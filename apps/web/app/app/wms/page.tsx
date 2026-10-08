@@ -164,6 +164,26 @@ type LaborMetrics = {
   }>;
 };
 
+type SlottingRecommendation = {
+  sku_id:string;
+  sku_code:string;
+  product_name:string;
+  pick_events:number;
+  picked_milli:string;
+  avg_daily_milli:string;
+  storage_milli:string;
+  current_pick_location_id:string|null;
+  current_pick_location_code:string|null;
+  current_min_milli:string|null;
+  current_max_milli:string|null;
+  suggested_location_id:string|null;
+  suggested_location_code:string|null;
+  suggested_min_milli:string;
+  suggested_max_milli:string;
+  recommendation:string;
+  reason:string;
+};
+
 
 
 type Topology = {
@@ -208,6 +228,7 @@ export default function WmsPage() {
   const [waves, setWaves] = useState<Wave[]>([]);
   const [dispatcher, setDispatcher] = useState<Dispatcher | null>(null);
   const [labor, setLabor] = useState<LaborMetrics | null>(null);
+  const [slotting, setSlotting] = useState<SlottingRecommendation[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [error, setError] = useState("");
 
@@ -240,7 +261,7 @@ export default function WmsPage() {
       setTopology(next);
 
       if (next.profile?.stock_tracking_state === "LOCATION_LEDGER") {
-        const [locationRows, taskRows, waveRows, dispatcherData, laborData] = await Promise.all([
+        const [locationRows, taskRows, waveRows, dispatcherData, laborData, slottingRows] = await Promise.all([
           apiRequest<LocationBalance[]>(
             "/wms/warehouses/" + id + "/location-balances"
           ),
@@ -255,6 +276,9 @@ export default function WmsPage() {
           ),
           apiRequest<LaborMetrics>(
             "/wms/warehouses/" + id + "/labor?hours=24"
+          ),
+          apiRequest<SlottingRecommendation[]>(
+            "/wms/warehouses/" + id + "/slotting?days=30"
           )
         ]);
         setBalances(locationRows);
@@ -262,12 +286,14 @@ export default function WmsPage() {
         setWaves(waveRows);
         setDispatcher(dispatcherData);
         setLabor(laborData);
+        setSlotting(slottingRows);
       } else {
         setBalances([]);
         setTasks([]);
         setWaves([]);
         setDispatcher(null);
         setLabor(null);
+        setSlotting([]);
       }
 
       setError("");
@@ -648,6 +674,53 @@ export default function WmsPage() {
         cause instanceof Error
           ? cause.message
           : "Не удалось настроить pick-face"
+      );
+    }
+  }
+
+  async function applySlotting(item: SlottingRecommendation) {
+    const locationId=
+      item.current_pick_location_id??item.suggested_location_id;
+    if(!locationId){
+      setError("Нет подходящей PICKING-ячейки для рекомендации.");
+      return;
+    }
+
+    if(
+      !window.confirm(
+        "Применить FIXED_PICK для " +
+          item.sku_code +
+          " в " +
+          (item.current_pick_location_code??item.suggested_location_code??"ячейке") +
+          "? Физическое перемещение товара не выполняется."
+      )
+    ) return;
+
+    try{
+      await apiRequest(
+        "/wms/warehouses/"+warehouseId+"/sku-rules",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            skuId:item.sku_id,
+            locationId,
+            ruleType:"FIXED_PICK",
+            priority:10,
+            minQuantityMilli:item.suggested_min_milli,
+            maxQuantityMilli:item.suggested_max_milli
+          })
+        }
+      );
+      setSlotting(
+        await apiRequest<SlottingRecommendation[]>(
+          "/wms/warehouses/"+warehouseId+"/slotting?days=30"
+        )
+      );
+    }catch(cause){
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось применить slotting-рекомендацию"
       );
     }
   }
@@ -1198,6 +1271,84 @@ export default function WmsPage() {
                               ) : null}
                             </article>
                           ))}
+                        </div>
+                      ) : null}
+                    </section>
+
+                    <section className="section-block">
+                      <div className="section-heading">
+                        <div>
+                          <p className="muted">Slotting / 30 дней</p>
+                          <h2>Рекомендации по pick-face</h2>
+                        </div>
+                      </div>
+
+                      <div className="data-table-wrap">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>SKU</th>
+                              <th>Отбор</th>
+                              <th>Pick-face</th>
+                              <th>Рекомендация</th>
+                              <th>Min / Max</th>
+                              <th />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {slotting.slice(0, 30).map((item) => (
+                              <tr key={item.sku_id}>
+                                <td>
+                                  <strong>{item.sku_code}</strong>
+                                  <br />
+                                  <small>{item.product_name}</small>
+                                </td>
+                                <td>
+                                  {Number(item.picked_milli)/1000} шт.
+                                  <br />
+                                  <small>{item.pick_events} операций</small>
+                                </td>
+                                <td>
+                                  {item.current_pick_location_code ??
+                                    item.suggested_location_code ??
+                                    "Нет подходящей ячейки"}
+                                </td>
+                                <td>
+                                  <span className="status-pill">
+                                    {item.recommendation}
+                                  </span>
+                                  <br />
+                                  <small>{item.reason}</small>
+                                </td>
+                                <td>
+                                  {Number(item.suggested_min_milli)/1000}
+                                  {" / "}
+                                  {Number(item.suggested_max_milli)/1000}
+                                </td>
+                                <td className="table-actions">
+                                  {item.recommendation!=="OK" &&
+                                  (item.current_pick_location_id||item.suggested_location_id) ? (
+                                    <button
+                                      className="secondary-button"
+                                      onClick={()=>void applySlotting(item)}
+                                      type="button"
+                                    >
+                                      Применить
+                                    </button>
+                                  ) : null}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {!slotting.length ? (
+                        <div className="table-empty">
+                          <strong>Недостаточно истории отбора</strong>
+                          <span>
+                            Рекомендации появятся после PICK-операций.
+                          </span>
                         </div>
                       ) : null}
                     </section>
