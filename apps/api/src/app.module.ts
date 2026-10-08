@@ -6,6 +6,7 @@ import {
 import { DatabaseModule } from "./infrastructure/database/database.module";
 import { AuthModule } from "./modules/platform/auth/auth.module";
 import { SessionContextMiddleware } from "./modules/platform/auth/session-context.middleware";
+import { AuthorizationModule } from "./modules/platform/authorization/authorization.module";
 import { HealthModule } from "./modules/platform/health/health.module";
 import { TenantContextModule } from "./modules/platform/tenant-context/tenant-context.module";
 import { TenantsModule } from "./modules/platform/tenants/tenants.module";
@@ -15,6 +16,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     DatabaseModule,
     TenantContextModule,
     AuthModule,
+    AuthorizationModule,
     TenantsModule,
     HealthModule
   ]
