@@ -208,7 +208,8 @@ export class Wms3plBillingService {
       const lines = await client.query(
         `SELECT
            l.id,l.service_code,l.quantity_milli::text,l.unit,
-           l.rate_minor::text,l.amount_minor::text,l.calculation,
+           l.rate_minor::text,l.currency,l.amount_minor::text,l.calculation,
+           l.service_period_from,l.service_period_to,
            r.effective_from,r.effective_to
          FROM wms_3pl_statement_line l
          JOIN wms_3pl_rate r
@@ -254,6 +255,46 @@ export class Wms3plBillingService {
         throw new BadRequestException("3PL-контракт закрыт");
       }
 
+      const rates = await client.query<{
+        id: string;
+        service_code: ServiceCode;
+        unit: "UNIT" | "TASK" | "UNIT_DAY";
+        rate_minor: string;
+        currency: string;
+        effective_from: string;
+        effective_to: string | null;
+      }>(
+        `SELECT
+           id,service_code,unit,rate_minor::text,currency,
+           effective_from::text,effective_to::text
+         FROM wms_3pl_rate
+         WHERE tenant_id=$1
+           AND contract_id=$2
+           AND effective_from <= $4::date
+           AND (effective_to IS NULL OR effective_to >= $3::date)
+         ORDER BY service_code,effective_from`,
+        [
+          context.tenantId,
+          contractId,
+          input.periodFrom,
+          input.periodTo
+        ]
+      );
+
+      if (!rates.rowCount) {
+        throw new BadRequestException(
+          "Для выбранного периода не настроены тарифы 3PL"
+        );
+      }
+
+      const currencies = new Set(rates.rows.map(rate => rate.currency));
+      if (currencies.size !== 1) {
+        throw new ConflictException(
+          "В одном statement нельзя смешивать валюты тарифов"
+        );
+      }
+      const statementCurrency = rates.rows[0]!.currency;
+
       const existing = await client.query<{
         id: string;
         status: string;
@@ -284,8 +325,8 @@ export class Wms3plBillingService {
         const created = await client.query<{ id: string }>(
           `INSERT INTO wms_3pl_statement(
              tenant_id,warehouse_id,owner_id,contract_id,
-             period_from,period_to,created_by_membership_id
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+             period_from,period_to,currency,created_by_membership_id
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
            RETURNING id`,
           [
             context.tenantId,
@@ -294,43 +335,24 @@ export class Wms3plBillingService {
             contractId,
             input.periodFrom,
             input.periodTo,
+            statementCurrency,
             context.membershipId
           ]
         );
         statementId = created.rows[0]!.id;
       } else {
         await client.query(
+          `UPDATE wms_3pl_statement
+           SET currency=$3,total_minor=0,generated_at=now(),updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status='DRAFT'`,
+          [context.tenantId, statementId, statementCurrency]
+        );
+        await client.query(
           `DELETE FROM wms_3pl_statement_line
            WHERE tenant_id=$1 AND statement_id=$2`,
           [context.tenantId, statementId]
         );
       }
-
-      const rates = await client.query<{
-        id: string;
-        service_code: ServiceCode;
-        unit: "UNIT" | "TASK" | "UNIT_DAY";
-        rate_minor: string;
-        currency: string;
-        effective_from: string;
-        effective_to: string | null;
-      }>(
-        `SELECT
-           id,service_code,unit,rate_minor::text,currency,
-           effective_from::text,effective_to::text
-         FROM wms_3pl_rate
-         WHERE tenant_id=$1
-           AND contract_id=$2
-           AND effective_from <= $4::date
-           AND (effective_to IS NULL OR effective_to >= $3::date)
-         ORDER BY service_code,effective_from`,
-        [
-          context.tenantId,
-          contractId,
-          input.periodFrom,
-          input.periodTo
-        ]
-      );
 
       let total = 0n;
       let lines = 0;
@@ -363,8 +385,9 @@ export class Wms3plBillingService {
         await client.query(
           `INSERT INTO wms_3pl_statement_line(
              tenant_id,statement_id,service_code,rate_id,
-             quantity_milli,unit,rate_minor,amount_minor,calculation
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+             quantity_milli,unit,rate_minor,currency,amount_minor,calculation,
+             service_period_from,service_period_to
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
           [
             context.tenantId,
             statementId,
@@ -373,6 +396,7 @@ export class Wms3plBillingService {
             quantity.toString(),
             rate.unit,
             rate.rate_minor,
+            rate.currency,
             amount.toString(),
             JSON.stringify({
               rateFrom,
@@ -383,7 +407,9 @@ export class Wms3plBillingService {
                   : rate.unit === "UNIT_DAY"
                     ? "unit-days × rate"
                     : "units × rate"
-            })
+            }),
+            rateFrom,
+            rateTo
           ]
         );
 
