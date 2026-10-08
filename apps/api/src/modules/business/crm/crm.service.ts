@@ -82,8 +82,7 @@ export class CrmService {
 
       if (scopedMembershipIds) {
         values.push(scopedMembershipIds);
-        scopeSql =
-          `AND d.responsible_membership_id = ANY(${values.length}::uuid[])`;
+        scopeSql = "AND d.responsible_membership_id = ANY($3::uuid[])";
       }
 
       const dealsResult = await client.query<{
