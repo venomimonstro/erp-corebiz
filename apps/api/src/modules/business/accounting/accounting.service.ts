@@ -53,7 +53,6 @@ export class AccountingService {
     ruleCode: string;
     ruleVersion: number;
     amountMinor: string;
-    reversalOfId?: string;
   }) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(input.businessDate) ||
         !Number.isInteger(input.ruleVersion) || input.ruleVersion <= 0 ||
@@ -101,7 +100,7 @@ export class AccountingService {
         [context.tenantId,input.legalEntityId,input.periodId,input.businessDate,
          input.sourceType,input.sourceId,input.postingKey.trim(),input.ruleCode,
          input.ruleVersion,row.debit_account_id,row.credit_account_id,
-         input.amountMinor,input.reversalOfId??null,context.membershipId]
+         input.amountMinor,null,context.membershipId]
       );
       return {id:inserted.rows[0]!.id,created:true};
     });
