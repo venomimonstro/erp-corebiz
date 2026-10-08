@@ -300,11 +300,21 @@ export class OmsService {
         const order = await client.query<{
           order_status: string;
           fulfillment_status: string;
+          inventory_owner_id: string;
+          owner_type: "INTERNAL" | "CLIENT";
         }>(
-          `SELECT order_status,fulfillment_status
-           FROM sales_order
-           WHERE tenant_id=$1 AND id=$2
-           FOR UPDATE`,
+          `SELECT
+             so.order_status,
+             so.fulfillment_status,
+             so.inventory_owner_id,
+             io.owner_type
+           FROM sales_order so
+           JOIN inventory_owner io
+             ON io.tenant_id=so.tenant_id
+            AND io.id=so.inventory_owner_id
+            AND io.status='ACTIVE'
+           WHERE so.tenant_id=$1 AND so.id=$2
+           FOR UPDATE OF so`,
           [context.tenantId, salesOrderId]
         );
 
@@ -352,6 +362,8 @@ export class OmsService {
             runNumber,
             JSON.stringify({
               salesOrderId,
+              inventoryOwnerId: sales.inventory_owner_id,
+              inventoryOwnerType: sales.owner_type,
               lines: stockLines.map((line) => ({
                 lineId: line.line_id,
                 skuId: line.sku_id,
@@ -409,7 +421,9 @@ export class OmsService {
             const candidates = await this.candidates(
               client,
               context.tenantId,
-              line.sku_id!
+              line.sku_id!,
+              sales.inventory_owner_id,
+              sales.owner_type
             );
 
             for (const candidate of candidates) {
@@ -474,7 +488,7 @@ export class OmsService {
                   atpBeforeMilli: candidate.atpMilli.toString(),
                   allocatedMilli: take.toString(),
                   reason:
-                    "Минимальный sourcing priority, затем default warehouse и максимальный ATP"
+                    "Owner-scoped ATP: sourcing priority, default warehouse, затем доступный остаток владельца"
                 };
 
                 await client.query(
@@ -834,7 +848,9 @@ export class OmsService {
   private async candidates(
     client: PoolClient,
     tenantId: string,
-    skuId: string
+    skuId: string,
+    ownerId: string,
+    ownerType: "INTERNAL" | "CLIENT"
   ): Promise<Candidate[]> {
     const result = await client.query<{
       warehouse_id: string;
@@ -850,39 +866,89 @@ export class OmsService {
          w.id AS warehouse_id,
          w.name AS warehouse_name,
          w.is_default,
-         COALESCE(b.physical_milli,0)::text AS physical_milli,
-         COALESCE(b.reserved_milli,0)::text AS reserved_milli,
+         (
+           CASE
+             WHEN wp.owner_tracking_state='OWNER_LEDGER'
+             THEN COALESCE(ob.physical_milli,0)
+             ELSE COALESCE(b.physical_milli,0)
+           END
+         )::text AS physical_milli,
+         (
+           CASE
+             WHEN wp.owner_tracking_state='OWNER_LEDGER'
+             THEN COALESCE(ob.reserved_milli,0)
+             ELSE COALESCE(b.reserved_milli,0)
+           END
+         )::text AS reserved_milli,
          COALESCE(ip.safety_stock_milli,0)::text AS safety_stock_milli,
          COALESCE(ip.sourcing_priority,100)::int AS sourcing_priority,
          GREATEST(
-           COALESCE(b.physical_milli,0)
-           - COALESCE(b.reserved_milli,0)
-           - COALESCE(ip.safety_stock_milli,0),
+           CASE
+             WHEN wp.owner_tracking_state='OWNER_LEDGER'
+             THEN
+               COALESCE(ob.physical_milli,0)
+               - COALESCE(ob.reserved_milli,0)
+               - COALESCE(ip.safety_stock_milli,0)
+             ELSE
+               COALESCE(b.physical_milli,0)
+               - COALESCE(b.reserved_milli,0)
+               - COALESCE(ip.safety_stock_milli,0)
+           END,
            0
          )::text AS atp_milli
        FROM warehouse w
+       LEFT JOIN warehouse_wms_profile wp
+         ON wp.tenant_id=w.tenant_id
+        AND wp.warehouse_id=w.id
+        AND wp.status='ACTIVE'
        LEFT JOIN inventory_balance b
          ON b.tenant_id=w.tenant_id
         AND b.warehouse_id=w.id
         AND b.sku_id=$2
+       LEFT JOIN inventory_owner_balance ob
+         ON ob.tenant_id=w.tenant_id
+        AND ob.warehouse_id=w.id
+        AND ob.owner_id=$3
+        AND ob.sku_id=$2
        LEFT JOIN inventory_policy ip
          ON ip.tenant_id=w.tenant_id
         AND ip.warehouse_id=w.id
         AND ip.sku_id=$2
+       LEFT JOIN warehouse_3pl_contract wc
+         ON wc.tenant_id=w.tenant_id
+        AND wc.warehouse_id=w.id
+        AND wc.owner_id=$3
+        AND wc.status='ACTIVE'
        WHERE w.tenant_id=$1
          AND w.status='ACTIVE'
          AND COALESCE(ip.enabled,true)=true
+         AND (
+           $4::text='INTERNAL'
+           OR (
+             $4::text='CLIENT'
+             AND wp.owner_tracking_state='OWNER_LEDGER'
+             AND wc.id IS NOT NULL
+           )
+         )
        ORDER BY
          COALESCE(ip.sourcing_priority,100) ASC,
          w.is_default DESC,
          GREATEST(
-           COALESCE(b.physical_milli,0)
-           - COALESCE(b.reserved_milli,0)
-           - COALESCE(ip.safety_stock_milli,0),
+           CASE
+             WHEN wp.owner_tracking_state='OWNER_LEDGER'
+             THEN
+               COALESCE(ob.physical_milli,0)
+               - COALESCE(ob.reserved_milli,0)
+               - COALESCE(ip.safety_stock_milli,0)
+             ELSE
+               COALESCE(b.physical_milli,0)
+               - COALESCE(b.reserved_milli,0)
+               - COALESCE(ip.safety_stock_milli,0)
+           END,
            0
          ) DESC,
          w.id`,
-      [tenantId, skuId]
+      [tenantId, skuId, ownerId, ownerType]
     );
 
     return result.rows.map((row) => ({
