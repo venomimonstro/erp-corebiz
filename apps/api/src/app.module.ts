@@ -6,6 +6,7 @@ import {
 import { DatabaseModule } from "./infrastructure/database/database.module";
 import { CrmModule } from "./modules/business/crm/crm.module";
 import { PartyModule } from "./modules/business/party/party.module";
+import { TasksModule } from "./modules/business/tasks/tasks.module";
 import { AuthModule } from "./modules/platform/auth/auth.module";
 import { SessionContextMiddleware } from "./modules/platform/auth/session-context.middleware";
 import { AuthorizationModule } from "./modules/platform/authorization/authorization.module";
@@ -22,6 +23,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     TenantsModule,
     PartyModule,
     CrmModule,
+    TasksModule,
     HealthModule
   ]
 })
