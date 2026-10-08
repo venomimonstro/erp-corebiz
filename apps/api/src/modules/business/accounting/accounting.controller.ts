@@ -14,6 +14,22 @@ export class AccountingController {
     return {ok:true,data:await this.accounting.accounts(this.context(request))};
   }
 
+  @Post("accounts")
+  @RequirePermission("accounting.policy.manage")
+  async createAccount(@Req() request:AuthenticatedRequest,@Body() body:{
+    code:string;name:string;category:"ASSET"|"LIABILITY"|"EQUITY"|"INCOME"|"EXPENSE"|"OFF_BALANCE";
+  }):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.accounting.createAccount(this.context(request),body)};
+  }
+
+  @Post("periods")
+  @RequirePermission("accounting.period.close")
+  async createPeriod(@Req() request:AuthenticatedRequest,@Body() body:{
+    legalEntityId:string;dateFrom:string;dateTo:string;
+  }):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.accounting.createPeriod(this.context(request),body)};
+  }
+
   @Get("periods")
   @RequirePermission("accounting.read")
   async periods(@Req() request: AuthenticatedRequest,@Query("legalEntityId") legalEntityId:string): Promise<ApiSuccess<unknown>> {
