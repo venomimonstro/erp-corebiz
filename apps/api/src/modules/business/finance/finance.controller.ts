@@ -16,6 +16,17 @@ import { FinanceService } from "./finance.service";
 export class FinanceController {
   constructor(private readonly finance: FinanceService) {}
 
+  @Post("bank-statements/import")
+  @RequirePermission("finance.write")
+  async importBankStatement(@Req() request:AuthenticatedRequest,@Body() body:{
+    cashAccountId:string;sourceName:string;externalStatementId:string;
+    currency:string;dateFrom:string;dateTo:string;
+    lines:Array<{externalLineId:string;bookedOn:string;direction:"IN"|"OUT";
+      amountMinor:string;counterpartyName?:string;purpose?:string}>;
+  }):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.finance.importBankStatement(this.context(request),body)};
+  }
+
   @Get("bank-statements")
   @RequirePermission("finance.read")
   async bankStatements(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {
