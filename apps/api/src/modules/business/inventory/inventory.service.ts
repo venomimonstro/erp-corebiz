@@ -2081,6 +2081,7 @@ export class InventoryService {
       returnLineId: string;
       warehouseId: string;
       skuId: string;
+      ownerId: string;
       quantityMilli: bigint;
       idempotencyKey: string;
     }
@@ -2101,6 +2102,7 @@ export class InventoryService {
       sourceId: input.returnRequestId,
       sourceLineId: input.returnLineId,
       reason: "Возврат клиента в доступный остаток",
+      ownerId: input.ownerId,
       idempotencyKey:
         "return-request:" +
         input.returnRequestId +
