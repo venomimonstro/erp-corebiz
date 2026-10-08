@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R3 / Sprint 13 — Onboarding & Migration.  
+**Активная разработка:** R4 / Sprint 19 — Resource Model.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -124,24 +124,74 @@
 
 Отсутствие GitHub Actions не означает отсутствие проверок: проверки должны запускаться локально/на сервере перед production release.
 
-## Активно — Sprint 13: Onboarding / Migration
+## R3 — Commercial MVP реализовано
+
+### Sprint 13 — Onboarding / Migration
+- migration batch/rows;
+- CSV/XLSX ingestion;
+- delimiter detection;
+- auto mapping;
+- dry-run/validation;
+- duplicate-safe product/customer import;
+- reconciliation;
+- onboarding state.
+
+### Sprint 14 — Billing
+- plans/entitlements;
+- tenant subscription;
+- trial/grace/read-only;
+- backend read-only enforcement;
+- billing workspace;
+- downgrade without data deletion.
+
+### Sprint 15 — Ticket System / Knowledge Base
+- tickets/messages;
+- attachment metadata;
+- contextual URL;
+- knowledge search;
+- temporary support grant with hashed one-time token.
+
+### Sprint 16 — Customization
+- custom fields/typed values;
+- versioned form layouts;
+- saved views;
+- capability toggles;
+- custom roles without mutation of system roles.
+
+### Sprint 17 — Workflow V1
+- transactional domain event outbox;
+- versioned workflow draft/test/publish;
+- conditions;
+- CREATE_TASK / ADD_TAG / NOTIFY allowlist;
+- worker with SKIP LOCKED;
+- retry/backoff;
+- execution log and recursion depth limit.
+
+### Sprint 18 — Production Hardening
+- global API rate limit;
+- auth-specific rate limits;
+- API security headers;
+- explicit request size limits;
+- liveness/readiness;
+- Postgres/Redis latency diagnostics;
+- outbox diagnostics;
+- API request p50/p95/p99 metrics;
+- migration advisory lock;
+- local release-check;
+- guarded backup/restore scripts.
+
+## Активно — Sprint 19: Resource Model
 
 Scope:
-- migration batch;
-- CSV/XLSX ingestion;
-- entity mapping;
-- dry-run;
-- row validation;
-- duplicate detection;
-- product/customer import first;
-- idempotent import;
-- reconciliation report;
-- first-company onboarding state.
+- Resource;
+- employee/room/equipment/vehicle/workplace;
+- skills;
+- capacity;
+- working schedules;
+- availability foundation;
+- branch binding.
 
 ## Следом
 
-Sprint 14 — Billing.  
-Sprint 15 — Ticket System / Knowledge Base.  
-Sprint 16 — Customization.  
-Sprint 17 — Workflow V1.  
-Sprint 18 — Production Hardening.
+Sprint 20 — Booking.  
+Sprint 21 — Service Workspace.
