@@ -2,13 +2,27 @@ import {Module} from "@nestjs/common";
 import {InventoryModule} from "../inventory/inventory.module";
 import {Wms3plBillingController} from "./wms-3pl-billing.controller";
 import {Wms3plBillingService} from "./wms-3pl-billing.service";
+import {Wms3plPortalController} from "./wms-3pl-portal.controller";
+import {Wms3plPortalService} from "./wms-3pl-portal.service";
 import {WmsController} from "./wms.controller";
 import {WmsService} from "./wms.service";
 
 @Module({
   imports:[InventoryModule],
-  controllers:[WmsController,Wms3plBillingController],
-  providers:[WmsService,Wms3plBillingService],
-  exports:[WmsService,Wms3plBillingService]
+  controllers:[
+    WmsController,
+    Wms3plBillingController,
+    Wms3plPortalController
+  ],
+  providers:[
+    WmsService,
+    Wms3plBillingService,
+    Wms3plPortalService
+  ],
+  exports:[
+    WmsService,
+    Wms3plBillingService,
+    Wms3plPortalService
+  ]
 })
 export class WmsModule{}
