@@ -479,6 +479,20 @@ export class WmsController{
     return {ok:true,data:{updated:true}};
   }
 
+  @Post("warehouses/:warehouseId/owner-ledger/initialize")
+  @RequirePermission("wms.manage")
+  async initializeOwnerLedger(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.initializeOwnerLedger(
+        this.ctx(req),warehouseId
+      )
+    };
+  }
+
   @Get("warehouses/:warehouseId/owner-reconciliation")
   @RequirePermission("wms.read")
   async ownerReconciliation(
