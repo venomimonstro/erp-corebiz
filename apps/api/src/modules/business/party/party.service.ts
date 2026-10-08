@@ -21,13 +21,16 @@ export class PartyService {
     const scope = await this.authorization.resolveScope(context, "crm.read");
     if (!scope) return [];
 
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
+
     return this.database.withTenantTransaction(context, async (client) => {
       const values: unknown[] = [context.tenantId];
       let scopeSql = "";
 
-      if (scope === "own") {
-        values.push(context.membershipId);
-        scopeSql = "AND p.responsible_membership_id = $2";
+      if (scopedMembershipIds) {
+        values.push(scopedMembershipIds);
+        scopeSql = `AND p.responsible_membership_id = ANY($${values.length}::uuid[])`;
       }
 
       const result = await client.query<{
@@ -92,15 +95,23 @@ export class PartyService {
     const scope = await this.authorization.resolveScope(context, "crm.write");
     if (!scope) throw new BadRequestException("Недостаточно прав");
 
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
+
     const displayName = input.displayName.trim();
     if (displayName.length < 2 || displayName.length > 200) {
       throw new BadRequestException("Некорректное имя клиента");
     }
 
     const responsibleMembershipId =
-      scope === "own"
-        ? context.membershipId
-        : input.responsibleMembershipId ?? context.membershipId;
+      input.responsibleMembershipId ?? context.membershipId;
+
+    if (
+      scopedMembershipIds &&
+      !scopedMembershipIds.includes(responsibleMembershipId)
+    ) {
+      throw new BadRequestException("Ответственный сотрудник недоступен");
+    }
 
     return this.database.withTenantTransaction(context, async (client) => {
       const responsible = await client.query(
@@ -137,9 +148,12 @@ export class PartyService {
 
       for (const contact of [
         input.phone ? { type: "PHONE", value: input.phone.trim() } : null,
-        input.email ? { type: "EMAIL", value: input.email.trim().toLowerCase() } : null
+        input.email
+          ? { type: "EMAIL", value: input.email.trim().toLowerCase() }
+          : null
       ].filter(Boolean) as Array<{ type: string; value: string }>) {
         if (!contact.value) continue;
+
         await client.query(
           `INSERT INTO party_contact(
              tenant_id, party_id, type, value, is_primary
