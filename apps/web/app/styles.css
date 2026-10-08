@@ -322,3 +322,28 @@ button, .primary, .secondary { font: inherit; }
 @media (max-width: 680px) {
   .resource-grid { grid-template-columns: 1fr; }
 }
+
+
+/* Service booking calendar */
+.booking-calendar { display: grid; gap: 16px; }
+.booking-day { display: grid; gap: 9px; }
+.booking-day > header { display: flex; justify-content: space-between; align-items: center; color: #72777e; }
+.booking-day > header strong { color: #2b2e32; font-size: 14px; }
+.booking-day > header span { font-size: 11px; }
+.booking-list { display: grid; gap: 7px; }
+.booking-card { background: #fff; border: 1px solid #e1e3e6; border-radius: 14px; padding: 12px; display: grid; grid-template-columns: 72px minmax(0,1fr) auto; gap: 14px; align-items: center; }
+.booking-time { display: grid; gap: 2px; text-align: center; }
+.booking-time strong { font-size: 18px; letter-spacing: -.03em; }
+.booking-time span { color: #91969d; font-size: 10px; }
+.booking-main { display: flex; justify-content: space-between; gap: 14px; align-items: center; min-width: 0; }
+.booking-main > div { display: grid; gap: 4px; min-width: 0; }
+.booking-main > div:first-child > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.booking-main > div:first-child > span { color: #777c83; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.booking-main > div:last-child { text-align: right; }
+.booking-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.booking-actions button { padding: 7px 9px; border-radius: 8px; font-size: 10px; }
+
+@media (max-width: 920px) {
+  .booking-card { grid-template-columns: 62px 1fr; }
+  .booking-actions { grid-column: 1 / -1; justify-content: flex-start; }
+}
