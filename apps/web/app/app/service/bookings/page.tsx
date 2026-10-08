@@ -52,6 +52,8 @@ export default function BookingsPage() {
   const [resources, setResources] = useState<Resource[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [error, setError] = useState("");
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [resourceFilter, setResourceFilter] = useState("");
 
   const load = useCallback(async () => {
     setError("");
@@ -59,7 +61,9 @@ export default function BookingsPage() {
     try {
       const from = new Date();
       from.setHours(0, 0, 0, 0);
-      const to = new Date(from.getTime() + 14 * 86400000);
+      from.setDate(from.getDate() + weekOffset * 7);
+      const to = new Date(from);
+      to.setDate(to.getDate() + 7);
 
       const data = await Promise.all([
         apiRequest<Service[]>("/service/catalog"),
@@ -78,7 +82,7 @@ export default function BookingsPage() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить записи");
     }
-  }, []);
+  }, [weekOffset]);
 
   useEffect(() => {
     void load();
@@ -88,6 +92,7 @@ export default function BookingsPage() {
     const map = new Map<string, Booking[]>();
 
     for (const booking of bookings) {
+      if (resourceFilter && !booking.resources.some((r) => r.resourceId === resourceFilter)) continue;
       const key = new Date(booking.starts_at).toLocaleDateString("ru-RU");
       const rows = map.get(key) ?? [];
       rows.push(booking);
@@ -95,7 +100,7 @@ export default function BookingsPage() {
     }
 
     return Array.from(map.entries());
-  }, [bookings]);
+  }, [bookings, resourceFilter]);
 
   async function createService() {
     const name = window.prompt("Название услуги");
@@ -262,6 +267,25 @@ export default function BookingsPage() {
             <span>{error}</span>
           </div>
         ) : null}
+
+        <div className="header-actions" aria-label="Навигация по календарю" style={{ marginBottom: 16, flexWrap: "wrap" }}>
+          <button type="button" className="secondary-button" onClick={() => setWeekOffset((n) => n - 1)}>
+            ← Предыдущие 7 дней
+          </button>
+          <button type="button" className="secondary-button" onClick={() => setWeekOffset(0)}>
+            Сегодня
+          </button>
+          <button type="button" className="secondary-button" onClick={() => setWeekOffset((n) => n + 1)}>
+            Следующие 7 дней →
+          </button>
+          <label>
+            Ресурс:{" "}
+            <select aria-label="Фильтр по сотруднику или ресурсу" value={resourceFilter} onChange={(e) => setResourceFilter(e.target.value)}>
+              <option value="">Все сотрудники и ресурсы</option>
+              {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </label>
+        </div>
 
         <div className="booking-calendar">
           {grouped.map(([date, rows]) => (
