@@ -6,6 +6,7 @@ import {
 import { RedisModule } from "./infrastructure/cache/redis.module";
 import { DatabaseModule } from "./infrastructure/database/database.module";
 import { CrmModule } from "./modules/business/crm/crm.module";
+import { OrganizationModule } from "./modules/business/organization/organization.module";
 import { PartyModule } from "./modules/business/party/party.module";
 import { TasksModule } from "./modules/business/tasks/tasks.module";
 import { AuthModule } from "./modules/platform/auth/auth.module";
@@ -23,6 +24,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     AuthModule,
     AuthorizationModule,
     TenantsModule,
+    OrganizationModule,
     PartyModule,
     CrmModule,
     TasksModule,
