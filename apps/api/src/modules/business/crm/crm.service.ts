@@ -42,6 +42,9 @@ export class CrmService {
     const scope = await this.authorization.resolveScope(context, "crm.read");
     if (!scope) throw new BadRequestException("Недостаточно прав");
 
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
+
     return this.database.withTenantTransaction(context, async (client) => {
       const pipelineResult = await client.query<{ id: string; name: string }>(
         `SELECT id, name
@@ -77,9 +80,10 @@ export class CrmService {
       const values: unknown[] = [context.tenantId, pipeline.id];
       let scopeSql = "";
 
-      if (scope === "own") {
-        values.push(context.membershipId);
-        scopeSql = "AND d.responsible_membership_id = $3";
+      if (scopedMembershipIds) {
+        values.push(scopedMembershipIds);
+        scopeSql =
+          `AND d.responsible_membership_id = ANY(${values.length}::uuid[])`;
       }
 
       const dealsResult = await client.query<{
@@ -169,6 +173,9 @@ export class CrmService {
     const scope = await this.authorization.resolveScope(context, "crm.write");
     if (!scope) throw new BadRequestException("Недостаточно прав");
 
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
+
     const title = input.title.trim();
     if (title.length < 2 || title.length > 240) {
       throw new BadRequestException("Некорректное название сделки");
@@ -213,9 +220,40 @@ export class CrmService {
       if (!stageId) throw new NotFoundException("Этап не найден");
 
       const responsible =
-        scope === "own"
-          ? context.membershipId
-          : input.responsibleMembershipId ?? context.membershipId;
+        input.responsibleMembershipId ?? context.membershipId;
+
+      if (
+        scopedMembershipIds &&
+        !scopedMembershipIds.includes(responsible)
+      ) {
+        throw new BadRequestException("Ответственный сотрудник недоступен");
+      }
+
+      const responsibleCheck = await client.query(
+        `SELECT 1 FROM tenant_membership
+         WHERE tenant_id = $1
+           AND id = $2
+           AND status = 'ACTIVE'`,
+        [context.tenantId, responsible]
+      );
+
+      if (!responsibleCheck.rowCount) {
+        throw new BadRequestException("Ответственный сотрудник недоступен");
+      }
+
+      if (input.partyId) {
+        const partyCheck = await client.query(
+          `SELECT 1 FROM party
+           WHERE tenant_id = $1
+             AND id = $2
+             AND status = 'ACTIVE'`,
+          [context.tenantId, input.partyId]
+        );
+
+        if (!partyCheck.rowCount) {
+          throw new BadRequestException("Клиент недоступен");
+        }
+      }
 
       const result = await client.query<{ id: string; version: number }>(
         `INSERT INTO crm_deal(
@@ -265,6 +303,9 @@ export class CrmService {
     const scope = await this.authorization.resolveScope(context, "crm.write");
     if (!scope) throw new BadRequestException("Недостаточно прав");
 
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
+
     return this.database.withTenantTransaction(context, async (client) => {
       const dealResult = await client.query<{
         id: string;
@@ -284,8 +325,9 @@ export class CrmService {
       if (!deal) throw new NotFoundException("Сделка не найдена");
 
       if (
-        scope === "own" &&
-        deal.responsible_membership_id !== context.membershipId
+        scopedMembershipIds &&
+        (!deal.responsible_membership_id ||
+          !scopedMembershipIds.includes(deal.responsible_membership_id))
       ) {
         throw new NotFoundException("Сделка не найдена");
       }
