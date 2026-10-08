@@ -99,6 +99,32 @@ type Wave = {
   released_at: string | null;
 };
 
+type Dispatcher = {
+  warehouseId: string;
+  backlog: {
+    open: number;
+    claimed: number;
+    unplanned_pick: number;
+    oldest_open_at: string | null;
+  };
+  waves: Array<Wave & { progress_percent?: string | number | null }>;
+  taskFlow: Array<{
+    task_type: string;
+    status: string;
+    count: number;
+  }>;
+  exceptions: Array<{
+    id: string;
+    task_type: string;
+    status: string;
+    last_error: string | null;
+    sku_code: string | null;
+    from_code: string | null;
+    to_code: string | null;
+    cluster_slot: string | null;
+  }>;
+};
+
 
 
 type Topology = {
@@ -141,6 +167,7 @@ export default function WmsPage() {
   const [balances, setBalances] = useState<LocationBalance[]>([]);
   const [tasks, setTasks] = useState<WmsTask[]>([]);
   const [waves, setWaves] = useState<Wave[]>([]);
+  const [dispatcher, setDispatcher] = useState<Dispatcher | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [error, setError] = useState("");
 
@@ -173,7 +200,7 @@ export default function WmsPage() {
       setTopology(next);
 
       if (next.profile?.stock_tracking_state === "LOCATION_LEDGER") {
-        const [locationRows, taskRows, waveRows] = await Promise.all([
+        const [locationRows, taskRows, waveRows, dispatcherData] = await Promise.all([
           apiRequest<LocationBalance[]>(
             "/wms/warehouses/" + id + "/location-balances"
           ),
@@ -182,15 +209,20 @@ export default function WmsPage() {
           ),
           apiRequest<Wave[]>(
             "/wms/warehouses/" + id + "/waves"
+          ),
+          apiRequest<Dispatcher>(
+            "/wms/warehouses/" + id + "/dispatcher"
           )
         ]);
         setBalances(locationRows);
         setTasks(taskRows);
         setWaves(waveRows);
+        setDispatcher(dispatcherData);
       } else {
         setBalances([]);
         setTasks([]);
         setWaves([]);
+        setDispatcher(null);
       }
 
       setError("");
@@ -1052,6 +1084,58 @@ export default function WmsPage() {
                       <div className="section-heading">
                         <div>
                           <p className="muted">Dispatcher</p>
+                          <h2>Поток склада</h2>
+                        </div>
+                      </div>
+
+                      <div className="wms-dispatcher-grid">
+                        <article>
+                          <span>Открыто</span>
+                          <strong>{dispatcher?.backlog.open ?? 0}</strong>
+                        </article>
+                        <article>
+                          <span>В работе</span>
+                          <strong>{dispatcher?.backlog.claimed ?? 0}</strong>
+                        </article>
+                        <article>
+                          <span>PICK вне wave</span>
+                          <strong>{dispatcher?.backlog.unplanned_pick ?? 0}</strong>
+                        </article>
+                        <article>
+                          <span>Исключения</span>
+                          <strong>{dispatcher?.exceptions.length ?? 0}</strong>
+                        </article>
+                      </div>
+
+                      {dispatcher?.backlog.oldest_open_at ? (
+                        <p className="builder-hint">
+                          Самая старая открытая задача:{" "}
+                          {new Date(dispatcher.backlog.oldest_open_at).toLocaleString("ru-RU")}
+                        </p>
+                      ) : null}
+
+                      {dispatcher?.exceptions.length ? (
+                        <div className="wms-exception-list">
+                          {dispatcher.exceptions.slice(0, 10).map((item) => (
+                            <article key={item.id}>
+                              <div>
+                                <strong>{item.task_type} · {item.status}</strong>
+                                <span>
+                                  {(item.from_code ?? "—") + " → " + (item.to_code ?? "—")}
+                                  {item.sku_code ? " · " + item.sku_code : ""}
+                                </span>
+                              </div>
+                              <small>{item.last_error ?? "Задача слишком долго находится в работе"}</small>
+                            </article>
+                          ))}
+                        </div>
+                      ) : null}
+                    </section>
+
+                    <section className="section-block">
+                      <div className="section-heading">
+                        <div>
+                          <p className="muted">Wave picking</p>
                           <h2>Waves</h2>
                         </div>
                         <button
