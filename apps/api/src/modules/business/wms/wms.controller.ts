@@ -214,6 +214,54 @@ export class WmsController{
     };
   }
 
+  @Post("orders/:orderId/plan-outbound")
+  @RequirePermission("wms.manage")
+  async planOutbound(
+    @Req() req:AuthenticatedRequest,
+    @Param("orderId") orderId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.planOutbound(this.ctx(req),orderId)
+    };
+  }
+
+  @Post("tasks/:taskId/complete-pick")
+  @RequirePermission("wms.manage")
+  async completePick(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.completePick(this.ctx(req),taskId)
+    };
+  }
+
+  @Post("tasks/:taskId/complete-pack")
+  @RequirePermission("wms.manage")
+  async completePack(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.completePack(this.ctx(req),taskId)
+    };
+  }
+
+  @Post("tasks/:taskId/complete-ship")
+  @RequirePermission("wms.manage")
+  async completeShip(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.completeShip(this.ctx(req),taskId)
+    };
+  }
+
   @Get("warehouses/:warehouseId/reconciliation")
   @RequirePermission("wms.read")
   async reconciliation(
