@@ -36,6 +36,19 @@ export class AccountingController {
     return {ok:true,data:await this.accounting.periods(this.context(request),legalEntityId)};
   }
 
+  @Get("trial-balance")
+  @RequirePermission("accounting.read")
+  async trialBalance(
+    @Req() request:AuthenticatedRequest,
+    @Query("legalEntityId") legalEntityId:string,
+    @Query("dateFrom") dateFrom:string,
+    @Query("dateTo") dateTo:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.accounting.trialBalance(
+      this.context(request),legalEntityId,dateFrom,dateTo
+    )};
+  }
+
   @Get("entries")
   @RequirePermission("accounting.read")
   async entries(@Req() request: AuthenticatedRequest,@Query("legalEntityId") legalEntityId:string): Promise<ApiSuccess<unknown>> {
