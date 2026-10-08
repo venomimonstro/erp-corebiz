@@ -509,20 +509,47 @@
 - operator access administration UI;
 - standalone /3pl client workspace.
 
-## Активно — Sprint 47: 3PL SLA / Claims / Client Requests
-
-Scope:
+### Sprint 47 — 3PL SLA / Claims / Client Requests
 - owner-scoped request/claim thread;
 - DAMAGE / SHORTAGE / DELAY / DOCUMENT / GENERAL;
-- priority and SLA deadline;
+- client priority limited to P2/P3/P4; P1 operator escalation only;
+- server-side SLA deadline;
 - public client create/read/message;
-- operator queue;
+- operator queue/detail/reply/status/priority;
 - OPEN / IN_PROGRESS / WAITING_CLIENT / RESOLVED / CLOSED;
 - immutable message history;
-- request audit and response times;
-- no cross-owner visibility.
+- no cross-owner visibility;
+- request workspace inside /3pl.
+
+### Sprint 48 — WMS Dock Appointments / Inbound ASN
+- ASN as expected-flow document, separate from inventory fact;
+- ASN owner / PO / warehouse integrity;
+- expected SKU quantities;
+- optional PurchaseOrder population;
+- active 3PL contract gate for CLIENT owner;
+- DOCK location scheduling;
+- non-overlapping dock time windows;
+- CHECKED_IN / IN_SERVICE / COMPLETED / NO_SHOW lifecycle;
+- dispatcher inbound workspace;
+- optional Goods Receipt → ASN linkage;
+- Goods Receipt line automatically reconciles ASN received quantity;
+- ASN becomes RECEIVED only when factual receipt covers expectation;
+- inventory quantity remains sourced only from Goods Receipt / Inventory Ledger.
+
+## Активно — Sprint 49: 3PL Invoicing Handoff to Finance / Accounting
+
+Scope:
+- FINALIZED 3PL statement → receivable/invoice handoff;
+- one statement can create at most one active finance document;
+- snapshot statement amount/currency/period;
+- finance document lifecycle independent from WMS;
+- cancellation/credit-note path, never mutate finalized statement;
+- payment matching to 3PL receivable;
+- owner/Party identity validation;
+- accounting-ready business event, but no direct statutory posting from WMS;
+- statement shows finance handoff/payment status.
 
 ## Следом
 
-Sprint 48 — WMS dock appointments / inbound ASN.  
-Sprint 49 — 3PL invoicing handoff to Finance / Accounting.
+Sprint 50 — Finance reconciliation / cash application hardening.  
+Sprint 51 — Accounting foundation / deterministic posting rules.
