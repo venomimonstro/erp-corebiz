@@ -146,6 +146,27 @@ export default function SitesPage() {
     }
   }
 
+  async function enableStore() {
+    if (!siteId) return;
+    try {
+      await apiRequest("/storefront/site/" + siteId + "/config", {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: true,
+          currency: "RUB"
+        })
+      });
+      window.alert("Интернет-магазин включён. Добавьте блок «Товары» или «Каталог» и опубликуйте страницу.");
+      setError("");
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось включить интернет-магазин"
+      );
+    }
+  }
+
   async function createPage() {
     if (!siteId) return;
     const name = window.prompt("Название страницы", "О компании");
@@ -417,14 +438,24 @@ export default function SitesPage() {
             ))}
 
             {selectedSite ? (
-              <a
-                className="site-public-link"
+              <>
+                <button
+                  className="site-store-enable"
+                  onClick={() => void enableStore()}
+                  type="button"
+                >
+                  Включить интернет-магазин
+                  <small>Каталог, корзина и checkout</small>
+                </button>
+                <a
+                  className="site-public-link"
                 href={"/s/" + selectedSite.public_slug}
                 target="_blank"
                 rel="noreferrer"
               >
                 Открыть сайт ↗
-              </a>
+                </a>
+              </>
             ) : null}
           </aside>
 
