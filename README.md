@@ -6,7 +6,9 @@
 
 - Репозиторий инициализирован.
 - Source of Truth: `docs/MASTER_SPEC.md`.
-- Текущий этап: **R0 / Sprint 0 — Foundation**.
+- Текущий этап: **аудит и стабилизация основного контура после спринтов 54–62**. Основа этих спринтов есть в коде, но production-приёмка не пройдена.
+- Актуальный аудит: [Стабильность, безопасность, UX и сравнение с МойСклад](docs/AUDIT_PRODUCT_SECURITY_UX_MOYSKLAD_2026_10_08.md).
+- Перечень открытых release-блокеров: [Sprints 54–60](docs/SPRINTS_54_TO_60_IMPLEMENTATION_STATUS.md).
 - Первый коммерческий контур: **ERP Core + CRM + Tasks + Catalog + Sales + Procurement + Inventory + Finance Lite + Billing + Support**.
 
 ## Главный принцип
