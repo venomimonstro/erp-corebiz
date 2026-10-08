@@ -14,6 +14,9 @@ export function AppSidebar({ active }: { active: string }) {
       {link("/app/tasks", "Задачи", "tasks")}
       {link("/app/crm/customers", "Клиенты", "customers")}
 
+      <span>Сервис</span>
+      {link("/app/service/resources", "Ресурсы", "resources")}
+
       <span>Бизнес</span>
       {link("/app/sales/orders", "Заказы", "orders")}
       {link("/app/catalog/products", "Товары", "products")}
