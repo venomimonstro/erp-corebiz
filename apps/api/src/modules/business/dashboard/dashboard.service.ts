@@ -30,12 +30,12 @@ export class DashboardService {
         client.query<{ cash_minor: string }>(
           `SELECT (
              COALESCE((SELECT sum(opening_balance_minor) FROM cash_account
-               WHERE tenant_id = $1 AND status = 'ACTIVE'), 0)
+               WHERE tenant_id = $1 AND status = 'ACTIVE' AND currency = 'RUB'), 0)
              +
              COALESCE((SELECT sum(
                CASE WHEN direction = 'IN' THEN amount_minor ELSE -amount_minor END
              ) FROM payment
-               WHERE tenant_id = $1 AND status = 'POSTED'), 0)
+               WHERE tenant_id = $1 AND status = 'POSTED' AND currency = 'RUB'), 0)
            )::text AS cash_minor`,
           [context.tenantId]
         ),
@@ -48,8 +48,9 @@ export class DashboardService {
                SELECT sum(o.total_minor)
                FROM sales_order o
                WHERE o.tenant_id = $1
-                 AND o.order_status <> 'CANCELLED'
+                 AND o.order_status IN ('CONFIRMED','COMPLETED')
                  AND o.created_at >= now() - interval '30 days'
+                 AND o.currency = 'RUB'
              ), 0)::text AS sales_minor,
              COALESCE((
                SELECT sum(
@@ -61,8 +62,9 @@ export class DashboardService {
                  ON l.tenant_id = o.tenant_id
                 AND l.order_id = o.id
                WHERE o.tenant_id = $1
-                 AND o.order_status <> 'CANCELLED'
+                 AND o.order_status IN ('CONFIRMED','COMPLETED')
                  AND o.created_at >= now() - interval '30 days'
+                 AND o.currency = 'RUB'
              ), 0)::text AS gross_profit_minor`,
           [context.tenantId]
         ),
@@ -83,6 +85,7 @@ export class DashboardService {
            FROM financial_obligation
            WHERE tenant_id = $1
              AND status IN ('OPEN','PARTIALLY_SETTLED')
+             AND currency = 'RUB'
            GROUP BY direction`,
           [context.tenantId]
         ),
@@ -94,7 +97,7 @@ export class DashboardService {
            JOIN sku s
              ON s.tenant_id = b.tenant_id
             AND s.id = b.sku_id
-           WHERE b.tenant_id = $1`,
+           WHERE b.tenant_id = $1 AND s.currency = 'RUB'`,
           [context.tenantId]
         )
       ]);
