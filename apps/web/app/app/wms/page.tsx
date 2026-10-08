@@ -77,6 +77,13 @@ type WmsTask = {
   last_error: string | null;
 };
 
+type Order = {
+  id: string;
+  number: string;
+  partyName: string | null;
+  fulfillmentStatus: string;
+};
+
 type Topology = {
   profile: {
     mode: string;
@@ -116,6 +123,7 @@ export default function WmsPage() {
   const [topology, setTopology] = useState<Topology | null>(null);
   const [balances, setBalances] = useState<LocationBalance[]>([]);
   const [tasks, setTasks] = useState<WmsTask[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [error, setError] = useState("");
 
   const loadWarehouses = useCallback(async () => {
@@ -130,6 +138,9 @@ export default function WmsPage() {
 
   useEffect(() => {
     void loadWarehouses();
+    void apiRequest<Order[]>("/sales/orders")
+      .then(setOrders)
+      .catch(() => setOrders([]));
   }, [loadWarehouses]);
 
   const loadTopology = useCallback(async (id: string) => {
@@ -270,32 +281,100 @@ export default function WmsPage() {
     }
   }
 
-  async function completeTask(task: WmsTask) {
-    if (
-      !window.confirm(
-        "Подтвердить перемещение " +
-          task.sku_code +
-          " из " +
-          (task.from_code ?? "—") +
-          " в " +
-          (task.to_code ?? "—") +
-          "?"
+  async function planOutbound() {
+    const candidates = orders.filter(
+      (order) => order.fulfillmentStatus === "RESERVED"
+    );
+
+    if (!candidates.length) {
+      setError("Нет заказов в статусе «В резерве» для отбора.");
+      return;
+    }
+
+    const list = candidates
+      .map(
+        (order, index) =>
+          (index + 1) +
+          ". " +
+          order.number +
+          (order.partyName ? " · " + order.partyName : "")
       )
-    ) {
+      .join("\n");
+
+    const selected =
+      Number(window.prompt("Выберите заказ для отбора:\n" + list, "1")) - 1;
+    const order = candidates[selected];
+    if (!order) return;
+
+    try {
+      const result = await apiRequest<{
+        allocations: number;
+        pickTasks: number;
+      }>("/wms/orders/" + order.id + "/plan-outbound", {
+        method: "POST"
+      });
+
+      window.alert(
+        result.pickTasks
+          ? "Создано PICK-задач: " + result.pickTasks
+          : "Отбор по заказу уже запланирован."
+      );
+
+      await loadTopology(warehouseId);
+      setOrders(await apiRequest<Order[]>("/sales/orders"));
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось запланировать отбор"
+      );
+    }
+  }
+
+  async function completeTask(task: WmsTask) {
+    const label =
+      task.task_type === "PUTAWAY"
+        ? "размещение"
+        : task.task_type === "PICK"
+          ? "отбор"
+          : task.task_type === "PACK"
+            ? "упаковку"
+            : task.task_type === "SHIP"
+              ? "отгрузку"
+              : "задачу";
+
+    if (!window.confirm("Подтвердить " + label + "?")) {
+      return;
+    }
+
+    const endpoint =
+      task.task_type === "PUTAWAY"
+        ? "complete-putaway"
+        : task.task_type === "PICK"
+          ? "complete-pick"
+          : task.task_type === "PACK"
+            ? "complete-pack"
+            : task.task_type === "SHIP"
+              ? "complete-ship"
+              : null;
+
+    if (!endpoint) {
+      setError("Для этого типа задачи завершение ещё не поддерживается.");
       return;
     }
 
     try {
       await apiRequest(
-        "/wms/tasks/" + task.id + "/complete-putaway",
+        "/wms/tasks/" + task.id + "/" + endpoint,
         { method: "POST" }
       );
       await loadTopology(warehouseId);
+      setOrders(await apiRequest<Order[]>("/sales/orders"));
     } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
-          : "Не удалось завершить размещение"
+          : "Не удалось завершить задачу"
       );
     }
   }
@@ -446,6 +525,12 @@ export default function WmsPage() {
           <div className="header-actions">
             {topology?.profile ? (
               <>
+                <button
+                  className="secondary-button"
+                  onClick={() => void planOutbound()}
+                >
+                  Подготовить заказ
+                </button>
                 <button className="secondary-button" onClick={() => void addZone()}>
                   + Зона
                 </button>
@@ -636,11 +721,19 @@ export default function WmsPage() {
                               <div>
                                 <span>{task.task_type} · {task.status}</span>
                                 <strong>
-                                  {task.product_name} · {task.sku_code}
+                                  {task.product_name
+                                    ? task.product_name + " · " + task.sku_code
+                                    : task.task_type === "PACK"
+                                      ? "Упаковка заказа"
+                                      : task.task_type === "SHIP"
+                                        ? "Финальная отгрузка заказа"
+                                        : "Складская задача"}
                                 </strong>
                                 <small>
-                                  {task.from_code ?? "—"} → {task.to_code ?? "—"} ·{" "}
-                                  {Number(task.quantity_milli) / 1000}
+                                  {(task.from_code ?? "—") + " → " + (task.to_code ?? "—")}
+                                  {task.quantity_milli
+                                    ? " · " + Number(task.quantity_milli) / 1000
+                                    : ""}
                                 </small>
                               </div>
 
@@ -665,7 +758,7 @@ export default function WmsPage() {
                         {!tasks.some((task) => task.status !== "COMPLETED") ? (
                           <div className="table-empty">
                             <strong>Активных задач нет</strong>
-                            <span>Новые задачи появятся после приёмки или размещения.</span>
+                            <span>Новые задачи появятся после приёмки, размещения или планирования заказа.</span>
                           </div>
                         ) : null}
                       </div>
