@@ -45,10 +45,41 @@ export function PublicSiteForm({
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
   const [startsAt, setStartsAt] = useState("");
+  const [bookingDay, setBookingDay] = useState("");
+  const [slots, setSlots] = useState<Array<{resourceId:string;resourceName:string;startsAt:string}>>([]);
+  const [resourceId, setResourceId] = useState("");
+  const [loadingSlots, setLoadingSlots] = useState(false);
   const [honeypot, setHoneypot] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  async function loadSlots() {
+    if(!bookingDay) return;
+    const from=new Date(bookingDay+"T00:00:00");
+    const to=new Date(from);
+    to.setDate(to.getDate()+1);
+    if(!Number.isFinite(from.getTime())) {
+      setError("Некорректная дата");
+      return;
+    }
+    setLoadingSlots(true);
+    setSlots([]);
+    setStartsAt("");
+    setResourceId("");
+    setError("");
+    try {
+      const query=new URLSearchParams({from:from.toISOString(),to:to.toISOString()});
+      const response=await fetch(API_URL+"/site-forms/availability/"+encodeURIComponent(publicKey)+"?"+query);
+      const data=await response.json() as ApiResponse<Array<{resourceId:string;resourceName:string;startsAt:string}>>;
+      if(!response.ok || !data.ok) throw new Error(!data.ok?data.error.message:"Расписание недоступно");
+      setSlots(data.data);
+    } catch (cause) {
+      setError(cause instanceof Error?cause.message:"Не удалось загрузить расписание");
+    } finally {
+      setLoadingSlots(false);
+    }
+  }
 
   async function send() {
     if (!publicKey) return;
@@ -65,9 +96,8 @@ export function PublicSiteForm({
         phone: phone.trim() || undefined,
         email: email.trim() || undefined,
         message: message.trim() || undefined,
-        startsAt: booking && startsAt
-          ? new Date(startsAt).toISOString()
-          : undefined,
+        startsAt: booking && startsAt ? startsAt : undefined,
+        resourceId: booking ? resourceId : undefined,
         honeypot
       });
 
@@ -89,6 +119,8 @@ export function PublicSiteForm({
       setEmail("");
       setMessage("");
       setStartsAt("");
+      setResourceId("");
+      setSlots([]);
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -154,14 +186,30 @@ export function PublicSiteForm({
         </div>
 
         {booking ? (
-          <label>
-            <span>Дата и время *</span>
-            <input
-              type="datetime-local"
-              value={startsAt}
-              onChange={(event) => setStartsAt(event.target.value)}
-            />
-          </label>
+          <div>
+            <label>
+              <span>Дата *</span>
+              <input type="date" value={bookingDay} onChange={(e) => {setBookingDay(e.target.value);setStartsAt("");setResourceId("");setSlots([]);}} />
+            </label>
+            <button type="button" disabled={!bookingDay||loadingSlots} onClick={() => void loadSlots()}>
+              {loadingSlots ? "Ищем свободное время…" : "Показать свободное время"}
+            </button>
+            {slots.length ? (
+              <label>
+                <span>Специалист и время *</span>
+                <select value={startsAt+"|"+resourceId} onChange={(e) => {
+                  const [start,resource]=e.target.value.split("|");
+                  setStartsAt(start||"");
+                  setResourceId(resource||"");
+                }}>
+                  <option value="|">Выбрать время</option>
+                  {slots.map((slot) => <option key={slot.resourceId+slot.startsAt} value={slot.startsAt+"|"+slot.resourceId}>
+                    {slot.resourceName} · {new Date(slot.startsAt).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})}
+                  </option>)}
+                </select>
+              </label>
+            ) : null}
+          </div>
         ) : null}
 
         <label>
@@ -189,7 +237,7 @@ export function PublicSiteForm({
             busy ||
             name.trim().length < 2 ||
             (!phone.trim() && !email.trim()) ||
-            (booking && !startsAt)
+            (booking && (!startsAt || !resourceId))
           }
           onClick={() => void send()}
         >
