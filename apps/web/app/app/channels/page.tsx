@@ -10,7 +10,23 @@ type Connection = {
   name: string;
   status: string;
   last_received_at: string | null;
+  last_synced_at: string | null;
   last_error: string | null;
+};
+
+type SyncJob = {
+  id: string;
+  connection_id: string;
+  connection_name: string;
+  provider: string;
+  period_from: string;
+  period_to: string;
+  status: string;
+  attempts: number;
+  imported_orders: number;
+  updated_orders: number;
+  last_error: string | null;
+  created_at: string;
 };
 
 type InboxRow = {
@@ -57,6 +73,7 @@ type Details = {
 
 export default function ChannelsPage() {
   const [connections, setConnections] = useState<Connection[]>([]);
+  const [jobs, setJobs] = useState<SyncJob[]>([]);
   const [inbox, setInbox] = useState<InboxRow[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [selected, setSelected] = useState<Details | null>(null);
@@ -67,14 +84,20 @@ export default function ChannelsPage() {
     try {
       const data = await Promise.all([
         apiRequest<Connection[]>("/channels/connections"),
+        apiRequest<SyncJob[]>("/channels/sync-jobs"),
         apiRequest<InboxRow[]>("/channels/inbox"),
         apiRequest<Product[]>("/catalog/products")
       ]);
       setConnections(data[0]);
-      setInbox(data[1]);
-      setProducts(data[2]);
+      setJobs(data[1]);
+      setInbox(data[2]);
+      setProducts(data[3]);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось загрузить каналы");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось загрузить каналы"
+      );
     }
   }, []);
 
@@ -85,57 +108,106 @@ export default function ChannelsPage() {
   async function createConnection() {
     const provider = (
       window.prompt(
-        "Канал: OWN_SITE, API, OZON, WILDBERRIES, YANDEX_MARKET",
-        "OWN_SITE"
+        "Канал: OWN_SITE, API, OZON, WILDBERRIES",
+        "OZON"
       ) ?? ""
     ).toUpperCase();
 
-    if (
-      !["OWN_SITE", "API", "OZON", "WILDBERRIES", "YANDEX_MARKET"].includes(
-        provider
-      )
-    ) {
+    if (!["OWN_SITE", "API", "OZON", "WILDBERRIES"].includes(provider)) {
       setError("Неизвестный тип канала");
       return;
     }
 
-    const name = window.prompt("Название канала", "Интернет-магазин");
+    const name = window.prompt(
+      "Название канала",
+      provider === "OZON"
+        ? "Ozon FBS"
+        : provider === "WILDBERRIES"
+          ? "Wildberries FBS"
+          : "Интернет-магазин"
+    );
     if (!name?.trim()) return;
 
     try {
-      const created = await apiRequest<{
-        id: string;
-        webhookSecret: string | null;
-      }>("/channels/connections", {
-        method: "POST",
-        body: JSON.stringify({
-          provider,
-          name: name.trim()
-        })
-      });
+      if (provider === "OZON") {
+        const clientId = window.prompt("Ozon Client-Id");
+        if (!clientId?.trim()) return;
+        const apiKey = window.prompt("Ozon Api-Key");
+        if (!apiKey?.trim()) return;
 
-      if (created.webhookSecret) {
-        const url =
-          window.location.origin +
-          "/api/v1/channels/webhook/" +
-          created.id +
-          "/" +
-          created.webhookSecret +
-          "/orders";
+        await apiRequest("/channels/connections/ozon", {
+          method: "POST",
+          body: JSON.stringify({
+            name: name.trim(),
+            clientId: clientId.trim(),
+            apiKey: apiKey.trim()
+          })
+        });
+      } else if (provider === "WILDBERRIES") {
+        const apiToken = window.prompt("Wildberries Marketplace API token");
+        if (!apiToken?.trim()) return;
 
-        window.prompt(
-          "Webhook URL. Секрет показывается только сейчас:",
-          url
-        );
+        await apiRequest("/channels/connections/wildberries", {
+          method: "POST",
+          body: JSON.stringify({
+            name: name.trim(),
+            apiToken: apiToken.trim()
+          })
+        });
       } else {
-        window.alert(
-          "Канал создан. Авторизация marketplace будет добавлена профильным коннектором."
-        );
+        const created = await apiRequest<{
+          id: string;
+          webhookSecret: string | null;
+        }>("/channels/connections", {
+          method: "POST",
+          body: JSON.stringify({
+            provider,
+            name: name.trim()
+          })
+        });
+
+        if (created.webhookSecret) {
+          const url =
+            window.location.origin +
+            "/api/v1/channels/webhook/" +
+            created.id +
+            "/" +
+            created.webhookSecret +
+            "/orders";
+
+          window.prompt(
+            "Webhook URL. Секрет показывается только сейчас:",
+            url
+          );
+        }
       }
 
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось создать канал");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось создать канал"
+      );
+    }
+  }
+
+  async function sync(connection: Connection) {
+    try {
+      await apiRequest(
+        "/channels/connections/" + connection.id + "/sync",
+        {
+          method: "POST",
+          body: JSON.stringify({})
+        }
+      );
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось запустить синхронизацию"
+      );
     }
   }
 
@@ -143,7 +215,11 @@ export default function ChannelsPage() {
     try {
       setSelected(await apiRequest<Details>("/channels/inbox/" + id));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось открыть заказ");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось открыть заказ"
+      );
     }
   }
 
@@ -177,7 +253,8 @@ export default function ChannelsPage() {
       )
       .join("\n");
 
-    const index = Number(window.prompt("Выберите SKU:\n" + list, "1")) - 1;
+    const index =
+      Number(window.prompt("Выберите SKU:\n" + list, "1")) - 1;
     const product = candidates[index];
     if (!product) return;
 
@@ -198,7 +275,11 @@ export default function ChannelsPage() {
       await openOrder(selected.order.id);
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось сохранить mapping");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось сохранить mapping"
+      );
     }
   }
 
@@ -215,12 +296,20 @@ export default function ChannelsPage() {
       setSelected(null);
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось импортировать заказ");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось импортировать заказ"
+      );
     }
   }
 
   async function ignore(row: InboxRow) {
-    if (!window.confirm("Игнорировать внешний заказ " + row.external_order_id + "?")) {
+    if (
+      !window.confirm(
+        "Игнорировать внешний заказ " + row.external_order_id + "?"
+      )
+    ) {
       return;
     }
 
@@ -231,7 +320,11 @@ export default function ChannelsPage() {
       setSelected(null);
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось игнорировать заказ");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось игнорировать заказ"
+      );
     }
   }
 
@@ -245,7 +338,7 @@ export default function ChannelsPage() {
             <p className="muted">Commerce / Integration Inbox</p>
             <h1>Каналы продаж</h1>
             <p className="workspace-summary">
-              Внешний заказ сначала нормализуется и сопоставляется, и только затем попадает в ERP.
+              Ozon, Wildberries, сайт и API сначала нормализуются в Inbox; ERP меняется только после контролируемого импорта.
             </p>
           </div>
 
@@ -271,7 +364,16 @@ export default function ChannelsPage() {
                 </div>
                 <b>{connection.provider}</b>
               </div>
+
               <dl className="growth-site-meta">
+                <div>
+                  <dt>Последний sync</dt>
+                  <dd>
+                    {connection.last_synced_at
+                      ? new Date(connection.last_synced_at).toLocaleString("ru-RU")
+                      : "Ещё не было"}
+                  </dd>
+                </div>
                 <div>
                   <dt>Последний заказ</dt>
                   <dd>
@@ -287,9 +389,64 @@ export default function ChannelsPage() {
                   </div>
                 ) : null}
               </dl>
+
+              {["OZON", "WILDBERRIES"].includes(connection.provider) ? (
+                <button
+                  onClick={() => void sync(connection)}
+                  type="button"
+                >
+                  Синхронизировать 7 дней
+                </button>
+              ) : null}
             </article>
           ))}
         </div>
+
+        {jobs.length ? (
+          <section className="section-block">
+            <div className="section-heading">
+              <div>
+                <p className="muted">Marketplace sync</p>
+                <h2>Последние синхронизации</h2>
+              </div>
+            </div>
+            <div className="data-table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Канал</th>
+                    <th>Период</th>
+                    <th>Статус</th>
+                    <th>Новых</th>
+                    <th>Обновлено</th>
+                    <th>Попытки</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {jobs.slice(0, 20).map((job) => (
+                    <tr key={job.id}>
+                      <td>
+                        <strong>{job.connection_name}</strong>
+                        <small>{job.provider}</small>
+                      </td>
+                      <td>
+                        {new Date(job.period_from).toLocaleDateString("ru-RU")} —{" "}
+                        {new Date(job.period_to).toLocaleDateString("ru-RU")}
+                      </td>
+                      <td>
+                        <span className="status-pill">{job.status}</span>
+                        {job.last_error ? <small>{job.last_error}</small> : null}
+                      </td>
+                      <td>{job.imported_orders}</td>
+                      <td>{job.updated_orders}</td>
+                      <td>{job.attempts}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
 
         <div className="channel-inbox-layout section-block">
           <div className="data-table-wrap">
