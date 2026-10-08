@@ -8,6 +8,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { DomainEventService } from "../../platform/events/domain-event.service";
+import { AttributionService } from "../growth/attribution.service";
 
 type BookingStatus =
   | "DRAFT"
@@ -22,7 +23,8 @@ type BookingStatus =
 export class BookingService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly events: DomainEventService
+    private readonly events: DomainEventService,
+    private readonly attribution: AttributionService
   ) {}
 
   async services(context: TenantContext): Promise<Array<Record<string, unknown>>> {
@@ -475,6 +477,19 @@ export class BookingService {
         );
       }
 
+      await this.attribution.recordConversion(client, context, {
+        partyId: input.partyId ?? null,
+        sourceType: "SERVICE_BOOKING",
+        sourceId: booking.id,
+        conversionType: "BOOKING",
+        revenueMinor: 0n,
+        currency: service.currency,
+        metadata: {
+          serviceId: input.serviceId,
+          startsAt: startsAt.toISOString()
+        }
+      });
+
       await this.events.enqueue(client, context, {
         eventName: "service.booking_created",
         entityType: "SERVICE_BOOKING",
@@ -664,6 +679,28 @@ export class BookingService {
       const row = result.rows[0];
       if (!row) {
         throw new ConflictException("Запись уже изменена или переход недоступен");
+      }
+
+      if (row.status === "COMPLETED") {
+        const completed = await client.query<{
+          party_id: string | null;
+          currency: string;
+        }>(
+          "SELECT party_id,currency FROM service_booking WHERE tenant_id=$1 AND id=$2",
+          [context.tenantId, bookingId]
+        );
+
+        await this.attribution.recordConversion(client, context, {
+          partyId: completed.rows[0]?.party_id ?? null,
+          sourceType: "SERVICE_BOOKING",
+          sourceId: bookingId,
+          conversionType: "COMPLETED_SERVICE",
+          revenueMinor: 0n,
+          currency: completed.rows[0]?.currency ?? "RUB",
+          metadata: {
+            status: "COMPLETED"
+          }
+        });
       }
 
       await this.events.enqueue(client, context, {
