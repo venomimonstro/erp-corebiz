@@ -9,8 +9,8 @@ declare global {
   }
 }
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
+// A tenant custom domain must use the same-origin API proxy.
+const API_URL = "/api/v1";
 
 export function PublicAnalyticsConsent({
   trackerKey
