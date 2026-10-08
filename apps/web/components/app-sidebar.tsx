@@ -1,0 +1,29 @@
+export function AppSidebar({ active }: { active: string }) {
+  const link = (href: string, label: string, key: string) => (
+    <a className={active === key ? "active" : ""} href={href}>{label}</a>
+  );
+
+  return (
+    <aside className="sidebar">
+      <strong>Business OS</strong>
+      {link("/app", "Сегодня", "dashboard")}
+      {link("/app/work", "Моя работа", "work")}
+
+      <span>CRM</span>
+      {link("/app/crm/deals", "Сделки", "deals")}
+      {link("/app/tasks", "Задачи", "tasks")}
+      {link("/app/crm/customers", "Клиенты", "customers")}
+
+      <span>Бизнес</span>
+      {link("/app/sales/orders", "Заказы", "orders")}
+      {link("/app/catalog/products", "Товары", "products")}
+      {link("/app/purchases", "Закупки", "purchases")}
+      {link("/app/inventory/stock", "Склад", "stock")}
+      {link("/app/finance", "Деньги", "finance")}
+
+      <span>Система</span>
+      {link("/app/support", "Поддержка", "support")}
+      {link("/app/settings", "Настройки", "settings")}
+    </aside>
+  );
+}
