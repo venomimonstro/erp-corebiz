@@ -231,7 +231,7 @@ export class AttributionService {
         "SELECT COALESCE(sum(revenue_minor),0)::text AS revenue " +
         "FROM marketing_conversion WHERE tenant_id=$1 AND status='ACTIVE' " +
         "AND occurred_at >= $2 AND occurred_at < $3 " +
-        "AND conversion_type IN ('PAYMENT','REFUND','COMPLETED_SERVICE')",
+        "AND conversion_type IN ('PAYMENT','REFUND')",
         [context.tenantId, from, to]
       );
 
