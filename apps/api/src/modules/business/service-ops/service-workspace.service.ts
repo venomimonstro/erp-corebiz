@@ -116,22 +116,26 @@ export class ServiceWorkspaceService {
       );
       if (!warehouse.rowCount) throw new NotFoundException("Склад не найден");
 
-      const sku = await client.query(
-        "SELECT 1 FROM sku WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
+      const sku = await client.query<{ cost_price_minor: string }>(
+        "SELECT cost_price_minor::text FROM sku " +
+        "WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
         [context.tenantId, input.skuId]
       );
-      if (!sku.rowCount) throw new NotFoundException("SKU не найден");
+      const skuRow = sku.rows[0];
+      if (!skuRow) throw new NotFoundException("SKU не найден");
 
       const result = await client.query<{ id: string }>(
         "INSERT INTO service_booking_material(" +
-        "tenant_id,booking_id,warehouse_id,sku_id,planned_quantity_milli" +
-        ") VALUES ($1,$2,$3,$4,$5) RETURNING id",
+        "tenant_id,booking_id,warehouse_id,sku_id,planned_quantity_milli," +
+        "unit_cost_minor_snapshot" +
+        ") VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",
         [
           context.tenantId,
           bookingId,
           input.warehouseId,
           input.skuId,
-          quantity.toString()
+          quantity.toString(),
+          skuRow.cost_price_minor
         ]
       );
 
