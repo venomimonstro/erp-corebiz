@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R7 / Sprint 32 — Storefront / Catalog / Cart / Checkout.  
+**Активная разработка:** R7 / Sprint 33 — Forms / CRM / Booking binding.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -322,20 +322,32 @@
 - SSR public renderer;
 - SEO title/meta from published version.
 
-## Активно — Sprint 32: Storefront / Catalog / Cart / Checkout
+### Sprint 32 — Storefront / Catalog / Cart / Checkout
+- storefront_config per site;
+- enable/disable storefront from client workspace;
+- ERP Product/Variant/SKU public catalog;
+- ATP visibility with safety stock;
+- server-side public cart with expiry;
+- quantity updates and cart totals;
+- checkout idempotency;
+- public customer → Party;
+- checkout → SalesService → confirmed SalesOrder;
+- no direct SQL mutation of Sales/Inventory from public request;
+- published PRODUCT_GRID/CATALOG blocks render live storefront;
+- global public_slug storefront resolution.
+
+## Активно — Sprint 33: Forms / CRM / Booking binding
 
 Scope:
-- bind site to internal OWN_SITE channel;
-- public catalog from ERP Product/Variant/SKU;
-- ATP visibility;
-- browser cart;
-- checkout validation and price snapshots;
-- checkout → Integration Inbox READY;
-- idempotent checkout;
-- no public direct write to Sales/Inventory;
-- storefront blocks render live catalog.
+- form bindings per site;
+- public anti-spam/idempotency;
+- CRM lead submission → Party + Deal;
+- booking submission → Party + ServiceBooking;
+- client-side FORM/BOOKING renderers;
+- binding selector in Site Builder;
+- submissions remain tenant isolated;
+- no anonymous direct write to CRM/Booking tables.
 
 ## Следом
 
-Sprint 33 — Forms / CRM / Booking binding.  
 Sprint 34 — Domains / SEO / Analytics auto-wiring.
