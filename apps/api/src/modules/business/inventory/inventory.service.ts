@@ -236,19 +236,35 @@ export class InventoryService {
           );
         }
 
-        const location = await client.query<{ physical_milli: string }>(
-          `SELECT b.physical_milli::text
-           FROM warehouse_location l
-           LEFT JOIN warehouse_location_balance b
-             ON b.tenant_id=l.tenant_id
-            AND b.warehouse_id=l.warehouse_id
-            AND b.location_id=l.id
-            AND b.sku_id=$4
-           WHERE l.tenant_id=$1
-             AND l.warehouse_id=$2
-             AND l.id=$3
-             AND l.status='ACTIVE'
-           FOR UPDATE OF l,b`,
+        const location = await client.query(
+          `SELECT 1
+           FROM warehouse_location
+           WHERE tenant_id=$1
+             AND warehouse_id=$2
+             AND id=$3
+             AND status='ACTIVE'
+           FOR UPDATE`,
+          [
+            context.tenantId,
+            input.warehouseId,
+            options.wmsLocationId
+          ]
+        );
+
+        if (!location.rowCount) {
+          throw new NotFoundException("WMS-ячейка не найдена");
+        }
+
+        const locationBalance = await client.query<{
+          physical_milli: string;
+        }>(
+          `SELECT physical_milli::text
+           FROM warehouse_location_balance
+           WHERE tenant_id=$1
+             AND warehouse_id=$2
+             AND location_id=$3
+             AND sku_id=$4
+           FOR UPDATE`,
           [
             context.tenantId,
             input.warehouseId,
@@ -257,12 +273,8 @@ export class InventoryService {
           ]
         );
 
-        if (!location.rows[0]) {
-          throw new NotFoundException("WMS-ячейка не найдена");
-        }
-
         const locationPhysical =
-          BigInt(location.rows[0].physical_milli ?? "0");
+          BigInt(locationBalance.rows[0]?.physical_milli ?? "0");
 
         if (locationPhysical + delta < 0n) {
           throw new ConflictException(
