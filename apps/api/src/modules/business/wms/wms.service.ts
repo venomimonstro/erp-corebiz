@@ -3258,6 +3258,147 @@ export class WmsService {
     });
   }
 
+  async slottingRecommendations(
+    context:TenantContext,
+    warehouseId:string,
+    daysInput=30
+  ):Promise<Array<Record<string,unknown>>>{
+    const days=this.integer(daysInput,7,90,"Период slotting");
+
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertProfile(client,context.tenantId,warehouseId);
+
+      const result=await client.query(
+        `WITH velocity AS (
+           SELECT
+             m.sku_id,
+             count(*)::int AS pick_events,
+             sum(m.quantity_milli)::bigint AS picked_milli,
+             ceil(sum(m.quantity_milli)::numeric / $3::numeric)::bigint
+               AS avg_daily_milli
+           FROM wms_location_movement m
+           WHERE m.tenant_id=$1
+             AND m.warehouse_id=$2
+             AND m.movement_type='PICK'
+             AND m.created_at>=now()-($3::text||' days')::interval
+           GROUP BY m.sku_id
+         ),
+         storage AS (
+           SELECT
+             b.sku_id,
+             sum(b.physical_milli)::bigint AS storage_milli
+           FROM warehouse_location_balance b
+           JOIN warehouse_location l
+             ON l.tenant_id=b.tenant_id AND l.id=b.location_id
+           JOIN warehouse_zone z
+             ON z.tenant_id=l.tenant_id AND z.id=l.zone_id
+           WHERE b.tenant_id=$1
+             AND b.warehouse_id=$2
+             AND b.physical_milli>0
+             AND l.status='ACTIVE'
+             AND l.is_system=false
+             AND z.status='ACTIVE'
+             AND z.zone_type='STORAGE'
+           GROUP BY b.sku_id
+         )
+         SELECT
+           v.sku_id,
+           s.code AS sku_code,
+           p.name AS product_name,
+           v.pick_events,
+           v.picked_milli::text,
+           v.avg_daily_milli::text,
+           COALESCE(st.storage_milli,0)::text AS storage_milli,
+           r.location_id AS current_pick_location_id,
+           current_location.full_code AS current_pick_location_code,
+           r.min_quantity_milli::text AS current_min_milli,
+           r.max_quantity_milli::text AS current_max_milli,
+           suggested.location_id AS suggested_location_id,
+           suggested.full_code AS suggested_location_code,
+           GREATEST(v.avg_daily_milli,1000)::text AS suggested_min_milli,
+           GREATEST(v.avg_daily_milli*3,3000)::text AS suggested_max_milli,
+           CASE
+             WHEN r.id IS NULL THEN 'CREATE_PICK_FACE'
+             WHEN r.min_quantity_milli IS NULL OR r.max_quantity_milli IS NULL
+               THEN 'SET_THRESHOLDS'
+             WHEN r.min_quantity_milli <
+                    GREATEST(v.avg_daily_milli,1000)*0.5
+               OR r.max_quantity_milli <
+                    GREATEST(v.avg_daily_milli*3,3000)*0.5
+               THEN 'INCREASE_CAPACITY'
+             WHEN r.min_quantity_milli >
+                    GREATEST(v.avg_daily_milli,1000)*2
+               AND r.max_quantity_milli >
+                    GREATEST(v.avg_daily_milli*3,3000)*2
+               THEN 'REDUCE_CAPACITY'
+             ELSE 'OK'
+           END AS recommendation,
+           CASE
+             WHEN COALESCE(st.storage_milli,0)=0
+               THEN 'Нет запаса в STORAGE'
+             WHEN r.id IS NULL
+               THEN 'SKU активно отбирается, но не имеет FIXED_PICK'
+             ELSE 'Порог рассчитан из средней скорости отбора'
+           END AS reason
+         FROM velocity v
+         JOIN sku s
+           ON s.tenant_id=$1 AND s.id=v.sku_id AND s.status='ACTIVE'
+         JOIN product_variant pv
+           ON pv.tenant_id=s.tenant_id AND pv.id=s.variant_id
+         JOIN product p
+           ON p.tenant_id=pv.tenant_id AND p.id=pv.product_id
+         LEFT JOIN storage st ON st.sku_id=v.sku_id
+         LEFT JOIN warehouse_location_sku_rule r
+           ON r.tenant_id=$1
+          AND r.warehouse_id=$2
+          AND r.sku_id=v.sku_id
+          AND r.rule_type='FIXED_PICK'
+         LEFT JOIN warehouse_location current_location
+           ON current_location.tenant_id=r.tenant_id
+          AND current_location.id=r.location_id
+         LEFT JOIN LATERAL (
+           SELECT l.id AS location_id,l.full_code
+           FROM warehouse_location l
+           JOIN warehouse_zone z
+             ON z.tenant_id=l.tenant_id AND z.id=l.zone_id
+           WHERE l.tenant_id=$1
+             AND l.warehouse_id=$2
+             AND l.status='ACTIVE'
+             AND l.is_system=false
+             AND z.status='ACTIVE'
+             AND z.zone_type='PICKING'
+             AND (
+               l.allow_mixed_sku=true OR
+               NOT EXISTS (
+                 SELECT 1
+                 FROM warehouse_location_balance bx
+                 WHERE bx.tenant_id=l.tenant_id
+                   AND bx.warehouse_id=l.warehouse_id
+                   AND bx.location_id=l.id
+                   AND bx.physical_milli>0
+                   AND bx.sku_id<>v.sku_id
+               )
+             )
+           ORDER BY
+             CASE WHEN l.id=r.location_id THEN 0 ELSE 1 END,
+             l.pick_sequence,l.full_code
+           LIMIT 1
+         ) suggested ON true
+         ORDER BY
+           CASE
+             WHEN r.id IS NULL THEN 0
+             ELSE 1
+           END,
+           v.picked_milli DESC,
+           s.code
+         LIMIT 100`,
+        [context.tenantId,warehouseId,days]
+      );
+
+      return result.rows;
+    });
+  }
+
   async reconciliation(
     context:TenantContext,
     warehouseId:string
