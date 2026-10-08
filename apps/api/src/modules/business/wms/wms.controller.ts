@@ -325,6 +325,18 @@ export class WmsController{
     };
   }
 
+  @Get("warehouses/:warehouseId/dispatcher")
+  @RequirePermission("wms.read")
+  async dispatcher(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.dispatcher(this.ctx(req),warehouseId)
+    };
+  }
+
   @Get("warehouses/:warehouseId/reconciliation")
   @RequirePermission("wms.read")
   async reconciliation(
