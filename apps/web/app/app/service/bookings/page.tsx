@@ -65,6 +65,9 @@ export default function BookingsPage() {
   const [selectedService, setSelectedService] = useState("");
   const [selectedResource, setSelectedResource] = useState("");
   const [selectedStart, setSelectedStart] = useState("");
+  const [slotDate, setSlotDate] = useState("");
+  const [availableSlots, setAvailableSlots] = useState<Array<{ resourceId: string; startsAt: string }>>([]);
+  const [slotLoading, setSlotLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [details, setDetails] = useState<Booking | null>(null);
   const [rescheduling, setRescheduling] = useState<Booking | null>(null);
@@ -149,6 +152,39 @@ export default function BookingsPage() {
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать услугу");
+    }
+  }
+
+  async function fetchSlots() {
+    if (!selectedService || !selectedResource || !slotDate) {
+      setError("Выберите услугу, ресурс и день");
+      return;
+    }
+    const from = new Date(slotDate + "T00:00:00");
+    const to = new Date(from);
+    to.setDate(to.getDate() + 1);
+    if (Number.isNaN(from.getTime())) {
+      setError("Некорректная дата");
+      return;
+    }
+    setSlotLoading(true);
+    setError("");
+    setAvailableSlots([]);
+    setSelectedStart("");
+    try {
+      const params = new URLSearchParams({
+        serviceId: selectedService,
+        from: from.toISOString(),
+        to: to.toISOString()
+      });
+      const slots = await apiRequest<Array<{resourceId:string;startsAt:string}>>(
+        "/service/availability?" + params.toString()
+      );
+      setAvailableSlots(slots.filter((slot) => slot.resourceId === selectedResource));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось найти свободное время");
+    } finally {
+      setSlotLoading(false);
     }
   }
 
@@ -289,6 +325,24 @@ export default function BookingsPage() {
               <label>Начало{" "}
                 <input required type="datetime-local" value={selectedStart} onChange={(e) => setSelectedStart(e.target.value)} />
               </label>
+              <label>День{" "}
+                <input type="date" value={slotDate} onChange={(e) => { setSlotDate(e.target.value); setAvailableSlots([]); setSelectedStart(""); }} />
+              </label>
+              <button type="button" className="secondary-button" disabled={slotLoading} onClick={() => void fetchSlots()}>
+                {slotLoading ? "Ищем…" : "Показать свободное время"}
+              </button>
+              {availableSlots.length ? (
+                <label>Свободные слоты{" "}
+                  <select value="" onChange={(e) => setSelectedStart(e.target.value)}>
+                    <option value="">Выбрать время</option>
+                    {availableSlots.map((slot) => (
+                      <option key={slot.startsAt} value={toLocalDateTimeInput(new Date(slot.startsAt))}>
+                        {new Date(slot.startsAt).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <button type="submit" disabled={submitting}>{submitting ? "Сохраняем…" : "Записать"}</button>
               <button className="secondary-button" type="button" onClick={() => setShowCreate(false)}>Отмена</button>
             </div>
