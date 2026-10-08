@@ -277,15 +277,6 @@ export default function WmsMobilePage() {
     }
   }
 
-  function completeEndpoint(taskType: string) {
-    if (taskType === "PUTAWAY") return "complete-putaway";
-    if (taskType === "PICK") return "complete-pick";
-    if (taskType === "PACK") return "complete-pack";
-    if (taskType === "SHIP") return "complete-ship";
-    if (taskType === "REPLENISH") return "complete-replenishment";
-    return null;
-  }
-
   async function completeTask() {
     if (!task) return;
 
@@ -295,7 +286,7 @@ export default function WmsMobilePage() {
       return;
     }
 
-    let path = "";
+    const path = "/wms/mobile/tasks/" + task.id + "/complete";
     let body: Record<string, unknown> | undefined;
 
     if (task.task_type === "COUNT") {
@@ -311,17 +302,9 @@ export default function WmsMobilePage() {
         setError("Некорректный фактический остаток.");
         return;
       }
-      path = "/wms/tasks/" + task.id + "/complete-count";
       body = {
         countedMilli: String(Math.round(quantity * 1000))
       };
-    } else {
-      const endpoint = completeEndpoint(task.task_type);
-      if (!endpoint) {
-        setError("Этот тип задачи пока нельзя завершить с ТСД.");
-        return;
-      }
-      path = "/wms/tasks/" + task.id + "/" + endpoint;
     }
 
     if (!navigator.onLine) {
