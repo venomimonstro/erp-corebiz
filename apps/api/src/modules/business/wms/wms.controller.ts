@@ -268,6 +268,63 @@ export class WmsController{
     return {ok:true,data:{updated:true}};
   }
 
+  @Post("warehouses/:warehouseId/scanner/next")
+  @RequirePermission("wms.manage")
+  async scannerNext(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.scannerNextTask(
+        this.ctx(req),warehouseId
+      )
+    };
+  }
+
+  @Get("scanner/tasks/:taskId")
+  @RequirePermission("wms.read")
+  async scannerTask(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.scannerTask(this.ctx(req),taskId)
+    };
+  }
+
+  @Post("scanner/tasks/:taskId/scan")
+  @RequirePermission("wms.manage")
+  async scannerScan(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string,
+    @Body() body:{
+      scanType:"FROM_LOCATION"|"TO_LOCATION"|"SKU"|"ORDER";
+      value:string;
+    }
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.scanTask(this.ctx(req),taskId,body)
+    };
+  }
+
+  @Post("scanner/tasks/:taskId/complete")
+  @RequirePermission("wms.manage")
+  async scannerComplete(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string,
+    @Body() body:{countedMilli?:string}
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.completeScannerTask(
+        this.ctx(req),taskId,body??{}
+      )
+    };
+  }
+
   @Get("warehouses/:warehouseId/waves")
   @RequirePermission("wms.read")
   async waves(
