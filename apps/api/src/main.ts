@@ -1,17 +1,23 @@
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
+import { getEnv } from "./infrastructure/config/env";
+import { ApiExceptionFilter } from "./infrastructure/http/api-exception.filter";
+import { traceMiddleware } from "./infrastructure/http/trace.middleware";
 
 async function bootstrap(): Promise<void> {
+  const env = getEnv();
+
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true
   });
 
+  app.use(traceMiddleware);
+  app.useGlobalFilters(new ApiExceptionFilter());
   app.setGlobalPrefix("api/v1");
   app.enableShutdownHooks();
 
-  const port = Number(process.env.API_PORT ?? 4000);
-  await app.listen(port, "0.0.0.0");
+  await app.listen(env.apiPort, "0.0.0.0");
 }
 
 void bootstrap();
