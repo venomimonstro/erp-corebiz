@@ -3,7 +3,9 @@ import {
   Module,
   NestModule
 } from "@nestjs/common";
+import { APP_GUARD } from "@nestjs/core";
 import { RedisModule } from "./infrastructure/cache/redis.module";
+import { ApiRateLimitGuard } from "./infrastructure/http/api-rate-limit.guard";
 import { DatabaseModule } from "./infrastructure/database/database.module";
 import { CatalogModule } from "./modules/business/catalog/catalog.module";
 import { CrmModule } from "./modules/business/crm/crm.module";
@@ -51,6 +53,12 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     SupportModule,
     WorkflowModule,
     HealthModule
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ApiRateLimitGuard
+    }
   ]
 })
 export class AppModule implements NestModule {
