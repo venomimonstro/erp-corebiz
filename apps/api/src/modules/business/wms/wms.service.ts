@@ -2822,6 +2822,328 @@ export class WmsService {
     });
   }
 
+  async nextMobileTask(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<Record<string,unknown>|null>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const profile=await client.query(
+        `SELECT 1
+         FROM warehouse_wms_profile
+         WHERE tenant_id=$1 AND warehouse_id=$2
+           AND status='ACTIVE'
+           AND stock_tracking_state='LOCATION_LEDGER'`,
+        [context.tenantId,warehouseId]
+      );
+      if(!profile.rowCount){
+        throw new BadRequestException("Мобильный WMS доступен только для активного ячеечного склада");
+      }
+
+      let task=await client.query<{id:string}>(
+        `SELECT id
+         FROM warehouse_task
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND status='CLAIMED'
+           AND claimed_by_membership_id=$3
+         ORDER BY priority,claimed_at,created_at
+         LIMIT 1
+         FOR UPDATE SKIP LOCKED`,
+        [context.tenantId,warehouseId,context.membershipId]
+      );
+
+      if(!task.rows[0]){
+        task=await client.query<{id:string}>(
+          `SELECT t.id
+           FROM warehouse_task t
+           LEFT JOIN wms_wave w
+             ON w.tenant_id=t.tenant_id AND w.id=t.wave_id
+           WHERE t.tenant_id=$1
+             AND t.warehouse_id=$2
+             AND t.status='OPEN'
+             AND (
+               t.wave_id IS NULL OR
+               w.status IN ('RELEASED','IN_PROGRESS')
+             )
+           ORDER BY
+             CASE WHEN t.wave_id IS NOT NULL THEN 0 ELSE 1 END,
+             COALESCE(w.priority,t.priority),
+             t.priority,
+             t.created_at
+           LIMIT 1
+           FOR UPDATE OF t SKIP LOCKED`,
+          [context.tenantId,warehouseId]
+        );
+
+        if(task.rows[0]){
+          await client.query(
+            `UPDATE warehouse_task
+             SET status='CLAIMED',
+                 claimed_by_membership_id=$3,
+                 claimed_at=COALESCE(claimed_at,now()),
+                 updated_at=now()
+             WHERE tenant_id=$1 AND id=$2`,
+            [context.tenantId,task.rows[0].id,context.membershipId]
+          );
+
+          await client.query(
+            `UPDATE wms_wave w
+             SET status='IN_PROGRESS'
+             FROM warehouse_task t
+             WHERE t.tenant_id=$1
+               AND t.id=$2
+               AND t.wave_id=w.id
+               AND w.tenant_id=t.tenant_id
+               AND w.status='RELEASED'`,
+            [context.tenantId,task.rows[0].id]
+          );
+        }
+      }
+
+      const taskId=task.rows[0]?.id;
+      if(!taskId) return null;
+
+      const detail=await client.query<{
+        id:string;
+        task_type:string;
+        status:string;
+        priority:number;
+        sku_id:string|null;
+        sku_code:string|null;
+        barcode:string|null;
+        product_name:string|null;
+        quantity_milli:string|null;
+        from_code:string|null;
+        from_short_code:string|null;
+        to_code:string|null;
+        to_short_code:string|null;
+        wave_id:string|null;
+        cluster_slot:string|null;
+        instructions:Record<string,unknown>;
+      }>(
+        `SELECT
+           t.id,t.task_type,t.status,t.priority,t.sku_id,
+           s.code AS sku_code,s.barcode,
+           p.name AS product_name,
+           t.quantity_milli::text,
+           fl.full_code AS from_code,fl.code AS from_short_code,
+           tl.full_code AS to_code,tl.code AS to_short_code,
+           t.wave_id,t.cluster_slot,t.instructions
+         FROM warehouse_task t
+         LEFT JOIN sku s
+           ON s.tenant_id=t.tenant_id AND s.id=t.sku_id
+         LEFT JOIN product_variant v
+           ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+         LEFT JOIN product p
+           ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+         LEFT JOIN warehouse_location fl
+           ON fl.tenant_id=t.tenant_id AND fl.id=t.from_location_id
+         LEFT JOIN warehouse_location tl
+           ON tl.tenant_id=t.tenant_id AND tl.id=t.to_location_id
+         WHERE t.tenant_id=$1 AND t.id=$2`,
+        [context.tenantId,taskId]
+      );
+
+      const row=detail.rows[0];
+      if(!row) return null;
+
+      const scans=await client.query<{scan_kind:string}>(
+        `SELECT DISTINCT scan_kind
+         FROM wms_task_scan
+         WHERE tenant_id=$1 AND task_id=$2 AND verified=true`,
+        [context.tenantId,taskId]
+      );
+
+      return {
+        ...row,
+        verifiedScans:scans.rows.map(scan=>scan.scan_kind)
+      };
+    });
+  }
+
+  async scanMobileTask(
+    context:TenantContext,
+    taskId:string,
+    input:{
+      kind:"FROM_LOCATION"|"SKU"|"TO_LOCATION";
+      value:string;
+      idempotencyKey:string;
+    }
+  ):Promise<{verified:true;kind:string}>{
+    const kind=String(input.kind??"").toUpperCase();
+    if(!["FROM_LOCATION","SKU","TO_LOCATION"].includes(kind)){
+      throw new BadRequestException("Неизвестный тип скана");
+    }
+    const value=String(input.value??"").trim();
+    if(!value||value.length>200){
+      throw new BadRequestException("Некорректное значение сканера");
+    }
+    if(!input.idempotencyKey?.trim()||input.idempotencyKey.length>180){
+      throw new BadRequestException("Требуется idempotencyKey скана");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const task=await client.query<{
+        status:string;
+        claimed_by_membership_id:string|null;
+        sku_code:string|null;
+        barcode:string|null;
+        from_code:string|null;
+        from_short_code:string|null;
+        to_code:string|null;
+        to_short_code:string|null;
+      }>(
+        `SELECT
+           t.status,t.claimed_by_membership_id,
+           s.code AS sku_code,s.barcode,
+           fl.full_code AS from_code,fl.code AS from_short_code,
+           tl.full_code AS to_code,tl.code AS to_short_code
+         FROM warehouse_task t
+         LEFT JOIN sku s
+           ON s.tenant_id=t.tenant_id AND s.id=t.sku_id
+         LEFT JOIN warehouse_location fl
+           ON fl.tenant_id=t.tenant_id AND fl.id=t.from_location_id
+         LEFT JOIN warehouse_location tl
+           ON tl.tenant_id=t.tenant_id AND tl.id=t.to_location_id
+         WHERE t.tenant_id=$1 AND t.id=$2
+         FOR UPDATE OF t`,
+        [context.tenantId,taskId]
+      );
+      const row=task.rows[0];
+      if(!row) throw new NotFoundException("WMS-задача не найдена");
+      if(
+        row.status!=="CLAIMED" ||
+        row.claimed_by_membership_id!==context.membershipId
+      ){
+        throw new ConflictException("Задача не находится у текущего сотрудника");
+      }
+
+      const normalized=value.toUpperCase();
+      let valid=false;
+
+      if(kind==="FROM_LOCATION"){
+        valid=Boolean(
+          row.from_code &&
+          [row.from_code,row.from_short_code]
+            .filter(Boolean)
+            .map(item=>String(item).toUpperCase())
+            .includes(normalized)
+        );
+      }else if(kind==="TO_LOCATION"){
+        valid=Boolean(
+          row.to_code &&
+          [row.to_code,row.to_short_code]
+            .filter(Boolean)
+            .map(item=>String(item).toUpperCase())
+            .includes(normalized)
+        );
+      }else{
+        valid=Boolean(
+          row.sku_code &&
+          [row.sku_code,row.barcode]
+            .filter(Boolean)
+            .map(item=>String(item).toUpperCase())
+            .includes(normalized)
+        );
+      }
+
+      if(!valid){
+        throw new ConflictException(
+          kind==="SKU"
+            ? "Отсканирован другой SKU/штрихкод"
+            : "Отсканирована другая складская ячейка"
+        );
+      }
+
+      await client.query(
+        `INSERT INTO wms_task_scan(
+           tenant_id,task_id,scan_kind,scanned_value,verified,
+           idempotency_key,actor_membership_id
+         ) VALUES ($1,$2,$3,$4,true,$5,$6)
+         ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
+        [
+          context.tenantId,taskId,kind,value,
+          input.idempotencyKey.trim(),context.membershipId
+        ]
+      );
+
+      return {verified:true,kind};
+    });
+  }
+
+  async reportMobileTaskProblem(
+    context:TenantContext,
+    taskId:string,
+    input:{
+      exceptionType:
+        |"STOCK_MISMATCH"
+        |"LOCATION_BLOCKED"
+        |"BARCODE_MISMATCH"
+        |"DAMAGE"
+        |"EQUIPMENT"
+        |"OTHER";
+      message?:string;
+    }
+  ):Promise<{blocked:true;exceptionId:string}>{
+    const type=String(input.exceptionType??"").toUpperCase();
+    if(![
+      "STOCK_MISMATCH","LOCATION_BLOCKED","BARCODE_MISMATCH",
+      "DAMAGE","EQUIPMENT","OTHER"
+    ].includes(type)){
+      throw new BadRequestException("Неизвестный тип проблемы");
+    }
+
+    const message=String(input.message??"").trim().slice(0,2000);
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const task=await client.query<{
+        status:string;
+        claimed_by_membership_id:string|null;
+      }>(
+        `SELECT status,claimed_by_membership_id
+         FROM warehouse_task
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,taskId]
+      );
+      const row=task.rows[0];
+      if(!row) throw new NotFoundException("WMS-задача не найдена");
+      if(
+        row.status!=="CLAIMED" ||
+        row.claimed_by_membership_id!==context.membershipId
+      ){
+        throw new ConflictException("Блокировать можно только свою активную задачу");
+      }
+
+      const exception=await client.query<{id:string}>(
+        `INSERT INTO wms_task_exception(
+           tenant_id,task_id,exception_type,message,reported_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5)
+         RETURNING id`,
+        [
+          context.tenantId,taskId,type,message||null,context.membershipId
+        ]
+      );
+
+      await client.query(
+        `UPDATE warehouse_task
+         SET status='BLOCKED',
+             last_error=$3,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [
+          context.tenantId,taskId,
+          (type+(message?": "+message:"")).slice(0,2000)
+        ]
+      );
+
+      return {
+        blocked:true,
+        exceptionId:exception.rows[0]!.id
+      };
+    });
+  }
+
   async reconciliation(
     context:TenantContext,
     warehouseId:string
