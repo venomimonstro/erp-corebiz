@@ -8,12 +8,14 @@ import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { DomainEventService } from "../../platform/events/domain-event.service";
+import { AttributionService } from "../growth/attribution.service";
 
 @Injectable()
 export class FinanceService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly events: DomainEventService
+    private readonly events: DomainEventService,
+    private readonly attribution: AttributionService
   ) {}
 
   async summary(context: TenantContext): Promise<{
@@ -547,6 +549,19 @@ export class FinanceService {
         { orderId: row.id, amountMinor: amount.toString() }
       );
 
+      await this.attribution.recordConversion(client, context, {
+        partyId: row.party_id,
+        sourceType: "PAYMENT",
+        sourceId: payment.id,
+        conversionType: "PAYMENT",
+        revenueMinor: amount,
+        currency: row.currency,
+        metadata: {
+          orderId: row.id,
+          paymentStatus
+        }
+      });
+
       await this.events.enqueue(client, context, {
         eventName: "finance.payment_posted",
         entityType: "PAYMENT",
@@ -852,6 +867,19 @@ export class FinanceService {
         payment.id,
         { orderId: row.id, amountMinor: amount.toString() }
       );
+
+      await this.attribution.recordConversion(client, context, {
+        partyId: row.party_id,
+        sourceType: "PAYMENT",
+        sourceId: payment.id,
+        conversionType: "REFUND",
+        revenueMinor: -amount,
+        currency: row.currency,
+        metadata: {
+          orderId: row.id,
+          paymentStatus
+        }
+      });
 
       await this.events.enqueue(client, context, {
         eventName: "finance.refund_posted",
