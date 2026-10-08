@@ -160,6 +160,9 @@ export class ProcurementService {
     totalMinor: string;
     currency: string;
     expectedAt: string | null;
+    inventoryOwnerId: string;
+    inventoryOwnerName: string;
+    inventoryOwnerType: string;
     version: number;
   }>> {
     return this.database.withTenantTransaction(context, async (client) => {
@@ -171,6 +174,9 @@ export class ProcurementService {
         total_minor: string;
         currency: string;
         expected_at: Date | null;
+        inventory_owner_id: string;
+        inventory_owner_name: string;
+        inventory_owner_type: string;
         version: number;
       }>(
         `SELECT
@@ -181,8 +187,14 @@ export class ProcurementService {
            po.total_minor::text,
            po.currency,
            po.expected_at,
+           po.inventory_owner_id,
+           io.name AS inventory_owner_name,
+           io.owner_type AS inventory_owner_type,
            po.version
          FROM purchase_order po
+         JOIN inventory_owner io
+           ON io.tenant_id=po.tenant_id
+          AND io.id=po.inventory_owner_id
          JOIN party p
            ON p.tenant_id = po.tenant_id
           AND p.id = po.supplier_party_id
@@ -200,6 +212,9 @@ export class ProcurementService {
         totalMinor: row.total_minor,
         currency: row.currency,
         expectedAt: row.expected_at?.toISOString() ?? null,
+        inventoryOwnerId: row.inventory_owner_id,
+        inventoryOwnerName: row.inventory_owner_name,
+        inventoryOwnerType: row.inventory_owner_type,
         version: row.version
       }));
     });
