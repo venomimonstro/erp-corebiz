@@ -958,6 +958,10 @@ export class InventoryService {
         );
       }
 
+      const wmsWarehouseIds = new Set(
+        wmsWarehouses.rows.map((item) => item.warehouse_id)
+      );
+
       const warehouseIds = new Set<string>();
 
       for (const reservation of reservations.rows) {
@@ -997,6 +1001,84 @@ export class InventoryService {
           );
         }
 
+        if (
+          options?.allowWms &&
+          wmsWarehouseIds.has(reservation.warehouse_id)
+        ) {
+          const allocations = await client.query<{
+            id: string;
+            outbound_location_id: string;
+            quantity_milli: string;
+            status: string;
+          }>(
+            `SELECT
+               id,outbound_location_id,quantity_milli::text,status
+             FROM wms_pick_allocation
+             WHERE tenant_id=$1
+               AND reservation_id=$2
+             ORDER BY created_at
+             FOR UPDATE`,
+            [context.tenantId, reservation.id]
+          );
+
+          if (!allocations.rowCount) {
+            throw new ConflictException(
+              "WMS allocation для резерва отсутствует"
+            );
+          }
+
+          const packedQuantity = allocations.rows.reduce(
+            (sum, allocation) => {
+              if (allocation.status !== "PACKED") {
+                throw new ConflictException(
+                  "Не все WMS allocations упакованы"
+                );
+              }
+              return sum + BigInt(allocation.quantity_milli);
+            },
+            0n
+          );
+
+          if (packedQuantity !== quantity) {
+            throw new ConflictException(
+              "Количество WMS allocations не совпадает с резервом"
+            );
+          }
+
+          for (const allocation of allocations.rows) {
+            const outbound = await client.query<{
+              physical_milli: string;
+            }>(
+              `SELECT physical_milli::text
+               FROM warehouse_location_balance
+               WHERE tenant_id=$1
+                 AND warehouse_id=$2
+                 AND location_id=$3
+                 AND sku_id=$4
+               FOR UPDATE`,
+              [
+                context.tenantId,
+                reservation.warehouse_id,
+                allocation.outbound_location_id,
+                reservation.sku_id
+              ]
+            );
+
+            const allocationQuantity = BigInt(
+              allocation.quantity_milli
+            );
+
+            if (
+              BigInt(outbound.rows[0]?.physical_milli ?? "0") <
+              allocationQuantity
+            ) {
+              throw new ConflictException(
+                "В зоне отгрузки недостаточно товара"
+              );
+            }
+          }
+        }
+
         await client.query(
           `UPDATE inventory_balance
            SET physical_milli = physical_milli - $4::bigint,
@@ -1029,6 +1111,76 @@ export class InventoryService {
            WHERE tenant_id = $1 AND id = $2`,
           [context.tenantId, reservation.id]
         );
+
+        if (
+          options?.allowWms &&
+          wmsWarehouseIds.has(reservation.warehouse_id)
+        ) {
+          const allocations = await client.query<{
+            id: string;
+            outbound_location_id: string;
+            quantity_milli: string;
+          }>(
+            `SELECT id,outbound_location_id,quantity_milli::text
+             FROM wms_pick_allocation
+             WHERE tenant_id=$1
+               AND reservation_id=$2
+               AND status='PACKED'
+             ORDER BY created_at
+             FOR UPDATE`,
+            [context.tenantId, reservation.id]
+          );
+
+          for (const allocation of allocations.rows) {
+            await client.query(
+              `UPDATE warehouse_location_balance
+               SET physical_milli=physical_milli-$5::bigint,
+                   updated_at=now()
+               WHERE tenant_id=$1
+                 AND warehouse_id=$2
+                 AND location_id=$3
+                 AND sku_id=$4`,
+              [
+                context.tenantId,
+                reservation.warehouse_id,
+                allocation.outbound_location_id,
+                reservation.sku_id,
+                allocation.quantity_milli
+              ]
+            );
+
+            await client.query(
+              `INSERT INTO wms_location_movement(
+                 tenant_id,warehouse_id,sku_id,movement_type,
+                 from_location_id,quantity_milli,
+                 source_type,source_id,idempotency_key,
+                 actor_membership_id
+               ) VALUES (
+                 $1,$2,$3,'SHIP',
+                 $4,$5,
+                 'SALES_ORDER',$6,$7,$8
+               )
+               ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
+              [
+                context.tenantId,
+                reservation.warehouse_id,
+                reservation.sku_id,
+                allocation.outbound_location_id,
+                allocation.quantity_milli,
+                input.orderId,
+                "wms-ship-allocation:" + allocation.id,
+                context.membershipId
+              ]
+            );
+
+            await client.query(
+              `UPDATE wms_pick_allocation
+               SET status='SHIPPED',shipped_at=now()
+               WHERE tenant_id=$1 AND id=$2`,
+              [context.tenantId, allocation.id]
+            );
+          }
+        }
       }
 
       await client.query(
