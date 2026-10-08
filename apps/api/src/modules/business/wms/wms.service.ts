@@ -3144,6 +3144,124 @@ export class WmsService {
     });
   }
 
+  async completeMobileTask(
+    context:TenantContext,
+    taskId:string,
+    input?:{
+      countedMilli?:string;
+    }
+  ):Promise<Record<string,unknown>>{
+    const task=await this.database.withTenantTransaction(
+      context,
+      async client=>{
+        const result=await client.query<{
+          task_type:string;
+          status:string;
+          claimed_by_membership_id:string|null;
+          from_location_id:string|null;
+          to_location_id:string|null;
+          sku_id:string|null;
+        }>(
+          `SELECT
+             task_type,status,claimed_by_membership_id,
+             from_location_id,to_location_id,sku_id
+           FROM warehouse_task
+           WHERE tenant_id=$1 AND id=$2
+           FOR UPDATE`,
+          [context.tenantId,taskId]
+        );
+        const row=result.rows[0];
+        if(!row) throw new NotFoundException("WMS-задача не найдена");
+        if(row.status==="COMPLETED"){
+          return {...row,already:true};
+        }
+        if(
+          row.status!=="CLAIMED" ||
+          row.claimed_by_membership_id!==context.membershipId
+        ){
+          throw new ConflictException(
+            "Задача не находится у текущего сотрудника"
+          );
+        }
+
+        const required:string[]=[];
+        if(row.from_location_id) required.push("FROM_LOCATION");
+        if(row.sku_id) required.push("SKU");
+        if(row.to_location_id) required.push("TO_LOCATION");
+
+        // PACK/SHIP are document/staging confirmations in current model.
+        // They do not require SKU scan until package/container entities exist.
+        const scanRequired=
+          ["PUTAWAY","PICK","REPLENISH","COUNT"].includes(row.task_type)
+            ? required
+            : [];
+
+        if(row.task_type==="COUNT"){
+          const index=scanRequired.indexOf("TO_LOCATION");
+          if(index>=0) scanRequired.splice(index,1);
+        }
+
+        if(scanRequired.length){
+          const scans=await client.query<{scan_kind:string}>(
+            `SELECT DISTINCT scan_kind
+             FROM wms_task_scan
+             WHERE tenant_id=$1
+               AND task_id=$2
+               AND verified=true`,
+            [context.tenantId,taskId]
+          );
+          const verified=new Set(scans.rows.map(item=>item.scan_kind));
+          const missing=scanRequired.filter(kind=>!verified.has(kind));
+          if(missing.length){
+            throw new ConflictException(
+              "TASK_CONFLICT: не подтверждены сканы " + missing.join(", ")
+            );
+          }
+        }
+
+        return {...row,already:false};
+      }
+    );
+
+    if(task.already){
+      return {completed:true,taskId,reused:true};
+    }
+
+    switch(task.task_type){
+      case "PUTAWAY":
+        await this.completePutaway(context,taskId);
+        break;
+      case "PICK":
+        await this.completePick(context,taskId);
+        break;
+      case "PACK":
+        await this.completePack(context,taskId);
+        break;
+      case "SHIP":
+        await this.completeShip(context,taskId);
+        break;
+      case "REPLENISH":
+        await this.completeReplenishment(context,taskId);
+        break;
+      case "COUNT":
+        if(!input?.countedMilli){
+          throw new BadRequestException(
+            "Для COUNT требуется фактическое количество"
+          );
+        }
+        await this.completeCycleCountTask(
+          context,taskId,input.countedMilli
+        );
+        break;
+      default:
+        throw new BadRequestException(
+          "Этот тип задачи пока не поддерживает мобильное завершение"
+        );
+    }
+
+    return {completed:true,taskId};
+  }
+
   async reconciliation(
     context:TenantContext,
     warehouseId:string
