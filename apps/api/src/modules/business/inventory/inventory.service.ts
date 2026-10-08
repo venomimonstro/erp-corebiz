@@ -1289,6 +1289,135 @@ export class InventoryService {
   }
 
 
+  async receiveCustomerReturn(
+    client: PoolClient,
+    context: TenantContext,
+    input: {
+      returnRequestId: string;
+      returnLineId: string;
+      warehouseId: string;
+      skuId: string;
+      quantityMilli: bigint;
+      idempotencyKey: string;
+    }
+  ): Promise<{ movementId: string; applied: boolean }> {
+    if (input.quantityMilli <= 0n) {
+      throw new BadRequestException("Количество возврата должно быть больше нуля");
+    }
+    if (!input.idempotencyKey?.trim()) {
+      throw new BadRequestException("Требуется ключ идемпотентности");
+    }
+
+    return this.postMovement(client, context, {
+      warehouseId: input.warehouseId,
+      skuId: input.skuId,
+      movementType: "RETURN",
+      quantityDeltaMilli: input.quantityMilli,
+      sourceType: "RETURN_REQUEST",
+      sourceId: input.returnRequestId,
+      sourceLineId: input.returnLineId,
+      reason: "Возврат клиента в доступный остаток",
+      idempotencyKey:
+        "return-request:" +
+        input.returnRequestId +
+        ":line:" +
+        input.returnLineId +
+        ":" +
+        input.idempotencyKey.trim()
+    });
+  }
+
+  async releaseOrderReservations(
+    client: PoolClient,
+    context: TenantContext,
+    input: {
+      orderId: string;
+      reason: string;
+    }
+  ): Promise<number> {
+    const reservations = await client.query<{
+      id: string;
+      warehouse_id: string;
+      sku_id: string;
+      quantity_milli: string;
+    }>(
+      `SELECT id,warehouse_id,sku_id,quantity_milli::text
+       FROM inventory_reservation
+       WHERE tenant_id=$1
+         AND sales_order_id=$2
+         AND status='ACTIVE'
+       ORDER BY warehouse_id,id
+       FOR UPDATE`,
+      [context.tenantId, input.orderId]
+    );
+
+    let released = 0;
+
+    for (const reservation of reservations.rows) {
+      await this.lockBalance(
+        client,
+        context.tenantId,
+        reservation.warehouse_id,
+        reservation.sku_id
+      );
+
+      const quantity = BigInt(reservation.quantity_milli);
+      const balance = await client.query<{ reserved_milli: string }>(
+        `SELECT reserved_milli::text
+         FROM inventory_balance
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND sku_id=$3
+         FOR UPDATE`,
+        [
+          context.tenantId,
+          reservation.warehouse_id,
+          reservation.sku_id
+        ]
+      );
+
+      if (BigInt(balance.rows[0]?.reserved_milli ?? "0") < quantity) {
+        throw new ConflictException(
+          "Резерв склада меньше reservation; требуется ручная сверка"
+        );
+      }
+
+      await client.query(
+        `UPDATE inventory_balance
+         SET reserved_milli=reserved_milli-$4::bigint,
+             updated_at=now()
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND sku_id=$3`,
+        [
+          context.tenantId,
+          reservation.warehouse_id,
+          reservation.sku_id,
+          quantity.toString()
+        ]
+      );
+
+      await client.query(
+        `UPDATE inventory_reservation
+         SET status='RELEASED',released_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId, reservation.id]
+      );
+
+      released += 1;
+    }
+
+    if (released > 0) {
+      await this.audit(
+        client,
+        context,
+        "inventory.order_reservations_released",
+        "sales_order",
+        input.orderId,
+        { released, reason: input.reason }
+      );
+    }
+
+    return released;
+  }
+
+
   async consumeForService(
     client: PoolClient,
     context: TenantContext,
