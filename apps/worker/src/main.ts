@@ -602,6 +602,30 @@ async function processMarketingJob(job: MarketingJob): Promise<void> {
         );
 
         await client.query(
+          "INSERT INTO marketing_campaign_alias(" +
+          "tenant_id,campaign_id,alias_type,alias_value" +
+          ") VALUES ($1,$2,'EXTERNAL_ID',$3) ON CONFLICT DO NOTHING",
+          [
+            job.tenant_id,
+            campaign.rows[0]!.id,
+            campaignExternalId
+          ]
+        );
+
+        if (campaignName) {
+          await client.query(
+            "INSERT INTO marketing_campaign_alias(" +
+            "tenant_id,campaign_id,alias_type,alias_value" +
+            ") VALUES ($1,$2,'NAME',$3) ON CONFLICT DO NOTHING",
+            [
+              job.tenant_id,
+              campaign.rows[0]!.id,
+              campaignName.slice(0, 500)
+            ]
+          );
+        }
+
+        await client.query(
           "INSERT INTO marketing_daily_stat(" +
           "tenant_id,connection_id,campaign_id,stat_date,impressions,clicks,spend_minor,raw" +
           ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8) " +
