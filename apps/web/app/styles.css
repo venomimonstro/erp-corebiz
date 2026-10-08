@@ -776,3 +776,58 @@ button, .primary, .secondary { font: inherit; }
   .wms-dispatcher-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .wms-exception-list article { display:grid; }
 }
+
+
+/* WMS mobile / TSD */
+.wms-mobile { min-height:100vh; background:#f4f5f6; color:#181a1d; font-family:Inter,system-ui,sans-serif; }
+.wms-mobile-topbar { position:sticky; top:0; z-index:20; display:flex; justify-content:space-between; gap:12px; align-items:center; padding:14px 16px; background:#fff; border-bottom:1px solid #e5e7e9; }
+.wms-mobile-topbar > div { display:grid; gap:2px; }
+.wms-mobile-topbar strong { font-size:15px; }
+.wms-mobile-topbar span { font-size:11px; }
+.wms-mobile-topbar .online { color:#287c45; }
+.wms-mobile-topbar .offline { color:#a34732; }
+.wms-mobile-topbar select { max-width:48vw; border:1px solid #dfe2e5; border-radius:10px; padding:9px 10px; background:#fff; }
+.wms-mobile-main { max-width:720px; margin:0 auto; padding:16px; display:grid; gap:14px; }
+.wms-mobile-error,.wms-mobile-message { border-radius:12px; padding:12px 14px; font-size:13px; }
+.wms-mobile-error { background:#fff0ef; color:#8d2d28; }
+.wms-mobile-message { background:#eef7f0; color:#356340; }
+.wms-mobile-empty { min-height:62vh; display:grid; place-items:center; align-content:center; text-align:center; gap:10px; }
+.wms-mobile-empty span { font-size:12px; color:#777d84; text-transform:uppercase; letter-spacing:.08em; }
+.wms-mobile-empty h1 { margin:0; max-width:420px; font-size:34px; letter-spacing:-.045em; }
+.wms-mobile-empty button { margin-top:12px; min-width:220px; padding:15px 18px; border:0; border-radius:12px; background:#181a1d; color:#fff; font-weight:700; }
+.wms-mobile-task { background:#fff; border:1px solid #e1e4e6; border-radius:20px; padding:18px; display:grid; gap:18px; }
+.wms-mobile-task-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; }
+.wms-mobile-task-head > div { display:grid; gap:4px; }
+.wms-mobile-task-head span { color:#777d84; font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+.wms-mobile-task-head h1 { margin:0; font-size:28px; letter-spacing:-.04em; line-height:1.05; }
+.wms-mobile-task-head > strong { min-width:68px; text-align:center; font-size:24px; border-radius:14px; background:#f2f3f4; padding:12px; }
+.wms-mobile-route { display:grid; grid-template-columns:1fr auto 1fr; gap:10px; align-items:center; }
+.wms-mobile-route > div { border:1px solid #e3e6e8; border-radius:14px; padding:14px; display:grid; gap:4px; }
+.wms-mobile-route span,.wms-mobile-sku span { font-size:10px; color:#777d84; text-transform:uppercase; }
+.wms-mobile-route strong { font-size:20px; letter-spacing:-.03em; }
+.wms-mobile-route b { color:#8b9096; }
+.wms-mobile-sku { display:grid; gap:3px; border-top:1px solid #eceef0; padding-top:14px; }
+.wms-mobile-sku strong { font-size:20px; }
+.wms-mobile-sku small { color:#777d84; }
+.wms-mobile-scan { background:#fff; border:1px solid #e1e4e6; border-radius:20px; padding:16px; display:grid; gap:14px; }
+.wms-mobile-scan-progress { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+.wms-mobile-scan-progress span { text-align:center; padding:8px 6px; border-radius:9px; background:#f1f2f3; color:#8b9096; font-size:11px; }
+.wms-mobile-scan-progress span.current { background:#e8eef8; color:#254f8d; font-weight:700; }
+.wms-mobile-scan-progress span.done { background:#e8f4eb; color:#2d6b3d; }
+.wms-mobile-scan label { display:grid; gap:7px; }
+.wms-mobile-scan label span { font-weight:700; }
+.wms-mobile-scan input { width:100%; box-sizing:border-box; border:2px solid #181a1d; border-radius:12px; padding:15px 14px; font:inherit; font-size:18px; }
+.wms-mobile-scan button.secondary { border:1px solid #dfe2e5; background:#fff; border-radius:10px; padding:11px 14px; }
+.wms-mobile-actions { position:sticky; bottom:0; display:grid; grid-template-columns:.7fr 1.3fr; gap:10px; padding:10px 0 4px; background:linear-gradient(to top,#f4f5f6 78%,transparent); }
+.wms-mobile-actions button { min-height:58px; border-radius:14px; font-size:16px; font-weight:700; }
+.wms-mobile-actions .problem { border:1px solid #dfb9ae; background:#fff; color:#8d2d28; }
+.wms-mobile-actions .complete { border:0; background:#181a1d; color:#fff; }
+.wms-mobile-actions button:disabled { opacity:.45; }
+
+@media (max-width:560px) {
+  .wms-mobile-topbar { align-items:flex-start; }
+  .wms-mobile-topbar select { max-width:52vw; }
+  .wms-mobile-main { padding:10px; }
+  .wms-mobile-task-head h1 { font-size:24px; }
+  .wms-mobile-route strong { font-size:17px; }
+}
