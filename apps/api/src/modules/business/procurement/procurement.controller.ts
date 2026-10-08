@@ -62,6 +62,7 @@ export class ProcurementController {
     @Body() body: {
       supplierPartyId: string;
       destinationBranchId?: string;
+      destinationWarehouseId?: string;
       expectedAt?: string;
       notes?: string;
       lines: Array<{
