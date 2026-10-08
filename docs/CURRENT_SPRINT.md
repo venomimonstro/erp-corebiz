@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R8 / Sprint 39 — Wave / Cluster Picking / Dispatcher.  
+**Активная разработка:** R8 / Sprint 40 — TSD / PWA scanner-first execution.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -414,19 +414,31 @@
 - REPLENISH task completion with reconciliation;
 - client UI for count/replenishment/pick-face setup.
 
-## Активно — Sprint 39: Wave / Cluster Picking / Dispatcher
+### Sprint 39 — Wave / Cluster Picking / Dispatcher
+- existing PICK tasks grouped without changing reservation quantities;
+- ORDER / BATCH / ZONE / CLUSTER strategies;
+- DRAFT → RELEASED → IN_PROGRESS → COMPLETED lifecycle;
+- cluster slot per sales order;
+- wave priority and size;
+- claim-next with SKIP LOCKED;
+- dispatcher progress counters;
+- automatic wave completion after final PICK;
+- no inventory mutation in wave orchestration.
+
+## Активно — Sprint 40: TSD / PWA scanner-first execution
 
 Scope:
-- group existing PICK tasks into waves;
-- ORDER / BATCH / ZONE / CLUSTER strategies;
-- release lifecycle;
-- cluster slots by sales order;
-- wave priority;
-- claim-next task;
-- dispatcher progress and exceptions;
-- no quantity mutation in wave orchestration itself.
+- mobile warehouse workspace;
+- next task command;
+- keyboard-wedge scanner input;
+- server-side FROM / SKU / TO scan validation;
+- immutable scan audit;
+- task problem/block flow;
+- offline client queue with idempotent replay;
+- PWA manifest/service worker;
+- no hidden inventory mutation from scanner endpoints.
 
 ## Следом
 
-Sprint 40 — TSD / PWA scanner-first execution.
+Sprint 41 — Advanced WMS dispatcher / labor metrics.
 
