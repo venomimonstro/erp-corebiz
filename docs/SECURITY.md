@@ -21,7 +21,10 @@ Tenant A не получает данные Tenant B через:
 
 DB application role:
 - не owner;
-- без BYPASSRLS.
+- NOSUPERUSER и NOBYPASSRLS;
+- миграции выполняются отдельной ролью, не runtime-подключением;
+- вход и восстановление сессии обязаны работать через строго ограниченный auth lookup без глобального обхода RLS;
+- SQL-диагностика: `scripts/security_postgres_rls_diagnostic.sql` запускается под реальной production app role.
 
 ## 3. Authentication
 
@@ -141,7 +144,7 @@ Secrets manager / envelope encryption for connector credentials.
 - credentials separate;
 - scheduled restore drills.
 
-## 13. CI security gate
+## 13. Обязательный ручной security gate (без CI/Actions)
 
 Любой tenant-owned endpoint тестируется:
 - Tenant A creates;
