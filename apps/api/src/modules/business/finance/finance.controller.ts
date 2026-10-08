@@ -16,6 +16,30 @@ import { FinanceService } from "./finance.service";
 export class FinanceController {
   constructor(private readonly finance: FinanceService) {}
 
+  @Get("bank-statements")
+  @RequirePermission("finance.read")
+  async bankStatements(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.finance.bankStatements(this.context(request))};
+  }
+
+  @Get("bank-statements/:statementId/lines")
+  @RequirePermission("finance.read")
+  async bankStatementLines(@Req() request:AuthenticatedRequest,@Param("statementId") statementId:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.finance.bankStatementLines(this.context(request),statementId)};
+  }
+
+  @Post("bank-statements/match")
+  @RequirePermission("finance.write")
+  async matchBankLine(@Req() request:AuthenticatedRequest,@Body() body:{lineId:string;paymentId:string}):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.finance.matchBankLine(this.context(request),body)};
+  }
+
+  @Post("bank-statements/:statementId/reconcile")
+  @RequirePermission("finance.write")
+  async reconcileBankStatement(@Req() request:AuthenticatedRequest,@Param("statementId") statementId:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.finance.reconcileBankStatement(this.context(request),statementId)};
+  }
+
   @Get("summary")
   @RequirePermission("finance.read")
   async summary(@Req() request: AuthenticatedRequest): Promise<ApiSuccess<unknown>> {
