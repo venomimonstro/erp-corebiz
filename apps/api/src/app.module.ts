@@ -3,6 +3,7 @@ import {
   Module,
   NestModule
 } from "@nestjs/common";
+import { RedisModule } from "./infrastructure/cache/redis.module";
 import { DatabaseModule } from "./infrastructure/database/database.module";
 import { CrmModule } from "./modules/business/crm/crm.module";
 import { PartyModule } from "./modules/business/party/party.module";
@@ -17,6 +18,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
 @Module({
   imports: [
     DatabaseModule,
+    RedisModule,
     TenantContextModule,
     AuthModule,
     AuthorizationModule,
