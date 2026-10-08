@@ -26,6 +26,10 @@ export function AppSidebar({ active }: { active: string }) {
       {link("/app/inventory/stock", "Склад", "stock")}
       {link("/app/finance", "Деньги", "finance")}
 
+      <span>Аналитика</span>
+      {link("/app/analytics", "Сквозная аналитика", "analytics")}
+      {link("/app/analytics/settings", "Трекер", "analytics-settings")}
+
       <span>Система</span>
       {link("/app/support", "Поддержка", "support")}
       {link("/app/settings", "Настройки", "settings")}
