@@ -8,6 +8,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { InventoryService } from "../inventory/inventory.service";
+import { FinanceService } from "../finance/finance.service";
 
 type PurchaseLineInput = {
   skuId: string;
@@ -24,7 +25,8 @@ type ReceiptLineInput = {
 export class ProcurementService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly inventory: InventoryService
+    private readonly inventory: InventoryService,
+    private readonly finance: FinanceService
   ) {}
 
   async listSuppliers(context: TenantContext): Promise<Array<{
@@ -417,6 +419,8 @@ export class ProcurementService {
           "Закупка уже изменена или не может быть подтверждена"
         );
       }
+
+      await this.finance.createPurchasePayable(client, context, order.id);
 
       await this.audit(
         client,
