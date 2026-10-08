@@ -252,6 +252,26 @@ export class SiteDomainsService{
     };
   }
 
+  async publicRoutesByHost(
+    hostInput:string
+  ):Promise<Array<{pageSlug:string;publishedAt:string;publicSlug:string}>>{
+    const host=this.hostname(hostInput);
+    const result=await this.database.query<{
+      page_slug:string;
+      published_at:Date;
+      public_slug:string;
+    }>(
+      `SELECT * FROM corebiz_public_site_routes_by_host($1)`,
+      [host]
+    );
+    if(!result.rowCount) throw new NotFoundException("Сайт не найден");
+    return result.rows.map(row=>({
+      pageSlug:row.page_slug,
+      publishedAt:row.published_at.toISOString(),
+      publicSlug:row.public_slug
+    }));
+  }
+
   private hostname(value:string):string{
     const raw=value.trim().toLowerCase().replace(/\.$/,"");
     if(raw.length<4||raw.length>253||raw.includes("/")||raw.includes(":")){
