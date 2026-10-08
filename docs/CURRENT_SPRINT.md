@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R7 / Sprint 34 — Domains / SEO / Analytics auto-wiring.  
+**Активная разработка:** R8 / Sprint 35 — WMS Address Storage Foundation.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -349,20 +349,38 @@
 - structured binding selector in Site Builder;
 - public FORM / BOOKING renderers.
 
-## Активно — Sprint 34: Domains / SEO / Analytics auto-wiring
+### Sprint 34 — Domains / SEO / Analytics auto-wiring
+- globally unique custom hostnames;
+- DNS TXT verification;
+- VERIFIED → ACTIVE lifecycle;
+- one primary domain per site;
+- custom-domain host routing in Next;
+- SEO robots / canonical / Open Graph;
+- SSR metadata;
+- public sitemap.xml / robots.txt for slug and custom domain;
+- site → first-party tracker binding;
+- tracker allowlist updated on domain activation;
+- analytics consent before script load;
+- no cross-tenant hostname collisions.
+
+**R7 Gate:** business can launch a public site/store, collect CRM leads/bookings/orders, use its own domain, and connect first-party marketing analytics without a separate CMS/landing/lead-form stack.
+
+## Активно — Sprint 35: WMS Address Storage Foundation
 
 Scope:
-- custom domain lifecycle;
-- DNS verification;
-- primary domain;
-- SEO robots/canonical/OG in editor and SSR metadata;
-- public host resolution;
-- automatic Tracker Site creation/binding;
-- published site injects first-party tracker only when configured;
-- sitemap/robots foundations;
-- no cross-tenant hostname collisions.
+- optional WMS profile per warehouse;
+- warehouse zones;
+- hierarchical address locations;
+- receiving/storage/picking/packing/shipping/quarantine zones;
+- cell capacity and lock state;
+- 2D coordinates for topology;
+- put-away eligibility metadata;
+- WMS workspace without affecting simple warehouses;
+- no duplicate inventory source of truth.
 
 ## Следом
 
-R8 / Sprint 35 — WMS address storage foundation.
+Sprint 36 — Receiving / Put-away Tasks.  
+Sprint 37 — Picking / Packing / Shipping Tasks.  
+Sprint 38 — Cycle Count / Replenishment.
 
