@@ -1,11 +1,12 @@
 import { Injectable, OnModuleDestroy } from "@nestjs/common";
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 import type { TenantContext } from "@corebiz/contracts";
+import { getEnv } from "../config/env";
 
 @Injectable()
 export class DatabaseService implements OnModuleDestroy {
   private readonly pool = new Pool({
-    connectionString: process.env.DATABASE_URL
+    connectionString: getEnv().databaseUrl
   });
 
   async query<T extends QueryResultRow = QueryResultRow>(
