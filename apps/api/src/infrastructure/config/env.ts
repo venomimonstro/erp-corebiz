@@ -4,6 +4,7 @@ export type AppEnv = Readonly<{
   databaseUrl: string;
   redisUrl: string;
   sessionSecret: string;
+  webOrigin: string;
 }>;
 
 let cached: AppEnv | undefined;
@@ -40,7 +41,8 @@ export function getEnv(): AppEnv {
     apiPort: parsePort(process.env.API_PORT),
     databaseUrl: required("DATABASE_URL"),
     redisUrl: required("REDIS_URL"),
-    sessionSecret
+    sessionSecret,
+    webOrigin: required("WEB_ORIGIN")
   };
 
   return cached;
