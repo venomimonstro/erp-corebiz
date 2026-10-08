@@ -55,6 +55,12 @@ export class ChannelsService {
     id: string;
     webhookSecret: string | null;
   }> {
+    if (!["OWN_SITE", "API"].includes(input.provider)) {
+      throw new BadRequestException(
+        "Marketplace-каналы подключаются только через профильный endpoint с credentials"
+      );
+    }
+
     const name = input.name.trim();
     if (name.length < 2 || name.length > 160) {
       throw new BadRequestException("Некорректное название канала");
