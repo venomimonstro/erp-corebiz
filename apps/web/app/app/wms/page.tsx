@@ -113,6 +113,18 @@ type Dispatcher = {
     status: string;
     count: number;
   }>;
+  slaBreaches: Array<{
+    id: string;
+    task_type: string;
+    status: string;
+    priority: number;
+    claimed_by_membership_id: string | null;
+    assignee_email: string | null;
+    warning_minutes: number;
+    critical_minutes: number;
+    age_minutes: string | number;
+    sla_state: "WARNING" | "CRITICAL";
+  }>;
   exceptions: Array<{
     id: string;
     exception_id: string | null;
@@ -185,6 +197,13 @@ type SlottingRecommendation = {
 };
 
 
+
+type SlaPolicy = {
+  task_type: string;
+  warning_minutes: number;
+  critical_minutes: number;
+  enabled: boolean;
+};
 
 type Topology = {
   profile: {
@@ -261,7 +280,7 @@ export default function WmsPage() {
       setTopology(next);
 
       if (next.profile?.stock_tracking_state === "LOCATION_LEDGER") {
-        const [locationRows, taskRows, waveRows, dispatcherData, laborData, slottingRows] = await Promise.all([
+        const [locationRows, taskRows, waveRows, dispatcherData, laborData, slottingRows, slaRows] = await Promise.all([
           apiRequest<LocationBalance[]>(
             "/wms/warehouses/" + id + "/location-balances"
           ),
@@ -279,6 +298,9 @@ export default function WmsPage() {
           ),
           apiRequest<SlottingRecommendation[]>(
             "/wms/warehouses/" + id + "/slotting?days=30"
+          ),
+          apiRequest<SlaPolicy[]>(
+            "/wms/warehouses/" + id + "/sla"
           )
         ]);
         setBalances(locationRows);
@@ -287,6 +309,7 @@ export default function WmsPage() {
         setDispatcher(dispatcherData);
         setLabor(laborData);
         setSlotting(slottingRows);
+        setSlaPolicies(slaRows);
       } else {
         setBalances([]);
         setTasks([]);
@@ -294,6 +317,7 @@ export default function WmsPage() {
         setDispatcher(null);
         setLabor(null);
         setSlotting([]);
+        setSlaPolicies([]);
       }
 
       setError("");
@@ -457,18 +481,115 @@ export default function WmsPage() {
     }
   }
 
-  async function requeueException(exceptionId: string) {
+  async function resolveException(
+    exceptionId: string,
+    taskStatus: string
+  ) {
+    const action =
+      taskStatus === "BLOCKED"
+        ? "RESUME"
+        : taskStatus === "FAILED"
+          ? "RETRY"
+          : null;
+
+    if (!action) {
+      setError("Эту задачу нельзя вернуть в работу из текущего статуса.");
+      return;
+    }
+
+    const note = window.prompt(
+      action === "RESUME"
+        ? "Комментарий: почему задачу можно продолжить?"
+        : "Комментарий: что исправлено перед повтором?",
+      ""
+    );
+    if (note === null) return;
+
     try {
       await apiRequest("/wms/exceptions/" + exceptionId + "/resolve", {
         method: "POST",
-        body: JSON.stringify({ action: "REQUEUE" })
+        body: JSON.stringify({
+          action,
+          note: note.trim() || undefined
+        })
       });
       await loadTopology(warehouseId);
     } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
-          : "Не удалось вернуть задачу в очередь"
+          : "Не удалось обработать исключение"
+      );
+    }
+  }
+
+  async function configureSla() {
+    if (!warehouseId) return;
+
+    const list = slaPolicies
+      .map(
+        (policy, index) =>
+          (index + 1) +
+          ". " +
+          policy.task_type +
+          " · " +
+          policy.warning_minutes +
+          "/" +
+          policy.critical_minutes +
+          " мин"
+      )
+      .join("\n");
+
+    const index =
+      Number(window.prompt("Выберите тип задачи:\n" + list, "1")) - 1;
+    const policy = slaPolicies[index];
+    if (!policy) return;
+
+    const warningRaw = window.prompt(
+      "Warning SLA, минут",
+      String(policy.warning_minutes)
+    );
+    if (warningRaw === null) return;
+
+    const criticalRaw = window.prompt(
+      "Critical SLA, минут",
+      String(policy.critical_minutes)
+    );
+    if (criticalRaw === null) return;
+
+    const warning = Number(warningRaw);
+    const critical = Number(criticalRaw);
+    if (
+      !Number.isInteger(warning) ||
+      !Number.isInteger(critical) ||
+      warning < 1 ||
+      critical < warning
+    ) {
+      setError("Некорректные SLA-пороги.");
+      return;
+    }
+
+    try {
+      await apiRequest(
+        "/wms/warehouses/" +
+          warehouseId +
+          "/sla/" +
+          policy.task_type,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            warningMinutes: warning,
+            criticalMinutes: critical,
+            enabled: true
+          })
+        }
+      );
+      await loadTopology(warehouseId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось сохранить SLA"
       );
     }
   }
@@ -1220,6 +1341,13 @@ export default function WmsPage() {
                           <p className="muted">Dispatcher</p>
                           <h2>Поток склада</h2>
                         </div>
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => void configureSla()}
+                        >
+                          Настроить SLA
+                        </button>
                       </div>
 
                       <div className="wms-dispatcher-grid">
@@ -1239,6 +1367,14 @@ export default function WmsPage() {
                           <span>Исключения</span>
                           <strong>{dispatcher?.exceptions.length ?? 0}</strong>
                         </article>
+                        <article>
+                          <span>SLA критично</span>
+                          <strong>
+                            {dispatcher?.slaBreaches.filter(
+                              (item) => item.sla_state === "CRITICAL"
+                            ).length ?? 0}
+                          </strong>
+                        </article>
                       </div>
 
                       {dispatcher?.backlog.oldest_open_at ? (
@@ -1246,6 +1382,28 @@ export default function WmsPage() {
                           Самая старая открытая задача:{" "}
                           {new Date(dispatcher.backlog.oldest_open_at).toLocaleString("ru-RU")}
                         </p>
+                      ) : null}
+
+                      {dispatcher?.slaBreaches.length ? (
+                        <div className="wms-exception-list">
+                          {dispatcher.slaBreaches.slice(0, 10).map((item) => (
+                            <article key={"sla-" + item.id}>
+                              <div>
+                                <strong>
+                                  SLA {item.sla_state} · {item.task_type}
+                                </strong>
+                                <span>
+                                  {item.assignee_email ?? "Не назначено"} ·{" "}
+                                  {Number(item.age_minutes).toFixed(1)} мин
+                                </span>
+                              </div>
+                              <small>
+                                Порог: {item.warning_minutes} /{" "}
+                                {item.critical_minutes} мин
+                              </small>
+                            </article>
+                          ))}
+                        </div>
                       ) : null}
 
                       {dispatcher?.exceptions.length ? (
@@ -1260,13 +1418,21 @@ export default function WmsPage() {
                                 </span>
                               </div>
                               <small>{item.last_error ?? "Задача слишком долго находится в работе"}</small>
-                              {item.exception_id && item.status === "BLOCKED" ? (
+                              {item.exception_id &&
+                              ["BLOCKED","FAILED"].includes(item.status) ? (
                                 <button
                                   className="secondary-button"
                                   type="button"
-                                  onClick={() => void requeueException(item.exception_id!)}
+                                  onClick={() =>
+                                    void resolveException(
+                                      item.exception_id!,
+                                      item.status
+                                    )
+                                  }
                                 >
-                                  Вернуть в очередь
+                                  {item.status === "BLOCKED"
+                                    ? "Продолжить"
+                                    : "Повторить"}
                                 </button>
                               ) : null}
                             </article>
@@ -1381,10 +1547,10 @@ export default function WmsPage() {
                       </div>
 
                       <div className="wms-risk-row">
-                        <span>до 15м: <b>{labor?.backlogRisk.fresh ?? 0}</b></span>
-                        <span>15–30м: <b>{labor?.backlogRisk.watch ?? 0}</b></span>
-                        <span>30–60м: <b>{labor?.backlogRisk.risk ?? 0}</b></span>
-                        <span>60м+: <b>{labor?.backlogRisk.critical ?? 0}</b></span>
+                        <span>В норме: <b>{labor?.backlogRisk.fresh ?? 0}</b></span>
+                        <span>Warning open: <b>{labor?.backlogRisk.watch ?? 0}</b></span>
+                        <span>Warning active: <b>{labor?.backlogRisk.risk ?? 0}</b></span>
+                        <span>Critical: <b>{labor?.backlogRisk.critical ?? 0}</b></span>
                       </div>
 
                       {labor?.operators.length ? (
