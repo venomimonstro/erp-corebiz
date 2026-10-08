@@ -4094,6 +4094,306 @@ export class WmsService {
     });
   }
 
+  async initializeOwnerLedger(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<{
+    initialized:boolean;
+    ownerId:string;
+    skuCount:number;
+    locationRows:number;
+  }>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const profile=await client.query<{
+        stock_tracking_state:string;
+        owner_tracking_state:string;
+      }>(
+        `SELECT stock_tracking_state,owner_tracking_state
+         FROM warehouse_wms_profile
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND status='ACTIVE'
+         FOR UPDATE`,
+        [context.tenantId,warehouseId]
+      );
+
+      const profileRow=profile.rows[0];
+      if(!profileRow){
+        throw new NotFoundException("Активный WMS-профиль склада не найден");
+      }
+      if(profileRow.stock_tracking_state!=="LOCATION_LEDGER"){
+        throw new BadRequestException(
+          "Owner ledger можно включить только после инициализации ячеечного WMS"
+        );
+      }
+
+      const owner=await client.query<{id:string}>(
+        `SELECT id
+         FROM inventory_owner
+         WHERE tenant_id=$1
+           AND owner_type='INTERNAL'
+           AND is_default=true
+           AND status='ACTIVE'
+         LIMIT 1
+         FOR UPDATE`,
+        [context.tenantId]
+      );
+      const ownerId=owner.rows[0]?.id;
+      if(!ownerId){
+        throw new ConflictException(
+          "Не найден активный INTERNAL owner по умолчанию"
+        );
+      }
+
+      if(profileRow.owner_tracking_state==="OWNER_LEDGER"){
+        const counts=await client.query<{
+          sku_count:string;
+          location_rows:string;
+        }>(
+          `SELECT
+             (
+               SELECT count(DISTINCT sku_id)
+               FROM inventory_owner_balance
+               WHERE tenant_id=$1 AND warehouse_id=$2
+             )::text AS sku_count,
+             (
+               SELECT count(*)
+               FROM warehouse_location_owner_balance
+               WHERE tenant_id=$1 AND warehouse_id=$2
+             )::text AS location_rows`,
+          [context.tenantId,warehouseId]
+        );
+
+        return {
+          initialized:false,
+          ownerId,
+          skuCount:Number(counts.rows[0]?.sku_count??"0"),
+          locationRows:Number(counts.rows[0]?.location_rows??"0")
+        };
+      }
+
+      const ownerExisting=await client.query<{count:string}>(
+        `SELECT (
+           (SELECT count(*) FROM inventory_owner_balance
+            WHERE tenant_id=$1 AND warehouse_id=$2)
+           +
+           (SELECT count(*) FROM warehouse_location_owner_balance
+            WHERE tenant_id=$1 AND warehouse_id=$2)
+           +
+           (SELECT count(*) FROM inventory_owner_movement
+            WHERE tenant_id=$1 AND warehouse_id=$2)
+           +
+           (SELECT count(*) FROM warehouse_location_owner_movement
+            WHERE tenant_id=$1 AND warehouse_id=$2)
+         )::text AS count`,
+        [context.tenantId,warehouseId]
+      );
+      if(BigInt(ownerExisting.rows[0]?.count??"0")!==0n){
+        throw new ConflictException(
+          "Owner subledger уже содержит данные до инициализации. Требуется ручная сверка."
+        );
+      }
+
+      const aggregate=await client.query<{
+        sku_id:string;
+        physical_milli:string;
+        reserved_milli:string;
+      }>(
+        `SELECT sku_id,physical_milli::text,reserved_milli::text
+         FROM inventory_balance
+         WHERE tenant_id=$1 AND warehouse_id=$2
+         ORDER BY sku_id
+         FOR UPDATE`,
+        [context.tenantId,warehouseId]
+      );
+
+      const locations=await client.query<{
+        location_id:string;
+        sku_id:string;
+        physical_milli:string;
+      }>(
+        `SELECT location_id,sku_id,physical_milli::text
+         FROM warehouse_location_balance
+         WHERE tenant_id=$1 AND warehouse_id=$2
+         ORDER BY location_id,sku_id
+         FOR UPDATE`,
+        [context.tenantId,warehouseId]
+      );
+
+      for(const row of aggregate.rows){
+        const physical=BigInt(row.physical_milli);
+        const reserved=BigInt(row.reserved_milli);
+
+        if(physical===0n&&reserved===0n) continue;
+
+        await client.query(
+          `INSERT INTO inventory_owner_balance(
+             tenant_id,warehouse_id,owner_id,sku_id,
+             physical_milli,reserved_milli
+           ) VALUES ($1,$2,$3,$4,$5,$6)`,
+          [
+            context.tenantId,warehouseId,ownerId,row.sku_id,
+            physical.toString(),reserved.toString()
+          ]
+        );
+
+        await client.query(
+          `INSERT INTO inventory_owner_movement(
+             tenant_id,warehouse_id,owner_id,sku_id,movement_type,
+             physical_delta_milli,reserved_delta_milli,
+             source_type,idempotency_key,actor_membership_id
+           ) VALUES (
+             $1,$2,$3,$4,'BOOTSTRAP',
+             $5,$6,
+             'OWNER_LEDGER_INITIALIZATION',$7,$8
+           )`,
+          [
+            context.tenantId,warehouseId,ownerId,row.sku_id,
+            physical.toString(),reserved.toString(),
+            "owner-bootstrap:"+warehouseId+":"+row.sku_id,
+            context.membershipId
+          ]
+        );
+      }
+
+      for(const row of locations.rows){
+        const physical=BigInt(row.physical_milli);
+        if(physical===0n) continue;
+
+        await client.query(
+          `INSERT INTO warehouse_location_owner_balance(
+             tenant_id,warehouse_id,owner_id,location_id,sku_id,physical_milli
+           ) VALUES ($1,$2,$3,$4,$5,$6)`,
+          [
+            context.tenantId,warehouseId,ownerId,
+            row.location_id,row.sku_id,physical.toString()
+          ]
+        );
+
+        await client.query(
+          `INSERT INTO warehouse_location_owner_movement(
+             tenant_id,warehouse_id,owner_id,sku_id,movement_type,
+             to_location_id,quantity_milli,
+             source_type,idempotency_key,actor_membership_id
+           ) VALUES (
+             $1,$2,$3,$4,'BOOTSTRAP',
+             $5,$6,
+             'OWNER_LEDGER_INITIALIZATION',$7,$8
+           )`,
+          [
+            context.tenantId,warehouseId,ownerId,row.sku_id,
+            row.location_id,physical.toString(),
+            "owner-location-bootstrap:"+warehouseId+":"+
+              row.location_id+":"+row.sku_id,
+            context.membershipId
+          ]
+        );
+      }
+
+      const aggregateMismatch=await client.query(
+        `WITH o AS (
+           SELECT sku_id,
+                  sum(physical_milli) AS physical_milli,
+                  sum(reserved_milli) AS reserved_milli
+           FROM inventory_owner_balance
+           WHERE tenant_id=$1 AND warehouse_id=$2
+           GROUP BY sku_id
+         )
+         SELECT 1
+         FROM inventory_balance i
+         FULL OUTER JOIN o ON o.sku_id=i.sku_id
+         WHERE COALESCE(i.tenant_id,$1::uuid)=$1
+           AND COALESCE(i.warehouse_id,$2::uuid)=$2
+           AND (
+             COALESCE(i.physical_milli,0)<>COALESCE(o.physical_milli,0)
+             OR COALESCE(i.reserved_milli,0)<>COALESCE(o.reserved_milli,0)
+           )
+         LIMIT 1`,
+        [context.tenantId,warehouseId]
+      );
+
+      const locationMismatch=await client.query(
+        `WITH o AS (
+           SELECT location_id,sku_id,sum(physical_milli) AS physical_milli
+           FROM warehouse_location_owner_balance
+           WHERE tenant_id=$1 AND warehouse_id=$2
+           GROUP BY location_id,sku_id
+         )
+         SELECT 1
+         FROM warehouse_location_balance l
+         FULL OUTER JOIN o
+           ON o.location_id=l.location_id AND o.sku_id=l.sku_id
+         WHERE COALESCE(l.tenant_id,$1::uuid)=$1
+           AND COALESCE(l.warehouse_id,$2::uuid)=$2
+           AND COALESCE(l.physical_milli,0)<>COALESCE(o.physical_milli,0)
+         LIMIT 1`,
+        [context.tenantId,warehouseId]
+      );
+
+      const ownerLocationMismatch=await client.query(
+        `WITH loc AS (
+           SELECT owner_id,sku_id,sum(physical_milli) AS physical_milli
+           FROM warehouse_location_owner_balance
+           WHERE tenant_id=$1 AND warehouse_id=$2
+           GROUP BY owner_id,sku_id
+         )
+         SELECT 1
+         FROM inventory_owner_balance b
+         FULL OUTER JOIN loc
+           ON loc.owner_id=b.owner_id AND loc.sku_id=b.sku_id
+         WHERE COALESCE(b.tenant_id,$1::uuid)=$1
+           AND COALESCE(b.warehouse_id,$2::uuid)=$2
+           AND COALESCE(b.physical_milli,0)<>COALESCE(loc.physical_milli,0)
+         LIMIT 1`,
+        [context.tenantId,warehouseId]
+      );
+
+      if(
+        aggregateMismatch.rowCount ||
+        locationMismatch.rowCount ||
+        ownerLocationMismatch.rowCount
+      ){
+        throw new ConflictException(
+          "Owner ledger bootstrap не прошёл reconciliation; транзакция отменена"
+        );
+      }
+
+      await client.query(
+        `UPDATE warehouse_wms_profile
+         SET owner_tracking_state='OWNER_LEDGER',
+             updated_at=now()
+         WHERE tenant_id=$1 AND warehouse_id=$2`,
+        [context.tenantId,warehouseId]
+      );
+
+      await this.audit(
+        client,context,
+        "wms.owner_ledger_initialized","warehouse",warehouseId,{
+          ownerId,
+          skuCount:aggregate.rows.filter(
+            row=>BigInt(row.physical_milli)!==0n||
+                 BigInt(row.reserved_milli)!==0n
+          ).length,
+          locationRows:locations.rows.filter(
+            row=>BigInt(row.physical_milli)!==0n
+          ).length
+        }
+      );
+
+      return {
+        initialized:true,
+        ownerId,
+        skuCount:aggregate.rows.filter(
+          row=>BigInt(row.physical_milli)!==0n||
+               BigInt(row.reserved_milli)!==0n
+        ).length,
+        locationRows:locations.rows.filter(
+          row=>BigInt(row.physical_milli)!==0n
+        ).length
+      };
+    });
+  }
+
   async ownerLedgerReconciliation(
     context:TenantContext,
     warehouseId:string
