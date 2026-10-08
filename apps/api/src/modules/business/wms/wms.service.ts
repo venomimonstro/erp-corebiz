@@ -2491,6 +2491,7 @@ export class WmsService {
         to_short_code:string|null;
         wave_id:string|null;
         cluster_slot:string|null;
+        order_number:string|null;
         instructions:Record<string,unknown>;
       }>(
         `SELECT
@@ -2500,7 +2501,12 @@ export class WmsService {
            t.quantity_milli::text,
            fl.full_code AS from_code,fl.code AS from_short_code,
            tl.full_code AS to_code,tl.code AS to_short_code,
-           t.wave_id,t.cluster_slot,t.instructions
+           t.wave_id,t.cluster_slot,
+           CASE
+             WHEN t.task_type IN ('PACK','SHIP') THEN so.business_number
+             ELSE NULL
+           END AS order_number,
+           t.instructions
          FROM warehouse_task t
          LEFT JOIN sku s
            ON s.tenant_id=t.tenant_id AND s.id=t.sku_id
@@ -2512,6 +2518,10 @@ export class WmsService {
            ON fl.tenant_id=t.tenant_id AND fl.id=t.from_location_id
          LEFT JOIN warehouse_location tl
            ON tl.tenant_id=t.tenant_id AND tl.id=t.to_location_id
+         LEFT JOIN sales_order so
+           ON so.tenant_id=t.tenant_id
+          AND so.id=t.source_id
+          AND t.task_type IN ('PACK','SHIP')
          WHERE t.tenant_id=$1 AND t.id=$2`,
         [context.tenantId,taskId]
       );
@@ -2537,13 +2547,13 @@ export class WmsService {
     context:TenantContext,
     taskId:string,
     input:{
-      kind:"FROM_LOCATION"|"SKU"|"TO_LOCATION";
+      kind:"FROM_LOCATION"|"SKU"|"TO_LOCATION"|"ORDER";
       value:string;
       idempotencyKey:string;
     }
   ):Promise<{verified:true;kind:string}>{
     const kind=String(input.kind??"").toUpperCase();
-    if(!["FROM_LOCATION","SKU","TO_LOCATION"].includes(kind)){
+    if(!["FROM_LOCATION","SKU","TO_LOCATION","ORDER"].includes(kind)){
       throw new BadRequestException("Неизвестный тип скана");
     }
     const value=String(input.value??"").trim();
@@ -2564,12 +2574,19 @@ export class WmsService {
         from_short_code:string|null;
         to_code:string|null;
         to_short_code:string|null;
+        source_id:string|null;
+        order_number:string|null;
       }>(
         `SELECT
            t.status,t.claimed_by_membership_id,
            s.code AS sku_code,s.barcode,
            fl.full_code AS from_code,fl.code AS from_short_code,
-           tl.full_code AS to_code,tl.code AS to_short_code
+           tl.full_code AS to_code,tl.code AS to_short_code,
+           t.source_id,
+           CASE
+             WHEN t.task_type IN ('PACK','SHIP') THEN so.business_number
+             ELSE NULL
+           END AS order_number
          FROM warehouse_task t
          LEFT JOIN sku s
            ON s.tenant_id=t.tenant_id AND s.id=t.sku_id
@@ -2577,6 +2594,10 @@ export class WmsService {
            ON fl.tenant_id=t.tenant_id AND fl.id=t.from_location_id
          LEFT JOIN warehouse_location tl
            ON tl.tenant_id=t.tenant_id AND tl.id=t.to_location_id
+         LEFT JOIN sales_order so
+           ON so.tenant_id=t.tenant_id
+          AND so.id=t.source_id
+          AND t.task_type IN ('PACK','SHIP')
          WHERE t.tenant_id=$1 AND t.id=$2
          FOR UPDATE OF t`,
         [context.tenantId,taskId]
@@ -2591,50 +2612,44 @@ export class WmsService {
       }
 
       const normalized=value.toUpperCase();
-      let valid=false;
+      let expectedValues:string[]=[];
 
       if(kind==="FROM_LOCATION"){
-        valid=Boolean(
-          row.from_code &&
-          [row.from_code,row.from_short_code]
-            .filter(Boolean)
-            .map(item=>String(item).toUpperCase())
-            .includes(normalized)
-        );
+        expectedValues=[row.from_code,row.from_short_code]
+          .filter(Boolean)
+          .map(item=>String(item).toUpperCase());
       }else if(kind==="TO_LOCATION"){
-        valid=Boolean(
-          row.to_code &&
-          [row.to_code,row.to_short_code]
-            .filter(Boolean)
-            .map(item=>String(item).toUpperCase())
-            .includes(normalized)
-        );
+        expectedValues=[row.to_code,row.to_short_code]
+          .filter(Boolean)
+          .map(item=>String(item).toUpperCase());
+      }else if(kind==="SKU"){
+        expectedValues=[row.sku_code,row.barcode]
+          .filter(Boolean)
+          .map(item=>String(item).toUpperCase());
       }else{
-        valid=Boolean(
-          row.sku_code &&
-          [row.sku_code,row.barcode]
-            .filter(Boolean)
-            .map(item=>String(item).toUpperCase())
-            .includes(normalized)
-        );
+        expectedValues=[row.order_number,row.source_id]
+          .filter(Boolean)
+          .map(item=>String(item).toUpperCase());
       }
 
-      if(!valid){
+      if(!expectedValues.length||!expectedValues.includes(normalized)){
         throw new ConflictException(
           kind==="SKU"
             ? "Отсканирован другой SKU/штрихкод"
-            : "Отсканирована другая складская ячейка"
+            : kind==="ORDER"
+              ? "Отсканирован другой заказ"
+              : "Отсканирована другая складская ячейка"
         );
       }
 
       await client.query(
         `INSERT INTO wms_task_scan(
-           tenant_id,task_id,scan_kind,scanned_value,verified,
+           tenant_id,task_id,scan_kind,scanned_value,matched_value,verified,
            idempotency_key,actor_membership_id
-         ) VALUES ($1,$2,$3,$4,true,$5,$6)
+         ) VALUES ($1,$2,$3,$4,$5,true,$6,$7)
          ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
         [
-          context.tenantId,taskId,kind,value,
+          context.tenantId,taskId,kind,value,expectedValues[0]!,
           input.idempotencyKey.trim(),context.membershipId
         ]
       );
@@ -2761,12 +2776,12 @@ export class WmsService {
         if(row.sku_id) required.push("SKU");
         if(row.to_location_id) required.push("TO_LOCATION");
 
-        // PACK/SHIP are document/staging confirmations in current model.
-        // They do not require SKU scan until package/container entities exist.
         const scanRequired=
           ["PUTAWAY","PICK","REPLENISH","COUNT"].includes(row.task_type)
-            ? required
-            : [];
+            ? [...required]
+            : ["PACK","SHIP"].includes(row.task_type)
+              ? ["ORDER"]
+              : [];
 
         if(row.task_type==="COUNT"){
           const index=scanRequired.indexOf("TO_LOCATION");
