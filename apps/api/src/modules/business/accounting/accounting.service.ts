@@ -16,6 +16,40 @@ export class AccountingService {
     });
   }
 
+  async createAccount(context:TenantContext,input:{
+    code:string;name:string;category:"ASSET"|"LIABILITY"|"EQUITY"|"INCOME"|"EXPENSE"|"OFF_BALANCE";
+  }) {
+    if (!input.code?.trim() || !input.name?.trim() || !["ASSET","LIABILITY","EQUITY","INCOME","EXPENSE","OFF_BALANCE"].includes(input.category)) {
+      throw new BadRequestException("Invalid accounting account");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `INSERT INTO accounting_account(tenant_id,code,name,category)
+         VALUES($1,$2,$3,$4) RETURNING id,code,name,category,active`,
+        [context.tenantId,input.code.trim(),input.name.trim(),input.category]
+      );
+      return result.rows[0];
+    });
+  }
+
+  async createPeriod(context:TenantContext,input:{
+    legalEntityId:string;dateFrom:string;dateTo:string;
+  }) {
+    if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(input.dateFrom) ||
+       !/^\\d{4}-\\d{2}-\\d{2}$/.test(input.dateTo) ||
+       input.dateFrom>input.dateTo) {
+      throw new BadRequestException("Invalid accounting period dates");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `INSERT INTO accounting_period(tenant_id,legal_entity_id,date_from,date_to)
+         VALUES($1,$2,$3,$4) RETURNING id,legal_entity_id,date_from,date_to,state`,
+        [context.tenantId,input.legalEntityId,input.dateFrom,input.dateTo]
+      );
+      return result.rows[0];
+    });
+  }
+
   async periods(context: TenantContext, legalEntityId: string) {
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
