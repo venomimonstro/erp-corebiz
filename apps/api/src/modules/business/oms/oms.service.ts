@@ -539,8 +539,7 @@ export class OmsService {
           } else {
             await client.query(
               `UPDATE oms_backorder_line
-               SET quantity_milli=1,
-                   status='ALLOCATED',
+               SET status='ALLOCATED',
                    updated_at=now()
                WHERE tenant_id=$1
                  AND oms_order_id=$2
