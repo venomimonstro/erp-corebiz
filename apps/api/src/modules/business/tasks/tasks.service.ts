@@ -43,9 +43,7 @@ export class TasksService {
 
       if (effectiveMembershipIds) {
         values.push(effectiveMembershipIds);
-        clauses.push(
-          `t.responsible_membership_id = ANY(${values.length}::uuid[])`
-        );
+        clauses.push("t.responsible_membership_id = ANY($2::uuid[])");
       }
 
       if (filter === "today") {
@@ -226,8 +224,7 @@ export class TasksService {
       let scopeSql = "";
       if (scopedMembershipIds) {
         values.push(scopedMembershipIds);
-        scopeSql =
-          `AND responsible_membership_id = ANY(${values.length}::uuid[])`;
+        scopeSql = "AND responsible_membership_id = ANY($4::uuid[])";
       }
 
       const result = await client.query<{ id: string; state: string }>(
