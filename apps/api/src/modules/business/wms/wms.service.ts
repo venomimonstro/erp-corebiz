@@ -2394,6 +2394,401 @@ export class WmsService {
     });
   }
 
+  async scannerNextTask(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<Record<string,unknown>|null>{
+    const taskId=await this.database.withTenantTransaction(
+      context,
+      async client=>{
+        await this.assertProfile(client,context.tenantId,warehouseId);
+
+        const current=await client.query<{id:string}>(
+          `SELECT id
+           FROM warehouse_task
+           WHERE tenant_id=$1
+             AND warehouse_id=$2
+             AND status='CLAIMED'
+             AND claimed_by_membership_id=$3
+             AND task_type IN (
+               'PUTAWAY','PICK','COUNT','REPLENISH','PACK','SHIP'
+             )
+           ORDER BY claimed_at,created_at
+           LIMIT 1`,
+          [context.tenantId,warehouseId,context.membershipId]
+        );
+        if(current.rows[0]) return current.rows[0].id;
+
+        const next=await client.query<{id:string}>(
+          `SELECT t.id
+           FROM warehouse_task t
+           LEFT JOIN wms_wave w
+             ON w.tenant_id=t.tenant_id AND w.id=t.wave_id
+           WHERE t.tenant_id=$1
+             AND t.warehouse_id=$2
+             AND t.status='OPEN'
+             AND t.task_type IN (
+               'PUTAWAY','PICK','COUNT','REPLENISH','PACK','SHIP'
+             )
+             AND (
+               t.wave_id IS NULL OR
+               w.status IN ('RELEASED','IN_PROGRESS')
+             )
+           ORDER BY
+             CASE t.task_type
+               WHEN 'PICK' THEN 0
+               WHEN 'REPLENISH' THEN 1
+               WHEN 'PUTAWAY' THEN 2
+               WHEN 'COUNT' THEN 3
+               WHEN 'PACK' THEN 4
+               WHEN 'SHIP' THEN 5
+               ELSE 9
+             END,
+             t.priority,
+             t.created_at
+           FOR UPDATE OF t SKIP LOCKED
+           LIMIT 1`,
+          [context.tenantId,warehouseId]
+        );
+
+        const row=next.rows[0];
+        if(!row) return null;
+
+        await client.query(
+          `UPDATE warehouse_task
+           SET status='CLAIMED',
+               claimed_by_membership_id=$3,
+               claimed_at=COALESCE(claimed_at,now()),
+               updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status='OPEN'`,
+          [context.tenantId,row.id,context.membershipId]
+        );
+
+        await client.query(
+          `UPDATE wms_wave w
+           SET status='IN_PROGRESS'
+           FROM warehouse_task t
+           WHERE t.tenant_id=$1
+             AND t.id=$2
+             AND t.wave_id=w.id
+             AND w.tenant_id=t.tenant_id
+             AND w.status='RELEASED'`,
+          [context.tenantId,row.id]
+        );
+
+        return row.id;
+      }
+    );
+
+    if(!taskId) return null;
+    return this.scannerTask(context,taskId);
+  }
+
+  async scannerTask(
+    context:TenantContext,
+    taskId:string
+  ):Promise<Record<string,unknown>>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const task=await client.query<{
+        id:string;
+        warehouse_id:string;
+        task_type:string;
+        status:string;
+        priority:number;
+        sku_id:string|null;
+        sku_code:string|null;
+        barcode:string|null;
+        product_name:string|null;
+        quantity_milli:string|null;
+        from_location_id:string|null;
+        from_code:string|null;
+        from_short_code:string|null;
+        to_location_id:string|null;
+        to_code:string|null;
+        to_short_code:string|null;
+        source_id:string|null;
+        order_number:string|null;
+        wave_id:string|null;
+        cluster_slot:string|null;
+        claimed_by_membership_id:string|null;
+        instructions:Record<string,unknown>;
+      }>(
+        `SELECT
+           t.id,t.warehouse_id,t.task_type,t.status,t.priority,
+           t.sku_id,s.code AS sku_code,s.barcode,
+           p.name AS product_name,
+           t.quantity_milli::text,
+           t.from_location_id,fl.full_code AS from_code,fl.code AS from_short_code,
+           t.to_location_id,tl.full_code AS to_code,tl.code AS to_short_code,
+           t.source_id,
+           CASE
+             WHEN t.source_type='SALES_ORDER' THEN so.business_number
+             WHEN t.task_type IN ('PACK','SHIP') THEN so2.business_number
+             ELSE NULL
+           END AS order_number,
+           t.wave_id,t.cluster_slot,t.claimed_by_membership_id,
+           t.instructions
+         FROM warehouse_task t
+         LEFT JOIN sku s
+           ON s.tenant_id=t.tenant_id AND s.id=t.sku_id
+         LEFT JOIN product_variant pv
+           ON pv.tenant_id=s.tenant_id AND pv.id=s.variant_id
+         LEFT JOIN product p
+           ON p.tenant_id=pv.tenant_id AND p.id=pv.product_id
+         LEFT JOIN warehouse_location fl
+           ON fl.tenant_id=t.tenant_id AND fl.id=t.from_location_id
+         LEFT JOIN warehouse_location tl
+           ON tl.tenant_id=t.tenant_id AND tl.id=t.to_location_id
+         LEFT JOIN sales_order so
+           ON so.tenant_id=t.tenant_id
+          AND t.source_type='SALES_ORDER'
+          AND so.id=t.source_id
+         LEFT JOIN sales_order so2
+           ON so2.tenant_id=t.tenant_id
+          AND t.task_type IN ('PACK','SHIP')
+          AND so2.id=t.source_id
+         WHERE t.tenant_id=$1 AND t.id=$2`,
+        [context.tenantId,taskId]
+      );
+
+      const row=task.rows[0];
+      if(!row) throw new NotFoundException("WMS-задача не найдена");
+
+      if(
+        row.status==='CLAIMED' &&
+        row.claimed_by_membership_id &&
+        row.claimed_by_membership_id!==context.membershipId
+      ){
+        throw new ConflictException("Задача назначена другому сотруднику");
+      }
+
+      const scans=await client.query<{scan_type:string;created_at:Date}>(
+        `SELECT scan_type,created_at
+         FROM wms_scan_event
+         WHERE tenant_id=$1 AND task_id=$2 AND membership_id=$3
+         ORDER BY created_at`,
+        [context.tenantId,taskId,context.membershipId]
+      );
+
+      const required=this.requiredScans(row.task_type);
+      const completed=new Set(scans.rows.map(scan=>scan.scan_type));
+
+      return {
+        id:row.id,
+        warehouseId:row.warehouse_id,
+        taskType:row.task_type,
+        status:row.status,
+        priority:row.priority,
+        skuId:row.sku_id,
+        skuCode:row.sku_code,
+        barcode:row.barcode,
+        productName:row.product_name,
+        quantityMilli:row.quantity_milli,
+        fromLocationId:row.from_location_id,
+        fromCode:row.from_code,
+        toLocationId:row.to_location_id,
+        toCode:row.to_code,
+        orderNumber:row.order_number,
+        waveId:row.wave_id,
+        clusterSlot:row.cluster_slot,
+        instructions:row.instructions,
+        requiredScans:required,
+        completedScans:required.filter(scan=>completed.has(scan)),
+        nextScan:required.find(scan=>!completed.has(scan))??null
+      };
+    });
+  }
+
+  async scanTask(
+    context:TenantContext,
+    taskId:string,
+    input:{
+      scanType:'FROM_LOCATION'|'TO_LOCATION'|'SKU'|'ORDER';
+      value:string;
+    }
+  ):Promise<Record<string,unknown>>{
+    const scanType=String(input.scanType??'').toUpperCase();
+    if(!['FROM_LOCATION','TO_LOCATION','SKU','ORDER'].includes(scanType)){
+      throw new BadRequestException("Неизвестный тип скана");
+    }
+
+    const scanned=String(input.value??'').trim();
+    if(!scanned||scanned.length>300){
+      throw new BadRequestException("Некорректное значение скана");
+    }
+
+    await this.database.withTenantTransaction(context,async client=>{
+      const task=await client.query<{
+        warehouse_id:string;
+        task_type:string;
+        status:string;
+        claimed_by_membership_id:string|null;
+        sku_code:string|null;
+        barcode:string|null;
+        from_code:string|null;
+        from_short_code:string|null;
+        to_code:string|null;
+        to_short_code:string|null;
+        source_id:string|null;
+        order_number:string|null;
+      }>(
+        `SELECT
+           t.warehouse_id,t.task_type,t.status,t.claimed_by_membership_id,
+           s.code AS sku_code,s.barcode,
+           fl.full_code AS from_code,fl.code AS from_short_code,
+           tl.full_code AS to_code,tl.code AS to_short_code,
+           t.source_id,
+           so.business_number AS order_number
+         FROM warehouse_task t
+         LEFT JOIN sku s
+           ON s.tenant_id=t.tenant_id AND s.id=t.sku_id
+         LEFT JOIN warehouse_location fl
+           ON fl.tenant_id=t.tenant_id AND fl.id=t.from_location_id
+         LEFT JOIN warehouse_location tl
+           ON tl.tenant_id=t.tenant_id AND tl.id=t.to_location_id
+         LEFT JOIN sales_order so
+           ON so.tenant_id=t.tenant_id
+          AND so.id=t.source_id
+          AND t.task_type IN ('PACK','SHIP')
+         WHERE t.tenant_id=$1 AND t.id=$2
+         FOR UPDATE OF t`,
+        [context.tenantId,taskId]
+      );
+
+      const row=task.rows[0];
+      if(!row) throw new NotFoundException("WMS-задача не найдена");
+      if(row.status!=='CLAIMED'){
+        throw new ConflictException("Сначала возьмите задачу");
+      }
+      if(row.claimed_by_membership_id!==context.membershipId){
+        throw new ConflictException("Задача назначена другому сотруднику");
+      }
+
+      const required=this.requiredScans(row.task_type);
+      if(!required.includes(scanType)){
+        throw new BadRequestException(
+          "Этот скан не требуется для задачи "+row.task_type
+        );
+      }
+
+      const normalize=(value:string|null)=>String(value??'').trim().toUpperCase();
+      const value=normalize(scanned);
+      let matches:string[]=[];
+
+      if(scanType==='FROM_LOCATION'){
+        matches=[row.from_code,row.from_short_code]
+          .filter(Boolean)
+          .map(normalize);
+      }else if(scanType==='TO_LOCATION'){
+        matches=[row.to_code,row.to_short_code]
+          .filter(Boolean)
+          .map(normalize);
+      }else if(scanType==='SKU'){
+        matches=[row.sku_code,row.barcode]
+          .filter(Boolean)
+          .map(normalize);
+      }else{
+        matches=[row.order_number,row.source_id]
+          .filter(Boolean)
+          .map(normalize);
+      }
+
+      if(!matches.length||!matches.includes(value)){
+        throw new ConflictException(
+          "Скан не соответствует текущей WMS-задаче"
+        );
+      }
+
+      await client.query(
+        `INSERT INTO wms_scan_event(
+           tenant_id,warehouse_id,task_id,membership_id,
+           scan_type,scanned_value,matched_value
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (task_id,membership_id,scan_type)
+         DO NOTHING`,
+        [
+          context.tenantId,row.warehouse_id,taskId,context.membershipId,
+          scanType,scanned,matches[0]!
+        ]
+      );
+    });
+
+    return this.scannerTask(context,taskId);
+  }
+
+  async completeScannerTask(
+    context:TenantContext,
+    taskId:string,
+    input:{countedMilli?:string}={}
+  ):Promise<Record<string,unknown>>{
+    const task=await this.scannerTask(context,taskId) as any;
+    if(task.status==='COMPLETED'){
+      return {completed:true,taskId,taskType:task.taskType};
+    }
+    if(task.status!=='CLAIMED'){
+      throw new ConflictException("Сначала возьмите задачу");
+    }
+
+    const missing=(task.requiredScans as string[]).filter(
+      scan=>!(task.completedScans as string[]).includes(scan)
+    );
+    if(missing.length){
+      throw new ConflictException(
+        "Не выполнены обязательные сканы: "+missing.join(", ")
+      );
+    }
+
+    if(task.taskType==='PUTAWAY'){
+      await this.completePutaway(context,taskId);
+      return {completed:true,taskId,taskType:task.taskType};
+    }
+    if(task.taskType==='PICK'){
+      await this.completePick(context,taskId);
+      return {completed:true,taskId,taskType:task.taskType};
+    }
+    if(task.taskType==='REPLENISH'){
+      await this.completeReplenishment(context,taskId);
+      return {completed:true,taskId,taskType:task.taskType};
+    }
+    if(task.taskType==='COUNT'){
+      const counted=String(input.countedMilli??'');
+      if(!/^\d+$/.test(counted)){
+        throw new BadRequestException(
+          "Для COUNT укажите фактическое количество"
+        );
+      }
+      const result=await this.completeCycleCountTask(
+        context,taskId,counted
+      );
+      return {
+        completed:true,
+        taskId,
+        taskType:task.taskType,
+        ...result
+      };
+    }
+    if(task.taskType==='PACK'){
+      const result=await this.completePack(context,taskId);
+      return {
+        completed:true,
+        taskId,
+        taskType:task.taskType,
+        ...result
+      };
+    }
+    if(task.taskType==='SHIP'){
+      const result=await this.completeShip(context,taskId);
+      return {
+        completed:true,
+        taskId,
+        taskType:task.taskType,
+        ...result
+      };
+    }
+
+    throw new BadRequestException("Тип задачи не поддерживается сканером");
+  }
+
   async waves(
     context:TenantContext,
     warehouseId:string
@@ -3298,6 +3693,19 @@ export class WmsService {
       );
       return result.rows;
     });
+  }
+
+  private requiredScans(taskType:string):string[]{
+    if(['PUTAWAY','PICK','REPLENISH'].includes(taskType)){
+      return ['FROM_LOCATION','SKU','TO_LOCATION'];
+    }
+    if(taskType==='COUNT'){
+      return ['FROM_LOCATION','SKU'];
+    }
+    if(['PACK','SHIP'].includes(taskType)){
+      return ['ORDER'];
+    }
+    return [];
   }
 
   private async assertLocationReconciliation(
