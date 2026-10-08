@@ -44,6 +44,15 @@ type ServiceItem = {
   duration_minutes: number;
 };
 
+type SiteDomain = {
+  id: string;
+  hostname: string;
+  status: "PENDING" | "VERIFIED" | "ACTIVE" | "DISABLED";
+  is_primary: boolean;
+  verified_at: string | null;
+  activated_at: string | null;
+};
+
 type Editor = {
   page: Page & {
     site_id: string;
@@ -56,6 +65,11 @@ type Editor = {
     status: string;
     title: string;
     meta_description: string | null;
+    meta_robots?: string | null;
+    canonical_path?: string | null;
+    og_title?: string | null;
+    og_description?: string | null;
+    og_image_url?: string | null;
   };
   blocks: Block[];
 };
@@ -92,10 +106,16 @@ export default function SitesPage() {
   const [pages, setPages] = useState<Page[]>([]);
   const [bindings, setBindings] = useState<Binding[]>([]);
   const [services, setServices] = useState<ServiceItem[]>([]);
+  const [domains, setDomains] = useState<SiteDomain[]>([]);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [title, setTitle] = useState("");
   const [meta, setMeta] = useState("");
+  const [robots, setRobots] = useState("index,follow");
+  const [canonical, setCanonical] = useState("");
+  const [ogTitle, setOgTitle] = useState("");
+  const [ogDescription, setOgDescription] = useState("");
+  const [ogImage, setOgImage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
 
@@ -135,11 +155,13 @@ export default function SitesPage() {
 
     void Promise.all([
       apiRequest<Binding[]>("/site-forms/site/" + siteId),
-      apiRequest<ServiceItem[]>("/service/catalog")
+      apiRequest<ServiceItem[]>("/service/catalog"),
+      apiRequest<SiteDomain[]>("/site-domains/site/" + siteId)
     ])
-      .then(([bindingRows, serviceRows]) => {
+      .then(([bindingRows, serviceRows, domainRows]) => {
         setBindings(bindingRows);
         setServices(serviceRows);
+        setDomains(domainRows);
       })
       .catch((cause) => {
         setError(
@@ -268,6 +290,69 @@ export default function SitesPage() {
     }
   }
 
+  async function addDomain() {
+    if (!siteId) return;
+    const hostname = window.prompt("Домен без https://", "example.ru");
+    if (!hostname?.trim()) return;
+
+    try {
+      const created = await apiRequest<{
+        id: string;
+        verificationHost: string;
+        verificationValue: string;
+      }>("/site-domains/site/" + siteId, {
+        method: "POST",
+        body: JSON.stringify({ hostname: hostname.trim() })
+      });
+
+      window.alert(
+        "Добавьте DNS TXT запись:\n" +
+        created.verificationHost +
+        "\nЗначение:\n" +
+        created.verificationValue
+      );
+      setDomains(
+        await apiRequest<SiteDomain[]>("/site-domains/site/" + siteId)
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось добавить домен");
+    }
+  }
+
+  async function verifyDomain(domain: SiteDomain) {
+    try {
+      const result = await apiRequest<{ verified: boolean }>(
+        "/site-domains/" + domain.id + "/verify",
+        { method: "POST" }
+      );
+      if (!result.verified) {
+        setError("TXT-запись пока не найдена. DNS может обновляться некоторое время.");
+      } else {
+        setError("");
+      }
+      setDomains(
+        await apiRequest<SiteDomain[]>("/site-domains/site/" + siteId)
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось проверить домен");
+    }
+  }
+
+  async function activateDomain(domain: SiteDomain) {
+    try {
+      await apiRequest("/site-domains/" + domain.id + "/activate", {
+        method: "POST",
+        body: JSON.stringify({ primary: true })
+      });
+      setDomains(
+        await apiRequest<SiteDomain[]>("/site-domains/site/" + siteId)
+      );
+      setError("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось активировать домен");
+    }
+  }
+
   async function createPage() {
     if (!siteId) return;
     const name = window.prompt("Название страницы", "О компании");
@@ -321,6 +406,11 @@ export default function SitesPage() {
       })));
       setTitle(data.version.title);
       setMeta(data.version.meta_description ?? "");
+      setRobots(data.version.meta_robots ?? "index,follow");
+      setCanonical(data.version.canonical_path ?? "");
+      setOgTitle(data.version.og_title ?? "");
+      setOgDescription(data.version.og_description ?? "");
+      setOgImage(data.version.og_image_url ?? "");
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось открыть редактор");
@@ -418,7 +508,12 @@ export default function SitesPage() {
             method: "PUT",
             body: JSON.stringify({
               title,
-              metaDescription: meta
+              metaDescription: meta,
+              metaRobots: robots,
+              canonicalPath: canonical || undefined,
+              ogTitle: ogTitle || undefined,
+              ogDescription: ogDescription || undefined,
+              ogImageUrl: ogImage || undefined
             })
           }
         ),
@@ -564,6 +659,40 @@ export default function SitesPage() {
                   + Онлайн-запись
                   <small>Создаёт клиента и запись на услугу</small>
                 </button>
+                <button
+                  className="site-store-enable"
+                  onClick={() => void addDomain()}
+                  type="button"
+                >
+                  + Свой домен
+                  <small>DNS TXT → проверка → активация</small>
+                </button>
+                {domains.map((domain) => (
+                  <div className="site-domain-mini" key={domain.id}>
+                    <strong>{domain.hostname}</strong>
+                    <small>
+                      {domain.status}
+                      {domain.is_primary ? " · основной" : ""}
+                    </small>
+                    {domain.status === "PENDING" ? (
+                      <button
+                        className="secondary-button"
+                        onClick={() => void verifyDomain(domain)}
+                        type="button"
+                      >
+                        Проверить DNS
+                      </button>
+                    ) : null}
+                    {domain.status === "VERIFIED" ? (
+                      <button
+                        onClick={() => void activateDomain(domain)}
+                        type="button"
+                      >
+                        Активировать
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
                 <a
                   className="site-public-link"
                 href={"/s/" + selectedSite.public_slug}
@@ -620,6 +749,47 @@ export default function SitesPage() {
                     <textarea
                       value={meta}
                       onChange={(event) => setMeta(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Robots</span>
+                    <select
+                      value={robots}
+                      onChange={(event) => setRobots(event.target.value)}
+                    >
+                      <option value="index,follow">index, follow</option>
+                      <option value="noindex,follow">noindex, follow</option>
+                      <option value="index,nofollow">index, nofollow</option>
+                      <option value="noindex,nofollow">noindex, nofollow</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Canonical path</span>
+                    <input
+                      placeholder="/"
+                      value={canonical}
+                      onChange={(event) => setCanonical(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Open Graph title</span>
+                    <input
+                      value={ogTitle}
+                      onChange={(event) => setOgTitle(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Open Graph image URL</span>
+                    <input
+                      value={ogImage}
+                      onChange={(event) => setOgImage(event.target.value)}
+                    />
+                  </label>
+                  <label className="site-meta-wide">
+                    <span>Open Graph description</span>
+                    <textarea
+                      value={ogDescription}
+                      onChange={(event) => setOgDescription(event.target.value)}
                     />
                   </label>
                 </div>
