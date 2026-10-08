@@ -304,19 +304,6 @@ export class OmsService {
           throw new ConflictException("Заказ уже передан в отгрузку");
         }
 
-        const activeReservations = await client.query<{ count: string }>(
-          `SELECT count(*)::text AS count
-           FROM inventory_reservation
-           WHERE tenant_id=$1 AND sales_order_id=$2 AND status='ACTIVE'`,
-          [context.tenantId, salesOrderId]
-        );
-
-        if (BigInt(activeReservations.rows[0]?.count ?? "0") > 0n) {
-          throw new ConflictException(
-            "У заказа уже есть активные резервы. Сначала освободите их."
-          );
-        }
-
         const lines = await client.query<{
           line_id: string;
           sku_id: string | null;
@@ -341,7 +328,6 @@ export class OmsService {
         );
 
         const runNumber = oms.allocation_version + 1;
-
         const run = await client.query<{ id: string }>(
           `INSERT INTO oms_sourcing_run(
              tenant_id,oms_order_id,run_number,status,strategy,input_snapshot
@@ -372,109 +358,232 @@ export class OmsService {
 
         const decisions: Array<Record<string, unknown>> = [];
         const usedWarehouses = new Set<string>();
+        let totalBackorderMilli = 0n;
+        let newlyReserved = 0;
 
         for (const line of stockLines) {
-          let remaining = BigInt(line.quantity_milli);
-          const candidates = await this.candidates(
-            client,
-            context.tenantId,
-            line.sku_id!
+          const reservedResult = await client.query<{ reserved_milli: string }>(
+            `SELECT COALESCE(sum(quantity_milli),0)::text AS reserved_milli
+             FROM inventory_reservation
+             WHERE tenant_id=$1
+               AND sales_order_id=$2
+               AND sales_order_line_id=$3
+               AND status='ACTIVE'`,
+            [context.tenantId, salesOrderId, line.line_id]
           );
 
-          for (const candidate of candidates) {
-            if (remaining <= 0n) break;
-            if (candidate.atpMilli <= 0n) continue;
+          const alreadyReserved = BigInt(
+            reservedResult.rows[0]?.reserved_milli ?? "0"
+          );
+          const requested = BigInt(line.quantity_milli);
+          let remaining =
+            requested > alreadyReserved ? requested - alreadyReserved : 0n;
 
-            const take =
-              candidate.atpMilli < remaining
-                ? candidate.atpMilli
-                : remaining;
-
-            const reservation = await this.inventory.reserveAllocation(
-              client,
-              context,
-              {
-                salesOrderId,
-                salesOrderLineId: line.line_id,
-                warehouseId: candidate.warehouseId,
-                skuId: line.sku_id!,
-                quantityMilli: take,
-                safetyStockMilli: candidate.safetyStockMilli,
-                idempotencyKey:
-                  "oms:" +
-                  oms.id +
-                  ":run:" +
-                  runNumber +
-                  ":line:" +
-                  line.line_id +
-                  ":warehouse:" +
-                  candidate.warehouseId
-              }
-            );
-
-            usedWarehouses.add(candidate.warehouseId);
-
-            const explanation = {
-              strategy: "PRIORITY_ATP",
-              warehouseName: candidate.warehouseName,
-              sourcingPriority: candidate.sourcingPriority,
-              isDefault: candidate.isDefault,
-              physicalMilli: candidate.physicalMilli.toString(),
-              reservedMilli: candidate.reservedMilli.toString(),
-              safetyStockMilli: candidate.safetyStockMilli.toString(),
-              atpBeforeMilli: candidate.atpMilli.toString(),
-              allocatedMilli: take.toString(),
-              reason:
-                "Минимальный sourcing priority, затем default warehouse и максимальный ATP"
-            };
-
-            await client.query(
-              `INSERT INTO oms_allocation(
-                 tenant_id,oms_order_id,sourcing_run_id,
-                 sales_order_line_id,sku_id,warehouse_id,reservation_id,
-                 quantity_milli,safety_stock_milli_snapshot,
-                 sourcing_priority_snapshot,state,explanation
-               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'RESERVED',$11)`,
-              [
-                context.tenantId,
-                oms.id,
-                run.rows[0]!.id,
-                line.line_id,
-                line.sku_id,
-                candidate.warehouseId,
-                reservation.reservationId,
-                take.toString(),
-                candidate.safetyStockMilli.toString(),
-                candidate.sourcingPriority,
-                JSON.stringify(explanation)
-              ]
-            );
-
-            decisions.push({
-              lineId: line.line_id,
-              skuId: line.sku_id,
-              sku: line.sku_code,
-              warehouseId: candidate.warehouseId,
-              warehouseName: candidate.warehouseName,
-              quantityMilli: take.toString(),
-              explanation
-            });
-
-            remaining -= take;
+          const existingWarehouses = await client.query<{ warehouse_id: string }>(
+            `SELECT DISTINCT warehouse_id
+             FROM inventory_reservation
+             WHERE tenant_id=$1
+               AND sales_order_id=$2
+               AND sales_order_line_id=$3
+               AND status='ACTIVE'`,
+            [context.tenantId, salesOrderId, line.line_id]
+          );
+          for (const row of existingWarehouses.rows) {
+            usedWarehouses.add(row.warehouse_id);
           }
 
           if (remaining > 0n) {
-            throw new ConflictException(
-              "Недостаточно глобального ATP для SKU " +
-              (line.sku_code ?? line.sku_id) +
-              ". Не хватает " +
-              remaining.toString()
+            const candidates = await this.candidates(
+              client,
+              context.tenantId,
+              line.sku_id!
+            );
+
+            for (const candidate of candidates) {
+              if (remaining <= 0n) break;
+              if (candidate.atpMilli <= 0n) continue;
+
+              const alreadyOnWarehouse = await client.query(
+                `SELECT 1
+                 FROM inventory_reservation
+                 WHERE tenant_id=$1
+                   AND sales_order_line_id=$2
+                   AND warehouse_id=$3
+                   AND status='ACTIVE'
+                 LIMIT 1`,
+                [
+                  context.tenantId,
+                  line.line_id,
+                  candidate.warehouseId
+                ]
+              );
+              if (alreadyOnWarehouse.rowCount) continue;
+
+              const take =
+                candidate.atpMilli < remaining
+                  ? candidate.atpMilli
+                  : remaining;
+
+              try {
+                const reservation = await this.inventory.reserveAllocation(
+                  client,
+                  context,
+                  {
+                    salesOrderId,
+                    salesOrderLineId: line.line_id,
+                    warehouseId: candidate.warehouseId,
+                    skuId: line.sku_id!,
+                    quantityMilli: take,
+                    safetyStockMilli: candidate.safetyStockMilli,
+                    idempotencyKey:
+                      "oms:" +
+                      oms.id +
+                      ":run:" +
+                      runNumber +
+                      ":line:" +
+                      line.line_id +
+                      ":warehouse:" +
+                      candidate.warehouseId
+                  }
+                );
+
+                usedWarehouses.add(candidate.warehouseId);
+                newlyReserved += reservation.applied ? 1 : 0;
+
+                const explanation = {
+                  strategy: "PRIORITY_ATP",
+                  warehouseName: candidate.warehouseName,
+                  sourcingPriority: candidate.sourcingPriority,
+                  isDefault: candidate.isDefault,
+                  physicalMilli: candidate.physicalMilli.toString(),
+                  reservedMilli: candidate.reservedMilli.toString(),
+                  safetyStockMilli: candidate.safetyStockMilli.toString(),
+                  atpBeforeMilli: candidate.atpMilli.toString(),
+                  allocatedMilli: take.toString(),
+                  reason:
+                    "Минимальный sourcing priority, затем default warehouse и максимальный ATP"
+                };
+
+                await client.query(
+                  `INSERT INTO oms_allocation(
+                     tenant_id,oms_order_id,sourcing_run_id,
+                     sales_order_line_id,sku_id,warehouse_id,reservation_id,
+                     quantity_milli,safety_stock_milli_snapshot,
+                     sourcing_priority_snapshot,state,explanation
+                   ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'RESERVED',$11)`,
+                  [
+                    context.tenantId,
+                    oms.id,
+                    run.rows[0]!.id,
+                    line.line_id,
+                    line.sku_id,
+                    candidate.warehouseId,
+                    reservation.reservationId,
+                    take.toString(),
+                    candidate.safetyStockMilli.toString(),
+                    candidate.sourcingPriority,
+                    JSON.stringify(explanation)
+                  ]
+                );
+
+                decisions.push({
+                  lineId: line.line_id,
+                  skuId: line.sku_id,
+                  sku: line.sku_code,
+                  warehouseId: candidate.warehouseId,
+                  warehouseName: candidate.warehouseName,
+                  quantityMilli: take.toString(),
+                  explanation
+                });
+
+                remaining -= take;
+              } catch (error) {
+                if (!(error instanceof ConflictException)) throw error;
+                decisions.push({
+                  lineId: line.line_id,
+                  skuId: line.sku_id,
+                  sku: line.sku_code,
+                  warehouseId: candidate.warehouseId,
+                  warehouseName: candidate.warehouseName,
+                  quantityMilli: "0",
+                  skipped: true,
+                  reason:
+                    "ATP изменился конкурентно; склад пропущен и sourcing продолжен"
+                });
+              }
+            }
+          }
+
+          if (remaining > 0n) {
+            totalBackorderMilli += remaining;
+
+            await client.query(
+              `INSERT INTO oms_backorder_line(
+                 tenant_id,oms_order_id,sales_order_line_id,sku_id,
+                 quantity_milli,status,reason
+               ) VALUES ($1,$2,$3,$4,$5,'OPEN','INSUFFICIENT_ATP')
+               ON CONFLICT (tenant_id,oms_order_id,sales_order_line_id)
+               DO UPDATE SET
+                 quantity_milli=EXCLUDED.quantity_milli,
+                 status='OPEN',
+                 reason='INSUFFICIENT_ATP',
+                 updated_at=now()`,
+              [
+                context.tenantId,
+                oms.id,
+                line.line_id,
+                line.sku_id,
+                remaining.toString()
+              ]
+            );
+          } else {
+            await client.query(
+              `UPDATE oms_backorder_line
+               SET quantity_milli=1,
+                   status='ALLOCATED',
+                   updated_at=now()
+               WHERE tenant_id=$1
+                 AND oms_order_id=$2
+                 AND sales_order_line_id=$3
+                 AND status <> 'CANCELLED'`,
+              [context.tenantId, oms.id, line.line_id]
             );
           }
         }
 
-        const fulfillmentStatus =
-          stockLines.length === 0 ? "READY" : "RESERVED";
+        const activeReservations = await client.query<{
+          count: string;
+          total_milli: string;
+        }>(
+          `SELECT count(*)::text AS count,
+                  COALESCE(sum(quantity_milli),0)::text AS total_milli
+           FROM inventory_reservation
+           WHERE tenant_id=$1
+             AND sales_order_id=$2
+             AND status='ACTIVE'`,
+          [context.tenantId, salesOrderId]
+        );
+
+        const reservationCount = Number(
+          activeReservations.rows[0]?.count ?? "0"
+        );
+
+        let fulfillmentStatus:
+          | "READY"
+          | "UNALLOCATED"
+          | "PARTIALLY_RESERVED"
+          | "RESERVED";
+
+        if (stockLines.length === 0) {
+          fulfillmentStatus = "READY";
+        } else if (totalBackorderMilli === 0n) {
+          fulfillmentStatus = "RESERVED";
+        } else if (reservationCount > 0) {
+          fulfillmentStatus = "PARTIALLY_RESERVED";
+        } else {
+          fulfillmentStatus = "UNALLOCATED";
+        }
+
         const singleWarehouse =
           usedWarehouses.size === 1
             ? Array.from(usedWarehouses)[0]
@@ -495,11 +604,21 @@ export class OmsService {
           ]
         );
 
+        const state =
+          totalBackorderMilli === 0n
+            ? "ALLOCATED"
+            : reservationCount > 0
+              ? "PARTIALLY_ALLOCATED"
+              : "BACKORDER";
+
         const summary = {
           strategy: "PRIORITY_ATP",
           split: usedWarehouses.size > 1,
           warehouses: Array.from(usedWarehouses),
-          allocationCount: decisions.length,
+          reservationCount,
+          newlyReserved,
+          allocationCount: decisions.filter((x) => !("skipped" in x)).length,
+          backorderMilli: totalBackorderMilli.toString(),
           lines: stockLines.length
         };
 
@@ -514,15 +633,16 @@ export class OmsService {
 
         await client.query(
           `UPDATE oms_order
-           SET state='ALLOCATED',
-               allocation_version=$3,
-               last_sourcing_summary=$4,
+           SET state=$3,
+               allocation_version=$4,
+               last_sourcing_summary=$5,
                last_error=NULL,
                updated_at=now()
            WHERE tenant_id=$1 AND id=$2`,
           [
             context.tenantId,
             oms.id,
+            state,
             runNumber,
             JSON.stringify(summary)
           ]
@@ -531,16 +651,16 @@ export class OmsService {
         await this.audit(
           client,
           context,
-          "oms.order_allocated",
+          "oms.order_sourced",
           "oms_order",
           oms.id,
-          summary
+          { state, ...summary }
         );
 
         return {
           omsOrderId: oms.id,
           salesOrderId,
-          state: "ALLOCATED",
+          state,
           fulfillmentStatus,
           ...summary,
           decisions
