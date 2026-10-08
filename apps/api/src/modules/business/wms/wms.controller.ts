@@ -268,6 +268,63 @@ export class WmsController{
     return {ok:true,data:{updated:true}};
   }
 
+  @Get("warehouses/:warehouseId/waves")
+  @RequirePermission("wms.read")
+  async waves(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.waves(this.ctx(req),warehouseId)
+    };
+  }
+
+  @Post("warehouses/:warehouseId/waves")
+  @RequirePermission("wms.manage")
+  async createWave(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string,
+    @Body() body:{
+      strategy:"ORDER"|"BATCH"|"ZONE"|"CLUSTER";
+      maxTasks?:number;
+      priority?:number;
+    }
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.createWave(
+        this.ctx(req),warehouseId,body
+      )
+    };
+  }
+
+  @Post("waves/:waveId/release")
+  @RequirePermission("wms.manage")
+  async releaseWave(
+    @Req() req:AuthenticatedRequest,
+    @Param("waveId") waveId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.releaseWave(this.ctx(req),waveId)
+    };
+  }
+
+  @Post("waves/:waveId/claim-next")
+  @RequirePermission("wms.manage")
+  async claimNextWaveTask(
+    @Req() req:AuthenticatedRequest,
+    @Param("waveId") waveId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.claimNextWaveTask(
+        this.ctx(req),waveId
+      )
+    };
+  }
+
   @Get("warehouses/:warehouseId/reconciliation")
   @RequirePermission("wms.read")
   async reconciliation(
