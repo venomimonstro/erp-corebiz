@@ -463,9 +463,15 @@ export class BookingService {
       for (const resource of resources) {
         await client.query(
           `INSERT INTO service_booking_resource(
-             tenant_id, booking_id, resource_id, capacity_units
-           ) VALUES ($1,$2,$3,1)`,
-          [context.tenantId, booking.id, resource.id]
+             tenant_id, booking_id, resource_id, capacity_units,
+             cost_per_hour_minor_snapshot
+           ) VALUES ($1,$2,$3,1,$4)`,
+          [
+            context.tenantId,
+            booking.id,
+            resource.id,
+            resource.cost_per_hour_minor
+          ]
         );
       }
 
@@ -594,9 +600,15 @@ export class BookingService {
       for (const resource of resources) {
         await client.query(
           `INSERT INTO service_booking_resource(
-             tenant_id, booking_id, resource_id, capacity_units
-           ) VALUES ($1,$2,$3,1)`,
-          [context.tenantId, bookingId, resource.id]
+             tenant_id, booking_id, resource_id, capacity_units,
+             cost_per_hour_minor_snapshot
+           ) VALUES ($1,$2,$3,1,$4)`,
+          [
+            context.tenantId,
+            bookingId,
+            resource.id,
+            resource.cost_per_hour_minor
+          ]
         );
       }
 
@@ -768,14 +780,16 @@ export class BookingService {
     name: string;
     type: string;
     capacity: number;
+    cost_per_hour_minor: string;
   }>> {
     const result = await client.query<{
       id: string;
       name: string;
       type: string;
       capacity: number;
+      cost_per_hour_minor: string;
     }>(
-      `SELECT id, name, type, capacity
+      `SELECT id, name, type, capacity, cost_per_hour_minor::text
        FROM service_resource
        WHERE tenant_id = $1
          AND id = ANY($2::uuid[])
