@@ -384,6 +384,683 @@ export class WmsService {
     });
   }
 
+  async initializeLocationLedger(
+    context: TenantContext,
+    warehouseId: string
+  ): Promise<{
+    initialized: boolean;
+    unassignedLocationId: string;
+    skuCount: number;
+  }> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertProfile(client,context.tenantId,warehouseId);
+
+      const profile=await client.query<{stock_tracking_state:string}>(
+        `SELECT stock_tracking_state
+         FROM warehouse_wms_profile
+         WHERE tenant_id=$1 AND warehouse_id=$2
+         FOR UPDATE`,
+        [context.tenantId,warehouseId]
+      );
+
+      if(profile.rows[0]?.stock_tracking_state==="LOCATION_LEDGER"){
+        const systemLocation=await client.query<{id:string}>(
+          `SELECT id FROM warehouse_location
+           WHERE tenant_id=$1 AND warehouse_id=$2
+             AND is_system=true AND code='UNASSIGNED'
+           LIMIT 1`,
+          [context.tenantId,warehouseId]
+        );
+        if(!systemLocation.rows[0]){
+          throw new ConflictException("WMS инициализирован некорректно: UNASSIGNED отсутствует");
+        }
+
+        const count=await client.query<{count:string}>(
+          `SELECT count(DISTINCT sku_id)::text AS count
+           FROM warehouse_location_balance
+           WHERE tenant_id=$1 AND warehouse_id=$2 AND physical_milli>0`,
+          [context.tenantId,warehouseId]
+        );
+
+        return {
+          initialized:false,
+          unassignedLocationId:systemLocation.rows[0].id,
+          skuCount:Number(count.rows[0]?.count??"0")
+        };
+      }
+
+      const existing=await client.query<{count:string}>(
+        `SELECT count(*)::text AS count
+         FROM warehouse_location_balance
+         WHERE tenant_id=$1 AND warehouse_id=$2`,
+        [context.tenantId,warehouseId]
+      );
+      if(Number(existing.rows[0]?.count??"0")>0){
+        throw new ConflictException(
+          "Location balances уже существуют до инициализации — требуется сверка"
+        );
+      }
+
+      let zone=await client.query<{id:string}>(
+        `SELECT id FROM warehouse_zone
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND is_system=true
+         LIMIT 1`,
+        [context.tenantId,warehouseId]
+      );
+
+      if(!zone.rows[0]){
+        zone=await client.query<{id:string}>(
+          `INSERT INTO warehouse_zone(
+             tenant_id,warehouse_id,code,name,zone_type,priority,status,
+             is_system,created_by_membership_id
+           ) VALUES (
+             $1,$2,'__SYSTEM__','Системная зона','RECEIVING',0,'ACTIVE',
+             true,$3
+           )
+           RETURNING id`,
+          [context.tenantId,warehouseId,context.membershipId]
+        );
+      }
+
+      let location=await client.query<{id:string}>(
+        `SELECT id FROM warehouse_location
+         WHERE tenant_id=$1 AND warehouse_id=$2
+           AND is_system=true AND code='UNASSIGNED'
+         LIMIT 1`,
+        [context.tenantId,warehouseId]
+      );
+
+      if(!location.rows[0]){
+        location=await client.query<{id:string}>(
+          `INSERT INTO warehouse_location(
+             tenant_id,warehouse_id,zone_id,
+             code,full_code,name,location_type,status,
+             pick_sequence,allow_mixed_sku,allow_mixed_lot,
+             is_system,created_by_membership_id
+           ) VALUES (
+             $1,$2,$3,'UNASSIGNED','__SYSTEM__-UNASSIGNED',
+             'Не размещено','BUFFER','ACTIVE',
+             0,true,true,true,$4
+           )
+           RETURNING id`,
+          [
+            context.tenantId,warehouseId,zone.rows[0]!.id,
+            context.membershipId
+          ]
+        );
+      }
+
+      const unassignedId=location.rows[0]!.id;
+
+      const balances=await client.query<{
+        sku_id:string;
+        physical_milli:string;
+      }>(
+        `SELECT sku_id,physical_milli::text
+         FROM inventory_balance
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND physical_milli>0
+         ORDER BY sku_id
+         FOR UPDATE`,
+        [context.tenantId,warehouseId]
+      );
+
+      for(const balance of balances.rows){
+        await client.query(
+          `INSERT INTO warehouse_location_balance(
+             tenant_id,warehouse_id,location_id,sku_id,physical_milli
+           ) VALUES ($1,$2,$3,$4,$5)`,
+          [
+            context.tenantId,warehouseId,unassignedId,
+            balance.sku_id,balance.physical_milli
+          ]
+        );
+
+        await client.query(
+          `INSERT INTO wms_location_movement(
+             tenant_id,warehouse_id,sku_id,movement_type,
+             to_location_id,quantity_milli,
+             source_type,idempotency_key,actor_membership_id
+           ) VALUES (
+             $1,$2,$3,'BOOTSTRAP',$4,$5,
+             'WMS_INITIALIZATION',$6,$7
+           )`,
+          [
+            context.tenantId,warehouseId,balance.sku_id,unassignedId,
+            balance.physical_milli,
+            "wms-bootstrap:"+warehouseId+":"+balance.sku_id,
+            context.membershipId
+          ]
+        );
+      }
+
+      await client.query(
+        `UPDATE warehouse_wms_profile
+         SET stock_tracking_state='LOCATION_LEDGER',
+             updated_at=now()
+         WHERE tenant_id=$1 AND warehouse_id=$2`,
+        [context.tenantId,warehouseId]
+      );
+
+      await this.assertLocationReconciliation(
+        client,context.tenantId,warehouseId
+      );
+
+      await this.audit(
+        client,context,"wms.location_ledger_initialized","warehouse",warehouseId,
+        {skuCount:balances.rowCount??0}
+      );
+
+      return {
+        initialized:true,
+        unassignedLocationId:unassignedId,
+        skuCount:balances.rowCount??0
+      };
+    });
+  }
+
+  async locationBalances(
+    context: TenantContext,
+    warehouseId: string
+  ): Promise<Array<Record<string, unknown>>> {
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           b.location_id,l.full_code,l.name AS location_name,l.is_system,
+           z.name AS zone_name,z.zone_type,
+           b.sku_id,s.code AS sku_code,p.name AS product_name,
+           b.physical_milli::text
+         FROM warehouse_location_balance b
+         JOIN warehouse_location l
+           ON l.tenant_id=b.tenant_id AND l.id=b.location_id
+         JOIN warehouse_zone z
+           ON z.tenant_id=l.tenant_id AND z.id=l.zone_id
+         JOIN sku s
+           ON s.tenant_id=b.tenant_id AND s.id=b.sku_id
+         JOIN product_variant v
+           ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+         JOIN product p
+           ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+         WHERE b.tenant_id=$1
+           AND b.warehouse_id=$2
+           AND b.physical_milli>0
+         ORDER BY l.is_system DESC,z.priority,l.pick_sequence,p.name,s.code`,
+        [context.tenantId,warehouseId]
+      );
+      return result.rows;
+    });
+  }
+
+  async createPutawayTask(
+    context: TenantContext,
+    warehouseId: string,
+    input: {
+      skuId: string;
+      quantityMilli: string;
+    }
+  ): Promise<{
+    taskId:string;
+    fromLocationId:string;
+    toLocationId:string;
+    toLocationCode:string;
+    quantityMilli:string;
+  }> {
+    if(!/^\d+$/.test(input.quantityMilli)||BigInt(input.quantityMilli)<=0n){
+      throw new BadRequestException("Некорректное количество размещения");
+    }
+
+    const quantity=BigInt(input.quantityMilli);
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const profile=await client.query<{stock_tracking_state:string}>(
+        `SELECT stock_tracking_state
+         FROM warehouse_wms_profile
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND status='ACTIVE'`,
+        [context.tenantId,warehouseId]
+      );
+      if(profile.rows[0]?.stock_tracking_state!=="LOCATION_LEDGER"){
+        throw new BadRequestException("Сначала инициализируйте ячеечный учёт");
+      }
+
+      const source=await client.query<{id:string;physical_milli:string}>(
+        `SELECT l.id,b.physical_milli::text
+         FROM warehouse_location l
+         JOIN warehouse_location_balance b
+           ON b.tenant_id=l.tenant_id
+          AND b.location_id=l.id
+          AND b.sku_id=$3
+         WHERE l.tenant_id=$1
+           AND l.warehouse_id=$2
+           AND l.is_system=true
+           AND l.code='UNASSIGNED'
+           AND b.physical_milli>0
+         FOR UPDATE OF b`,
+        [context.tenantId,warehouseId,input.skuId]
+      );
+      const sourceRow=source.rows[0];
+      if(!sourceRow||BigInt(sourceRow.physical_milli)<quantity){
+        throw new ConflictException("В UNASSIGNED недостаточно товара");
+      }
+
+      const candidates=await client.query<{
+        id:string;
+        full_code:string;
+        allow_mixed_sku:boolean;
+        rule_rank:number;
+        rule_priority:number;
+        zone_priority:number;
+        pick_sequence:number;
+      }>(
+        `SELECT
+           l.id,l.full_code,l.allow_mixed_sku,
+           CASE
+             WHEN EXISTS (
+               SELECT 1 FROM warehouse_location_sku_rule r
+               WHERE r.tenant_id=l.tenant_id
+                 AND r.warehouse_id=l.warehouse_id
+                 AND r.sku_id=$3
+                 AND r.rule_type='FIXED_PICK'
+                 AND (r.location_id=l.id OR (r.location_id IS NULL AND r.zone_id=l.zone_id))
+             ) THEN 0
+             WHEN EXISTS (
+               SELECT 1 FROM warehouse_location_sku_rule r
+               WHERE r.tenant_id=l.tenant_id
+                 AND r.warehouse_id=l.warehouse_id
+                 AND r.sku_id=$3
+                 AND r.rule_type='PREFER'
+                 AND (r.location_id=l.id OR (r.location_id IS NULL AND r.zone_id=l.zone_id))
+             ) THEN 10
+             WHEN EXISTS (
+               SELECT 1 FROM warehouse_location_sku_rule r
+               WHERE r.tenant_id=l.tenant_id
+                 AND r.warehouse_id=l.warehouse_id
+                 AND r.sku_id=$3
+                 AND r.rule_type='ALLOW'
+                 AND (r.location_id=l.id OR (r.location_id IS NULL AND r.zone_id=l.zone_id))
+             ) THEN 50
+             ELSE 100
+           END AS rule_rank,
+           COALESCE((
+             SELECT min(r.priority)
+             FROM warehouse_location_sku_rule r
+             WHERE r.tenant_id=l.tenant_id
+               AND r.warehouse_id=l.warehouse_id
+               AND r.sku_id=$3
+               AND r.rule_type IN ('FIXED_PICK','PREFER','ALLOW')
+               AND (r.location_id=l.id OR (r.location_id IS NULL AND r.zone_id=l.zone_id))
+           ),100) AS rule_priority,
+           z.priority AS zone_priority,
+           l.pick_sequence
+         FROM warehouse_location l
+         JOIN warehouse_zone z
+           ON z.tenant_id=l.tenant_id AND z.id=l.zone_id
+         WHERE l.tenant_id=$1
+           AND l.warehouse_id=$2
+           AND l.status='ACTIVE'
+           AND l.is_system=false
+           AND l.location_type IN ('BIN','SHELF','FLOOR','BUFFER')
+           AND z.status='ACTIVE'
+           AND z.zone_type IN ('STORAGE','PICKING')
+           AND NOT EXISTS (
+             SELECT 1 FROM warehouse_location_sku_rule r
+             WHERE r.tenant_id=l.tenant_id
+               AND r.warehouse_id=l.warehouse_id
+               AND r.sku_id=$3
+               AND r.rule_type='FORBID'
+               AND (r.location_id=l.id OR (r.location_id IS NULL AND r.zone_id=l.zone_id))
+           )
+           AND (
+             l.allow_mixed_sku=true OR
+             NOT EXISTS (
+               SELECT 1 FROM warehouse_location_balance b
+               WHERE b.tenant_id=l.tenant_id
+                 AND b.location_id=l.id
+                 AND b.physical_milli>0
+                 AND b.sku_id<>$3
+             )
+           )
+         ORDER BY
+           rule_rank,rule_priority,z.priority,l.pick_sequence,l.full_code
+         LIMIT 1`,
+        [context.tenantId,warehouseId,input.skuId]
+      );
+
+      const target=candidates.rows[0];
+      if(!target){
+        throw new ConflictException(
+          "Нет подходящей активной ячейки для размещения SKU"
+        );
+      }
+
+      const taskKey=
+        "putaway:"+warehouseId+":"+input.skuId+":"+
+        Date.now().toString()+":"+context.membershipId;
+
+      const task=await client.query<{id:string}>(
+        `INSERT INTO warehouse_task(
+           tenant_id,warehouse_id,task_type,status,priority,
+           sku_id,quantity_milli,from_location_id,to_location_id,
+           idempotency_key,instructions
+         ) VALUES (
+           $1,$2,'PUTAWAY','OPEN',100,
+           $3,$4,$5,$6,$7,$8
+         )
+         RETURNING id`,
+        [
+          context.tenantId,warehouseId,input.skuId,quantity.toString(),
+          sourceRow.id,target.id,taskKey,
+          JSON.stringify({
+            targetCode:target.full_code,
+            reason:"Лучший доступный адрес по SKU-правилам, приоритету зоны и pick sequence"
+          })
+        ]
+      );
+
+      return {
+        taskId:task.rows[0]!.id,
+        fromLocationId:sourceRow.id,
+        toLocationId:target.id,
+        toLocationCode:target.full_code,
+        quantityMilli:quantity.toString()
+      };
+    });
+  }
+
+  async tasks(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<Array<Record<string,unknown>>>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           t.id,t.task_type,t.status,t.priority,t.sku_id,
+           s.code AS sku_code,p.name AS product_name,
+           t.quantity_milli::text,
+           t.from_location_id,fl.full_code AS from_code,
+           t.to_location_id,tl.full_code AS to_code,
+           t.claimed_by_membership_id,t.claimed_at,t.completed_at,
+           t.instructions,t.last_error,t.created_at
+         FROM warehouse_task t
+         LEFT JOIN sku s
+           ON s.tenant_id=t.tenant_id AND s.id=t.sku_id
+         LEFT JOIN product_variant v
+           ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+         LEFT JOIN product p
+           ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+         LEFT JOIN warehouse_location fl
+           ON fl.tenant_id=t.tenant_id AND fl.id=t.from_location_id
+         LEFT JOIN warehouse_location tl
+           ON tl.tenant_id=t.tenant_id AND tl.id=t.to_location_id
+         WHERE t.tenant_id=$1 AND t.warehouse_id=$2
+         ORDER BY
+           CASE t.status WHEN 'CLAIMED' THEN 0 WHEN 'OPEN' THEN 1 ELSE 2 END,
+           t.priority,t.created_at
+         LIMIT 500`,
+        [context.tenantId,warehouseId]
+      );
+      return result.rows;
+    });
+  }
+
+  async claimTask(
+    context:TenantContext,
+    taskId:string
+  ):Promise<void>{
+    await this.database.withTenantTransaction(context,async client=>{
+      const task=await client.query<{
+        status:string;
+        claimed_by_membership_id:string|null;
+      }>(
+        `SELECT status,claimed_by_membership_id
+         FROM warehouse_task
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,taskId]
+      );
+      const row=task.rows[0];
+      if(!row) throw new NotFoundException("Задача не найдена");
+      if(row.status==="COMPLETED") return;
+      if(row.status==="CLAIMED"&&row.claimed_by_membership_id!==context.membershipId){
+        throw new ConflictException("Задачу уже выполняет другой сотрудник");
+      }
+      if(row.status!=="OPEN"&&row.status!=="CLAIMED"){
+        throw new BadRequestException("Задачу нельзя взять в работу");
+      }
+
+      await client.query(
+        `UPDATE warehouse_task
+         SET status='CLAIMED',
+             claimed_by_membership_id=$3,
+             claimed_at=COALESCE(claimed_at,now()),
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,taskId,context.membershipId]
+      );
+    });
+  }
+
+  async completePutaway(
+    context:TenantContext,
+    taskId:string
+  ):Promise<void>{
+    await this.database.withTenantTransaction(context,async client=>{
+      const task=await client.query<{
+        warehouse_id:string;
+        task_type:string;
+        status:string;
+        sku_id:string;
+        quantity_milli:string;
+        from_location_id:string;
+        to_location_id:string;
+        claimed_by_membership_id:string|null;
+      }>(
+        `SELECT
+           warehouse_id,task_type,status,sku_id,quantity_milli::text,
+           from_location_id,to_location_id,claimed_by_membership_id
+         FROM warehouse_task
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,taskId]
+      );
+
+      const row=task.rows[0];
+      if(!row) throw new NotFoundException("Задача не найдена");
+      if(row.status==="COMPLETED") return;
+      if(row.task_type!=="PUTAWAY"){
+        throw new BadRequestException("Это не задача размещения");
+      }
+      if(row.status!=="CLAIMED"||row.claimed_by_membership_id!==context.membershipId){
+        throw new ConflictException("Сначала возьмите задачу в работу");
+      }
+
+      const target=await client.query<{
+        status:string;
+        allow_mixed_sku:boolean;
+      }>(
+        `SELECT status,allow_mixed_sku
+         FROM warehouse_location
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND id=$3
+         FOR UPDATE`,
+        [context.tenantId,row.warehouse_id,row.to_location_id]
+      );
+      const targetRow=target.rows[0];
+      if(!targetRow||targetRow.status!=="ACTIVE"){
+        throw new ConflictException("Целевая ячейка недоступна");
+      }
+
+      if(!targetRow.allow_mixed_sku){
+        const mixed=await client.query(
+          `SELECT 1 FROM warehouse_location_balance
+           WHERE tenant_id=$1
+             AND warehouse_id=$2
+             AND location_id=$3
+             AND physical_milli>0
+             AND sku_id<>$4
+           LIMIT 1`,
+          [
+            context.tenantId,row.warehouse_id,row.to_location_id,row.sku_id
+          ]
+        );
+        if(mixed.rowCount){
+          throw new ConflictException("Целевая ячейка не допускает смешивание SKU");
+        }
+      }
+
+      const source=await client.query<{physical_milli:string}>(
+        `SELECT physical_milli::text
+         FROM warehouse_location_balance
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND location_id=$3
+           AND sku_id=$4
+         FOR UPDATE`,
+        [
+          context.tenantId,row.warehouse_id,row.from_location_id,row.sku_id
+        ]
+      );
+      const quantity=BigInt(row.quantity_milli);
+      if(BigInt(source.rows[0]?.physical_milli??"0")<quantity){
+        throw new ConflictException("В исходном адресе недостаточно товара");
+      }
+
+      await client.query(
+        `UPDATE warehouse_location_balance
+         SET physical_milli=physical_milli-$5::bigint,updated_at=now()
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND location_id=$3
+           AND sku_id=$4`,
+        [
+          context.tenantId,row.warehouse_id,row.from_location_id,row.sku_id,
+          quantity.toString()
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO warehouse_location_balance(
+           tenant_id,warehouse_id,location_id,sku_id,physical_milli
+         ) VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (tenant_id,warehouse_id,location_id,sku_id)
+         DO UPDATE SET
+           physical_milli=warehouse_location_balance.physical_milli+
+             EXCLUDED.physical_milli,
+           updated_at=now()`,
+        [
+          context.tenantId,row.warehouse_id,row.to_location_id,row.sku_id,
+          quantity.toString()
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO wms_location_movement(
+           tenant_id,warehouse_id,sku_id,movement_type,
+           from_location_id,to_location_id,quantity_milli,
+           source_type,source_id,idempotency_key,actor_membership_id
+         ) VALUES (
+           $1,$2,$3,'PUTAWAY',$4,$5,$6,
+           'WAREHOUSE_TASK',$7,$8,$9
+         )
+         ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
+        [
+          context.tenantId,row.warehouse_id,row.sku_id,
+          row.from_location_id,row.to_location_id,quantity.toString(),
+          taskId,"putaway-task:"+taskId,context.membershipId
+        ]
+      );
+
+      await client.query(
+        `UPDATE warehouse_task
+         SET status='COMPLETED',
+             completed_at=now(),
+             result=$3,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [
+          context.tenantId,taskId,
+          JSON.stringify({completedBy:context.membershipId})
+        ]
+      );
+
+      await this.assertLocationReconciliation(
+        client,context.tenantId,row.warehouse_id
+      );
+    });
+  }
+
+  async reconciliation(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<Array<Record<string,unknown>>>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           COALESCE(i.sku_id,l.sku_id) AS sku_id,
+           s.code AS sku_code,
+           COALESCE(i.physical_milli,0)::text AS inventory_physical_milli,
+           COALESCE(l.location_milli,0)::text AS location_physical_milli,
+           (
+             COALESCE(i.physical_milli,0)-
+             COALESCE(l.location_milli,0)
+           )::text AS difference_milli
+         FROM inventory_balance i
+         FULL OUTER JOIN (
+           SELECT tenant_id,warehouse_id,sku_id,
+                  sum(physical_milli) AS location_milli
+           FROM warehouse_location_balance
+           WHERE tenant_id=$1 AND warehouse_id=$2
+           GROUP BY tenant_id,warehouse_id,sku_id
+         ) l
+           ON l.tenant_id=i.tenant_id
+          AND l.warehouse_id=i.warehouse_id
+          AND l.sku_id=i.sku_id
+         JOIN sku s
+           ON s.tenant_id=COALESCE(i.tenant_id,l.tenant_id)
+          AND s.id=COALESCE(i.sku_id,l.sku_id)
+         WHERE COALESCE(i.tenant_id,l.tenant_id)=$1
+           AND COALESCE(i.warehouse_id,l.warehouse_id)=$2
+         ORDER BY s.code`,
+        [context.tenantId,warehouseId]
+      );
+      return result.rows;
+    });
+  }
+
+  private async assertLocationReconciliation(
+    client:PoolClient,
+    tenantId:string,
+    warehouseId:string
+  ):Promise<void>{
+    const mismatch=await client.query(
+      `SELECT 1
+       FROM (
+         SELECT
+           COALESCE(i.sku_id,l.sku_id) AS sku_id,
+           COALESCE(i.physical_milli,0) AS inventory_milli,
+           COALESCE(l.location_milli,0) AS location_milli
+         FROM inventory_balance i
+         FULL OUTER JOIN (
+           SELECT tenant_id,warehouse_id,sku_id,
+                  sum(physical_milli) AS location_milli
+           FROM warehouse_location_balance
+           WHERE tenant_id=$1 AND warehouse_id=$2
+           GROUP BY tenant_id,warehouse_id,sku_id
+         ) l
+           ON l.tenant_id=i.tenant_id
+          AND l.warehouse_id=i.warehouse_id
+          AND l.sku_id=i.sku_id
+         WHERE COALESCE(i.tenant_id,l.tenant_id)=$1
+           AND COALESCE(i.warehouse_id,l.warehouse_id)=$2
+       ) q
+       WHERE inventory_milli<>location_milli
+       LIMIT 1`,
+      [tenantId,warehouseId]
+    );
+    if(mismatch.rowCount){
+      throw new ConflictException(
+        "WMS location ledger не сходится с Inventory Balance"
+      );
+    }
+  }
+
   private async assertWarehouse(
     client:PoolClient,tenantId:string,warehouseId:string
   ):Promise<void>{
