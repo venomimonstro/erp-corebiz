@@ -668,6 +668,10 @@ export class BookingService {
     status: "ARRIVED" | "IN_SERVICE" | "COMPLETED" | "CANCELLED" | "NO_SHOW",
     version: number
   ): Promise<{ version: number; status: string }> {
+    if (!["ARRIVED", "IN_SERVICE", "COMPLETED", "CANCELLED", "NO_SHOW"].includes(status) ||
+        !Number.isSafeInteger(version) || version < 1) {
+      throw new BadRequestException("Некорректный статус или версия записи");
+    }
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query<{ version: number; status: string }>(
         `UPDATE service_booking
