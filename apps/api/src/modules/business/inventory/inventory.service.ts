@@ -328,6 +328,109 @@ export class InventoryService {
     });
   }
 
+  async applyWmsCountAdjustment(
+    client: PoolClient,
+    context: TenantContext,
+    input: {
+      warehouseId: string;
+      skuId: string;
+      quantityDeltaMilli: bigint;
+      countId: string;
+      countLineId: string;
+      reason: string;
+      idempotencyKey: string;
+    }
+  ): Promise<{ movementId: string | null; applied: boolean }> {
+    if (input.quantityDeltaMilli === 0n) {
+      return { movementId: null, applied: false };
+    }
+    if (!input.idempotencyKey?.trim()) {
+      throw new BadRequestException("Требуется ключ идемпотентности WMS count");
+    }
+
+    const existing = await client.query<{ id: string }>(
+      `SELECT id FROM inventory_transaction
+       WHERE tenant_id=$1 AND idempotency_key=$2`,
+      [context.tenantId,input.idempotencyKey.trim()]
+    );
+    if (existing.rows[0]) {
+      return { movementId: existing.rows[0].id, applied: false };
+    }
+
+    const wms = await client.query(
+      `SELECT 1
+       FROM warehouse_wms_profile
+       WHERE tenant_id=$1 AND warehouse_id=$2
+         AND status='ACTIVE'
+         AND stock_tracking_state='LOCATION_LEDGER'`,
+      [context.tenantId,input.warehouseId]
+    );
+    if (!wms.rowCount) {
+      throw new ConflictException("Cycle count разрешён только для активного адресного WMS");
+    }
+
+    await this.assertWarehouse(client,context.tenantId,input.warehouseId);
+    await this.assertSku(client,context.tenantId,input.skuId);
+    await this.lockBalance(
+      client,context.tenantId,input.warehouseId,input.skuId
+    );
+
+    const balance = await client.query<{
+      physical_milli:string;
+      reserved_milli:string;
+    }>(
+      `SELECT physical_milli::text,reserved_milli::text
+       FROM inventory_balance
+       WHERE tenant_id=$1 AND warehouse_id=$2 AND sku_id=$3
+       FOR UPDATE`,
+      [context.tenantId,input.warehouseId,input.skuId]
+    );
+
+    const row=balance.rows[0]!;
+    const nextPhysical=
+      BigInt(row.physical_milli)+input.quantityDeltaMilli;
+    const reserved=BigInt(row.reserved_milli);
+
+    if(nextPhysical<0n||nextPhysical<reserved){
+      throw new ConflictException(
+        "Результат пересчёта ниже зарезервированного остатка; сначала разберите резервы"
+      );
+    }
+
+    const movement=await this.insertMovementOnly(client,context,{
+      warehouseId:input.warehouseId,
+      skuId:input.skuId,
+      movementType:"ADJUSTMENT",
+      quantityDeltaMilli:input.quantityDeltaMilli,
+      sourceType:"WMS_CYCLE_COUNT",
+      sourceId:input.countId,
+      sourceLineId:input.countLineId,
+      reason:input.reason,
+      idempotencyKey:input.idempotencyKey.trim()
+    });
+
+    await client.query(
+      `UPDATE inventory_balance
+       SET physical_milli=$4::bigint,updated_at=now()
+       WHERE tenant_id=$1 AND warehouse_id=$2 AND sku_id=$3`,
+      [
+        context.tenantId,input.warehouseId,input.skuId,
+        nextPhysical.toString()
+      ]
+    );
+
+    await this.audit(
+      client,context,"inventory.wms_count_adjusted","sku",input.skuId,{
+        warehouseId:input.warehouseId,
+        countId:input.countId,
+        countLineId:input.countLineId,
+        deltaMilli:input.quantityDeltaMilli.toString()
+      }
+    );
+
+    return {movementId:movement.id,applied:true};
+  }
+
   async postGoodsReceipt(
     client: PoolClient,
     context: TenantContext,
