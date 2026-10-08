@@ -403,6 +403,23 @@ export class WmsController{
     };
   }
 
+  @Get("warehouses/:warehouseId/slotting")
+  @RequirePermission("wms.read")
+  async slotting(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string,
+    @Query("days") days?:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.slottingRecommendations(
+        this.ctx(req),
+        warehouseId,
+        days?Number(days):30
+      )
+    };
+  }
+
   @Get("warehouses/:warehouseId/reconciliation")
   @RequirePermission("wms.read")
   async reconciliation(
