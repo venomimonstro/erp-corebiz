@@ -66,12 +66,6 @@ export class ChannelsService {
       throw new BadRequestException("Некорректное название канала");
     }
 
-    if (["OZON", "WILDBERRIES", "YANDEX_MARKET"].includes(input.provider)) {
-      throw new BadRequestException(
-        "Marketplace нужно подключать через профильный endpoint с credentials"
-      );
-    }
-
     const webhookEnabled =
       input.provider === "OWN_SITE" || input.provider === "API";
 
