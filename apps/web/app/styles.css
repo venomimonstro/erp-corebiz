@@ -368,3 +368,35 @@ button, .primary, .secondary { font: inherit; }
   .service-today-row > button { justify-self: start; }
   .service-analytics-grid { grid-template-columns: 1fr; }
 }
+
+
+/* Growth analytics */
+.tracker-site-grid,
+.connection-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
+.tracker-site-card,
+.connection-card { background: #fff; border: 1px solid #e1e3e6; border-radius: 15px; padding: 15px; display: grid; gap: 13px; }
+.tracker-site-card header,
+.connection-card header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.tracker-site-card header > div,
+.connection-card header > div { display: grid; gap: 4px; }
+.tracker-site-card header span:not(.status-pill),
+.connection-card header span:not(.status-pill) { color: #858a91; font-size: 9px; letter-spacing: .07em; }
+.tracker-site-card h2,
+.connection-card h3 { margin: 0; font-size: 17px; }
+.tracker-site-card code { display: block; background: #f4f5f6; border-radius: 9px; padding: 9px; font-size: 10px; word-break: break-all; }
+.tracker-domains { display: flex; flex-wrap: wrap; gap: 5px; }
+.tracker-domains span { background: #f0f2f3; border-radius: 999px; padding: 5px 8px; font-size: 10px; }
+.connection-card dl { margin: 0; display: grid; gap: 7px; }
+.connection-card dl > div { display: grid; grid-template-columns: 135px 1fr; gap: 8px; font-size: 11px; }
+.connection-card dt { color: #858a91; }
+.connection-card dd { margin: 0; word-break: break-word; }
+.connection-error { background: #fff1f0; border: 1px solid #ffd5d1; color: #9e2b22; border-radius: 9px; padding: 8px 9px; font-size: 10px; line-height: 1.4; }
+
+@media (max-width: 1050px) {
+  .tracker-site-grid,
+  .connection-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+  .tracker-site-grid,
+  .connection-grid { grid-template-columns: 1fr; }
+}
