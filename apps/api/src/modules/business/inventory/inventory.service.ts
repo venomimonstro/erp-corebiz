@@ -2202,6 +2202,179 @@ export class InventoryService {
     return { applied: movement.applied };
   }
 
+  async moveOwnerLocation(
+    client:PoolClient,
+    context:TenantContext,
+    input:{
+      warehouseId:string;
+      ownerId:string;
+      skuId:string;
+      fromLocationId?:string;
+      toLocationId?:string;
+      quantityMilli:bigint;
+      movementType:
+        |"PUTAWAY"|"MOVE"|"PICK"|"SHIP"|"RETURN"|"ADJUSTMENT";
+      sourceType:string;
+      sourceId?:string;
+      sourceLineId?:string;
+      idempotencyKey:string;
+    }
+  ):Promise<{applied:boolean}>{
+    if(input.quantityMilli<=0n){
+      throw new BadRequestException("Количество owner-location movement должно быть больше нуля");
+    }
+    if(!input.fromLocationId&&!input.toLocationId){
+      throw new BadRequestException("Owner-location movement требует from или to location");
+    }
+    if(!await this.ownerLedgerEnabled(
+      client,context.tenantId,input.warehouseId
+    )){
+      return {applied:false};
+    }
+
+    const existing=await client.query(
+      `SELECT 1
+       FROM warehouse_location_owner_movement
+       WHERE tenant_id=$1 AND idempotency_key=$2`,
+      [context.tenantId,input.idempotencyKey]
+    );
+    if(existing.rowCount) return {applied:false};
+
+    await this.assertOwnerContractIfClient(
+      client,context.tenantId,input.warehouseId,input.ownerId
+    );
+
+    if(input.fromLocationId){
+      const source=await client.query<{physical_milli:string}>(
+        `SELECT physical_milli::text
+         FROM warehouse_location_owner_balance
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND owner_id=$3
+           AND location_id=$4
+           AND sku_id=$5
+         FOR UPDATE`,
+        [
+          context.tenantId,input.warehouseId,input.ownerId,
+          input.fromLocationId,input.skuId
+        ]
+      );
+      const physical=BigInt(source.rows[0]?.physical_milli??"0");
+      if(physical<input.quantityMilli){
+        throw new ConflictException(
+          "Недостаточно товара выбранного владельца в исходной ячейке"
+        );
+      }
+
+      await client.query(
+        `UPDATE warehouse_location_owner_balance
+         SET physical_milli=physical_milli-$6::bigint,
+             updated_at=now()
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND owner_id=$3
+           AND location_id=$4
+           AND sku_id=$5`,
+        [
+          context.tenantId,input.warehouseId,input.ownerId,
+          input.fromLocationId,input.skuId,input.quantityMilli.toString()
+        ]
+      );
+    }
+
+    if(input.toLocationId){
+      await client.query(
+        `INSERT INTO warehouse_location_owner_balance(
+           tenant_id,warehouse_id,owner_id,location_id,sku_id,physical_milli
+         ) VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (
+           tenant_id,warehouse_id,owner_id,location_id,sku_id
+         )
+         DO UPDATE SET
+           physical_milli=
+             warehouse_location_owner_balance.physical_milli+
+             EXCLUDED.physical_milli,
+           updated_at=now()`,
+        [
+          context.tenantId,input.warehouseId,input.ownerId,
+          input.toLocationId,input.skuId,input.quantityMilli.toString()
+        ]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO warehouse_location_owner_movement(
+         tenant_id,warehouse_id,owner_id,sku_id,movement_type,
+         from_location_id,to_location_id,quantity_milli,
+         source_type,source_id,source_line_id,
+         idempotency_key,actor_membership_id
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [
+        context.tenantId,input.warehouseId,input.ownerId,input.skuId,
+        input.movementType,input.fromLocationId??null,input.toLocationId??null,
+        input.quantityMilli.toString(),input.sourceType,
+        input.sourceId??null,input.sourceLineId??null,
+        input.idempotencyKey,context.membershipId
+      ]
+    );
+
+    return {applied:true};
+  }
+
+  async releaseOwnerReservation(
+    client:PoolClient,
+    context:TenantContext,
+    input:{
+      warehouseId:string;
+      ownerId:string;
+      skuId:string;
+      quantityMilli:bigint;
+      salesOrderId:string;
+      salesOrderLineId:string;
+      idempotencyKey:string;
+    }
+  ):Promise<void>{
+    if(!await this.ownerLedgerEnabled(
+      client,context.tenantId,input.warehouseId
+    )) return;
+
+    await this.applyOwnerBalanceDelta(
+      client,context,{
+        warehouseId:input.warehouseId,
+        ownerId:input.ownerId,
+        skuId:input.skuId,
+        physicalDelta:0n,
+        reservedDelta:-input.quantityMilli,
+        movementType:"RELEASE",
+        sourceType:"SALES_ORDER",
+        sourceId:input.salesOrderId,
+        sourceLineId:input.salesOrderLineId,
+        idempotencyKey:input.idempotencyKey
+      }
+    );
+  }
+
+  private async assertOwnerContractIfClient(
+    client:PoolClient,
+    tenantId:string,
+    warehouseId:string,
+    ownerId:string
+  ):Promise<void>{
+    const owner=await client.query<{owner_type:string}>(
+      `SELECT owner_type
+       FROM inventory_owner
+       WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+      [tenantId,ownerId]
+    );
+    const row=owner.rows[0];
+    if(!row) throw new NotFoundException("Владелец товара не найден");
+    if(row.owner_type==="CLIENT"){
+      await this.assertOwnerContract(
+        client,tenantId,warehouseId,ownerId
+      );
+    }
+  }
+
   private async nextNumber(
     client: PoolClient,
     tenantId: string,
