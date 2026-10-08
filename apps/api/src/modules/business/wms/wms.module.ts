@@ -6,6 +6,8 @@ import {Wms3plPortalController} from "./wms-3pl-portal.controller";
 import {Wms3plPortalService} from "./wms-3pl-portal.service";
 import {Wms3plRequestsController} from "./wms-3pl-requests.controller";
 import {Wms3plRequestsService} from "./wms-3pl-requests.service";
+import {WmsInboundController} from "./wms-inbound.controller";
+import {WmsInboundService} from "./wms-inbound.service";
 import {WmsController} from "./wms.controller";
 import {WmsService} from "./wms.service";
 
@@ -15,19 +17,22 @@ import {WmsService} from "./wms.service";
     WmsController,
     Wms3plBillingController,
     Wms3plPortalController,
-    Wms3plRequestsController
+    Wms3plRequestsController,
+    WmsInboundController
   ],
   providers:[
     WmsService,
     Wms3plBillingService,
     Wms3plPortalService,
-    Wms3plRequestsService
+    Wms3plRequestsService,
+    WmsInboundService
   ],
   exports:[
     WmsService,
     Wms3plBillingService,
     Wms3plPortalService,
-    Wms3plRequestsService
+    Wms3plRequestsService,
+    WmsInboundService
   ]
 })
 export class WmsModule{}
