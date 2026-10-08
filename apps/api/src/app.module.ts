@@ -9,6 +9,7 @@ import { CatalogModule } from "./modules/business/catalog/catalog.module";
 import { CrmModule } from "./modules/business/crm/crm.module";
 import { OrganizationModule } from "./modules/business/organization/organization.module";
 import { PartyModule } from "./modules/business/party/party.module";
+import { SalesModule } from "./modules/business/sales/sales.module";
 import { TasksModule } from "./modules/business/tasks/tasks.module";
 import { AuthModule } from "./modules/platform/auth/auth.module";
 import { SessionContextMiddleware } from "./modules/platform/auth/session-context.middleware";
@@ -30,6 +31,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     CrmModule,
     TasksModule,
     CatalogModule,
+    SalesModule,
     HealthModule
   ]
 })
