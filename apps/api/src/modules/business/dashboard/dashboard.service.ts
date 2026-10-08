@@ -44,18 +44,26 @@ export class DashboardService {
           gross_profit_minor: string;
         }>(
           `SELECT
-             COALESCE(sum(o.total_minor), 0)::text AS sales_minor,
-             COALESCE(sum(
-               l.line_total_minor -
-               ((l.cost_price_minor_snapshot * l.quantity_milli + 500) / 1000)
-             ), 0)::text AS gross_profit_minor
-           FROM sales_order o
-           JOIN sales_order_line l
-             ON l.tenant_id = o.tenant_id
-            AND l.order_id = o.id
-           WHERE o.tenant_id = $1
-             AND o.order_status <> 'CANCELLED'
-             AND o.created_at >= now() - interval '30 days'`,
+             COALESCE((
+               SELECT sum(o.total_minor)
+               FROM sales_order o
+               WHERE o.tenant_id = $1
+                 AND o.order_status <> 'CANCELLED'
+                 AND o.created_at >= now() - interval '30 days'
+             ), 0)::text AS sales_minor,
+             COALESCE((
+               SELECT sum(
+                 l.line_total_minor -
+                 ((l.cost_price_minor_snapshot * l.quantity_milli + 500) / 1000)
+               )
+               FROM sales_order o
+               JOIN sales_order_line l
+                 ON l.tenant_id = o.tenant_id
+                AND l.order_id = o.id
+               WHERE o.tenant_id = $1
+                 AND o.order_status <> 'CANCELLED'
+                 AND o.created_at >= now() - interval '30 days'
+             ), 0)::text AS gross_profit_minor`,
           [context.tenantId]
         ),
         client.query<{ count: string }>(
