@@ -96,6 +96,24 @@ export class AccountingService {
     });
   }
 
+  async periodHistory(context:TenantContext,periodId:string) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const period=await client.query(
+        "SELECT 1 FROM accounting_period WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,periodId]
+      );
+      if(!period.rowCount) throw new NotFoundException("Accounting period not found");
+      const result=await client.query(
+        `SELECT id,from_state,to_state,reason,actor_membership_id,changed_at
+         FROM accounting_period_transition
+         WHERE tenant_id=$1 AND period_id=$2
+         ORDER BY changed_at DESC,id DESC`,
+        [context.tenantId,periodId]
+      );
+      return result.rows;
+    });
+  }
+
   async lockPeriod(context:TenantContext,input:{
     periodId:string;targetState:"SOFT_LOCKED"|"HARD_LOCKED";reason:string;
   }) {
