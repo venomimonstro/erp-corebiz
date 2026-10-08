@@ -619,8 +619,11 @@ export class WmsService {
     const quantity=BigInt(input.quantityMilli);
 
     return this.database.withTenantTransaction(context,async client=>{
-      const profile=await client.query<{stock_tracking_state:string}>(
-        `SELECT stock_tracking_state
+      const profile=await client.query<{
+        stock_tracking_state:string;
+        owner_tracking_state:string;
+      }>(
+        `SELECT stock_tracking_state,owner_tracking_state
          FROM warehouse_wms_profile
          WHERE tenant_id=$1 AND warehouse_id=$2 AND status='ACTIVE'`,
         [context.tenantId,warehouseId]
@@ -1162,7 +1165,12 @@ export class WmsService {
           planned_milli:string;
         }>(
           `SELECT
-             b.location_id,l.full_code,ob.physical_milli::text,
+             b.location_id,l.full_code,
+             CASE
+               WHEN wp.owner_tracking_state='OWNER_LEDGER'
+                 THEN COALESCE(ob.physical_milli,0)
+               ELSE b.physical_milli
+             END::text AS physical_milli,
              COALESCE((
                SELECT sum(a.quantity_milli)
                FROM wms_pick_allocation a
@@ -1170,11 +1178,18 @@ export class WmsService {
                  AND a.warehouse_id=b.warehouse_id
                  AND a.source_location_id=b.location_id
                  AND a.sku_id=b.sku_id
-                 AND a.owner_id=$4
+                 AND (
+                   wp.owner_tracking_state<>'OWNER_LEDGER'
+                   OR a.owner_id=$4
+                 )
                  AND a.status='PLANNED'
              ),0)::text AS planned_milli
            FROM warehouse_location_balance b
-           JOIN warehouse_location_owner_balance ob
+           JOIN warehouse_wms_profile wp
+             ON wp.tenant_id=b.tenant_id
+            AND wp.warehouse_id=b.warehouse_id
+            AND wp.status='ACTIVE'
+           LEFT JOIN warehouse_location_owner_balance ob
              ON ob.tenant_id=b.tenant_id
             AND ob.warehouse_id=b.warehouse_id
             AND ob.location_id=b.location_id
@@ -1187,7 +1202,13 @@ export class WmsService {
            WHERE b.tenant_id=$1
              AND b.warehouse_id=$2
              AND b.sku_id=$3
-             AND b.physical_milli>0
+             AND (
+               CASE
+                 WHEN wp.owner_tracking_state='OWNER_LEDGER'
+                   THEN COALESCE(ob.physical_milli,0)
+                 ELSE b.physical_milli
+               END
+             )>0
              AND l.status='ACTIVE'
              AND l.is_system=false
              AND z.status='ACTIVE'
