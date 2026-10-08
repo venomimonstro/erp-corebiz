@@ -255,6 +255,349 @@ export class FinanceService {
     });
   }
 
+  async listInvoices(
+    context: TenantContext
+  ): Promise<Array<Record<string, unknown>>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `SELECT
+           i.id,i.business_number,i.party_id,p.display_name AS party_name,
+           i.source_type,i.source_id,i.obligation_id,
+           i.period_from,i.period_to,i.currency,i.amount_minor::text,i.status,
+           i.issued_at,i.due_at,i.updated_at,
+           o.settled_minor::text,
+           (o.amount_minor-o.settled_minor)::text AS remaining_minor
+         FROM finance_invoice i
+         JOIN financial_obligation o
+           ON o.tenant_id=i.tenant_id AND o.id=i.obligation_id
+         JOIN party p
+           ON p.tenant_id=i.tenant_id AND p.id=i.party_id
+         WHERE i.tenant_id=$1
+         ORDER BY i.issued_at DESC
+         LIMIT 1000`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async create3plStatementInvoice(
+    context: TenantContext,
+    statementId: string,
+    input?: { dueAt?: string }
+  ): Promise<{ invoiceId: string; obligationId: string; number: string }> {
+    const dueAt = input?.dueAt ? new Date(input.dueAt) : null;
+    if (dueAt && Number.isNaN(dueAt.getTime())) {
+      throw new BadRequestException("Некорректный срок оплаты");
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const statement = await client.query<{
+        id: string;
+        status: string;
+        owner_id: string;
+        period_from: string;
+        period_to: string;
+        currency: string;
+        total_minor: string;
+        party_id: string | null;
+        finance_invoice_id: string | null;
+      }>(
+        `SELECT
+           s.id,s.status,s.owner_id,s.period_from::text,s.period_to::text,
+           s.currency,s.total_minor::text,
+           io.party_id,s.finance_invoice_id
+         FROM wms_3pl_statement s
+         JOIN inventory_owner io
+           ON io.tenant_id=s.tenant_id AND io.id=s.owner_id
+         WHERE s.tenant_id=$1 AND s.id=$2
+         FOR UPDATE OF s`,
+        [context.tenantId, statementId]
+      );
+
+      const row = statement.rows[0];
+      if (!row) throw new NotFoundException("3PL statement не найден");
+      if (row.status !== "FINALIZED") {
+        throw new BadRequestException(
+          "В Finance можно передать только FINALIZED statement"
+        );
+      }
+      if (!row.party_id) {
+        throw new ConflictException(
+          "3PL-владелец не связан с клиентом CRM"
+        );
+      }
+
+      if (row.finance_invoice_id) {
+        const existing = await client.query<{
+          id: string;
+          business_number: string;
+          obligation_id: string;
+        }>(
+          `SELECT id,business_number,obligation_id
+           FROM finance_invoice
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId, row.finance_invoice_id]
+        );
+        const invoice = existing.rows[0];
+        if (!invoice) {
+          throw new ConflictException("Finance link statement повреждён");
+        }
+        return {
+          invoiceId: invoice.id,
+          obligationId: invoice.obligation_id,
+          number: invoice.business_number
+        };
+      }
+
+      const obligation = await client.query<{ id: string }>(
+        `INSERT INTO financial_obligation(
+           tenant_id,direction,party_id,source_type,source_id,
+           currency,amount_minor,due_at
+         ) VALUES ($1,'RECEIVABLE',$2,'WMS_3PL_STATEMENT',$3,$4,$5,$6)
+         ON CONFLICT (tenant_id,direction,source_type,source_id)
+         DO UPDATE SET
+           party_id=EXCLUDED.party_id,
+           due_at=EXCLUDED.due_at,
+           updated_at=now()
+         RETURNING id`,
+        [
+          context.tenantId,
+          row.party_id,
+          row.id,
+          row.currency,
+          row.total_minor,
+          dueAt
+        ]
+      );
+
+      const obligationId = obligation.rows[0]!.id;
+      const number = await this.nextNumber(
+        client,
+        context.tenantId,
+        "finance_invoice",
+        "INV"
+      );
+
+      const invoice = await client.query<{ id: string }>(
+        `INSERT INTO finance_invoice(
+           tenant_id,business_number,party_id,source_type,source_id,
+           obligation_id,period_from,period_to,currency,amount_minor,due_at,
+           created_by_membership_id
+         ) VALUES ($1,$2,$3,'WMS_3PL_STATEMENT',$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (tenant_id,source_type,source_id)
+         DO UPDATE SET updated_at=finance_invoice.updated_at
+         RETURNING id`,
+        [
+          context.tenantId,
+          number,
+          row.party_id,
+          row.id,
+          obligationId,
+          row.period_from,
+          row.period_to,
+          row.currency,
+          row.total_minor,
+          dueAt,
+          context.membershipId
+        ]
+      );
+
+      const invoiceId = invoice.rows[0]!.id;
+
+      await client.query(
+        `UPDATE wms_3pl_statement
+         SET finance_invoice_id=$3,
+             finance_handed_off_at=COALESCE(finance_handed_off_at,now()),
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId, row.id, invoiceId]
+      );
+
+      await this.audit(
+        client,
+        context,
+        "finance.3pl_invoice_issued",
+        "finance_invoice",
+        invoiceId,
+        {
+          statementId: row.id,
+          obligationId,
+          amountMinor: row.total_minor,
+          currency: row.currency
+        }
+      );
+
+      await this.events.enqueue(client, context, {
+        eventName: "finance.invoice_issued",
+        entityType: "FINANCE_INVOICE",
+        entityId: invoiceId,
+        payload: {
+          invoiceId,
+          sourceType: "WMS_3PL_STATEMENT",
+          sourceId: row.id,
+          partyId: row.party_id,
+          obligationId,
+          amountMinor: row.total_minor,
+          currency: row.currency,
+          periodFrom: row.period_from,
+          periodTo: row.period_to
+        }
+      });
+
+      return { invoiceId, obligationId, number };
+    });
+  }
+
+  async receiveInvoicePayment(
+    context: TenantContext,
+    input: {
+      invoiceId: string;
+      amountMinor: string;
+      cashAccountId?: string;
+      idempotencyKey: string;
+      note?: string;
+    }
+  ): Promise<{ paymentId: string; number: string; invoiceStatus: string }> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const existing = await this.findPaymentByKey(
+        client,
+        context.tenantId,
+        input.idempotencyKey
+      );
+      if (existing) {
+        const state = await client.query<{ status: string }>(
+          `SELECT status FROM finance_invoice
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId, input.invoiceId]
+        );
+        return {
+          paymentId: existing.id,
+          number: existing.business_number,
+          invoiceStatus: state.rows[0]?.status ?? "ISSUED"
+        };
+      }
+
+      const amount = this.parsePositiveAmount(input.amountMinor);
+
+      const invoice = await client.query<{
+        id: string;
+        party_id: string;
+        obligation_id: string;
+        currency: string;
+        amount_minor: string;
+        status: string;
+        settled_minor: string;
+      }>(
+        `SELECT
+           i.id,i.party_id,i.obligation_id,i.currency,i.amount_minor::text,
+           i.status,o.settled_minor::text
+         FROM finance_invoice i
+         JOIN financial_obligation o
+           ON o.tenant_id=i.tenant_id AND o.id=i.obligation_id
+         WHERE i.tenant_id=$1 AND i.id=$2
+         FOR UPDATE OF i,o`,
+        [context.tenantId, input.invoiceId]
+      );
+
+      const row = invoice.rows[0];
+      if (!row) throw new NotFoundException("Счёт не найден");
+      if (["CANCELLED","CREDITED"].includes(row.status)) {
+        throw new BadRequestException("Счёт не принимает оплату");
+      }
+
+      const remaining =
+        BigInt(row.amount_minor) - BigInt(row.settled_minor);
+      if (amount > remaining) {
+        throw new ConflictException("Платёж превышает остаток по счёту");
+      }
+
+      const accountId =
+        input.cashAccountId ??
+        (await this.getDefaultCashAccountId(
+          client,
+          context.tenantId,
+          row.currency
+        ));
+      const categoryId = await this.getCategoryId(
+        client,
+        context.tenantId,
+        "CUSTOMER_PAYMENT"
+      );
+
+      const payment = await this.insertPayment(client, context, {
+        cashAccountId: accountId,
+        categoryId,
+        partyId: row.party_id,
+        obligationId: row.obligation_id,
+        direction: "IN",
+        kind: "PAYMENT",
+        amountMinor: amount,
+        currency: row.currency,
+        sourceType: "FINANCE_INVOICE",
+        sourceId: row.id,
+        idempotencyKey: input.idempotencyKey,
+        note: input.note
+      });
+
+      const settled = BigInt(row.settled_minor) + amount;
+      const obligationStatus =
+        settled === BigInt(row.amount_minor)
+          ? "SETTLED"
+          : "PARTIALLY_SETTLED";
+
+      await client.query(
+        `UPDATE financial_obligation
+         SET settled_minor=$3,status=$4,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [
+          context.tenantId,
+          row.obligation_id,
+          settled.toString(),
+          obligationStatus
+        ]
+      );
+
+      const state = await client.query<{ status: string }>(
+        `SELECT status FROM finance_invoice
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId, row.id]
+      );
+
+      await this.audit(
+        client,
+        context,
+        "finance.invoice_payment_posted",
+        "payment",
+        payment.id,
+        {
+          invoiceId: row.id,
+          amountMinor: amount.toString()
+        }
+      );
+
+      await this.events.enqueue(client, context, {
+        eventName: "finance.invoice_payment_posted",
+        entityType: "PAYMENT",
+        entityId: payment.id,
+        payload: {
+          paymentId: payment.id,
+          invoiceId: row.id,
+          obligationId: row.obligation_id,
+          amountMinor: amount.toString(),
+          currency: row.currency,
+          invoiceStatus: state.rows[0]?.status
+        }
+      });
+
+      return {
+        paymentId: payment.id,
+        number: payment.business_number,
+        invoiceStatus: state.rows[0]?.status ?? "PARTIALLY_PAID"
+      };
+    });
+  }
+
   async createCashAccount(
     context: TenantContext,
     input: {
