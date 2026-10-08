@@ -96,6 +96,41 @@ export class AccountingService {
     });
   }
 
+  async monthCloseChecks(context:TenantContext,periodId:string) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const p=await client.query("SELECT 1 FROM accounting_period WHERE tenant_id=$1 AND id=$2",[context.tenantId,periodId]);
+      if(!p.rowCount) throw new NotFoundException("Period not found");
+      const rows=await client.query(
+        "SELECT code,status,note,checked_by_membership_id,checked_at FROM accounting_month_close_check WHERE tenant_id=$1 AND period_id=$2 ORDER BY code",
+        [context.tenantId,periodId]);
+      return rows.rows;
+    });
+  }
+
+  async setMonthCloseCheck(context:TenantContext,input:{
+    periodId:string;code:"JOURNAL"|"BANK"|"RECEIVABLES"|"PAYABLES"|"INVENTORY"|"VAT"|"PAYROLL";
+    status:"PENDING"|"DONE"|"BLOCKED";note?:string;
+  }) {
+    const codes=["JOURNAL","BANK","RECEIVABLES","PAYABLES","INVENTORY","VAT","PAYROLL"];
+    if(!input?.periodId || !codes.includes(input.code) || !["PENDING","DONE","BLOCKED"].includes(input.status))
+      throw new BadRequestException("Invalid close check");
+    return this.database.withTenantTransaction(context,async client=>{
+      const p=await client.query("SELECT state FROM accounting_period WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
+        [context.tenantId,input.periodId]);
+      if(!p.rowCount) throw new NotFoundException("Period not found");
+      if(p.rows[0].state!=="OPEN") throw new ConflictException("Period is locked");
+      const row=await client.query(
+        `INSERT INTO accounting_month_close_check(tenant_id,period_id,code,status,note,checked_by_membership_id,checked_at)
+         VALUES($1,$2,$3,$4,$5,$6,now())
+         ON CONFLICT(tenant_id,period_id,code) DO UPDATE
+         SET status=EXCLUDED.status,note=EXCLUDED.note,checked_by_membership_id=EXCLUDED.checked_by_membership_id,
+             checked_at=EXCLUDED.checked_at
+         RETURNING code,status,checked_at`,
+        [context.tenantId,input.periodId,input.code,input.status,input.note??null,context.membershipId]);
+      return row.rows[0];
+    });
+  }
+
   async periodHistory(context:TenantContext,periodId:string) {
     return this.database.withTenantTransaction(context,async client=>{
       const period=await client.query(
