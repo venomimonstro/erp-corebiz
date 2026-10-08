@@ -122,6 +122,7 @@ export class SalesService {
       idempotencyKey?: string;
       lines: CreateLineInput[];
       sourceDealId?: string;
+      inventoryOwnerId?: string;
     }
   ): Promise<{ id: string; number: string; version: number }> {
     const scope = await this.authorization.resolveScope(context, "sales.write");
@@ -186,6 +187,29 @@ export class SalesService {
         );
       }
 
+      const ownerResult=await client.query<{
+        id:string;
+        owner_type:string;
+      }>(
+        input.inventoryOwnerId
+          ? `SELECT id,owner_type
+             FROM inventory_owner
+             WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`
+          : `SELECT id,owner_type
+             FROM inventory_owner
+             WHERE tenant_id=$1
+               AND is_default=true
+               AND status='ACTIVE'
+             LIMIT 1`,
+        input.inventoryOwnerId
+          ? [context.tenantId,input.inventoryOwnerId]
+          : [context.tenantId]
+      );
+      const inventoryOwner=ownerResult.rows[0];
+      if(!inventoryOwner){
+        throw new NotFoundException("Владелец товара не найден");
+      }
+
       const preparedLines = [];
       let subtotal = 0n;
 
@@ -223,9 +247,9 @@ export class SalesService {
         }>(
           `INSERT INTO sales_order(
              tenant_id, business_number, source_deal_id, party_id,
-             responsible_membership_id, currency,
+             responsible_membership_id, inventory_owner_id, currency,
              subtotal_minor, total_minor, notes, idempotency_key
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,$9)
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8,$9,$10)
            RETURNING id, business_number, version`,
           [
             context.tenantId,
@@ -233,6 +257,7 @@ export class SalesService {
             input.sourceDealId ?? null,
             input.partyId ?? null,
             responsible,
+            inventoryOwner.id,
             input.currency?.trim().toUpperCase() || "RUB",
             subtotal.toString(),
             input.notes?.trim() || null,
