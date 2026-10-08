@@ -39,6 +39,24 @@ export class FinanceController {
     return {ok:true,data:await this.finance.bankStatementLines(this.context(request),statementId)};
   }
 
+  @Post("bank-statements/unmatch")
+  @RequirePermission("finance.write")
+  async unmatchBankLine(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:{lineId:string;reason:string}
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.finance.unmatchBankLine(this.context(request),body)};
+  }
+
+  @Get("bank-statements/lines/:lineId/audit")
+  @RequirePermission("finance.read")
+  async bankMatchAudit(
+    @Req() request:AuthenticatedRequest,
+    @Param("lineId") lineId:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.finance.bankMatchAudit(this.context(request),lineId)};
+  }
+
   @Post("bank-statements/match")
   @RequirePermission("finance.write")
   async matchBankLine(@Req() request:AuthenticatedRequest,@Body() body:{lineId:string;paymentId:string}):Promise<ApiSuccess<unknown>> {
