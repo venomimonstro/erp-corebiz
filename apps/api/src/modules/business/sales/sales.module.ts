@@ -3,11 +3,12 @@ import { AuthorizationModule } from "../../platform/authorization/authorization.
 import { DomainEventModule } from "../../platform/events/domain-event.module";
 import { InventoryModule } from "../inventory/inventory.module";
 import { FinanceModule } from "../finance/finance.module";
+import { GrowthModule } from "../growth/growth.module";
 import { SalesController } from "./sales.controller";
 import { SalesService } from "./sales.service";
 
 @Module({
-  imports: [AuthorizationModule, DomainEventModule, InventoryModule, FinanceModule],
+  imports: [AuthorizationModule, DomainEventModule, InventoryModule, FinanceModule, GrowthModule],
   controllers: [SalesController],
   providers: [SalesService],
   exports: [SalesService]
