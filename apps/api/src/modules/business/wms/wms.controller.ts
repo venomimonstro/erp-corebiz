@@ -442,6 +442,57 @@ export class WmsController{
     };
   }
 
+  @Get("owners")
+  @RequirePermission("wms.read")
+  async owners(
+    @Req() req:AuthenticatedRequest
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.inventoryOwners(this.ctx(req))
+    };
+  }
+
+  @Post("owners")
+  @RequirePermission("wms.manage")
+  async createOwner(
+    @Req() req:AuthenticatedRequest,
+    @Body() body:{partyId:string;code:string;name?:string}
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.createInventoryOwner(this.ctx(req),body)
+    };
+  }
+
+  @Put("warehouses/:warehouseId/3pl/:ownerId")
+  @RequirePermission("wms.manage")
+  async configure3pl(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string,
+    @Param("ownerId") ownerId:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<{updated:true}>>{
+    await this.wms.configure3plContract(
+      this.ctx(req),warehouseId,ownerId,body
+    );
+    return {ok:true,data:{updated:true}};
+  }
+
+  @Get("warehouses/:warehouseId/owner-reconciliation")
+  @RequirePermission("wms.read")
+  async ownerReconciliation(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.ownerLedgerReconciliation(
+        this.ctx(req),warehouseId
+      )
+    };
+  }
+
   @Get("warehouses/:warehouseId/reconciliation")
   @RequirePermission("wms.read")
   async reconciliation(
