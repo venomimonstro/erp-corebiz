@@ -880,3 +880,24 @@ button, .primary, .secondary { font: inherit; }
   .portal-header { padding:14px 16px; }
   .portal-content { padding:16px 10px 40px; }
 }
+
+
+/* WMS inbound / dock dispatcher */
+.inbound-layout { display:grid; grid-template-columns:minmax(0,1fr) 390px; gap:12px; align-items:start; margin-top:16px; }
+.inbound-panel { background:#fff; border:1px solid #e1e3e6; border-radius:16px; padding:14px; position:sticky; top:18px; display:grid; gap:18px; }
+.inbound-panel > header { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; padding-bottom:12px; border-bottom:1px solid #eceef0; }
+.inbound-panel > header > div { display:grid; gap:3px; }
+.inbound-panel > header small,.inbound-panel > header span { color:#858a91; font-size:10px; }
+.inbound-panel h3 { margin:0; font-size:15px; }
+.inbound-lines,.inbound-appointments { display:grid; gap:7px; }
+.inbound-lines article,.inbound-appointments article { border:1px solid #e8eaed; border-radius:11px; padding:10px; display:grid; gap:8px; }
+.inbound-lines article { grid-template-columns:minmax(0,1fr) auto; align-items:center; }
+.inbound-lines article > div,.inbound-appointments article > div:first-child { display:grid; gap:3px; }
+.inbound-lines span,.inbound-appointments span { color:#858a91; font-size:10px; }
+.inbound-appointments article { grid-template-columns:minmax(0,1fr) auto; }
+.inbound-appointments .table-actions { grid-column:1 / -1; }
+
+@media (max-width:1080px) {
+  .inbound-layout { grid-template-columns:1fr; }
+  .inbound-panel { position:static; }
+}
