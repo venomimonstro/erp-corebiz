@@ -1747,6 +1747,627 @@ export class WmsService {
     });
   }
 
+  async createCycleCount(
+    context:TenantContext,
+    warehouseId:string,
+    input:{
+      zoneId?:string;
+      locationId?:string;
+      reason?:string;
+    }={}
+  ):Promise<{countId:string;tasks:number}>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const profile=await client.query<{stock_tracking_state:string}>(
+        `SELECT stock_tracking_state
+         FROM warehouse_wms_profile
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND status='ACTIVE'`,
+        [context.tenantId,warehouseId]
+      );
+      if(profile.rows[0]?.stock_tracking_state!=="LOCATION_LEDGER"){
+        throw new BadRequestException("Cycle count требует активный ячеечный учёт");
+      }
+
+      if(input.locationId){
+        const location=await client.query<{zone_id:string}>(
+          `SELECT zone_id
+           FROM warehouse_location
+           WHERE tenant_id=$1 AND warehouse_id=$2
+             AND id=$3 AND status='ACTIVE' AND is_system=false`,
+          [context.tenantId,warehouseId,input.locationId]
+        );
+        if(!location.rows[0]){
+          throw new NotFoundException("Ячейка для пересчёта не найдена");
+        }
+        if(input.zoneId&&input.zoneId!==location.rows[0].zone_id){
+          throw new BadRequestException("Ячейка относится к другой зоне");
+        }
+      }
+
+      const balances=await client.query<{
+        location_id:string;
+        sku_id:string;
+        physical_milli:string;
+      }>(
+        `SELECT
+           b.location_id,b.sku_id,b.physical_milli::text
+         FROM warehouse_location_balance b
+         JOIN warehouse_location l
+           ON l.tenant_id=b.tenant_id AND l.id=b.location_id
+         WHERE b.tenant_id=$1
+           AND b.warehouse_id=$2
+           AND b.physical_milli>0
+           AND l.status='ACTIVE'
+           AND l.is_system=false
+           AND ($3::uuid IS NULL OR l.zone_id=$3)
+           AND ($4::uuid IS NULL OR l.id=$4)
+         ORDER BY l.pick_sequence,l.full_code,b.sku_id
+         FOR UPDATE OF b`,
+        [
+          context.tenantId,
+          warehouseId,
+          input.zoneId??null,
+          input.locationId??null
+        ]
+      );
+
+      if(!balances.rowCount){
+        throw new ConflictException(
+          "В выбранной области нет положительного остатка для пересчёта"
+        );
+      }
+
+      const count=await client.query<{id:string}>(
+        `INSERT INTO wms_cycle_count(
+           tenant_id,warehouse_id,zone_id,location_id,reason,
+           created_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6)
+         RETURNING id`,
+        [
+          context.tenantId,warehouseId,
+          input.zoneId??null,input.locationId??null,
+          input.reason?.trim()||null,context.membershipId
+        ]
+      );
+      const countId=count.rows[0]!.id;
+      let tasks=0;
+
+      for(const balance of balances.rows){
+        const line=await client.query<{id:string}>(
+          `INSERT INTO wms_cycle_count_line(
+             tenant_id,count_id,warehouse_id,location_id,sku_id,expected_milli
+           ) VALUES ($1,$2,$3,$4,$5,$6)
+           RETURNING id`,
+          [
+            context.tenantId,countId,warehouseId,
+            balance.location_id,balance.sku_id,balance.physical_milli
+          ]
+        );
+        const lineId=line.rows[0]!.id;
+
+        const task=await client.query<{id:string}>(
+          `INSERT INTO warehouse_task(
+             tenant_id,warehouse_id,task_type,status,priority,
+             sku_id,quantity_milli,from_location_id,
+             source_type,source_id,source_line_id,
+             idempotency_key,instructions
+           ) VALUES (
+             $1,$2,'COUNT','OPEN',80,
+             $3,$4,$5,
+             'WMS_CYCLE_COUNT',$6,$7,
+             $8,$9
+           )
+           RETURNING id`,
+          [
+            context.tenantId,warehouseId,balance.sku_id,
+            balance.physical_milli,balance.location_id,
+            countId,lineId,
+            "count:"+lineId,
+            JSON.stringify({
+              countId,
+              countLineId:lineId,
+              expectedMilli:balance.physical_milli
+            })
+          ]
+        );
+
+        await client.query(
+          `UPDATE wms_cycle_count_line
+           SET task_id=$3
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,lineId,task.rows[0]!.id]
+        );
+        tasks+=1;
+      }
+
+      await this.audit(
+        client,context,"wms.cycle_count_created","wms_cycle_count",countId,
+        {
+          warehouseId,
+          zoneId:input.zoneId??null,
+          locationId:input.locationId??null,
+          tasks
+        }
+      );
+
+      return {countId,tasks};
+    });
+  }
+
+  async completeCycleCountTask(
+    context:TenantContext,
+    taskId:string,
+    countedMilliInput:string
+  ):Promise<{
+    varianceMilli:string;
+    countCompleted:boolean;
+  }>{
+    if(!/^\d+$/.test(countedMilliInput)){
+      throw new BadRequestException("Некорректный фактический остаток");
+    }
+    const counted=BigInt(countedMilliInput);
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const task=await client.query<{
+        task_status:string;
+        claimed_by_membership_id:string|null;
+        warehouse_id:string;
+        line_id:string;
+        count_id:string;
+        count_status:string;
+        line_status:string;
+        location_id:string;
+        sku_id:string;
+        expected_milli:string;
+      }>(
+        `SELECT
+           t.status AS task_status,t.claimed_by_membership_id,t.warehouse_id,
+           l.id AS line_id,l.count_id,c.status AS count_status,
+           l.status AS line_status,l.location_id,l.sku_id,
+           l.expected_milli::text
+         FROM warehouse_task t
+         JOIN wms_cycle_count_line l
+           ON l.tenant_id=t.tenant_id AND l.task_id=t.id
+         JOIN wms_cycle_count c
+           ON c.tenant_id=l.tenant_id AND c.id=l.count_id
+         WHERE t.tenant_id=$1 AND t.id=$2 AND t.task_type='COUNT'
+         FOR UPDATE OF t,l,c`,
+        [context.tenantId,taskId]
+      );
+
+      const row=task.rows[0];
+      if(!row) throw new NotFoundException("COUNT-задача не найдена");
+      if(row.task_status==="COMPLETED"&&row.line_status==="POSTED"){
+        const line=await client.query<{variance_milli:string}>(
+          `SELECT variance_milli::text
+           FROM wms_cycle_count_line
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,row.line_id]
+        );
+        return {
+          varianceMilli:line.rows[0]?.variance_milli??"0",
+          countCompleted:row.count_status==="POSTED"
+        };
+      }
+      if(row.count_status!=="OPEN"){
+        throw new ConflictException("Пересчёт уже закрыт");
+      }
+      if(
+        row.task_status!=="CLAIMED" ||
+        row.claimed_by_membership_id!==context.membershipId
+      ){
+        throw new ConflictException("Сначала возьмите COUNT-задачу");
+      }
+
+      const current=await client.query<{physical_milli:string}>(
+        `SELECT physical_milli::text
+         FROM warehouse_location_balance
+         WHERE tenant_id=$1 AND warehouse_id=$2
+           AND location_id=$3 AND sku_id=$4
+         FOR UPDATE`,
+        [
+          context.tenantId,row.warehouse_id,row.location_id,row.sku_id
+        ]
+      );
+      const currentMilli=BigInt(current.rows[0]?.physical_milli??"0");
+      const expected=BigInt(row.expected_milli);
+
+      if(currentMilli!==expected){
+        throw new ConflictException(
+          "Остаток в ячейке изменился после создания пересчёта. Создайте новый count."
+        );
+      }
+
+      const variance=counted-expected;
+
+      if(variance!==0n){
+        await this.inventory.applyWmsCountAdjustment(
+          client,
+          context,
+          {
+            warehouseId:row.warehouse_id,
+            skuId:row.sku_id,
+            quantityDeltaMilli:variance,
+            countId:row.count_id,
+            countLineId:row.line_id,
+            reason:"WMS cycle count",
+            idempotencyKey:"wms-count-adjust:"+row.line_id
+          }
+        );
+
+        await client.query(
+          `UPDATE warehouse_location_balance
+           SET physical_milli=$5::bigint,updated_at=now()
+           WHERE tenant_id=$1 AND warehouse_id=$2
+             AND location_id=$3 AND sku_id=$4`,
+          [
+            context.tenantId,row.warehouse_id,row.location_id,row.sku_id,
+            counted.toString()
+          ]
+        );
+
+        await client.query(
+          `INSERT INTO wms_location_movement(
+             tenant_id,warehouse_id,sku_id,movement_type,
+             from_location_id,to_location_id,quantity_milli,
+             source_type,source_id,source_line_id,
+             idempotency_key,actor_membership_id
+           ) VALUES (
+             $1,$2,$3,'ADJUSTMENT',
+             CASE WHEN $4::bigint<0 THEN $5::uuid ELSE NULL END,
+             CASE WHEN $4::bigint>0 THEN $5::uuid ELSE NULL END,
+             abs($4::bigint),
+             'WMS_CYCLE_COUNT',$6,$7,$8,$9
+           )
+           ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
+          [
+            context.tenantId,row.warehouse_id,row.sku_id,
+            variance.toString(),row.location_id,row.count_id,row.line_id,
+            "count-location-adjust:"+row.line_id,
+            context.membershipId
+          ]
+        );
+      }
+
+      await client.query(
+        `UPDATE wms_cycle_count_line
+         SET counted_milli=$3,
+             variance_milli=$4,
+             status='POSTED',
+             posted_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [
+          context.tenantId,row.line_id,
+          counted.toString(),variance.toString()
+        ]
+      );
+
+      await client.query(
+        `UPDATE warehouse_task
+         SET status='COMPLETED',completed_at=now(),
+             result=$3,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [
+          context.tenantId,taskId,
+          JSON.stringify({
+            countedMilli:counted.toString(),
+            varianceMilli:variance.toString(),
+            completedBy:context.membershipId
+          })
+        ]
+      );
+
+      const open=await client.query(
+        `SELECT 1
+         FROM wms_cycle_count_line
+         WHERE tenant_id=$1 AND count_id=$2 AND status='OPEN'
+         LIMIT 1`,
+        [context.tenantId,row.count_id]
+      );
+
+      const countCompleted=!open.rowCount;
+      if(countCompleted){
+        await client.query(
+          `UPDATE wms_cycle_count
+           SET status='POSTED',posted_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status='OPEN'`,
+          [context.tenantId,row.count_id]
+        );
+      }
+
+      await this.assertLocationReconciliation(
+        client,context.tenantId,row.warehouse_id
+      );
+
+      return {
+        varianceMilli:variance.toString(),
+        countCompleted
+      };
+    });
+  }
+
+  async planReplenishment(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<{
+    tasks:number;
+    shortages:Array<{skuId:string;targetLocationId:string;missingMilli:string}>;
+  }>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const profile=await client.query<{stock_tracking_state:string}>(
+        `SELECT stock_tracking_state
+         FROM warehouse_wms_profile
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND status='ACTIVE'`,
+        [context.tenantId,warehouseId]
+      );
+      if(profile.rows[0]?.stock_tracking_state!=="LOCATION_LEDGER"){
+        throw new BadRequestException("Replenishment требует активный ячеечный учёт");
+      }
+
+      const targets=await client.query<{
+        sku_id:string;
+        location_id:string;
+        min_quantity_milli:string;
+        max_quantity_milli:string|null;
+        current_milli:string;
+      }>(
+        `SELECT
+           r.sku_id,r.location_id,
+           r.min_quantity_milli::text,
+           r.max_quantity_milli::text,
+           COALESCE(b.physical_milli,0)::text AS current_milli
+         FROM warehouse_location_sku_rule r
+         JOIN warehouse_location l
+           ON l.tenant_id=r.tenant_id AND l.id=r.location_id
+         LEFT JOIN warehouse_location_balance b
+           ON b.tenant_id=r.tenant_id
+          AND b.warehouse_id=r.warehouse_id
+          AND b.location_id=r.location_id
+          AND b.sku_id=r.sku_id
+         WHERE r.tenant_id=$1
+           AND r.warehouse_id=$2
+           AND r.rule_type='FIXED_PICK'
+           AND r.location_id IS NOT NULL
+           AND r.min_quantity_milli IS NOT NULL
+           AND l.status='ACTIVE'
+           AND COALESCE(b.physical_milli,0)<r.min_quantity_milli
+           AND NOT EXISTS (
+             SELECT 1 FROM warehouse_task t
+             WHERE t.tenant_id=r.tenant_id
+               AND t.warehouse_id=r.warehouse_id
+               AND t.task_type='REPLENISH'
+               AND t.sku_id=r.sku_id
+               AND t.to_location_id=r.location_id
+               AND t.status IN ('OPEN','CLAIMED')
+           )
+         ORDER BY r.priority,l.pick_sequence,r.sku_id`,
+        [context.tenantId,warehouseId]
+      );
+
+      let tasks=0;
+      const shortages:Array<{
+        skuId:string;
+        targetLocationId:string;
+        missingMilli:string;
+      }>=[];
+
+      for(const target of targets.rows){
+        const current=BigInt(target.current_milli);
+        const desired=BigInt(
+          target.max_quantity_milli??target.min_quantity_milli
+        );
+        let need=desired-current;
+        if(need<=0n) continue;
+
+        const sources=await client.query<{
+          location_id:string;
+          physical_milli:string;
+          planned_milli:string;
+        }>(
+          `SELECT
+             b.location_id,b.physical_milli::text,
+             COALESCE((
+               SELECT sum(t.quantity_milli)
+               FROM warehouse_task t
+               WHERE t.tenant_id=b.tenant_id
+                 AND t.warehouse_id=b.warehouse_id
+                 AND t.task_type='REPLENISH'
+                 AND t.sku_id=b.sku_id
+                 AND t.from_location_id=b.location_id
+                 AND t.status IN ('OPEN','CLAIMED')
+             ),0)::text AS planned_milli
+           FROM warehouse_location_balance b
+           JOIN warehouse_location l
+             ON l.tenant_id=b.tenant_id AND l.id=b.location_id
+           JOIN warehouse_zone z
+             ON z.tenant_id=l.tenant_id AND z.id=l.zone_id
+           WHERE b.tenant_id=$1
+             AND b.warehouse_id=$2
+             AND b.sku_id=$3
+             AND b.location_id<>$4
+             AND b.physical_milli>0
+             AND l.status='ACTIVE'
+             AND l.is_system=false
+             AND z.status='ACTIVE'
+             AND z.zone_type='STORAGE'
+           ORDER BY z.priority,l.pick_sequence,l.full_code
+           FOR UPDATE OF b`,
+          [
+            context.tenantId,warehouseId,
+            target.sku_id,target.location_id
+          ]
+        );
+
+        let sequence=0;
+        for(const source of sources.rows){
+          if(need<=0n) break;
+          const available=
+            BigInt(source.physical_milli)-BigInt(source.planned_milli);
+          if(available<=0n) continue;
+
+          const quantity=available<need?available:need;
+          const key=
+            "replenish:"+target.location_id+":"+target.sku_id+":"+
+            source.location_id+":"+Date.now().toString()+":"+sequence.toString();
+
+          await client.query(
+            `INSERT INTO warehouse_task(
+               tenant_id,warehouse_id,task_type,status,priority,
+               sku_id,quantity_milli,from_location_id,to_location_id,
+               source_type,source_id,idempotency_key,instructions
+             ) VALUES (
+               $1,$2,'REPLENISH','OPEN',60,
+               $3,$4,$5,$6,
+               'FIXED_PICK_RULE',$6,$7,$8
+             )`,
+            [
+              context.tenantId,warehouseId,target.sku_id,
+              quantity.toString(),source.location_id,target.location_id,
+              key,
+              JSON.stringify({
+                minMilli:target.min_quantity_milli,
+                maxMilli:target.max_quantity_milli,
+                plannedMilli:quantity.toString()
+              })
+            ]
+          );
+
+          tasks+=1;
+          sequence+=1;
+          need-=quantity;
+        }
+
+        if(need>0n){
+          shortages.push({
+            skuId:target.sku_id,
+            targetLocationId:target.location_id,
+            missingMilli:need.toString()
+          });
+        }
+      }
+
+      return {tasks,shortages};
+    });
+  }
+
+  async completeReplenishment(
+    context:TenantContext,
+    taskId:string
+  ):Promise<void>{
+    await this.database.withTenantTransaction(context,async client=>{
+      const task=await client.query<{
+        status:string;
+        warehouse_id:string;
+        sku_id:string;
+        quantity_milli:string;
+        from_location_id:string;
+        to_location_id:string;
+        claimed_by_membership_id:string|null;
+      }>(
+        `SELECT
+           status,warehouse_id,sku_id,quantity_milli::text,
+           from_location_id,to_location_id,claimed_by_membership_id
+         FROM warehouse_task
+         WHERE tenant_id=$1 AND id=$2 AND task_type='REPLENISH'
+         FOR UPDATE`,
+        [context.tenantId,taskId]
+      );
+      const row=task.rows[0];
+      if(!row) throw new NotFoundException("REPLENISH-задача не найдена");
+      if(row.status==="COMPLETED") return;
+      if(
+        row.status!=="CLAIMED" ||
+        row.claimed_by_membership_id!==context.membershipId
+      ){
+        throw new ConflictException("Сначала возьмите REPLENISH-задачу");
+      }
+
+      const target=await client.query<{status:string}>(
+        `SELECT status
+         FROM warehouse_location
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND id=$3
+         FOR UPDATE`,
+        [context.tenantId,row.warehouse_id,row.to_location_id]
+      );
+      if(target.rows[0]?.status!=="ACTIVE"){
+        throw new ConflictException("Целевая pick-ячейка недоступна");
+      }
+
+      const source=await client.query<{physical_milli:string}>(
+        `SELECT physical_milli::text
+         FROM warehouse_location_balance
+         WHERE tenant_id=$1 AND warehouse_id=$2
+           AND location_id=$3 AND sku_id=$4
+         FOR UPDATE`,
+        [
+          context.tenantId,row.warehouse_id,
+          row.from_location_id,row.sku_id
+        ]
+      );
+      const quantity=BigInt(row.quantity_milli);
+      if(BigInt(source.rows[0]?.physical_milli??"0")<quantity){
+        throw new ConflictException("В STORAGE ячейке недостаточно товара");
+      }
+
+      await client.query(
+        `UPDATE warehouse_location_balance
+         SET physical_milli=physical_milli-$5::bigint,updated_at=now()
+         WHERE tenant_id=$1 AND warehouse_id=$2
+           AND location_id=$3 AND sku_id=$4`,
+        [
+          context.tenantId,row.warehouse_id,
+          row.from_location_id,row.sku_id,quantity.toString()
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO warehouse_location_balance(
+           tenant_id,warehouse_id,location_id,sku_id,physical_milli
+         ) VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (tenant_id,warehouse_id,location_id,sku_id)
+         DO UPDATE SET
+           physical_milli=warehouse_location_balance.physical_milli+
+             EXCLUDED.physical_milli,
+           updated_at=now()`,
+        [
+          context.tenantId,row.warehouse_id,
+          row.to_location_id,row.sku_id,quantity.toString()
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO wms_location_movement(
+           tenant_id,warehouse_id,sku_id,movement_type,
+           from_location_id,to_location_id,quantity_milli,
+           source_type,source_id,idempotency_key,actor_membership_id
+         ) VALUES (
+           $1,$2,$3,'MOVE',$4,$5,$6,
+           'WAREHOUSE_TASK',$7,$8,$9
+         )
+         ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
+        [
+          context.tenantId,row.warehouse_id,row.sku_id,
+          row.from_location_id,row.to_location_id,quantity.toString(),
+          taskId,"replenish-task:"+taskId,context.membershipId
+        ]
+      );
+
+      await client.query(
+        `UPDATE warehouse_task
+         SET status='COMPLETED',completed_at=now(),
+             result=$3,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [
+          context.tenantId,taskId,
+          JSON.stringify({completedBy:context.membershipId})
+        ]
+      );
+
+      await this.assertLocationReconciliation(
+        client,context.tenantId,row.warehouse_id
+      );
+    });
+  }
+
   async reconciliation(
     context:TenantContext,
     warehouseId:string
