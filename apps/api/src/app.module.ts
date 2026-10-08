@@ -13,6 +13,7 @@ import { DashboardModule } from "./modules/business/dashboard/dashboard.module";
 import { FinanceModule } from "./modules/business/finance/finance.module";
 import { GrowthModule } from "./modules/business/growth/growth.module";
 import { InventoryModule } from "./modules/business/inventory/inventory.module";
+import { GrowthModule } from "./modules/business/growth/growth.module";
 import { MigrationModule } from "./modules/business/migration/migration.module";
 import { OrganizationModule } from "./modules/business/organization/organization.module";
 import { PartyModule } from "./modules/business/party/party.module";
@@ -52,6 +53,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     FinanceModule,
     GrowthModule,
     InventoryModule,
+    GrowthModule,
     MigrationModule,
     ProcurementModule,
     SupportModule,
