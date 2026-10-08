@@ -56,6 +56,17 @@ export function middleware(request: NextRequest) {
   }
 
   const url = request.nextUrl.clone();
+
+  if (pathname === "/sitemap.xml") {
+    url.pathname = "/__site_host_sitemap";
+    return NextResponse.rewrite(url);
+  }
+
+  if (pathname === "/robots.txt") {
+    url.pathname = "/__site_host_robots";
+    return NextResponse.rewrite(url);
+  }
+
   url.pathname =
     "/__site_host" +
     (pathname === "/" ? "" : pathname);
