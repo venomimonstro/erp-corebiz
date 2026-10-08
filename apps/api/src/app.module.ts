@@ -21,6 +21,7 @@ import { PartyModule } from "./modules/business/party/party.module";
 import { ProcurementModule } from "./modules/business/procurement/procurement.module";
 import { SalesModule } from "./modules/business/sales/sales.module";
 import { ServiceOpsModule } from "./modules/business/service-ops/service-ops.module";
+import { SitesModule } from "./modules/business/sites/sites.module";
 import { SupportModule } from "./modules/business/support/support.module";
 import { WorkflowModule } from "./modules/business/workflow/workflow.module";
 import { TasksModule } from "./modules/business/tasks/tasks.module";
@@ -52,6 +53,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     ChannelsModule,
     SalesModule,
     ServiceOpsModule,
+    SitesModule,
     FinanceModule,
     GrowthModule,
     InventoryModule,
