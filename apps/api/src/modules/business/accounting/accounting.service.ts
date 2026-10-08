@@ -62,6 +62,40 @@ export class AccountingService {
     });
   }
 
+  async trialBalance(context:TenantContext,legalEntityId:string,dateFrom:string,dateTo:string) {
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) ||
+       !/^\d{4}-\d{2}-\d{2}$/.test(dateTo) ||
+       dateFrom>dateTo) {
+      throw new BadRequestException("Invalid reporting date range");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `WITH movements AS (
+           SELECT debit_account_id AS account_id,amount_minor AS debit,0::bigint AS credit
+           FROM accounting_journal_entry
+           WHERE tenant_id=$1 AND legal_entity_id=$2
+             AND business_date BETWEEN $3::date AND $4::date
+           UNION ALL
+           SELECT credit_account_id,0::bigint,amount_minor
+           FROM accounting_journal_entry
+           WHERE tenant_id=$1 AND legal_entity_id=$2
+             AND business_date BETWEEN $3::date AND $4::date
+         )
+         SELECT a.id,a.code,a.name,
+                coalesce(sum(m.debit),0)::text AS debit_minor,
+                coalesce(sum(m.credit),0)::text AS credit_minor,
+                (coalesce(sum(m.debit),0)-coalesce(sum(m.credit),0))::text AS net_debit_minor
+         FROM accounting_account a
+         JOIN movements m ON m.account_id=a.id
+         WHERE a.tenant_id=$1
+         GROUP BY a.id,a.code,a.name
+         ORDER BY a.code`,
+        [context.tenantId,legalEntityId,dateFrom,dateTo]
+      );
+      return result.rows;
+    });
+  }
+
   async entries(context: TenantContext, legalEntityId: string) {
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
