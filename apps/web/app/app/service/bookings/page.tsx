@@ -66,6 +66,7 @@ export default function BookingsPage() {
   const [selectedResource, setSelectedResource] = useState("");
   const [selectedStart, setSelectedStart] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [details, setDetails] = useState<Booking | null>(null);
   const [rescheduling, setRescheduling] = useState<Booking | null>(null);
   const [rescheduleStart, setRescheduleStart] = useState("");
 
@@ -209,6 +210,15 @@ export default function BookingsPage() {
     }
   }
 
+  async function openDetails(id: string) {
+    try {
+      const result = await apiRequest<Booking>("/service/bookings/" + encodeURIComponent(id));
+      setDetails(result);
+    } catch {
+      setError("Не удалось открыть карточку визита");
+    }
+  }
+
   async function changeStatus(
     booking: Booking,
     status: "ARRIVED" | "IN_SERVICE" | "COMPLETED" | "CANCELLED" | "NO_SHOW"
@@ -324,6 +334,18 @@ export default function BookingsPage() {
             <span>Выберите другой период, ресурс или создайте новую запись.</span>
           </div>
         ) : null}
+        {details && (
+          <section className="settings-card">
+            <h2>Визит {details.business_number}</h2>
+            <p>{details.service_name} · {details.party_name ?? "Клиент не указан"}</p>
+            <p>{new Date(details.starts_at).toLocaleString("ru-RU")}</p>
+            <p>{details.resources.map((item) => item.resourceName).join(", ")}</p>
+            <p>Статус: {details.status}</p>
+            <p>Стоимость: {money(details.price_minor_snapshot, details.currency)}</p>
+            <p>Это стоимость услуги, не подтверждение оплаты.</p>
+            <button type="button" onClick={() => setDetails(null)}>Закрыть карточку</button>
+          </section>
+        )}
         <div className="booking-calendar">
           {grouped.map(([date, rows]) => (
             <section className="booking-day" key={date}>
@@ -367,6 +389,7 @@ export default function BookingsPage() {
                     </div>
 
                     <div className="booking-actions">
+                      <button type="button" onClick={() => void openDetails(booking.id)}>Подробнее</button>
                       {booking.status === "CONFIRMED" ? (
                         <>
                           <button
