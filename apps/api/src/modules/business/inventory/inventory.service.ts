@@ -1108,6 +1108,41 @@ export class InventoryService {
     });
   }
 
+
+  async consumeForService(
+    client: PoolClient,
+    context: TenantContext,
+    input: {
+      bookingId: string;
+      warehouseId: string;
+      materialLineId: string;
+      skuId: string;
+      quantityMilli: bigint;
+    }
+  ): Promise<void> {
+    if (input.quantityMilli <= 0n) {
+      throw new BadRequestException("Количество расхода должно быть больше нуля");
+    }
+
+    await this.postMovement(client, context, {
+      warehouseId: input.warehouseId,
+      skuId: input.skuId,
+      movementType: "WRITE_OFF",
+      quantityDeltaMilli: -input.quantityMilli,
+      sourceType: "SERVICE_BOOKING",
+      sourceId: input.bookingId,
+      sourceLineId: input.materialLineId,
+      reason: "Расход материала по услуге",
+      idempotencyKey:
+        "service-booking:" +
+        input.bookingId +
+        ":material:" +
+        input.materialLineId +
+        ":consume:" +
+        input.quantityMilli.toString()
+    });
+  }
+
   private async nextNumber(
     client: PoolClient,
     tenantId: string,
