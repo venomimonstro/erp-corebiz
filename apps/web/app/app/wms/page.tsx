@@ -115,6 +115,7 @@ type Dispatcher = {
   }>;
   exceptions: Array<{
     id: string;
+    exception_id: string | null;
     task_type: string;
     status: string;
     last_error: string | null;
@@ -426,6 +427,22 @@ export default function WmsPage() {
         cause instanceof Error
           ? cause.message
           : "Не удалось запланировать отбор"
+      );
+    }
+  }
+
+  async function requeueException(exceptionId: string) {
+    try {
+      await apiRequest("/wms/exceptions/" + exceptionId + "/resolve", {
+        method: "POST",
+        body: JSON.stringify({ action: "REQUEUE" })
+      });
+      await loadTopology(warehouseId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось вернуть задачу в очередь"
       );
     }
   }
@@ -1170,6 +1187,15 @@ export default function WmsPage() {
                                 </span>
                               </div>
                               <small>{item.last_error ?? "Задача слишком долго находится в работе"}</small>
+                              {item.exception_id && item.status === "BLOCKED" ? (
+                                <button
+                                  className="secondary-button"
+                                  type="button"
+                                  onClick={() => void requeueException(item.exception_id!)}
+                                >
+                                  Вернуть в очередь
+                                </button>
+                              ) : null}
                             </article>
                           ))}
                         </div>
