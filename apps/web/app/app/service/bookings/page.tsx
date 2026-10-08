@@ -66,6 +66,8 @@ export default function BookingsPage() {
   const [selectedResource, setSelectedResource] = useState("");
   const [selectedStart, setSelectedStart] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [rescheduling, setRescheduling] = useState<Booking | null>(null);
+  const [rescheduleStart, setRescheduleStart] = useState("");
 
   const load = useCallback(async () => {
     setError("");
@@ -182,24 +184,28 @@ export default function BookingsPage() {
     }
   }
 
-  async function reschedule(booking: Booking) {
-    const startsAt = window.prompt(
-      "Новое время начала",
-      toLocalDateTimeInput(new Date(booking.starts_at))
-    );
-    if (!startsAt) return;
-
+  async function reschedule(booking: Booking, startsAt: string) {
+    const parsed = new Date(startsAt);
+    if (Number.isNaN(parsed.getTime())) {
+      setError("Некорректное время переноса");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
     try {
       await apiRequest("/service/bookings/" + booking.id + "/reschedule", {
         method: "PATCH",
         body: JSON.stringify({
-          startsAt,
+          startsAt: parsed.toISOString(),
           version: booking.version
         })
       });
+      setRescheduling(null);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось перенести запись");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -207,6 +213,7 @@ export default function BookingsPage() {
     booking: Booking,
     status: "ARRIVED" | "IN_SERVICE" | "COMPLETED" | "CANCELLED" | "NO_SHOW"
   ) {
+    if (status === "CANCELLED" && !window.confirm("Отменить эту запись?")) return;
     try {
       await apiRequest("/service/bookings/" + booking.id + "/status", {
         method: "PATCH",
@@ -274,6 +281,20 @@ export default function BookingsPage() {
               </label>
               <button type="submit" disabled={submitting}>{submitting ? "Сохраняем…" : "Записать"}</button>
               <button className="secondary-button" type="button" onClick={() => setShowCreate(false)}>Отмена</button>
+            </div>
+          </form>
+        ) : null}
+
+        {rescheduling ? (
+          <form className="settings-card" onSubmit={(e) => { e.preventDefault(); void reschedule(rescheduling, rescheduleStart); }} style={{ marginBottom: 16 }}>
+            <h2>Перенести запись {rescheduling.business_number}</h2>
+            <p className="muted">{rescheduling.service_name} · {rescheduling.party_name ?? "Клиент не указан"}</p>
+            <div className="header-actions">
+              <label>Новое время{" "}
+                <input required type="datetime-local" value={rescheduleStart} onChange={(e) => setRescheduleStart(e.target.value)} />
+              </label>
+              <button type="submit" disabled={submitting}>{submitting ? "Переносим…" : "Подтвердить перенос"}</button>
+              <button type="button" className="secondary-button" onClick={() => setRescheduling(null)}>Отмена</button>
             </div>
           </form>
         ) : null}
@@ -350,7 +371,7 @@ export default function BookingsPage() {
                         <>
                           <button
                             className="secondary-button"
-                            onClick={() => void reschedule(booking)}
+                            onClick={() => { setRescheduling(booking); setRescheduleStart(toLocalDateTimeInput(new Date(booking.starts_at))); }}
                             type="button"
                           >
                             Перенести
