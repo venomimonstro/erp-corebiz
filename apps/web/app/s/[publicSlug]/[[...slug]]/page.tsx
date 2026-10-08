@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { PublicStorefront } from "../../../../components/public-storefront";
 
 type ApiResponse<T> =
   | { ok: true; data: T }
@@ -99,7 +100,11 @@ export default async function PublicSitePage({ params }: Props) {
 
       <div className="public-site-content">
         {data.blocks.map((block) => (
-          <PublicBlock key={block.id} block={block} />
+          <PublicBlock
+            key={block.id}
+            block={block}
+            publicSlug={data.site.publicSlug}
+          />
         ))}
       </div>
 
@@ -111,9 +116,11 @@ export default async function PublicSitePage({ params }: Props) {
 }
 
 function PublicBlock({
-  block
+  block,
+  publicSlug
 }: {
   block: PublicPageData["blocks"][number];
+  publicSlug: string;
 }) {
   const c = block.config;
 
@@ -188,6 +195,16 @@ function PublicBlock({
 
   if (block.type === "SPACER") {
     return <div style={{ height: Number(c.size ?? 32) }} />;
+  }
+
+  if (block.type === "PRODUCT_GRID" || block.type === "CATALOG") {
+    return (
+      <PublicStorefront
+        publicSlug={publicSlug}
+        heading={c.heading}
+        limit={Number(c.limit ?? 12)}
+      />
+    );
   }
 
   return (
