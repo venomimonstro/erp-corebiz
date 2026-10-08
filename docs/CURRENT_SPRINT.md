@@ -439,21 +439,32 @@
 - service worker never caches business API responses;
 - no hidden inventory mutation from scanner endpoints.
 
-## Активно — Sprint 41: Advanced WMS Dispatcher / Labor Metrics
-
-Scope:
+### Sprint 41 — Advanced WMS Dispatcher / Labor Metrics
 - warehouse labor scorecard;
 - tasks/hour and median cycle time;
 - active operators;
 - task-type throughput;
-- aged backlog and SLA-risk bands;
+- aged backlog risk bands;
 - blocked/failed exception queue;
 - workload by zone/task type;
 - dispatcher drill-down;
 - operational metrics only, no payroll coupling.
 
+## Активно — Sprint 42: WMS Performance Hardening / Slotting
+
+Scope:
+- hot-path database indexes;
+- PICK velocity by SKU;
+- suggested pick-face location;
+- suggested min/max replenishment thresholds;
+- recommendation reasons;
+- explicit apply only;
+- no automatic inventory movement;
+- keep Inventory / WMS ledgers unchanged by recommendation engine.
+
 ## Следом
 
-Sprint 42 — WMS performance hardening / slotting recommendations.
+Sprint 43 — WMS 3PL / owner-client inventory dimensions foundation.
+
 
 
