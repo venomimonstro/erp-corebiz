@@ -30,6 +30,7 @@ export function AppSidebar({ active }: { active: string }) {
       {link("/app/catalog/products", "Товары", "products")}
       {link("/app/purchases", "Закупки", "purchases")}
       {link("/app/inventory/stock", "Склад", "stock")}
+      {link("/app/wms", "WMS", "wms")}
       {link("/app/finance", "Деньги", "finance")}
 
       <span>Аналитика</span>
