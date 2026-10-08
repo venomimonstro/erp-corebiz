@@ -19,6 +19,7 @@ import { SupportModule } from "./modules/business/support/support.module";
 import { TasksModule } from "./modules/business/tasks/tasks.module";
 import { AuthModule } from "./modules/platform/auth/auth.module";
 import { BillingModule } from "./modules/platform/billing/billing.module";
+import { CustomizationModule } from "./modules/platform/customization/customization.module";
 import { SessionContextMiddleware } from "./modules/platform/auth/session-context.middleware";
 import { AuthorizationModule } from "./modules/platform/authorization/authorization.module";
 import { HealthModule } from "./modules/platform/health/health.module";
@@ -32,6 +33,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     TenantContextModule,
     AuthModule,
     BillingModule,
+    CustomizationModule,
     AuthorizationModule,
     TenantsModule,
     OrganizationModule,
