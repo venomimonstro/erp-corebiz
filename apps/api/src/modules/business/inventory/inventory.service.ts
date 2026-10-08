@@ -641,6 +641,440 @@ export class InventoryService {
     });
   }
 
+
+  async transfer(
+    context: TenantContext,
+    input: {
+      fromWarehouseId: string;
+      toWarehouseId: string;
+      idempotencyKey: string;
+      lines: Array<{ skuId: string; quantityMilli: string }>;
+    }
+  ): Promise<{ transferId: string; number: string; applied: boolean }> {
+    if (input.fromWarehouseId === input.toWarehouseId) {
+      throw new BadRequestException("Склады отправления и назначения совпадают");
+    }
+    if (!input.idempotencyKey?.trim()) {
+      throw new BadRequestException("Требуется ключ идемпотентности");
+    }
+    if (!input.lines?.length) {
+      throw new BadRequestException("Добавьте позиции перемещения");
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const existing = await client.query<{ id: string; business_number: string; status: string }>(
+        `SELECT id, business_number, status
+         FROM inventory_transfer
+         WHERE tenant_id = $1 AND idempotency_key = $2`,
+        [context.tenantId, input.idempotencyKey.trim()]
+      );
+
+      if (existing.rows[0]) {
+        return {
+          transferId: existing.rows[0].id,
+          number: existing.rows[0].business_number,
+          applied: existing.rows[0].status === "POSTED"
+        };
+      }
+
+      await this.assertWarehouse(client, context.tenantId, input.fromWarehouseId);
+      await this.assertWarehouse(client, context.tenantId, input.toWarehouseId);
+
+      const prepared = input.lines.map((line) => {
+        if (!/^\d+$/.test(line.quantityMilli)) {
+          throw new BadRequestException("Некорректное количество");
+        }
+        const quantity = BigInt(line.quantityMilli);
+        if (quantity <= 0n) {
+          throw new BadRequestException("Количество должно быть больше нуля");
+        }
+        return { ...line, quantity };
+      });
+
+      for (const line of prepared) {
+        await this.assertSku(client, context.tenantId, line.skuId);
+        await this.lockBalance(
+          client,
+          context.tenantId,
+          input.fromWarehouseId,
+          line.skuId
+        );
+
+        const balance = await client.query<{
+          physical_milli: string;
+          reserved_milli: string;
+        }>(
+          `SELECT physical_milli::text, reserved_milli::text
+           FROM inventory_balance
+           WHERE tenant_id = $1 AND warehouse_id = $2 AND sku_id = $3
+           FOR UPDATE`,
+          [context.tenantId, input.fromWarehouseId, line.skuId]
+        );
+
+        const row = balance.rows[0]!;
+        const available =
+          BigInt(row.physical_milli) - BigInt(row.reserved_milli);
+
+        if (available < line.quantity) {
+          throw new ConflictException(
+            "Недостаточно доступного остатка для перемещения"
+          );
+        }
+      }
+
+      const number = await this.nextNumber(
+        client,
+        context.tenantId,
+        "inventory_transfer",
+        "TR"
+      );
+
+      const transferResult = await client.query<{ id: string }>(
+        `INSERT INTO inventory_transfer(
+           tenant_id, business_number, from_warehouse_id, to_warehouse_id,
+           status, idempotency_key, created_by_membership_id,
+           posted_by_membership_id, posted_at
+         ) VALUES ($1,$2,$3,$4,'POSTED',$5,$6,$6,now())
+         RETURNING id`,
+        [
+          context.tenantId,
+          number,
+          input.fromWarehouseId,
+          input.toWarehouseId,
+          input.idempotencyKey.trim(),
+          context.membershipId
+        ]
+      );
+
+      const transfer = transferResult.rows[0];
+      if (!transfer) throw new Error("INVENTORY_TRANSFER_CREATE_FAILED");
+
+      for (const line of prepared) {
+        const lineResult = await client.query<{ id: string }>(
+          `INSERT INTO inventory_transfer_line(
+             tenant_id, transfer_id, sku_id, quantity_milli
+           ) VALUES ($1,$2,$3,$4)
+           RETURNING id`,
+          [
+            context.tenantId,
+            transfer.id,
+            line.skuId,
+            line.quantity.toString()
+          ]
+        );
+
+        const transferLine = lineResult.rows[0];
+        if (!transferLine) throw new Error("INVENTORY_TRANSFER_LINE_CREATE_FAILED");
+
+        await this.postMovement(client, context, {
+          warehouseId: input.fromWarehouseId,
+          skuId: line.skuId,
+          movementType: "TRANSFER_OUT",
+          quantityDeltaMilli: -line.quantity,
+          sourceType: "INVENTORY_TRANSFER",
+          sourceId: transfer.id,
+          sourceLineId: transferLine.id,
+          idempotencyKey: `transfer:${transfer.id}:line:${transferLine.id}:out`
+        });
+
+        await this.postMovement(client, context, {
+          warehouseId: input.toWarehouseId,
+          skuId: line.skuId,
+          movementType: "TRANSFER_IN",
+          quantityDeltaMilli: line.quantity,
+          sourceType: "INVENTORY_TRANSFER",
+          sourceId: transfer.id,
+          sourceLineId: transferLine.id,
+          idempotencyKey: `transfer:${transfer.id}:line:${transferLine.id}:in`
+        });
+      }
+
+      await this.audit(
+        client,
+        context,
+        "inventory.transfer_posted",
+        "inventory_transfer",
+        transfer.id,
+        {
+          number,
+          fromWarehouseId: input.fromWarehouseId,
+          toWarehouseId: input.toWarehouseId
+        }
+      );
+
+      return {
+        transferId: transfer.id,
+        number,
+        applied: true
+      };
+    });
+  }
+
+  async createStockCount(
+    context: TenantContext,
+    warehouseId: string
+  ): Promise<{
+    stockCountId: string;
+    number: string;
+    lines: number;
+  }> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertWarehouse(client, context.tenantId, warehouseId);
+
+      const number = await this.nextNumber(
+        client,
+        context.tenantId,
+        "stock_count",
+        "SC"
+      );
+
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO stock_count(
+           tenant_id, warehouse_id, business_number,
+           status, created_by_membership_id
+         ) VALUES ($1,$2,$3,'IN_PROGRESS',$4)
+         RETURNING id`,
+        [context.tenantId, warehouseId, number, context.membershipId]
+      );
+
+      const count = result.rows[0];
+      if (!count) throw new Error("STOCK_COUNT_CREATE_FAILED");
+
+      const linesResult = await client.query<{ count: string }>(
+        `WITH inserted AS (
+           INSERT INTO stock_count_line(
+             tenant_id, stock_count_id, sku_id, expected_milli
+           )
+           SELECT $1, $2, s.id, COALESCE(b.physical_milli, 0)
+           FROM sku s
+           LEFT JOIN inventory_balance b
+             ON b.tenant_id = s.tenant_id
+            AND b.sku_id = s.id
+            AND b.warehouse_id = $3
+           WHERE s.tenant_id = $1
+             AND s.status = 'ACTIVE'
+             AND s.track_inventory = true
+           RETURNING 1
+         )
+         SELECT count(*)::text AS count FROM inserted`,
+        [context.tenantId, count.id, warehouseId]
+      );
+
+      await this.audit(
+        client,
+        context,
+        "inventory.stock_count_started",
+        "stock_count",
+        count.id,
+        { number, warehouseId }
+      );
+
+      return {
+        stockCountId: count.id,
+        number,
+        lines: Number(linesResult.rows[0]?.count ?? "0")
+      };
+    });
+  }
+
+  async stockCountLines(
+    context: TenantContext,
+    stockCountId: string
+  ): Promise<Array<{
+    id: string;
+    skuId: string;
+    sku: string;
+    productName: string;
+    expectedMilli: string;
+    countedMilli: string | null;
+  }>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query<{
+        id: string;
+        sku_id: string;
+        sku_code: string;
+        product_name: string;
+        expected_milli: string;
+        counted_milli: string | null;
+      }>(
+        `SELECT
+           l.id,
+           l.sku_id,
+           s.code AS sku_code,
+           p.name AS product_name,
+           l.expected_milli::text,
+           l.counted_milli::text
+         FROM stock_count_line l
+         JOIN stock_count c
+           ON c.tenant_id = l.tenant_id AND c.id = l.stock_count_id
+         JOIN sku s
+           ON s.tenant_id = l.tenant_id AND s.id = l.sku_id
+         JOIN product_variant v
+           ON v.tenant_id = s.tenant_id AND v.id = s.variant_id
+         JOIN product p
+           ON p.tenant_id = v.tenant_id AND p.id = v.product_id
+         WHERE l.tenant_id = $1
+           AND l.stock_count_id = $2
+         ORDER BY p.name, s.code`,
+        [context.tenantId, stockCountId]
+      );
+
+      return result.rows.map((row) => ({
+        id: row.id,
+        skuId: row.sku_id,
+        sku: row.sku_code,
+        productName: row.product_name,
+        expectedMilli: row.expected_milli,
+        countedMilli: row.counted_milli
+      }));
+    });
+  }
+
+  async updateStockCountLine(
+    context: TenantContext,
+    stockCountId: string,
+    lineId: string,
+    countedMilli: string
+  ): Promise<void> {
+    if (!/^\d+$/.test(countedMilli)) {
+      throw new BadRequestException("Некорректное фактическое количество");
+    }
+
+    await this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `UPDATE stock_count_line l
+         SET counted_milli = $4::bigint
+         FROM stock_count c
+         WHERE l.tenant_id = $1
+           AND l.stock_count_id = $2
+           AND l.id = $3
+           AND c.tenant_id = l.tenant_id
+           AND c.id = l.stock_count_id
+           AND c.status = 'IN_PROGRESS'
+         RETURNING l.id`,
+        [context.tenantId, stockCountId, lineId, countedMilli]
+      );
+
+      if (!result.rowCount) {
+        throw new NotFoundException("Строка инвентаризации недоступна");
+      }
+    });
+  }
+
+  async postStockCount(
+    context: TenantContext,
+    stockCountId: string
+  ): Promise<{ stockCountId: string; adjustments: number }> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const countResult = await client.query<{
+        id: string;
+        warehouse_id: string;
+        status: string;
+      }>(
+        `SELECT id, warehouse_id, status
+         FROM stock_count
+         WHERE tenant_id = $1 AND id = $2
+         FOR UPDATE`,
+        [context.tenantId, stockCountId]
+      );
+
+      const count = countResult.rows[0];
+      if (!count) throw new NotFoundException("Инвентаризация не найдена");
+      if (count.status === "POSTED") {
+        return { stockCountId, adjustments: 0 };
+      }
+      if (count.status !== "IN_PROGRESS") {
+        throw new BadRequestException("Инвентаризацию нельзя провести");
+      }
+
+      const lines = await client.query<{
+        id: string;
+        sku_id: string;
+        expected_milli: string;
+        counted_milli: string | null;
+      }>(
+        `SELECT id, sku_id, expected_milli::text, counted_milli::text
+         FROM stock_count_line
+         WHERE tenant_id = $1 AND stock_count_id = $2
+         FOR UPDATE`,
+        [context.tenantId, stockCountId]
+      );
+
+      const uncounted = lines.rows.find((line) => line.counted_milli === null);
+      if (uncounted) {
+        throw new BadRequestException(
+          "Заполните фактическое количество по всем позициям"
+        );
+      }
+
+      let adjustments = 0;
+
+      for (const line of lines.rows) {
+        const expected = BigInt(line.expected_milli);
+        const counted = BigInt(line.counted_milli!);
+        const delta = counted - expected;
+
+        if (delta === 0n) continue;
+
+        await this.postMovement(client, context, {
+          warehouseId: count.warehouse_id,
+          skuId: line.sku_id,
+          movementType: "ADJUSTMENT",
+          quantityDeltaMilli: delta,
+          sourceType: "STOCK_COUNT",
+          sourceId: stockCountId,
+          sourceLineId: line.id,
+          reason: "Инвентаризация",
+          idempotencyKey: `stock-count:${stockCountId}:line:${line.id}`
+        });
+
+        adjustments += 1;
+      }
+
+      await client.query(
+        `UPDATE stock_count
+         SET status = 'POSTED',
+             posted_by_membership_id = $3,
+             posted_at = now()
+         WHERE tenant_id = $1 AND id = $2`,
+        [context.tenantId, stockCountId, context.membershipId]
+      );
+
+      await this.audit(
+        client,
+        context,
+        "inventory.stock_count_posted",
+        "stock_count",
+        stockCountId,
+        { adjustments }
+      );
+
+      return { stockCountId, adjustments };
+    });
+  }
+
+  private async nextNumber(
+    client: PoolClient,
+    tenantId: string,
+    counterKey: string,
+    prefix: string
+  ): Promise<string> {
+    const counter = await client.query<{ value: string }>(
+      `INSERT INTO tenant_counter(tenant_id, counter_key, value)
+       VALUES ($1,$2,1)
+       ON CONFLICT (tenant_id, counter_key)
+       DO UPDATE SET
+         value = tenant_counter.value + 1,
+         updated_at = now()
+       RETURNING value::text`,
+      [tenantId, counterKey]
+    );
+
+    const sequence = BigInt(counter.rows[0]?.value ?? "0");
+    const year = new Date().getUTCFullYear();
+    return `${prefix}-${year}-${sequence.toString().padStart(6, "0")}`;
+  }
+
   private async postMovement(
     client: PoolClient,
     context: TenantContext,
