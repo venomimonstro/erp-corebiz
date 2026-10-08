@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R6 / Sprint 27 — Channel connectors foundation.  
+**Активная разработка:** R6 / Sprint 28 — OMS / ATP / Allocation.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -259,20 +259,30 @@
 - asynchronous uploading status polling;
 - linkage failure visibility.
 
-## Активно — Sprint 27: Channel connectors foundation
+### Sprint 27 — Channel connectors foundation
+- unified channel connection;
+- OWN_SITE/API secure webhook;
+- normalized external order inbox;
+- external event idempotency;
+- external offer → internal SKU mapping;
+- NEEDS_MAPPING / READY / IMPORTED / FAILED / IGNORED;
+- controlled import through SalesService;
+- order import idempotency;
+- provider contract reserved for Ozon/WB/Yandex Market.
+
+## Активно — Sprint 28: OMS / ATP / Allocation
 
 Scope:
-- unified Channel Connection;
-- external order inbox;
-- product/SKU mapping;
-- idempotent webhook/pull ingestion;
-- retry/rate-limit/health;
-- manual resolve/retry/ignore;
-- channel event audit;
-- connector contract for own site/Ozon/WB/Yandex Market/API.
+- OMS orchestration order linked to SalesOrder;
+- global ATP by SKU/warehouse;
+- safety stock policy;
+- allocation/split allocation;
+- deterministic sourcing score;
+- allocation explanation;
+- reservation integration;
+- OMS state machine.
 
 ## Следом
 
-Sprint 28 — OMS / ATP / Allocation.  
 Sprint 29 — Returns / Backorder / Sourcing.  
 Sprint 30 — Marketplaces Ozon/WB.
