@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import type { ApiSuccess,TenantContext } from "@corebiz/contracts";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
+import { Public } from "../../platform/auth/public.decorator";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
 import { SitesService } from "./sites.service";
 
@@ -68,9 +69,27 @@ export class SitesController{
 
   @Post("pages/:pageId/versions/:versionId/publish")
   @RequirePermission("sites.manage")
-  async publish(@Req() req:AuthenticatedRequest,@Param("pageId") pageId:string,@Param("versionId") versionId:string):Promise<ApiSuccess<{published:true}>>{
-    await this.sitesService.publish(this.ctx(req),pageId,versionId);
-    return {ok:true,data:{published:true}};
+  async publish(
+    @Req() req:AuthenticatedRequest,
+    @Param("pageId") pageId:string,
+    @Param("versionId") versionId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.sitesService.publish(this.ctx(req),pageId,versionId)
+    };
+  }
+
+  @Public()
+  @Get("public/:publicSlug/page")
+  async publicPage(
+    @Param("publicSlug") publicSlug:string,
+    @Query("slug") slug?:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.sitesService.publicPage(publicSlug,slug)
+    };
   }
 
   private ctx(req:AuthenticatedRequest):TenantContext{
