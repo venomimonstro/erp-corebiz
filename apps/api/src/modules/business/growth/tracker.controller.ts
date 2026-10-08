@@ -69,10 +69,21 @@ export class TrackerController {
     return {
       ok: true,
       data: await this.tracker.collect(body, {
-        origin: request.headers?.origin,
-        ip: request.ip,
-        userAgent: request.headers?.["user-agent"]
+        origin: request.headers?.origin
       })
+    };
+  }
+
+  @Get("summary")
+  @RequirePermission("analytics.read")
+  async summary(
+    @Req() request: AuthenticatedRequest,
+    @Query("from") from?: string,
+    @Query("to") to?: string
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.tracker.summary(this.context(request), from, to)
     };
   }
 
