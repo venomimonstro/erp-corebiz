@@ -592,6 +592,15 @@ export class MigrationService {
     let cell = "";
     let quoted = false;
     const source = text.replace(/^\uFEFF/, "");
+    const firstLine = source.split(/\r?\n/, 1)[0] ?? "";
+    const delimiterCandidates = [
+      { value: ";", count: (firstLine.match(/;/g) ?? []).length },
+      { value: "\t", count: (firstLine.match(/\t/g) ?? []).length },
+      { value: ",", count: (firstLine.match(/,/g) ?? []).length }
+    ].sort((a, b) => b.count - a.count);
+    const delimiter = delimiterCandidates[0]?.count
+      ? delimiterCandidates[0].value
+      : ",";
 
     for (let index = 0; index < source.length; index += 1) {
       const char = source[index]!;
@@ -604,7 +613,7 @@ export class MigrationService {
         }
         continue;
       }
-      if (!quoted && (char === "," || char === ";" || char === "\t")) {
+      if (!quoted && char === delimiter) {
         row.push(cell.trim());
         cell = "";
         continue;
