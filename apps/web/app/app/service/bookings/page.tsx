@@ -311,13 +311,13 @@ export default function BookingsPage() {
             <p className="muted">Выберите услугу, ресурс и местное время. Доступность проверяется сервером.</p>
             <div className="header-actions" style={{ flexWrap: "wrap" }}>
               <label>Услуга{" "}
-                <select required value={selectedService} onChange={(e) => setSelectedService(e.target.value)}>
+                <select required value={selectedService} onChange={(e) => { setSelectedService(e.target.value); setSelectedStart(""); setAvailableSlots([]); }}>
                   <option value="">Выбрать услугу</option>
                   {services.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.duration_minutes} мин</option>)}
                 </select>
               </label>
               <label>Сотрудник или ресурс{" "}
-                <select required value={selectedResource} onChange={(e) => setSelectedResource(e.target.value)}>
+                <select required value={selectedResource} onChange={(e) => { setSelectedResource(e.target.value); setSelectedStart(""); setAvailableSlots([]); }}>
                   <option value="">Выбрать ресурс</option>
                   {resources.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
@@ -333,7 +333,7 @@ export default function BookingsPage() {
               </button>
               {availableSlots.length ? (
                 <label>Свободные слоты{" "}
-                  <select value="" onChange={(e) => setSelectedStart(e.target.value)}>
+                  <select value={selectedStart} onChange={(e) => setSelectedStart(e.target.value)}>
                     <option value="">Выбрать время</option>
                     {availableSlots.map((slot) => (
                       <option key={slot.startsAt} value={toLocalDateTimeInput(new Date(slot.startsAt))}>
