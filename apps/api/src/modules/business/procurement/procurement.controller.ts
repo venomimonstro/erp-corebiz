@@ -114,6 +114,7 @@ export class ProcurementController {
     @Req() request: AuthenticatedRequest,
     @Param("id") id: string,
     @Body() body: {
+      inboundAsnId?: string;
       lines: Array<{
         purchaseOrderLineId: string;
         quantityMilli: string;
@@ -125,7 +126,8 @@ export class ProcurementController {
       data: await this.procurement.receive(
         this.context(request),
         id,
-        body.lines
+        body.lines,
+        { inboundAsnId: body.inboundAsnId }
       )
     };
   }
