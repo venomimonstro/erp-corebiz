@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Req
@@ -80,6 +81,28 @@ export class OmsController {
     @Param("id") id: string
   ): Promise<ApiSuccess<{ updated: true }>> {
     await this.oms.markShipped(this.context(request), id);
+    return { ok: true, data: { updated: true } };
+  }
+
+  @Get("backorders")
+  @RequirePermission("oms.read")
+  async backorders(
+    @Req() request: AuthenticatedRequest
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.oms.backorders(this.context(request))
+    };
+  }
+
+  @Patch("backorders/:id")
+  @RequirePermission("oms.manage")
+  async updateBackorder(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: { expectedAt?: string | null; cancel?: boolean }
+  ): Promise<ApiSuccess<{ updated: true }>> {
+    await this.oms.updateBackorder(this.context(request), id, body);
     return { ok: true, data: { updated: true } };
   }
 
