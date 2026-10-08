@@ -782,6 +782,7 @@ export class WmsService {
            t.quantity_milli::text,
            t.from_location_id,fl.full_code AS from_code,
            t.to_location_id,tl.full_code AS to_code,
+           t.source_type,t.source_id,t.source_line_id,
            t.claimed_by_membership_id,t.claimed_at,t.completed_at,
            t.instructions,t.last_error,t.created_at
          FROM warehouse_task t
@@ -1222,11 +1223,13 @@ export class WmsService {
         claimed_by_membership_id:string|null;
         allocation_id:string;
         allocation_status:string;
+        sales_order_id:string;
       }>(
         `SELECT
            t.status,t.warehouse_id,t.sku_id,t.quantity_milli::text,
            t.from_location_id,t.to_location_id,t.claimed_by_membership_id,
-           a.id AS allocation_id,a.status AS allocation_status
+           a.id AS allocation_id,a.status AS allocation_status,
+           a.sales_order_id
          FROM warehouse_task t
          JOIN wms_pick_allocation a
            ON a.tenant_id=t.tenant_id AND a.pick_task_id=t.id
@@ -1343,6 +1346,38 @@ export class WmsService {
           JSON.stringify({completedBy:context.membershipId})
         ]
       );
+
+      const pending=await client.query(
+        `SELECT 1
+         FROM wms_pick_allocation
+         WHERE tenant_id=$1
+           AND sales_order_id=$2
+           AND warehouse_id=$3
+           AND status='PLANNED'
+         LIMIT 1`,
+        [context.tenantId,row.sales_order_id,row.warehouse_id]
+      );
+
+      if(!pending.rowCount){
+        await client.query(
+          `INSERT INTO warehouse_task(
+             tenant_id,warehouse_id,task_type,status,priority,
+             source_type,source_id,idempotency_key,instructions
+           ) VALUES (
+             $1,$2,'PACK','OPEN',100,
+             'SALES_ORDER',$3,$4,$5
+           )
+           ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
+          [
+            context.tenantId,row.warehouse_id,row.sales_order_id,
+            "pack:"+row.sales_order_id+":"+row.warehouse_id,
+            JSON.stringify({
+              orderId:row.sales_order_id,
+              warehouseId:row.warehouse_id
+            })
+          ]
+        );
+      }
 
       await this.assertLocationReconciliation(
         client,context.tenantId,row.warehouse_id
