@@ -12,6 +12,13 @@ async function bootstrap(): Promise<void> {
     bufferLogs: true
   });
 
+  app.enableCors({
+    origin: env.webOrigin,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "X-Trace-Id"]
+  });
+
   app.use(traceMiddleware);
   app.useGlobalFilters(new ApiExceptionFilter());
   app.setGlobalPrefix("api/v1");
