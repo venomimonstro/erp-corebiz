@@ -80,6 +80,91 @@ export class WmsController{
     return {ok:true,data:await this.wms.setSkuRule(this.ctx(req),warehouseId,body)};
   }
 
+  @Post("warehouses/:warehouseId/location-ledger/initialize")
+  @RequirePermission("wms.manage")
+  async initialize(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.initializeLocationLedger(
+        this.ctx(req),warehouseId
+      )
+    };
+  }
+
+  @Get("warehouses/:warehouseId/location-balances")
+  @RequirePermission("wms.read")
+  async locationBalances(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.locationBalances(this.ctx(req),warehouseId)
+    };
+  }
+
+  @Post("warehouses/:warehouseId/putaway-tasks")
+  @RequirePermission("wms.manage")
+  async putawayTask(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string,
+    @Body() body:{skuId:string;quantityMilli:string}
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.createPutawayTask(
+        this.ctx(req),warehouseId,body
+      )
+    };
+  }
+
+  @Get("warehouses/:warehouseId/tasks")
+  @RequirePermission("wms.read")
+  async tasks(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.tasks(this.ctx(req),warehouseId)
+    };
+  }
+
+  @Post("tasks/:taskId/claim")
+  @RequirePermission("wms.manage")
+  async claim(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string
+  ):Promise<ApiSuccess<{updated:true}>>{
+    await this.wms.claimTask(this.ctx(req),taskId);
+    return {ok:true,data:{updated:true}};
+  }
+
+  @Post("tasks/:taskId/complete-putaway")
+  @RequirePermission("wms.manage")
+  async completePutaway(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string
+  ):Promise<ApiSuccess<{updated:true}>>{
+    await this.wms.completePutaway(this.ctx(req),taskId);
+    return {ok:true,data:{updated:true}};
+  }
+
+  @Get("warehouses/:warehouseId/reconciliation")
+  @RequirePermission("wms.read")
+  async reconciliation(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.reconciliation(this.ctx(req),warehouseId)
+    };
+  }
+
   private ctx(req:AuthenticatedRequest):TenantContext{
     const a=req.auth!;
     return {tenantId:a.tenantId,userId:a.userId,membershipId:a.membershipId};
