@@ -18,6 +18,67 @@ export class FinanceService {
     private readonly attribution: AttributionService
   ) {}
 
+  async importBankStatement(context:TenantContext,input:{
+    cashAccountId:string;sourceName:string;externalStatementId:string;
+    currency:string;dateFrom:string;dateTo:string;
+    lines:Array<{externalLineId:string;bookedOn:string;direction:"IN"|"OUT";
+      amountMinor:string;counterpartyName?:string;purpose?:string}>;
+  }) {
+    const iso=/^\d{4}-\d{2}-\d{2}$/;
+    if(!input?.cashAccountId || !input.sourceName?.trim() ||
+       !input.externalStatementId?.trim() || !/^[A-Z]{3}$/.test(input.currency) ||
+       !iso.test(input.dateFrom) || !iso.test(input.dateTo) ||
+       input.dateFrom>input.dateTo || !Array.isArray(input.lines) ||
+       input.lines.length===0 || input.lines.length>500) {
+      throw new BadRequestException("Invalid bank statement batch");
+    }
+    const ids=new Set<string>();
+    for(const line of input.lines) {
+      if(!line?.externalLineId?.trim() || ids.has(line.externalLineId.trim()) ||
+         !iso.test(line.bookedOn) || line.bookedOn<input.dateFrom ||
+         line.bookedOn>input.dateTo || !["IN","OUT"].includes(line.direction) ||
+         !/^\d+$/.test(line.amountMinor) || BigInt(line.amountMinor)<=0n) {
+        throw new BadRequestException("Invalid or duplicate bank statement line");
+      }
+      ids.add(line.externalLineId.trim());
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const account=await client.query(
+        `SELECT 1 FROM cash_account WHERE tenant_id=$1 AND id=$2
+           AND currency=$3 AND status='ACTIVE' FOR UPDATE`,
+        [context.tenantId,input.cashAccountId,input.currency]
+      );
+      if(!account.rowCount) throw new NotFoundException("Active cash account not found");
+      const inserted=await client.query<{id:string}>(
+        `INSERT INTO finance_bank_statement(
+           tenant_id,cash_account_id,source_name,external_statement_id,currency,
+           date_from,date_to,imported_by_membership_id
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT(tenant_id,cash_account_id,source_name,external_statement_id)
+         DO NOTHING RETURNING id`,
+        [context.tenantId,input.cashAccountId,input.sourceName.trim(),
+         input.externalStatementId.trim(),input.currency,input.dateFrom,
+         input.dateTo,context.membershipId]
+      );
+      if(!inserted.rows[0]) {
+        throw new ConflictException("Statement external identifier has already been imported");
+      }
+      const statementId=inserted.rows[0].id;
+      for(const line of input.lines) {
+        await client.query(
+          `INSERT INTO finance_bank_statement_line(
+             tenant_id,statement_id,external_line_id,booked_on,direction,
+             amount_minor,counterparty_name,purpose
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [context.tenantId,statementId,line.externalLineId.trim(),
+           line.bookedOn,line.direction,line.amountMinor,
+           line.counterpartyName?.slice(0,512)??null,line.purpose?.slice(0,2000)??null]
+        );
+      }
+      return {statementId,importedLines:input.lines.length};
+    });
+  }
+
   async bankStatements(context:TenantContext) {
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
