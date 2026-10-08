@@ -2849,6 +2849,98 @@ export class WmsService {
     return {completed:true,taskId};
   }
 
+  async slaPolicies(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<Array<Record<string,unknown>>>{
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertProfile(client,context.tenantId,warehouseId);
+
+      const result=await client.query(
+        `WITH task_types(task_type) AS (
+           VALUES
+             ('PUTAWAY'),('PICK'),('PACK'),
+             ('SHIP'),('COUNT'),('REPLENISH')
+         )
+         SELECT
+           t.task_type,
+           COALESCE(p.warning_minutes,15)::int AS warning_minutes,
+           COALESCE(p.critical_minutes,30)::int AS critical_minutes,
+           COALESCE(p.enabled,true) AS enabled,
+           p.updated_at
+         FROM task_types t
+         LEFT JOIN wms_task_sla_policy p
+           ON p.tenant_id=$1
+          AND p.warehouse_id=$2
+          AND p.task_type=t.task_type
+         ORDER BY t.task_type`,
+        [context.tenantId,warehouseId]
+      );
+      return result.rows;
+    });
+  }
+
+  async setSlaPolicy(
+    context:TenantContext,
+    warehouseId:string,
+    taskTypeInput:string,
+    input:{
+      warningMinutes:number;
+      criticalMinutes:number;
+      enabled?:boolean;
+    }
+  ):Promise<void>{
+    const taskType=String(taskTypeInput??"").toUpperCase();
+    if(![
+      "PUTAWAY","PICK","PACK","SHIP","COUNT","REPLENISH"
+    ].includes(taskType)){
+      throw new BadRequestException("Неизвестный тип WMS-задачи");
+    }
+
+    const warning=this.integer(
+      input.warningMinutes,1,1440,"Warning SLA"
+    );
+    const critical=this.integer(
+      input.criticalMinutes,1,2880,"Critical SLA"
+    );
+    if(critical<warning){
+      throw new BadRequestException(
+        "Critical SLA не может быть меньше Warning SLA"
+      );
+    }
+
+    await this.database.withTenantTransaction(context,async client=>{
+      await this.assertProfile(client,context.tenantId,warehouseId);
+
+      await client.query(
+        `INSERT INTO wms_task_sla_policy(
+           tenant_id,warehouse_id,task_type,
+           warning_minutes,critical_minutes,enabled,
+           updated_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (tenant_id,warehouse_id,task_type)
+         DO UPDATE SET
+           warning_minutes=EXCLUDED.warning_minutes,
+           critical_minutes=EXCLUDED.critical_minutes,
+           enabled=EXCLUDED.enabled,
+           updated_by_membership_id=EXCLUDED.updated_by_membership_id,
+           updated_at=now()`,
+        [
+          context.tenantId,warehouseId,taskType,
+          warning,critical,input.enabled??true,
+          context.membershipId
+        ]
+      );
+
+      await this.audit(
+        client,context,"wms.sla_policy_updated","warehouse",warehouseId,{
+          taskType,warningMinutes:warning,criticalMinutes:critical,
+          enabled:input.enabled??true
+        }
+      );
+    });
+  }
+
   async dispatcher(
     context:TenantContext,
     warehouseId:string
@@ -2910,6 +3002,59 @@ export class WmsService {
         [context.tenantId,warehouseId]
       );
 
+      const slaBreaches=await client.query(
+        `SELECT
+           t.id,t.task_type,t.status,t.priority,t.created_at,t.claimed_at,
+           t.claimed_by_membership_id,
+           u.email AS assignee_email,
+           COALESCE(p.warning_minutes,15)::int AS warning_minutes,
+           COALESCE(p.critical_minutes,30)::int AS critical_minutes,
+           round(
+             extract(epoch FROM (
+               now()-COALESCE(t.claimed_at,t.created_at)
+             ))/60.0,
+             1
+           ) AS age_minutes,
+           CASE
+             WHEN extract(epoch FROM (
+               now()-COALESCE(t.claimed_at,t.created_at)
+             ))/60.0 >= COALESCE(p.critical_minutes,30)
+               THEN 'CRITICAL'
+             WHEN extract(epoch FROM (
+               now()-COALESCE(t.claimed_at,t.created_at)
+             ))/60.0 >= COALESCE(p.warning_minutes,15)
+               THEN 'WARNING'
+             ELSE 'OK'
+           END AS sla_state
+         FROM warehouse_task t
+         LEFT JOIN wms_task_sla_policy p
+           ON p.tenant_id=t.tenant_id
+          AND p.warehouse_id=t.warehouse_id
+          AND p.task_type=t.task_type
+          AND p.enabled=true
+         LEFT JOIN tenant_membership m
+           ON m.tenant_id=t.tenant_id
+          AND m.id=t.claimed_by_membership_id
+         LEFT JOIN app_user u ON u.id=m.user_id
+         WHERE t.tenant_id=$1
+           AND t.warehouse_id=$2
+           AND t.status IN ('OPEN','CLAIMED')
+           AND extract(epoch FROM (
+             now()-COALESCE(t.claimed_at,t.created_at)
+           ))/60.0 >= COALESCE(p.warning_minutes,15)
+         ORDER BY
+           CASE
+             WHEN extract(epoch FROM (
+               now()-COALESCE(t.claimed_at,t.created_at)
+             ))/60.0 >= COALESCE(p.critical_minutes,30)
+               THEN 0
+             ELSE 1
+           END,
+           COALESCE(t.claimed_at,t.created_at)
+         LIMIT 100`,
+        [context.tenantId,warehouseId]
+      );
+
       const exceptions=await client.query(
         `SELECT
            e.id AS exception_id,
@@ -2956,6 +3101,7 @@ export class WmsService {
         },
         waves:waves.rows,
         taskFlow:taskFlow.rows,
+        slaBreaches:slaBreaches.rows,
         exceptions:exceptions.rows
       };
     });
@@ -2972,6 +3118,7 @@ export class WmsService {
         `SELECT
            e.id,e.task_id,e.exception_type,e.message,e.status,
            e.reported_at,e.resolved_at,
+           e.resolution_action,e.resolution_note,
            t.task_type,t.status AS task_status,t.last_error,
            t.wave_id,t.cluster_slot,
            s.code AS sku_code,p.name AS product_name,
@@ -3004,12 +3151,16 @@ export class WmsService {
   async resolveException(
     context:TenantContext,
     exceptionId:string,
-    input:{action:"REQUEUE"|"CANCEL"}
+    input:{
+      action:"RESUME"|"RETRY"|"CANCEL";
+      note?:string;
+    }
   ):Promise<{taskId:string;taskStatus:"OPEN"|"CANCELLED"}>{
     const action=String(input.action??"").toUpperCase();
-    if(!["REQUEUE","CANCEL"].includes(action)){
+    if(!["RESUME","RETRY","CANCEL"].includes(action)){
       throw new BadRequestException("Неизвестное действие диспетчера");
     }
+    const note=String(input.note??"").trim().slice(0,2000);
 
     return this.database.withTenantTransaction(context,async client=>{
       const exception=await client.query<{
@@ -3034,16 +3185,26 @@ export class WmsService {
       if(row.exception_status!=="OPEN"){
         throw new ConflictException("Исключение уже закрыто");
       }
-      if(!["BLOCKED","FAILED"].includes(row.task_status)){
+
+      if(action==="RESUME"&&row.task_status!=="BLOCKED"){
         throw new ConflictException(
-          "Задача уже не находится в состоянии исключения"
+          "RESUME допустим только для BLOCKED-задачи"
         );
       }
-
+      if(action==="RETRY"&&row.task_status!=="FAILED"){
+        throw new ConflictException(
+          "RETRY допустим только для FAILED-задачи"
+        );
+      }
       if(action==="CANCEL"){
+        if(!["BLOCKED","FAILED"].includes(row.task_status)){
+          throw new ConflictException(
+            "Отменить можно только проблемную задачу"
+          );
+        }
         if(["PICK","PACK","SHIP"].includes(row.task_type)){
           throw new ConflictException(
-            "Outbound-задачу нельзя отменить из диспетчера: верните её в очередь или отмените бизнес-процесс заказа"
+            "Outbound-задачу нельзя отменить из диспетчера: отмените бизнес-процесс заказа или верните задачу в работу"
           );
         }
 
@@ -3073,21 +3234,25 @@ export class WmsService {
         `UPDATE wms_task_exception
          SET status='RESOLVED',
              resolved_at=now(),
-             resolved_by_membership_id=$3
+             resolved_by_membership_id=$3,
+             resolution_action=$4,
+             resolution_note=$5
          WHERE tenant_id=$1 AND id=$2`,
-        [context.tenantId,exceptionId,context.membershipId]
+        [
+          context.tenantId,exceptionId,context.membershipId,
+          action,note||null
+        ]
       );
 
       await this.audit(
         client,context,"wms.exception_resolved","warehouse_task",row.task_id,{
-          exceptionId,
-          action
+          exceptionId,action,note:note||null
         }
       );
 
       return {
         taskId:row.task_id,
-        taskStatus:action==="REQUEUE"?"OPEN":"CANCELLED"
+        taskStatus:action==="CANCEL"?"CANCELLED":"OPEN"
       };
     });
   }
@@ -3201,28 +3366,45 @@ export class WmsService {
       const risk=await client.query(
         `SELECT
            count(*) FILTER (
-             WHERE status='OPEN'
-               AND created_at>now()-interval '15 minutes'
+             WHERE q.status='OPEN' AND q.sla_state='OK'
            )::int AS fresh,
            count(*) FILTER (
-             WHERE status='OPEN'
-               AND created_at<=now()-interval '15 minutes'
-               AND created_at>now()-interval '30 minutes'
+             WHERE q.status='OPEN' AND q.sla_state='WARNING'
            )::int AS watch,
            count(*) FILTER (
-             WHERE status='OPEN'
-               AND created_at<=now()-interval '30 minutes'
-               AND created_at>now()-interval '60 minutes'
+             WHERE q.status='CLAIMED' AND q.sla_state='WARNING'
            )::int AS risk,
            count(*) FILTER (
-             WHERE status='OPEN'
-               AND created_at<=now()-interval '60 minutes'
+             WHERE q.sla_state='CRITICAL'
            )::int AS critical,
            count(*) FILTER (
-             WHERE status IN ('BLOCKED','FAILED')
+             WHERE q.status IN ('BLOCKED','FAILED')
            )::int AS exceptions
-         FROM warehouse_task
-         WHERE tenant_id=$1 AND warehouse_id=$2`,
+         FROM (
+           SELECT
+             t.status,
+             CASE
+               WHEN t.status IN ('BLOCKED','FAILED') THEN 'CRITICAL'
+               WHEN extract(epoch FROM (
+                 now()-COALESCE(t.claimed_at,t.created_at)
+               ))/60.0 >= COALESCE(p.critical_minutes,30)
+                 THEN 'CRITICAL'
+               WHEN extract(epoch FROM (
+                 now()-COALESCE(t.claimed_at,t.created_at)
+               ))/60.0 >= COALESCE(p.warning_minutes,15)
+                 THEN 'WARNING'
+               ELSE 'OK'
+             END AS sla_state
+           FROM warehouse_task t
+           LEFT JOIN wms_task_sla_policy p
+             ON p.tenant_id=t.tenant_id
+            AND p.warehouse_id=t.warehouse_id
+            AND p.task_type=t.task_type
+            AND p.enabled=true
+           WHERE t.tenant_id=$1
+             AND t.warehouse_id=$2
+             AND t.status IN ('OPEN','CLAIMED','BLOCKED','FAILED')
+         ) q`,
         [context.tenantId,warehouseId]
       );
 
