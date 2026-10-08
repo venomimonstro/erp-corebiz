@@ -144,6 +144,61 @@ export class FinanceService {
     });
   }
 
+  async unmatchBankLine(context:TenantContext,input:{
+    lineId:string;reason:string;
+  }) {
+    if(!input?.lineId || typeof input.reason!=="string" ||
+       input.reason.trim().length<12) {
+      throw new BadRequestException("Correction requires bank line and detailed reason");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const line=await client.query<{payment_id:string|null;statement_id:string}>(
+        `SELECT payment_id,statement_id FROM finance_bank_statement_line
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,input.lineId]
+      );
+      const row=line.rows[0];
+      if(!row) throw new NotFoundException("Bank line not found");
+      if(!row.payment_id) return {unmatched:true,changed:false};
+      const statement=await client.query<{status:string}>(
+        `SELECT status FROM finance_bank_statement
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,row.statement_id]
+      );
+      if(statement.rows[0]?.status!=="IMPORTED") {
+        throw new ConflictException("Finalized bank statement cannot be corrected");
+      }
+      await client.query(
+        `SELECT set_config('app.bank_unmatch_actor',$1,true),
+                set_config('app.bank_unmatch_reason',$2,true)`,
+        [context.membershipId,input.reason.trim()]
+      );
+      await client.query(
+        `UPDATE finance_bank_statement_line SET payment_id=NULL
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,input.lineId]
+      );
+      return {unmatched:true,changed:true,previousPaymentId:row.payment_id};
+    });
+  }
+
+  async bankMatchAudit(context:TenantContext,lineId:string) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const row=await client.query(
+        "SELECT 1 FROM finance_bank_statement_line WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,lineId]
+      );
+      if(!row.rowCount) throw new NotFoundException("Bank line not found");
+      const result=await client.query(
+        `SELECT id,old_payment_id,reason,actor_membership_id,changed_at
+         FROM finance_bank_match_audit WHERE tenant_id=$1 AND bank_line_id=$2
+         ORDER BY changed_at DESC,id DESC`,
+        [context.tenantId,lineId]
+      );
+      return result.rows;
+    });
+  }
+
   async reconcileBankStatement(context:TenantContext,statementId:string) {
     return this.database.withTenantTransaction(context,async client=>{
       const statement=await client.query<{status:string}>(
