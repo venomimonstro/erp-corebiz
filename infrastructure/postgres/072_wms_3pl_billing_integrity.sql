@@ -2,19 +2,26 @@ BEGIN;
 
 ALTER TABLE wms_3pl_statement_line
   ADD COLUMN IF NOT EXISTS service_period_from date,
-  ADD COLUMN IF NOT EXISTS service_period_to date;
+  ADD COLUMN IF NOT EXISTS service_period_to date,
+  ADD COLUMN IF NOT EXISTS currency char(3);
 
 UPDATE wms_3pl_statement_line l
 SET service_period_from=s.period_from,
-    service_period_to=s.period_to
+    service_period_to=s.period_to,
+    currency=s.currency
 FROM wms_3pl_statement s
 WHERE s.id=l.statement_id
   AND s.tenant_id=l.tenant_id
-  AND (l.service_period_from IS NULL OR l.service_period_to IS NULL);
+  AND (
+    l.service_period_from IS NULL OR
+    l.service_period_to IS NULL OR
+    l.currency IS NULL
+  );
 
 ALTER TABLE wms_3pl_statement_line
   ALTER COLUMN service_period_from SET NOT NULL,
-  ALTER COLUMN service_period_to SET NOT NULL;
+  ALTER COLUMN service_period_to SET NOT NULL,
+  ALTER COLUMN currency SET NOT NULL;
 
 ALTER TABLE wms_3pl_statement_line
   ADD CONSTRAINT wms_3pl_statement_line_period_check
