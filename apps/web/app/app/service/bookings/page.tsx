@@ -61,6 +61,11 @@ export default function BookingsPage() {
   const [error, setError] = useState("");
   const [weekOffset, setWeekOffset] = useState(0);
   const [resourceFilter, setResourceFilter] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
+  const [selectedService, setSelectedService] = useState("");
+  const [selectedResource, setSelectedResource] = useState("");
+  const [selectedStart, setSelectedStart] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(async () => {
     setError("");
@@ -145,63 +150,35 @@ export default function BookingsPage() {
   }
 
   async function createBooking() {
-    if (!services.length) {
-      setError("Сначала создайте услугу");
+    if (!selectedService || !selectedResource || !selectedStart) {
+      setError("Выберите услугу, сотрудника или ресурс и время");
       return;
     }
-    if (!resources.length) {
-      setError("Сначала создайте ресурс");
+    const parsed = new Date(selectedStart);
+    if (Number.isNaN(parsed.getTime())) {
+      setError("Некорректная дата записи");
       return;
     }
-
-    const serviceText = services
-      .map(
-        (service, index) =>
-          `${index + 1}. ${service.name} · ${service.duration_minutes} мин · ${money(
-            service.price_minor,
-            service.currency
-          )}`
-      )
-      .join("\n");
-
-    const serviceIndex =
-      Number(window.prompt("Выберите услугу:\n" + serviceText, "1")) - 1;
-    const service = services[serviceIndex];
-    if (!service) return;
-
-    const resourceText = resources
-      .map((resource, index) => `${index + 1}. ${resource.name} · ${resource.type}`)
-      .join("\n");
-
-    const resourceIndex =
-      Number(window.prompt("Выберите ресурс:\n" + resourceText, "1")) - 1;
-    const resource = resources[resourceIndex];
-    if (!resource) return;
-
-    const defaultStart = new Date(Date.now() + 3600000);
-    defaultStart.setMinutes(0, 0, 0);
-
-    const startsAt = window.prompt(
-      "Дата и время начала",
-      toLocalDateTimeInput(defaultStart)
-    );
-    if (!startsAt) return;
-
+    setSubmitting(true);
+    setError("");
     try {
       await apiRequest("/service/bookings", {
         method: "POST",
         body: JSON.stringify({
-          serviceId: service.id,
-          resourceIds: [resource.id],
-          startsAt,
+          serviceId: selectedService,
+          resourceIds: [selectedResource],
+          startsAt: parsed.toISOString(),
           source: "MANUAL",
           idempotencyKey: crypto.randomUUID()
         })
       });
-
+      setShowCreate(false);
+      setSelectedStart("");
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать запись");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -262,7 +239,7 @@ export default function BookingsPage() {
             <button className="secondary-button" onClick={() => void createService()} type="button">
               + Услуга
             </button>
-            <button onClick={() => void createBooking()} type="button">
+            <button onClick={() => { setShowCreate((v) => !v); setError(""); }} type="button">
               + Запись
             </button>
           </div>
@@ -273,6 +250,32 @@ export default function BookingsPage() {
             <strong>Не удалось выполнить действие</strong>
             <span>{error}</span>
           </div>
+        ) : null}
+
+        {showCreate ? (
+          <form className="settings-card" onSubmit={(e) => { e.preventDefault(); void createBooking(); }} style={{ marginBottom: 16 }}>
+            <h2>Новая запись</h2>
+            <p className="muted">Выберите услугу, ресурс и местное время. Доступность проверяется сервером.</p>
+            <div className="header-actions" style={{ flexWrap: "wrap" }}>
+              <label>Услуга{" "}
+                <select required value={selectedService} onChange={(e) => setSelectedService(e.target.value)}>
+                  <option value="">Выбрать услугу</option>
+                  {services.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.duration_minutes} мин</option>)}
+                </select>
+              </label>
+              <label>Сотрудник или ресурс{" "}
+                <select required value={selectedResource} onChange={(e) => setSelectedResource(e.target.value)}>
+                  <option value="">Выбрать ресурс</option>
+                  {resources.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </label>
+              <label>Начало{" "}
+                <input required type="datetime-local" value={selectedStart} onChange={(e) => setSelectedStart(e.target.value)} />
+              </label>
+              <button type="submit" disabled={submitting}>{submitting ? "Сохраняем…" : "Записать"}</button>
+              <button className="secondary-button" type="button" onClick={() => setShowCreate(false)}>Отмена</button>
+            </div>
+          </form>
         ) : null}
 
         <div className="header-actions" aria-label="Навигация по календарю" style={{ marginBottom: 16, flexWrap: "wrap" }}>
