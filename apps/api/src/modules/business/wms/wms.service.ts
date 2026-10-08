@@ -2834,6 +2834,172 @@ export class WmsService {
     return {completed:true,taskId};
   }
 
+  async laborMetrics(
+    context:TenantContext,
+    warehouseId:string,
+    hoursInput=24
+  ):Promise<Record<string,unknown>>{
+    const hours=this.integer(hoursInput,1,168,"Окно labor metrics");
+
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertProfile(client,context.tenantId,warehouseId);
+
+      const summary=await client.query(
+        `SELECT
+           count(*) FILTER (
+             WHERE status='COMPLETED'
+               AND completed_at>=now()-($3::text||' hours')::interval
+           )::int AS completed,
+           count(*) FILTER (WHERE status='CLAIMED')::int AS active_tasks,
+           count(DISTINCT claimed_by_membership_id) FILTER (
+             WHERE status='CLAIMED'
+           )::int AS active_operators,
+           round(
+             count(*) FILTER (
+               WHERE status='COMPLETED'
+                 AND completed_at>=now()-($3::text||' hours')::interval
+             )::numeric / $3::numeric,
+             2
+           ) AS tasks_per_hour,
+           round(
+             percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM (completed_at-claimed_at))/60.0
+             ) FILTER (
+               WHERE status='COMPLETED'
+                 AND claimed_at IS NOT NULL
+                 AND completed_at IS NOT NULL
+                 AND completed_at>=now()-($3::text||' hours')::interval
+             )::numeric,
+             1
+           ) AS median_cycle_minutes
+         FROM warehouse_task
+         WHERE tenant_id=$1 AND warehouse_id=$2`,
+        [context.tenantId,warehouseId,hours]
+      );
+
+      const operators=await client.query(
+        `SELECT
+           m.id AS membership_id,
+           u.email,
+           count(t.id) FILTER (
+             WHERE t.status='COMPLETED'
+               AND t.completed_at>=now()-($3::text||' hours')::interval
+           )::int AS completed,
+           count(t.id) FILTER (WHERE t.status='CLAIMED')::int AS active,
+           round(
+             percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM (t.completed_at-t.claimed_at))/60.0
+             ) FILTER (
+               WHERE t.status='COMPLETED'
+                 AND t.claimed_at IS NOT NULL
+                 AND t.completed_at IS NOT NULL
+                 AND t.completed_at>=now()-($3::text||' hours')::interval
+             )::numeric,
+             1
+           ) AS median_cycle_minutes,
+           max(t.completed_at) AS last_completed_at
+         FROM tenant_membership m
+         JOIN app_user u ON u.id=m.user_id
+         LEFT JOIN warehouse_task t
+           ON t.tenant_id=m.tenant_id
+          AND t.claimed_by_membership_id=m.id
+          AND t.warehouse_id=$2
+         WHERE m.tenant_id=$1
+           AND m.status='ACTIVE'
+         GROUP BY m.id,u.email
+         HAVING
+           count(t.id) FILTER (
+             WHERE t.status='COMPLETED'
+               AND t.completed_at>=now()-($3::text||' hours')::interval
+           )>0
+           OR count(t.id) FILTER (WHERE t.status='CLAIMED')>0
+         ORDER BY completed DESC,active DESC,u.email
+         LIMIT 100`,
+        [context.tenantId,warehouseId,hours]
+      );
+
+      const throughput=await client.query(
+        `SELECT
+           task_type,
+           count(*)::int AS completed,
+           round(
+             percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM (completed_at-claimed_at))/60.0
+             ) FILTER (
+               WHERE claimed_at IS NOT NULL
+             )::numeric,
+             1
+           ) AS median_cycle_minutes
+         FROM warehouse_task
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND status='COMPLETED'
+           AND completed_at>=now()-($3::text||' hours')::interval
+         GROUP BY task_type
+         ORDER BY completed DESC,task_type`,
+        [context.tenantId,warehouseId,hours]
+      );
+
+      const risk=await client.query(
+        `SELECT
+           count(*) FILTER (
+             WHERE status='OPEN'
+               AND created_at>now()-interval '15 minutes'
+           )::int AS fresh,
+           count(*) FILTER (
+             WHERE status='OPEN'
+               AND created_at<=now()-interval '15 minutes'
+               AND created_at>now()-interval '30 minutes'
+           )::int AS watch,
+           count(*) FILTER (
+             WHERE status='OPEN'
+               AND created_at<=now()-interval '30 minutes'
+               AND created_at>now()-interval '60 minutes'
+           )::int AS risk,
+           count(*) FILTER (
+             WHERE status='OPEN'
+               AND created_at<=now()-interval '60 minutes'
+           )::int AS critical,
+           count(*) FILTER (
+             WHERE status IN ('BLOCKED','FAILED')
+           )::int AS exceptions
+         FROM warehouse_task
+         WHERE tenant_id=$1 AND warehouse_id=$2`,
+        [context.tenantId,warehouseId]
+      );
+
+      const workload=await client.query(
+        `SELECT
+           COALESCE(z.name,'Без зоны') AS zone_name,
+           t.task_type,
+           t.status,
+           count(*)::int AS tasks
+         FROM warehouse_task t
+         LEFT JOIN warehouse_location l
+           ON l.tenant_id=t.tenant_id
+          AND l.id=COALESCE(t.from_location_id,t.to_location_id)
+         LEFT JOIN warehouse_zone z
+           ON z.tenant_id=l.tenant_id AND z.id=l.zone_id
+         WHERE t.tenant_id=$1
+           AND t.warehouse_id=$2
+           AND t.status IN ('OPEN','CLAIMED','BLOCKED','FAILED')
+         GROUP BY z.name,t.task_type,t.status
+         ORDER BY zone_name,t.task_type,t.status`,
+        [context.tenantId,warehouseId]
+      );
+
+      return {
+        warehouseId,
+        windowHours:hours,
+        summary:summary.rows[0]??{},
+        operators:operators.rows,
+        throughput:throughput.rows,
+        backlogRisk:risk.rows[0]??{},
+        workload:workload.rows
+      };
+    });
+  }
+
   async reconciliation(
     context:TenantContext,
     warehouseId:string
