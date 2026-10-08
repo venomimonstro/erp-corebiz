@@ -33,11 +33,12 @@ type MobileTask = {
   to_short_code: string | null;
   wave_id: string | null;
   cluster_slot: string | null;
+  order_number: string | null;
   instructions: Record<string, unknown>;
   verifiedScans: string[];
 };
 
-type ScanKind = "FROM_LOCATION" | "SKU" | "TO_LOCATION";
+type ScanKind = "FROM_LOCATION" | "SKU" | "TO_LOCATION" | "ORDER";
 
 type OfflineAction = {
   id: string;
@@ -195,6 +196,11 @@ export default function WmsMobilePage() {
 
   const requiredScans = useMemo<ScanKind[]>(() => {
     if (!task) return [];
+
+    if (task.task_type === "PACK" || task.task_type === "SHIP") {
+      return task.order_number ? ["ORDER"] : [];
+    }
+
     const result: ScanKind[] = [];
     if (task.from_code) result.push("FROM_LOCATION");
     if (task.sku_code) result.push("SKU");
@@ -412,7 +418,9 @@ export default function WmsMobilePage() {
         ? "Сканируйте товар / штрихкод"
         : nextScan === "TO_LOCATION"
           ? "Сканируйте целевую ячейку"
-          : "Все обязательные сканы выполнены";
+          : nextScan === "ORDER"
+            ? "Сканируйте номер заказа"
+            : "Все обязательные сканы выполнены";
 
   return (
     <main className="wms-mobile">
@@ -506,6 +514,20 @@ export default function WmsMobilePage() {
                   {task.barcode ? <small>{task.barcode}</small> : null}
                 </div>
               ) : null}
+
+              {task.order_number ? (
+                <div className="wms-mobile-sku">
+                  <span>Заказ</span>
+                  <strong>{task.order_number}</strong>
+                  <small>
+                    {task.task_type === "PACK"
+                      ? "Подтвердите заказ перед упаковкой"
+                      : task.task_type === "SHIP"
+                        ? "Подтвердите заказ перед отгрузкой"
+                        : ""}
+                  </small>
+                </div>
+              ) : null}
             </article>
 
             {requiredScans.length ? (
@@ -526,7 +548,9 @@ export default function WmsMobilePage() {
                         ? "Откуда"
                         : kind === "SKU"
                           ? "Товар"
-                          : "Куда"}
+                          : kind === "TO_LOCATION"
+                            ? "Куда"
+                            : "Заказ"}
                     </span>
                   ))}
                 </div>
