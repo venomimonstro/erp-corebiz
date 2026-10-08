@@ -332,6 +332,28 @@ export class BookingService {
     });
   }
 
+  async bookingDetails(context: TenantContext, bookingId: string): Promise<Record<string, unknown>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `SELECT b.id,b.business_number,b.status,b.source,b.starts_at,b.ends_at,
+                b.price_minor_snapshot::text,b.currency,b.version,b.notes,b.party_id,
+                p.display_name AS party_name,s.name AS service_name,
+                COALESCE(json_agg(json_build_object('resourceId',r.id,'resourceName',r.name,'type',r.type))
+                  FILTER (WHERE r.id IS NOT NULL),'[]'::json) AS resources
+         FROM service_booking b
+         JOIN service_catalog_item s ON s.tenant_id=b.tenant_id AND s.id=b.service_id
+         LEFT JOIN party p ON p.tenant_id=b.tenant_id AND p.id=b.party_id
+         LEFT JOIN service_booking_resource br ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
+         LEFT JOIN service_resource r ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+         WHERE b.tenant_id=$1 AND b.id=$2
+         GROUP BY b.id,p.display_name,s.name`,
+        [context.tenantId, bookingId]
+      );
+      if (!result.rows[0]) throw new NotFoundException("Запись не найдена");
+      return result.rows[0] as Record<string, unknown>;
+    });
+  }
+
   async createBooking(
     context: TenantContext,
     input: {
