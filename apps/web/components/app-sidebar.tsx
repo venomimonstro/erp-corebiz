@@ -25,6 +25,7 @@ export function AppSidebar({ active }: { active: string }) {
       {link("/app/support", "Поддержка", "support")}
       {link("/app/settings", "Настройки", "settings")}
       {link("/app/settings/billing", "Тариф", "billing")}
+      {link("/app/settings/customization", "Настройка системы", "customization")}
     </aside>
   );
 }
