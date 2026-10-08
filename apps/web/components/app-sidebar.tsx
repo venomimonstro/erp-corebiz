@@ -31,7 +31,8 @@ export function AppSidebar({ active }: { active: string }) {
       {link("/app/analytics/settings", "Трекер", "analytics-settings")}
 
       <span>Аналитика</span>
-      {link("/app/analytics/growth", "Трафик и реклама", "growth")}
+      {link("/app/analytics/growth", "Трафик", "growth")}
+      {link("/app/analytics/marketing", "Реклама", "marketing")}
 
       <span>Система</span>
       {link("/app/support", "Поддержка", "support")}
