@@ -100,7 +100,30 @@ export class AccountingService {
         "SELECT id FROM accounting_journal_entry WHERE tenant_id=$1 AND posting_key=$2",
         [context.tenantId,input.postingKey.trim()]
       );
-      if (existing.rows[0]) return {id:existing.rows[0].id,created:false};
+      if (existing.rows[0]) {
+        const recorded=await client.query<{
+          id:string;legal_entity_id:string;period_id:string;business_date:string;
+          source_type:string;source_id:string;rule_code:string;rule_version:number;
+          amount_minor:string;
+        }>(
+          `SELECT id,legal_entity_id,period_id,business_date::text,source_type,
+                  source_id,rule_code,rule_version,amount_minor::text
+           FROM accounting_journal_entry WHERE tenant_id=$1 AND posting_key=$2`,
+          [context.tenantId,input.postingKey.trim()]
+        );
+        const previous=recorded.rows[0]!;
+        if (previous.legal_entity_id!==input.legalEntityId ||
+            previous.period_id!==input.periodId ||
+            previous.business_date!==input.businessDate ||
+            previous.source_type!==input.sourceType ||
+            previous.source_id!==input.sourceId ||
+            previous.rule_code!==input.ruleCode ||
+            previous.rule_version!==input.ruleVersion ||
+            previous.amount_minor!==input.amountMinor) {
+          throw new ConflictException("Posting key already used with different operation");
+        }
+        return {id:previous.id,created:false};
+      }
 
       const period = await client.query(
         `SELECT 1 FROM accounting_period
