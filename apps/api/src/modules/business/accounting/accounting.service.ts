@@ -183,17 +183,18 @@ export class AccountingService {
       );
       const original=previous.rows[0];
       if (!original) throw new NotFoundException("Original posting not found");
-      const existing=await client.query<{id:string;reversal_of_id:string|null}>(
-        `SELECT id,reversal_of_id FROM accounting_journal_entry
+      const existing=await client.query<{id:string;posting_key:string;reversal_of_id:string|null}>(
+        `SELECT id,posting_key,reversal_of_id FROM accounting_journal_entry
          WHERE tenant_id=$1 AND (posting_key=$2 OR reversal_of_id=$3) FOR UPDATE`,
         [context.tenantId,input.postingKey.trim(),input.originalEntryId]
       );
       if (existing.rowCount) {
-        const prior=existing.rows[0]!;
-        if(prior.reversal_of_id!==input.originalEntryId) {
-          throw new ConflictException("Posting key belongs to another operation");
-        }
-        return {id:prior.id,created:false};
+        const unrelated=existing.rows.find(row =>
+          row.reversal_of_id!==input.originalEntryId ||
+          row.posting_key!==input.postingKey.trim()
+        );
+        if (unrelated) throw new ConflictException("Reversal already exists or key belongs to another posting");
+        return {id:existing.rows[0]!.id,created:false};
       }
       const period=await client.query(
         `SELECT 1 FROM accounting_period WHERE tenant_id=$1 AND id=$2
