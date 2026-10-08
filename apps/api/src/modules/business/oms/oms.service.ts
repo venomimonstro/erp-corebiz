@@ -245,10 +245,23 @@ export class OmsService {
         [context.tenantId, omsOrderId]
       );
 
+      const backorders = await client.query(
+        `SELECT
+           b.id,b.sales_order_line_id,b.sku_id,s.code AS sku_code,
+           b.quantity_milli::text,b.status,b.expected_at,b.reason,b.updated_at
+         FROM oms_backorder_line b
+         JOIN sku s
+           ON s.tenant_id=b.tenant_id AND s.id=b.sku_id
+         WHERE b.tenant_id=$1 AND b.oms_order_id=$2
+         ORDER BY b.created_at`,
+        [context.tenantId, omsOrderId]
+      );
+
       return {
         order: order.rows[0],
         lines: lines.rows,
-        allocations: allocations.rows
+        allocations: allocations.rows,
+        backorders: backorders.rows
       };
     });
   }
@@ -685,6 +698,81 @@ export class OmsService {
       throw error;
     }
   }
+
+  async backorders(
+    context: TenantContext
+  ): Promise<Array<Record<string, unknown>>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `SELECT
+           b.id,b.oms_order_id,b.sales_order_line_id,b.sku_id,
+           s.code AS sku_code,b.quantity_milli::text,b.status,
+           b.expected_at,b.reason,b.updated_at,
+           so.business_number AS sales_order_number,
+           p.display_name AS party_name
+         FROM oms_backorder_line b
+         JOIN oms_order oo
+           ON oo.tenant_id=b.tenant_id AND oo.id=b.oms_order_id
+         JOIN sales_order so
+           ON so.tenant_id=oo.tenant_id AND so.id=oo.sales_order_id
+         JOIN sku s
+           ON s.tenant_id=b.tenant_id AND s.id=b.sku_id
+         LEFT JOIN party p
+           ON p.tenant_id=so.tenant_id AND p.id=so.party_id
+         WHERE b.tenant_id=$1
+           AND b.status IN ('OPEN','PARTIALLY_ALLOCATED')
+         ORDER BY b.expected_at NULLS LAST,b.created_at
+         LIMIT 500`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async updateBackorder(
+    context: TenantContext,
+    backorderId: string,
+    input: {
+      expectedAt?: string | null;
+      cancel?: boolean;
+    }
+  ): Promise<void> {
+    const expectedAt =
+      input.expectedAt === null || input.expectedAt === undefined
+        ? null
+        : new Date(input.expectedAt);
+
+    if (
+      expectedAt &&
+      Number.isNaN(expectedAt.getTime())
+    ) {
+      throw new BadRequestException("Некорректная ожидаемая дата");
+    }
+
+    await this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `UPDATE oms_backorder_line
+         SET expected_at=$3,
+             status=CASE WHEN $4::boolean THEN 'CANCELLED' ELSE status END,
+             updated_at=now()
+         WHERE tenant_id=$1
+           AND id=$2
+           AND status IN ('OPEN','PARTIALLY_ALLOCATED')
+         RETURNING id`,
+        [
+          context.tenantId,
+          backorderId,
+          expectedAt,
+          input.cancel ?? false
+        ]
+      );
+
+      if (!result.rowCount) {
+        throw new NotFoundException("Активный backorder не найден");
+      }
+    });
+  }
+
 
   async markFulfillment(
     context: TenantContext,
