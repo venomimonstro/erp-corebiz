@@ -213,6 +213,7 @@ export class ProcurementService {
       destinationWarehouseId?: string;
       expectedAt?: string;
       notes?: string;
+      inventoryOwnerId?: string;
       lines: PurchaseLineInput[];
     }
   ): Promise<{ id: string; number: string; version: number }> {
@@ -267,6 +268,46 @@ export class ProcurementService {
 
       if (!warehouse.rowCount) {
         throw new NotFoundException("Склад назначения не найден");
+      }
+
+      const ownerResult=await client.query<{
+        id:string;
+        owner_type:string;
+      }>(
+        input.inventoryOwnerId
+          ? `SELECT id,owner_type
+             FROM inventory_owner
+             WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`
+          : `SELECT id,owner_type
+             FROM inventory_owner
+             WHERE tenant_id=$1
+               AND is_default=true
+               AND status='ACTIVE'
+             LIMIT 1`,
+        input.inventoryOwnerId
+          ? [context.tenantId,input.inventoryOwnerId]
+          : [context.tenantId]
+      );
+      const inventoryOwner=ownerResult.rows[0];
+      if(!inventoryOwner){
+        throw new NotFoundException("Владелец товара не найден");
+      }
+
+      if(inventoryOwner.owner_type==="CLIENT"){
+        const contract=await client.query(
+          `SELECT 1
+           FROM warehouse_3pl_contract
+           WHERE tenant_id=$1
+             AND warehouse_id=$2
+             AND owner_id=$3
+             AND status='ACTIVE'`,
+          [context.tenantId,destinationWarehouseId,inventoryOwner.id]
+        );
+        if(!contract.rowCount){
+          throw new ConflictException(
+            "Для 3PL-владельца нет активного контракта на складе назначения"
+          );
+        }
       }
 
       const preparedLines: Array<{
@@ -337,9 +378,9 @@ export class ProcurementService {
         `INSERT INTO purchase_order(
            tenant_id, business_number, supplier_party_id,
            destination_branch_id, destination_warehouse_id,
-           responsible_membership_id,
+           responsible_membership_id, inventory_owner_id,
            total_minor, expected_at, notes
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
          RETURNING id, business_number, version`,
         [
           context.tenantId,
@@ -348,6 +389,7 @@ export class ProcurementService {
           input.destinationBranchId ?? null,
           destinationWarehouseId,
           context.membershipId,
+          inventoryOwner.id,
           total.toString(),
           expectedAt,
           input.notes?.trim() || null
@@ -534,8 +576,9 @@ export class ProcurementService {
         id: string;
         status: string;
         destination_warehouse_id: string | null;
+        inventory_owner_id: string;
       }>(
-        `SELECT id, status, destination_warehouse_id
+        `SELECT id, status, destination_warehouse_id, inventory_owner_id
          FROM purchase_order
          WHERE tenant_id = $1 AND id = $2
          FOR UPDATE`,
@@ -620,10 +663,13 @@ export class ProcurementService {
       const receiptResult = await client.query<{ id: string }>(
         `INSERT INTO goods_receipt(
            tenant_id, purchase_order_id, business_number,
-           posted_by_membership_id
-         ) VALUES ($1,$2,$3,$4)
+           inventory_owner_id, posted_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5)
          RETURNING id`,
-        [context.tenantId, orderId, number, context.membershipId]
+        [
+          context.tenantId,orderId,number,
+          order.inventory_owner_id,context.membershipId
+        ]
       );
 
       const receipt = receiptResult.rows[0];
@@ -686,6 +732,7 @@ export class ProcurementService {
       await this.inventory.postGoodsReceipt(client, context, {
         receiptId: receipt.id,
         warehouseId,
+        ownerId: order.inventory_owner_id,
         lines: inventoryLines
       });
 
