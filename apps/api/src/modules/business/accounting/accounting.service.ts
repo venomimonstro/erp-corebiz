@@ -35,8 +35,8 @@ export class AccountingService {
   async createPeriod(context:TenantContext,input:{
     legalEntityId:string;dateFrom:string;dateTo:string;
   }) {
-    if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(input.dateFrom) ||
-       !/^\\d{4}-\\d{2}-\\d{2}$/.test(input.dateTo) ||
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(input.dateFrom) ||
+       !/^\d{4}-\d{2}-\d{2}$/.test(input.dateTo) ||
        input.dateFrom>input.dateTo) {
       throw new BadRequestException("Invalid accounting period dates");
     }
