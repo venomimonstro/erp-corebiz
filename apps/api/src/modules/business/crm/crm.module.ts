@@ -6,6 +6,7 @@ import { CrmService } from "./crm.service";
 @Module({
   imports: [AuthorizationModule],
   controllers: [CrmController],
-  providers: [CrmService]
+  providers: [CrmService],
+  exports: [CrmService]
 })
 export class CrmModule {}
