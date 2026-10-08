@@ -8,6 +8,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
+import { InventoryService } from "../inventory/inventory.service";
 
 type CreateLineInput = {
   skuId?: string;
@@ -21,7 +22,8 @@ type CreateLineInput = {
 export class SalesService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly authorization: AuthorizationService
+    private readonly authorization: AuthorizationService,
+    private readonly inventory: InventoryService
   ) {}
 
   async list(context: TenantContext): Promise<Array<{
@@ -416,6 +418,36 @@ export class SalesService {
         orderStatus: order.order_status,
         version: order.version
       };
+    });
+  }
+
+  async reserve(
+    context: TenantContext,
+    orderId: string,
+    idempotencyKey: string,
+    warehouseId?: string
+  ): Promise<unknown> {
+    const scope = await this.authorization.resolveScope(context, "sales.write");
+    if (!scope) throw new BadRequestException("Недостаточно прав");
+
+    return this.inventory.reserveOrder(context, {
+      orderId,
+      warehouseId,
+      idempotencyKey
+    });
+  }
+
+  async ship(
+    context: TenantContext,
+    orderId: string,
+    idempotencyKey: string
+  ): Promise<unknown> {
+    const scope = await this.authorization.resolveScope(context, "sales.write");
+    if (!scope) throw new BadRequestException("Недостаточно прав");
+
+    return this.inventory.shipOrder(context, {
+      orderId,
+      idempotencyKey
     });
   }
 
