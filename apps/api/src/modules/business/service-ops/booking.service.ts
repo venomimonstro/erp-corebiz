@@ -731,7 +731,9 @@ export class BookingService {
     }>(
       `SELECT
          r.capacity,
-         COALESCE(sum(br.capacity_units), 0)::text AS occupied
+         COALESCE(sum(
+           CASE WHEN b.id IS NOT NULL THEN br.capacity_units ELSE 0 END
+         ), 0)::text AS occupied
        FROM service_resource r
        LEFT JOIN service_booking_resource br
          ON br.tenant_id = r.tenant_id
