@@ -133,3 +133,25 @@ button, .primary, .secondary { font: inherit; }
 .status-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 8px; background: #f1f2f4; color: #50555c; font-size: 11px; white-space: nowrap; }
 .table-actions { text-align: right; }
 .table-actions button { padding: 7px 10px; border-radius: 8px; font-size: 11px; }
+
+
+/* Shared actions and finance */
+.header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.metric-card { background: #fff; border: 1px solid #e1e3e6; border-radius: 16px; padding: 18px; display: grid; gap: 7px; }
+.metric-card > span { color: #71767d; font-size: 12px; }
+.metric-card > strong { font-size: 27px; letter-spacing: -.04em; }
+.metric-card > small { color: #8a8f96; }
+.finance-accounts { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 24px; }
+.account-card { flex: 0 0 260px; background: #17191c; color: #fff; border-radius: 15px; padding: 16px; display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }
+.account-card > div { display: grid; gap: 5px; }
+.account-card span { color: #aeb3ba; font-size: 11px; }
+.account-card > strong { white-space: nowrap; }
+.section-block { margin-top: 26px; }
+.section-heading { display: flex; justify-content: space-between; align-items: end; margin-bottom: 12px; }
+.section-heading h2 { margin: 3px 0 0; font-size: 21px; letter-spacing: -.03em; }
+
+@media (max-width: 920px) {
+  .metric-grid { grid-template-columns: 1fr; }
+  .header-actions { justify-content: flex-start; }
+}
