@@ -32,6 +32,7 @@ export function AppSidebar({ active }: { active: string }) {
       {link("/app/inventory/stock", "Склад", "stock")}
       {link("/app/wms", "WMS", "wms")}
       {link("/app/wms/owners", "Владельцы товара", "wms-owners")}
+      {link("/app/wms/billing", "3PL расчёты", "wms-billing")}
       {link("/app/wms/mobile", "WMS · ТСД", "wms-mobile")}
       {link("/app/finance", "Деньги", "finance")}
 
