@@ -35,6 +35,7 @@ export class SalesService {
     fulfillmentStatus: string;
     responsibleMembershipId: string | null;
     createdAt: string;
+    version: number;
   }>> {
     const scope = await this.authorization.resolveScope(context, "sales.read");
     if (!scope) throw new BadRequestException("Недостаточно прав");
@@ -62,6 +63,7 @@ export class SalesService {
         fulfillment_status: string;
         responsible_membership_id: string | null;
         created_at: Date;
+        version: number;
       }>(
         `SELECT
            o.id,
@@ -73,7 +75,8 @@ export class SalesService {
            o.payment_status,
            o.fulfillment_status,
            o.responsible_membership_id,
-           o.created_at
+           o.created_at,
+           o.version
          FROM sales_order o
          LEFT JOIN party p
            ON p.tenant_id = o.tenant_id
@@ -95,7 +98,8 @@ export class SalesService {
         paymentStatus: row.payment_status,
         fulfillmentStatus: row.fulfillment_status,
         responsibleMembershipId: row.responsible_membership_id,
-        createdAt: row.created_at.toISOString()
+        createdAt: row.created_at.toISOString(),
+        version: row.version
       }));
     });
   }
