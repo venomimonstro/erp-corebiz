@@ -436,7 +436,15 @@ export class SitesService {
     context: TenantContext,
     pageId: string,
     versionId: string,
-    input: { title: string; metaDescription?: string }
+    input: {
+      title: string;
+      metaDescription?: string;
+      metaRobots?: string;
+      canonicalPath?: string;
+      ogTitle?: string;
+      ogDescription?: string;
+      ogImageUrl?: string;
+    }
   ): Promise<void> {
     const title = String(input.title ?? "").trim();
     if (title.length < 1 || title.length > 240) {
@@ -448,13 +456,66 @@ export class SitesService {
       throw new BadRequestException("Meta description слишком длинный");
     }
 
+    const robots = (input.metaRobots?.trim() || "index,follow").toLowerCase();
+    const allowedRobots = new Set([
+      "index,follow",
+      "noindex,follow",
+      "index,nofollow",
+      "noindex,nofollow"
+    ]);
+    if (!allowedRobots.has(robots)) {
+      throw new BadRequestException("Некорректный meta robots");
+    }
+
+    const canonicalPath = input.canonicalPath?.trim() || null;
+    if (
+      canonicalPath &&
+      (!canonicalPath.startsWith("/") ||
+        canonicalPath.startsWith("//") ||
+        canonicalPath.length > 500)
+    ) {
+      throw new BadRequestException("Canonical должен быть относительным path");
+    }
+
+    const ogTitle = input.ogTitle?.trim() || null;
+    const ogDescription = input.ogDescription?.trim() || null;
+    const ogImageUrl = input.ogImageUrl?.trim() || null;
+
+    if (ogTitle && ogTitle.length > 240) {
+      throw new BadRequestException("OG title слишком длинный");
+    }
+    if (ogDescription && ogDescription.length > 500) {
+      throw new BadRequestException("OG description слишком длинный");
+    }
+    if (ogImageUrl) this.assertSafeUrl(ogImageUrl);
+
     await this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `UPDATE site_page_version
-         SET title=$4,meta_description=$5
-         WHERE tenant_id=$1 AND page_id=$2 AND id=$3 AND status='DRAFT'
+         SET title=$4,
+             meta_description=$5,
+             meta_robots=$6,
+             canonical_path=$7,
+             og_title=$8,
+             og_description=$9,
+             og_image_url=$10
+         WHERE tenant_id=$1
+           AND page_id=$2
+           AND id=$3
+           AND status='DRAFT'
          RETURNING id`,
-        [context.tenantId, pageId, versionId, title, meta]
+        [
+          context.tenantId,
+          pageId,
+          versionId,
+          title,
+          meta,
+          robots,
+          canonicalPath,
+          ogTitle,
+          ogDescription,
+          ogImageUrl
+        ]
       );
       if (!result.rowCount) {
         throw new ConflictException("Изменять можно только DRAFT");
