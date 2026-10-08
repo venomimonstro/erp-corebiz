@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R8 / Sprint 36 — Receiving / Put-away Tasks.  
+**Активная разработка:** R8 / Sprint 37 — Picking / Packing / Shipping Tasks.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -378,21 +378,32 @@
 - WMS UI only for warehouses where it is enabled;
 - Inventory Ledger remains the only quantity source of truth while topology is configured.
 
-## Активно — Sprint 36: Receiving / Put-away Tasks
+### Sprint 36 — Receiving / Put-away Tasks
+- explicit location-ledger initialization;
+- system UNASSIGNED bootstrap location;
+- existing physical stock bootstrap with immutable movements;
+- new goods receipts mirrored to UNASSIGNED idempotently;
+- location balance subledger;
+- put-away candidate selection from SKU rules / zone priority / pick sequence;
+- PUTAWAY task create / claim / complete;
+- mixed-SKU restriction enforced at completion;
+- location ledger reconciliation to Inventory Balance after operations;
+- bypass movements blocked once location ledger is active.
+
+## Активно — Sprint 37: Picking / Packing / Shipping Tasks
 
 Scope:
-- explicit location-ledger initialization;
-- UNASSIGNED system location for safe bootstrap;
-- immutable WMS location movements;
-- receiving buffer assignment;
-- put-away suggestion engine;
-- put-away tasks;
-- task claim/complete;
-- location balance reconciled to warehouse Inventory Balance;
-- no double posting into aggregate Inventory Ledger.
+- OMS reservation → location pick allocation;
+- location-level availability against concurrent pick tasks;
+- PICK task generation;
+- outbound staging;
+- PACK tasks;
+- SHIP tasks;
+- WMS shipment finalization through InventoryService;
+- multi-warehouse order support without double shipment;
+- full location/aggregate reconciliation.
 
 ## Следом
 
-Sprint 37 — Picking / Packing / Shipping Tasks.  
 Sprint 38 — Cycle Count / Replenishment.
 
