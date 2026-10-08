@@ -16,6 +16,7 @@ import { GrowthModule } from "./modules/business/growth/growth.module";
 import { InventoryModule } from "./modules/business/inventory/inventory.module";
 import { MigrationModule } from "./modules/business/migration/migration.module";
 import { OrganizationModule } from "./modules/business/organization/organization.module";
+import { OmsModule } from "./modules/business/oms/oms.module";
 import { PartyModule } from "./modules/business/party/party.module";
 import { ProcurementModule } from "./modules/business/procurement/procurement.module";
 import { SalesModule } from "./modules/business/sales/sales.module";
@@ -55,6 +56,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     GrowthModule,
     InventoryModule,
     MigrationModule,
+    OmsModule,
     ProcurementModule,
     SupportModule,
     WorkflowModule,
