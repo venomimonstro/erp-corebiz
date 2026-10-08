@@ -134,15 +134,12 @@ export class AccountingService {
         (period.state==="SOFT_LOCKED" && input.targetState==="HARD_LOCKED");
       if(!allowed) throw new ConflictException("Invalid accounting period state transition");
       await client.query(
-        `UPDATE accounting_period SET state=$3 WHERE tenant_id=$1 AND id=$2`,
-        [context.tenantId,input.periodId,input.targetState]
+        "SELECT set_config('app.accounting_period_reason',$1,true), set_config('app.accounting_period_actor',$2,true)",
+        [input.reason.trim(),context.membershipId]
       );
       await client.query(
-        `INSERT INTO accounting_period_transition(
-           tenant_id,period_id,from_state,to_state,reason,actor_membership_id
-         ) VALUES($1,$2,$3,$4,$5,$6)`,
-        [context.tenantId,input.periodId,period.state,input.targetState,
-         input.reason.trim(),context.membershipId]
+        `UPDATE accounting_period SET state=$3 WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,input.periodId,input.targetState]
       );
       return {state:input.targetState,changed:true};
     });
