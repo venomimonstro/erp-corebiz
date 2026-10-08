@@ -96,6 +96,40 @@ export class AccountingService {
     });
   }
 
+  async lockPeriod(context:TenantContext,input:{
+    periodId:string;targetState:"SOFT_LOCKED"|"HARD_LOCKED";reason:string;
+  }) {
+    if (!["SOFT_LOCKED","HARD_LOCKED"].includes(input.targetState) ||
+        !input.reason?.trim() || input.reason.trim().length<8) {
+      throw new BadRequestException("Period lock requires target and reason");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{id:string;state:string}>(
+        `SELECT id,state FROM accounting_period
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,input.periodId]
+      );
+      const period=result.rows[0];
+      if(!period) throw new NotFoundException("Accounting period not found");
+      if(period.state===input.targetState) return {state:period.state,changed:false};
+      const allowed=(period.state==="OPEN" && input.targetState==="SOFT_LOCKED") ||
+        (period.state==="SOFT_LOCKED" && input.targetState==="HARD_LOCKED");
+      if(!allowed) throw new ConflictException("Invalid accounting period state transition");
+      await client.query(
+        `UPDATE accounting_period SET state=$3 WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,input.periodId,input.targetState]
+      );
+      await client.query(
+        `INSERT INTO accounting_period_transition(
+           tenant_id,period_id,from_state,to_state,reason,actor_membership_id
+         ) VALUES($1,$2,$3,$4,$5,$6)`,
+        [context.tenantId,input.periodId,period.state,input.targetState,
+         input.reason.trim(),context.membershipId]
+      );
+      return {state:input.targetState,changed:true};
+    });
+  }
+
   async entries(context: TenantContext, legalEntityId: string) {
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
