@@ -8,7 +8,11 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "lint": "pnpm -r lint"
+    "lint": "pnpm -r lint",
+    "infra:up": "docker compose -f infrastructure/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infrastructure/docker-compose.yml down",
+    "db:migrate": "pnpm --filter @corebiz/api db:migrate",
+    "bootstrap:local": "pnpm infra:up && pnpm db:migrate"
   },
   "engines": {
     "node": ">=22.0.0"
