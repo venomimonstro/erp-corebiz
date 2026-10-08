@@ -155,3 +155,36 @@ button, .primary, .secondary { font: inherit; }
   .metric-grid { grid-template-columns: 1fr; }
   .header-actions { justify-content: flex-start; }
 }
+
+
+/* Owner dashboard */
+.owner-kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+.owner-kpi { background: #fff; border: 1px solid #e1e3e6; border-radius: 16px; padding: 17px; display: grid; gap: 7px; min-height: 118px; }
+.owner-kpi > span { color: #72777e; font-size: 12px; }
+.owner-kpi > strong { font-size: 24px; letter-spacing: -.04em; }
+.owner-kpi > small { color: #92969d; line-height: 1.35; }
+.attention { background: #fff; border: 1px solid #e1e3e6; border-radius: 18px; padding: 20px; }
+.attention-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.attention-heading h2 { margin: 3px 0 0; font-size: 22px; letter-spacing: -.03em; }
+.queue-count { min-width: 30px; height: 30px; padding: 0 9px; display: inline-grid; place-items: center; border-radius: 999px; background: #17191c; color: #fff; font-size: 12px; }
+.action-queue { display: grid; gap: 7px; }
+.action-item { display: grid; grid-template-columns: 10px 1fr auto; gap: 11px; align-items: center; padding: 12px 13px; border: 1px solid #eceef0; border-radius: 12px; background: #fbfbfc; transition: transform .12s ease, border-color .12s ease; }
+.action-item:hover { transform: translateY(-1px); border-color: #cfd3d8; }
+.action-item > div { display: grid; gap: 3px; min-width: 0; }
+.action-item small { color: #8a8f96; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }
+.action-item strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.action-item span:not(.severity-dot) { color: #73787f; font-size: 12px; }
+.action-item > b { font-size: 15px; }
+.severity-dot { width: 8px; height: 8px; border-radius: 50%; }
+.severity-dot.critical { background: #b42318; }
+.severity-dot.warning { background: #d98b00; }
+.severity-dot.info { background: #2672c9; }
+.queue-empty { min-height: 150px; display: grid; place-content: center; text-align: center; gap: 6px; color: #7b8087; }
+.queue-empty strong { color: #26292d; }
+
+@media (max-width: 1200px) {
+  .owner-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+  .owner-kpi-grid { grid-template-columns: 1fr; }
+}
