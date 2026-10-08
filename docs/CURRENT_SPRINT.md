@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R8 / Sprint 46 — 3PL Client Portal.  
+**Активная разработка:** R8 / Sprint 47 — 3PL SLA / Claims / Client Requests.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -495,21 +495,34 @@
 - detailed calculation lines;
 - finance-oriented 3PL billing workspace.
 
-## Активно — Sprint 46: 3PL Client Portal
+### Sprint 46 — 3PL Client Portal
+- external portal access separated from internal tenant membership;
+- token bound to exactly one CLIENT inventory_owner;
+- random token shown once, only SHA-256 hash stored;
+- expiry / revocation / usage counter;
+- read-only owner aggregate stock;
+- read-only owner location stock;
+- owner movement history;
+- owner sales/fulfillment visibility;
+- finalized 3PL statements only;
+- no visibility into other owners or internal ERP;
+- operator access administration UI;
+- standalone /3pl client workspace.
+
+## Активно — Sprint 47: 3PL SLA / Claims / Client Requests
 
 Scope:
-- external owner access invitation/token lifecycle;
-- access bound to exactly one inventory_owner;
-- hashed one-time/rotatable credentials;
-- read-only owner stock;
-- owner location stock;
-- owner movements;
-- owner sales/order fulfillment visibility;
-- finalized 3PL statements;
-- no access to operator internal owners, costs or other tenants;
-- revocation and audit.
+- owner-scoped request/claim thread;
+- DAMAGE / SHORTAGE / DELAY / DOCUMENT / GENERAL;
+- priority and SLA deadline;
+- public client create/read/message;
+- operator queue;
+- OPEN / IN_PROGRESS / WAITING_CLIENT / RESOLVED / CLOSED;
+- immutable message history;
+- request audit and response times;
+- no cross-owner visibility.
 
 ## Следом
 
-Sprint 47 — 3PL SLA / claims / client requests.  
-Sprint 48 — WMS dock appointments / inbound ASN.
+Sprint 48 — WMS dock appointments / inbound ASN.  
+Sprint 49 — 3PL invoicing handoff to Finance / Accounting.
