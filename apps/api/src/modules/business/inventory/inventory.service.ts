@@ -1274,6 +1274,7 @@ export class InventoryService {
         sales_order_line_id: string;
         warehouse_id: string;
         sku_id: string;
+        owner_id:string;
         quantity_milli: string;
       }>(
         `SELECT
@@ -1281,6 +1282,7 @@ export class InventoryService {
            sales_order_line_id,
            warehouse_id,
            sku_id,
+           owner_id,
            quantity_milli::text
          FROM inventory_reservation
          WHERE tenant_id = $1
@@ -1436,6 +1438,27 @@ export class InventoryService {
           }
         }
 
+        if(await this.ownerLedgerEnabled(
+          client,context.tenantId,reservation.warehouse_id
+        )){
+          await this.applyOwnerBalanceDelta(
+            client,context,{
+              warehouseId:reservation.warehouse_id,
+              ownerId:reservation.owner_id,
+              skuId:reservation.sku_id,
+              physicalDelta:-quantity,
+              reservedDelta:-quantity,
+              movementType:"SHIPMENT",
+              sourceType:"SALES_ORDER",
+              sourceId:input.orderId,
+              sourceLineId:reservation.sales_order_line_id,
+              idempotencyKey:
+                "owner-direct-shipment:"+input.idempotencyKey+
+                ":reservation:"+reservation.id
+            }
+          );
+        }
+
         await client.query(
           `UPDATE inventory_balance
            SET physical_milli = physical_milli - $4::bigint,
@@ -1459,7 +1482,8 @@ export class InventoryService {
           sourceId: input.orderId,
           sourceLineId: reservation.sales_order_line_id,
           idempotencyKey:
-            `${input.idempotencyKey}:reservation:${reservation.id}`
+            `${input.idempotencyKey}:reservation:${reservation.id}`,
+          ownerId:reservation.owner_id
         });
 
         await client.query(
@@ -1489,6 +1513,22 @@ export class InventoryService {
           );
 
           for (const allocation of allocations.rows) {
+            await this.moveOwnerLocation(
+              client,context,{
+                warehouseId:reservation.warehouse_id,
+                ownerId:reservation.owner_id,
+                skuId:reservation.sku_id,
+                fromLocationId:allocation.outbound_location_id,
+                quantityMilli:BigInt(allocation.quantity_milli),
+                movementType:"SHIP",
+                sourceType:"SALES_ORDER",
+                sourceId:input.orderId,
+                sourceLineId:allocation.id,
+                idempotencyKey:
+                  "owner-direct-ship-allocation:"+allocation.id
+              }
+            );
+
             await client.query(
               `UPDATE warehouse_location_balance
                SET physical_milli=physical_milli-$5::bigint,
@@ -2081,11 +2121,13 @@ export class InventoryService {
   ): Promise<number> {
     const reservations = await client.query<{
       id: string;
+      sales_order_line_id:string;
       warehouse_id: string;
       sku_id: string;
+      owner_id:string;
       quantity_milli: string;
     }>(
-      `SELECT id,warehouse_id,sku_id,quantity_milli::text
+      `SELECT id,sales_order_line_id,warehouse_id,sku_id,owner_id,quantity_milli::text
        FROM inventory_reservation
        WHERE tenant_id=$1
          AND sales_order_id=$2
@@ -2123,6 +2165,18 @@ export class InventoryService {
           "Резерв склада меньше reservation; требуется ручная сверка"
         );
       }
+
+      await this.releaseOwnerReservation(
+        client,context,{
+          warehouseId:reservation.warehouse_id,
+          ownerId:reservation.owner_id,
+          skuId:reservation.sku_id,
+          quantityMilli:quantity,
+          salesOrderId:input.orderId,
+          salesOrderLineId:reservation.sales_order_line_id,
+          idempotencyKey:"owner-release:"+reservation.id
+        }
+      );
 
       await client.query(
         `UPDATE inventory_balance
