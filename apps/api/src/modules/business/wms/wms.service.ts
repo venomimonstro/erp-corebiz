@@ -2466,6 +2466,7 @@ export class WmsService {
         task_id:string;
         sales_order_id:string;
         sku_id:string;
+        zone_id:string;
         zone_priority:number;
         pick_sequence:number;
       }>(
@@ -2473,6 +2474,7 @@ export class WmsService {
            t.id AS task_id,
            a.sales_order_id,
            a.sku_id,
+           z.id AS zone_id,
            z.priority AS zone_priority,
            l.pick_sequence
          FROM warehouse_task t
@@ -2496,7 +2498,7 @@ export class WmsService {
            l.pick_sequence,
            a.sales_order_id,
            t.created_at
-         LIMIT $4
+         LIMIT 500
          FOR UPDATE OF t SKIP LOCKED`,
         [context.tenantId,warehouseId,strategy,maxTasks]
       );
@@ -2504,6 +2506,28 @@ export class WmsService {
       if(!candidates.rowCount){
         throw new ConflictException("Нет свободных PICK-задач для wave");
       }
+
+      const allCandidates=candidates.rows;
+      let selectedCandidates=allCandidates;
+
+      if(strategy==="ORDER"){
+        const firstOrder=allCandidates[0]!.sales_order_id;
+        selectedCandidates=allCandidates.filter(
+          row=>row.sales_order_id===firstOrder
+        );
+      }else if(strategy==="BATCH"){
+        const firstSku=allCandidates[0]!.sku_id;
+        selectedCandidates=allCandidates.filter(
+          row=>row.sku_id===firstSku
+        );
+      }else if(strategy==="ZONE"){
+        const firstZone=allCandidates[0]!.zone_id;
+        selectedCandidates=allCandidates.filter(
+          row=>row.zone_id===firstZone
+        );
+      }
+
+      selectedCandidates=selectedCandidates.slice(0,maxTasks);
 
       const wave=await client.query<{id:string}>(
         `INSERT INTO wms_wave(
@@ -2521,7 +2545,7 @@ export class WmsService {
       const orderSlots=new Map<string,string>();
       let nextSlot=1;
 
-      for(const row of candidates.rows){
+      for(const row of selectedCandidates){
         let clusterSlot:string|null=null;
         if(strategy==="CLUSTER"){
           clusterSlot=orderSlots.get(row.sales_order_id)??null;
@@ -2545,17 +2569,17 @@ export class WmsService {
         );
       }
 
-      const orders=new Set(candidates.rows.map(row=>row.sales_order_id)).size;
+      const orders=new Set(selectedCandidates.map(row=>row.sales_order_id)).size;
 
       await this.audit(
         client,context,"wms.wave_created","wms_wave",waveId,{
-          warehouseId,strategy,tasks:candidates.rowCount??0,orders
+          warehouseId,strategy,tasks:selectedCandidates.length,orders
         }
       );
 
       return {
         waveId,
-        tasks:candidates.rowCount??0,
+        tasks:selectedCandidates.length,
         orders
       };
     });
@@ -2697,6 +2721,104 @@ export class WmsService {
         ...row,
         waveId,
         warehouseId:waveRow.warehouse_id
+      };
+    });
+  }
+
+  async dispatcher(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<Record<string,unknown>>{
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertProfile(client,context.tenantId,warehouseId);
+
+      const waves=await client.query(
+        `SELECT
+           w.id,w.strategy,w.status,w.priority,w.created_at,w.released_at,
+           count(t.id)::int AS tasks,
+           count(t.id) FILTER (WHERE t.status='OPEN')::int AS open_tasks,
+           count(t.id) FILTER (WHERE t.status='CLAIMED')::int AS claimed_tasks,
+           count(t.id) FILTER (WHERE t.status='COMPLETED')::int AS completed_tasks,
+           count(t.id) FILTER (WHERE t.status='FAILED')::int AS failed_tasks,
+           round(
+             100.0 * count(t.id) FILTER (WHERE t.status='COMPLETED') /
+             NULLIF(count(t.id),0),
+             1
+           ) AS progress_percent
+         FROM wms_wave w
+         LEFT JOIN warehouse_task t
+           ON t.tenant_id=w.tenant_id AND t.wave_id=w.id
+         WHERE w.tenant_id=$1
+           AND w.warehouse_id=$2
+           AND w.status IN ('DRAFT','RELEASED','IN_PROGRESS')
+         GROUP BY w.id
+         ORDER BY
+           CASE w.status
+             WHEN 'IN_PROGRESS' THEN 0
+             WHEN 'RELEASED' THEN 1
+             ELSE 2
+           END,
+           w.priority,w.created_at`,
+        [context.tenantId,warehouseId]
+      );
+
+      const taskFlow=await client.query(
+        `SELECT
+           task_type,status,count(*)::int AS count
+         FROM warehouse_task
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND status IN ('OPEN','CLAIMED','FAILED','BLOCKED')
+         GROUP BY task_type,status
+         ORDER BY task_type,status`,
+        [context.tenantId,warehouseId]
+      );
+
+      const exceptions=await client.query(
+        `SELECT
+           t.id,t.task_type,t.status,t.last_error,
+           t.priority,t.created_at,
+           s.code AS sku_code,
+           fl.full_code AS from_code,
+           tl.full_code AS to_code,
+           t.wave_id,t.cluster_slot
+         FROM warehouse_task t
+         LEFT JOIN sku s
+           ON s.tenant_id=t.tenant_id AND s.id=t.sku_id
+         LEFT JOIN warehouse_location fl
+           ON fl.tenant_id=t.tenant_id AND fl.id=t.from_location_id
+         LEFT JOIN warehouse_location tl
+           ON tl.tenant_id=t.tenant_id AND tl.id=t.to_location_id
+         WHERE t.tenant_id=$1
+           AND t.warehouse_id=$2
+           AND (
+             t.status IN ('FAILED','BLOCKED') OR
+             (t.status='CLAIMED' AND t.claimed_at < now()-interval '30 minutes')
+           )
+         ORDER BY t.priority,t.created_at
+         LIMIT 100`,
+        [context.tenantId,warehouseId]
+      );
+
+      const backlog=await client.query(
+        `SELECT
+           count(*) FILTER (WHERE status='OPEN')::int AS open,
+           count(*) FILTER (WHERE status='CLAIMED')::int AS claimed,
+           count(*) FILTER (
+             WHERE task_type='PICK' AND status='OPEN' AND wave_id IS NULL
+           )::int AS unplanned_pick,
+           min(created_at) FILTER (WHERE status='OPEN') AS oldest_open_at
+         FROM warehouse_task
+         WHERE tenant_id=$1 AND warehouse_id=$2`,
+        [context.tenantId,warehouseId]
+      );
+
+      return {
+        warehouseId,
+        backlog:backlog.rows[0]??{},
+        waves:waves.rows,
+        taskFlow:taskFlow.rows,
+        exceptions:exceptions.rows
       };
     });
   }
