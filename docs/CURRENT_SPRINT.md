@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R8 / Sprint 40 — TSD / PWA scanner-first execution.  
+**Активная разработка:** R8 / Sprint 46 — 3PL Client Portal.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -460,23 +460,56 @@
 - no automatic inventory movement;
 - recommendation engine does not mutate stock ledgers.
 
-## Активно — Sprint 43: WMS 3PL / Owner Inventory Foundation
-
-Scope:
+### Sprint 43 — WMS 3PL / Owner Inventory Foundation
 - inventory owner master data;
 - default INTERNAL owner;
-- 3PL client owner linked to Party;
+- CLIENT owner linked to Party;
 - warehouse/owner contract;
-- owner aggregate subledger;
-- owner location subledger;
+- owner aggregate and location subledgers;
 - controlled TOTAL_ONLY → OWNER_LEDGER initialization;
-- reconciliation owner sums ↔ aggregate Inventory/WMS;
-- no owner-aware shipping until ledger gate is enabled.
+- aggregate↔owner↔location reconciliation;
+- cross-tenant owner/dimension integrity guards;
+- immutable owner movement ledgers;
+- owner workspace.
+
+### Sprint 44 — 3PL Owner-aware Operations
+- purchase order / goods receipt owner dimension;
+- sales order / reservation owner dimension;
+- owner-aware receipt into UNASSIGNED;
+- owner-aware put-away and location movements;
+- owner-aware reservation and ATP validation;
+- owner-aware pick/pack/shipment;
+- owner contract gate for CLIENT stock;
+- owner document freeze after committed warehouse operations;
+- database integrity for reservation/pick/receipt ownership;
+- shipment consumes aggregate + owner ledgers atomically.
+
+### Sprint 45 — 3PL Billing / Statements
+- effective-dated contract rates;
+- receipt unit billing;
+- put-away / pick / pack task billing;
+- shipment unit billing;
+- storage unit-day billing from owner movement history;
+- draft statement regeneration;
+- finalized statement immutability;
+- detailed calculation lines;
+- finance-oriented 3PL billing workspace.
+
+## Активно — Sprint 46: 3PL Client Portal
+
+Scope:
+- external owner access invitation/token lifecycle;
+- access bound to exactly one inventory_owner;
+- hashed one-time/rotatable credentials;
+- read-only owner stock;
+- owner location stock;
+- owner movements;
+- owner sales/order fulfillment visibility;
+- finalized 3PL statements;
+- no access to operator internal owners, costs or other tenants;
+- revocation and audit.
 
 ## Следом
 
-Sprint 44 — 3PL owner-aware receipt/reservation/pick/shipment.
-
-
-
-
+Sprint 47 — 3PL SLA / claims / client requests.  
+Sprint 48 — WMS dock appointments / inbound ASN.
