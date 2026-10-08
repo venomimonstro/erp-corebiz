@@ -215,9 +215,9 @@ export default function ServiceHomePage() {
               </article>
 
               <article className="metric-card">
-                <span>Выручка завершённых</span>
+                <span>Стоимость завершённых услуг</span>
                 <strong>{money(today.metrics.revenueMinor)}</strong>
-                <small>Только завершённые услуги</small>
+                <small>Начисленная стоимость, не фактическая оплата</small>
               </article>
 
               <article className="metric-card">
