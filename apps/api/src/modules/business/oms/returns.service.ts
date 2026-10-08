@@ -124,8 +124,9 @@ export class ReturnsService {
         party_id: string | null;
         order_status: string;
         fulfillment_status: string;
+        inventory_owner_id: string;
       }>(
-        `SELECT party_id,order_status,fulfillment_status
+        `SELECT party_id,order_status,fulfillment_status,inventory_owner_id
          FROM sales_order
          WHERE tenant_id=$1 AND id=$2
          FOR UPDATE`,
@@ -219,15 +220,16 @@ export class ReturnsService {
 
       const request = await client.query<{ id: string }>(
         `INSERT INTO return_request(
-           tenant_id,business_number,sales_order_id,party_id,
+           tenant_id,business_number,sales_order_id,party_id,inventory_owner_id,
            reason,notes,created_by_membership_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          RETURNING id`,
         [
           context.tenantId,
           number,
           input.salesOrderId,
           orderRow.party_id,
+          orderRow.inventory_owner_id,
           input.reason?.trim() || null,
           input.notes?.trim() || null,
           context.membershipId
@@ -388,11 +390,13 @@ export class ReturnsService {
         authorized_quantity_milli: string;
         received_quantity_milli: string;
         request_status: string;
+        inventory_owner_id: string;
       }>(
         `SELECT
            l.id,l.sku_id,l.authorized_quantity_milli::text,
            l.received_quantity_milli::text,
-           r.status AS request_status
+           r.status AS request_status,
+           r.inventory_owner_id
          FROM return_request_line l
          JOIN return_request r
            ON r.tenant_id=l.tenant_id AND r.id=l.return_request_id
@@ -439,6 +443,7 @@ export class ReturnsService {
             returnLineId: lineId,
             warehouseId: input.warehouseId,
             skuId: line.sku_id,
+            ownerId: line.inventory_owner_id,
             quantityMilli: quantity,
             idempotencyKey: input.idempotencyKey
           }
