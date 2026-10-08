@@ -18,6 +18,90 @@ export class FinanceService {
     private readonly attribution: AttributionService
   ) {}
 
+  async bankStatements(context:TenantContext) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT s.id,s.cash_account_id,s.source_name,s.external_statement_id,
+                s.currency,s.date_from,s.date_to,s.status,s.imported_at,
+                count(l.id)::integer AS line_count,
+                count(l.id) FILTER (WHERE l.payment_id IS NULL)::integer AS unmatched_count
+         FROM finance_bank_statement s
+         LEFT JOIN finance_bank_statement_line l
+           ON l.tenant_id=s.tenant_id AND l.statement_id=s.id
+         WHERE s.tenant_id=$1
+         GROUP BY s.id
+         ORDER BY s.imported_at DESC LIMIT 200`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async bankStatementLines(context:TenantContext,statementId:string) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const exists=await client.query(
+        "SELECT 1 FROM finance_bank_statement WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,statementId]
+      );
+      if(!exists.rowCount) throw new NotFoundException("Bank statement not found");
+      const result=await client.query(
+        `SELECT id,external_line_id,booked_on,direction,amount_minor::text,
+                counterparty_name,purpose,payment_id
+         FROM finance_bank_statement_line
+         WHERE tenant_id=$1 AND statement_id=$2 ORDER BY booked_on,id LIMIT 5000`,
+        [context.tenantId,statementId]
+      );
+      return result.rows;
+    });
+  }
+
+  async matchBankLine(context:TenantContext,input:{lineId:string;paymentId:string}) {
+    if(!input?.lineId || !input?.paymentId) throw new BadRequestException("Line and payment required");
+    return this.database.withTenantTransaction(context,async client=>{
+      const line=await client.query<{id:string;payment_id:string|null;statement_id:string}>(
+        `SELECT id,payment_id,statement_id FROM finance_bank_statement_line
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,input.lineId]
+      );
+      const row=line.rows[0];
+      if(!row) throw new NotFoundException("Bank line not found");
+      if(row.payment_id===input.paymentId) return {matched:true,alreadyMatched:true};
+      if(row.payment_id) throw new ConflictException("Bank line already matched");
+      const statement=await client.query<{status:string}>(
+        `SELECT status FROM finance_bank_statement
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,row.statement_id]
+      );
+      if(statement.rows[0]?.status!=="IMPORTED") throw new ConflictException("Statement is finalized");
+      const matched=await client.query(
+        `UPDATE finance_bank_statement_line
+         SET payment_id=$3 WHERE tenant_id=$1 AND id=$2
+         RETURNING id`,
+        [context.tenantId,input.lineId,input.paymentId]
+      );
+      return {matched:matched.rowCount===1,alreadyMatched:false};
+    });
+  }
+
+  async reconcileBankStatement(context:TenantContext,statementId:string) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const statement=await client.query<{status:string}>(
+        `SELECT status FROM finance_bank_statement
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,statementId]
+      );
+      if(!statement.rowCount) throw new NotFoundException("Bank statement not found");
+      if(statement.rows[0]!.status==="RECONCILED") return {status:"RECONCILED",changed:false};
+      if(statement.rows[0]!.status!=="IMPORTED") throw new ConflictException("Bank statement rejected");
+      const result=await client.query(
+        `UPDATE finance_bank_statement SET status='RECONCILED'
+         WHERE tenant_id=$1 AND id=$2 RETURNING id`,
+        [context.tenantId,statementId]
+      );
+      return {status:"RECONCILED",changed:result.rowCount===1};
+    });
+  }
+
   async summary(context: TenantContext): Promise<{
     accounts: Array<{
       id: string;
