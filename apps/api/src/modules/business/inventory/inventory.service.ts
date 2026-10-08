@@ -642,9 +642,8 @@ export class InventoryService {
         id: string;
         order_status: string;
         fulfillment_status: string;
-        warehouse_id: string | null;
       }>(
-        `SELECT id, order_status, fulfillment_status, warehouse_id
+        `SELECT id, order_status, fulfillment_status
          FROM sales_order
          WHERE tenant_id = $1 AND id = $2
          FOR UPDATE`,
@@ -674,8 +673,19 @@ export class InventoryService {
           "inventory.order_shipped",
           "sales_order",
           input.orderId,
-          { inventoryMovements: 0 }
+          { inventoryMovements: 0, warehouses: [] }
         );
+
+        await this.events.enqueue(client, context, {
+          eventName: "inventory.order_shipped",
+          entityType: "SALES_ORDER",
+          entityId: input.orderId,
+          payload: {
+            orderId: input.orderId,
+            warehouseIds: [],
+            fulfillmentStatus: "SHIPPED"
+          }
+        });
 
         return {
           orderId: input.orderId,
@@ -683,26 +693,28 @@ export class InventoryService {
         };
       }
 
-      if (row.fulfillment_status !== "RESERVED" || !row.warehouse_id) {
-        throw new BadRequestException("Заказ должен быть готов к отгрузке");
+      if (row.fulfillment_status !== "RESERVED") {
+        throw new BadRequestException("Заказ должен быть зарезервирован");
       }
 
       const reservations = await client.query<{
         id: string;
         sales_order_line_id: string;
+        warehouse_id: string;
         sku_id: string;
         quantity_milli: string;
       }>(
         `SELECT
            id,
            sales_order_line_id,
+           warehouse_id,
            sku_id,
            quantity_milli::text
          FROM inventory_reservation
          WHERE tenant_id = $1
            AND sales_order_id = $2
            AND status = 'ACTIVE'
-         ORDER BY created_at
+         ORDER BY warehouse_id, created_at
          FOR UPDATE`,
         [context.tenantId, input.orderId]
       );
@@ -711,11 +723,15 @@ export class InventoryService {
         throw new ConflictException("Активные резервы заказа не найдены");
       }
 
+      const warehouseIds = new Set<string>();
+
       for (const reservation of reservations.rows) {
+        warehouseIds.add(reservation.warehouse_id);
+
         await this.lockBalance(
           client,
           context.tenantId,
-          row.warehouse_id,
+          reservation.warehouse_id,
           reservation.sku_id
         );
 
@@ -729,7 +745,11 @@ export class InventoryService {
            FROM inventory_balance
            WHERE tenant_id = $1 AND warehouse_id = $2 AND sku_id = $3
            FOR UPDATE`,
-          [context.tenantId, row.warehouse_id, reservation.sku_id]
+          [
+            context.tenantId,
+            reservation.warehouse_id,
+            reservation.sku_id
+          ]
         );
 
         const current = balance.rows[0]!;
@@ -737,7 +757,9 @@ export class InventoryService {
           BigInt(current.physical_milli) < quantity ||
           BigInt(current.reserved_milli) < quantity
         ) {
-          throw new ConflictException("Складской баланс изменился и требует проверки");
+          throw new ConflictException(
+            "Складской баланс изменился и требует повторного allocation"
+          );
         }
 
         await client.query(
@@ -748,14 +770,14 @@ export class InventoryService {
            WHERE tenant_id = $1 AND warehouse_id = $2 AND sku_id = $3`,
           [
             context.tenantId,
-            row.warehouse_id,
+            reservation.warehouse_id,
             reservation.sku_id,
             quantity.toString()
           ]
         );
 
         await this.insertMovementOnly(client, context, {
-          warehouseId: row.warehouse_id,
+          warehouseId: reservation.warehouse_id,
           skuId: reservation.sku_id,
           movementType: "SHIPMENT",
           quantityDeltaMilli: -quantity,
@@ -783,12 +805,18 @@ export class InventoryService {
         [context.tenantId, input.orderId]
       );
 
+      const warehouses = Array.from(warehouseIds);
+
       await this.audit(
         client,
         context,
         "inventory.order_shipped",
         "sales_order",
-        input.orderId
+        input.orderId,
+        {
+          inventoryMovements: reservations.rowCount ?? 0,
+          warehouses
+        }
       );
 
       await this.events.enqueue(client, context, {
@@ -797,7 +825,7 @@ export class InventoryService {
         entityId: input.orderId,
         payload: {
           orderId: input.orderId,
-          warehouseId: row.warehouse_id,
+          warehouseIds: warehouses,
           fulfillmentStatus: "SHIPPED"
         }
       });
@@ -808,7 +836,6 @@ export class InventoryService {
       };
     });
   }
-
 
   async transfer(
     context: TenantContext,
