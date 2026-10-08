@@ -38,6 +38,20 @@ export class AccountingController {
     return {ok:true,data:await this.accounting.lockPeriod(this.context(request),body)};
   }
 
+  @Get("periods/checks")
+  @RequirePermission("accounting.read")
+  async closeChecks(@Req() req:AuthenticatedRequest,@Query("periodId") periodId:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.accounting.monthCloseChecks(this.context(req),periodId)};
+  }
+  @Post("periods/checks")
+  @RequirePermission("accounting.period.close")
+  async setCloseCheck(@Req() req:AuthenticatedRequest,@Body() body:{
+    periodId:string;code:"JOURNAL"|"BANK"|"RECEIVABLES"|"PAYABLES"|"INVENTORY"|"VAT"|"PAYROLL";
+    status:"PENDING"|"DONE"|"BLOCKED";note?:string;
+  }):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.accounting.setMonthCloseCheck(this.context(req),body)};
+  }
+
   @Get("periods/history")
   @RequirePermission("accounting.read")
   async periodHistory(
