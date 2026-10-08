@@ -48,6 +48,17 @@ export class SiteDomainsController{
     return {ok:true,data:await this.domains.publicByHost(host,slug)};
   }
 
+  @Public()
+  @Get("public/routes")
+  async publicRoutes(
+    @Query("host") host:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.domains.publicRoutesByHost(host)
+    };
+  }
+
   private ctx(req:AuthenticatedRequest):TenantContext{
     const a=req.auth!;return {tenantId:a.tenantId,userId:a.userId,membershipId:a.membershipId};
   }
