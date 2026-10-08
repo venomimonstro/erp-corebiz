@@ -141,6 +141,7 @@ export class SiteFormsService {
       email?:string;
       message?:string;
       startsAt?:string;
+      resourceId?:string;
       honeypot?:string;
     }
   ):Promise<Record<string,unknown>>{
@@ -279,6 +280,12 @@ export class SiteFormsService {
         ? row.config.resourceIds.map(String)
         : [];
 
+      const requestedResource=payload.resourceId;
+      if(requestedResource && !resourceIds.includes(requestedResource))
+        throw new BadRequestException("Выбранный специалист не разрешён для этой формы");
+      if(!requestedResource && resourceIds.length!==1)
+        throw new BadRequestException("Выберите специалиста или ресурс");
+
       const customer=await this.parties.create(context,{
         displayName:payload.name,
         phone:payload.phone??undefined,
@@ -288,7 +295,7 @@ export class SiteFormsService {
 
       const booking=await this.bookings.createBooking(context,{
         serviceId,
-        resourceIds,
+        resourceIds:requestedResource?[requestedResource]:resourceIds,
         startsAt:startsAt.toISOString(),
         partyId:customer.id,
         source:"PUBLIC_SITE",
@@ -309,7 +316,7 @@ export class SiteFormsService {
   }
 
   private validatePayload(input:any):{
-    name:string;phone?:string;email?:string;message?:string;startsAt?:string
+    name:string;phone?:string;email?:string;message?:string;startsAt?:string;resourceId?:string
   }{
     const name=String(input.name??"").trim();
     if(name.length<2||name.length>200) throw new BadRequestException("Укажите имя");
@@ -323,13 +330,16 @@ export class SiteFormsService {
     if(message.length>4000) throw new BadRequestException("Сообщение слишком длинное");
 
     const startsAt=String(input.startsAt??"").trim();
+    const resourceId=String(input.resourceId??"").trim();
+    if(resourceId && !/^[0-9a-f-]{36}$/i.test(resourceId)) throw new BadRequestException("Некорректный ресурс");
 
     return {
       name,
       ...(phone?{phone}:{}),
       ...(email?{email}:{}),
       ...(message?{message}:{}),
-      ...(startsAt?{startsAt}:{})
+      ...(startsAt?{startsAt}:{}),
+      ...(resourceId?{resourceId}:{})
     };
   }
 
