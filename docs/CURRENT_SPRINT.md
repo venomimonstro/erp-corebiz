@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R6 / Sprint 30 — Marketplaces Ozon/WB.  
+**Активная разработка:** R7 / Sprint 31 — Site builder block core.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -293,19 +293,36 @@
 - non-restock dispositions do not increase available inventory;
 - over-return protection.
 
-## Активно — Sprint 30: Marketplaces Ozon/WB
+### Sprint 30 — Marketplaces Ozon/WB
+- encrypted marketplace credentials;
+- dedicated Ozon/WB connection flows;
+- marketplace sync job queue with lease/retry/backoff;
+- Ozon FBS v4 cursor sync;
+- Wildberries FBS v3 next/date window sync;
+- provider rate-limit handling;
+- page-by-page checkpoints;
+- normalized Channel Inbox import only;
+- existing SKU mapping reuse;
+- marketplace order deduplication;
+- connection health/freshness;
+- OMS allocation state synchronized with Inventory reservation/shipment state.
+
+**R6 Gate:** external channel → Integration Inbox → mapped SalesOrder → OMS ATP/allocation → Inventory reservation/shipment → return/backorder is now represented end-to-end in one domain chain.
+
+## Активно — Sprint 31: Site builder block core
 
 Scope:
-- provider-specific encrypted credentials;
-- Ozon order pull adapter;
-- Wildberries order pull adapter;
-- normalized import into Channel Inbox;
-- cursor/watermark sync;
-- retry/rate-limit/backoff;
-- provider health;
-- manual sync and worker queue;
-- no direct writes into Sales/Inventory from marketplace API.
+- Site / Page / PageVersion;
+- DRAFT / PUBLISHED version lifecycle;
+- typed block allowlist;
+- ordered block composition;
+- block config validation;
+- preview renderer;
+- no direct arbitrary HTML/JS execution;
+- internal builder workspace.
 
 ## Следом
 
-R7 / Sprint 31 — Site builder block core.
+Sprint 32 — Forms/CRM/Booking binding.  
+Sprint 33 — Storefront/catalog/cart/checkout.  
+Sprint 34 — Domains/publishing/SEO.
