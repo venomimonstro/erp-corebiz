@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, Req } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, Req } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
@@ -26,6 +26,18 @@ export class VatController {
   @RequirePermission("accounting.read")
   async entries(@Req() req:AuthenticatedRequest,@Query("legalEntityId") legalEntityId:string):Promise<ApiSuccess<unknown>> {
     return {ok:true,data:await this.vat.registerEntries(this.ctx(req),legalEntityId)};
+  }
+  @Post("documents/:documentId/approve")
+  @RequirePermission("accounting.policy.manage")
+  async approve(@Req() req:AuthenticatedRequest,@Param("documentId") documentId:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.vat.approveDocument(this.ctx(req),documentId)};
+  }
+  @Post("register")
+  @RequirePermission("accounting.post")
+  async register(@Req() req:AuthenticatedRequest,@Body() body:{
+    documentId:string;eventDate:string;registerKind:"OUTPUT_VAT"|"INPUT_VAT"|"CORRECTION";
+  }):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.vat.registerDocument(this.ctx(req),body)};
   }
   private ctx(req:AuthenticatedRequest):TenantContext {
     const a=req.auth!;
