@@ -7,12 +7,10 @@ export function AppSidebar({ active }: { active: string }) {
     <aside className="sidebar">
       <strong>Business OS</strong>
       {link("/app", "Сегодня", "dashboard")}
-      {link("/app/work", "Моя работа", "work")}
 
       <span>CRM</span>
       {link("/app/crm/deals", "Сделки", "deals")}
       {link("/app/tasks", "Задачи", "tasks")}
-      {link("/app/crm/customers", "Клиенты", "customers")}
 
       <span>Сервис</span>
       {link("/app/service", "Сегодня сервиса", "service-home")}
