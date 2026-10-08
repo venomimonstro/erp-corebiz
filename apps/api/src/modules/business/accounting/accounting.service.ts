@@ -96,6 +96,11 @@ export class AccountingService {
       throw new BadRequestException("Invalid accounting posting request");
     }
     return this.database.withTenantTransaction(context, async (client) => {
+      // Serialize competing requests before the idempotency lookup.
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [context.tenantId + ":accounting:" + input.postingKey.trim()]
+      );
       const existing = await client.query<{id:string}>(
         "SELECT id FROM accounting_journal_entry WHERE tenant_id=$1 AND posting_key=$2",
         [context.tenantId,input.postingKey.trim()]
@@ -172,6 +177,10 @@ export class AccountingService {
       throw new BadRequestException("Invalid reversal request");
     }
     return this.database.withTenantTransaction(context,async client=>{
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [context.tenantId + ":accounting-reverse:" + input.originalEntryId]
+      );
       const previous=await client.query<{
         id:string;legal_entity_id:string;source_type:string;source_id:string;
         debit_account_id:string;credit_account_id:string;amount_minor:string;currency:string;
