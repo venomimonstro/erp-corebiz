@@ -288,7 +288,7 @@ export class WmsController{
     @Req() req:AuthenticatedRequest,
     @Param("taskId") taskId:string,
     @Body() body:{
-      kind:"FROM_LOCATION"|"SKU"|"TO_LOCATION";
+      kind:"FROM_LOCATION"|"SKU"|"TO_LOCATION"|"ORDER";
       value:string;
       idempotencyKey:string;
     }
@@ -360,18 +360,37 @@ export class WmsController{
     };
   }
 
-  @Get("warehouses/:warehouseId/labor")
+  @Get("warehouses/:warehouseId/sla")
   @RequirePermission("wms.read")
-  async labor(
+  async slaPolicies(
     @Req() req:AuthenticatedRequest,
     @Param("warehouseId") warehouseId:string
   ):Promise<ApiSuccess<unknown>>{
     return {
       ok:true,
-      data:await this.wms.laborMetrics(
-        this.ctx(req),warehouseId,24
-      )
+      data:await this.wms.slaPolicies(this.ctx(req),warehouseId)
     };
+  }
+
+  @Put("warehouses/:warehouseId/sla/:taskType")
+  @RequirePermission("wms.manage")
+  async setSlaPolicy(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string,
+    @Param("taskType") taskType:string,
+    @Body() body:{
+      warningMinutes:number;
+      criticalMinutes:number;
+      enabled?:boolean;
+    }
+  ):Promise<ApiSuccess<{updated:true}>>{
+    await this.wms.setSlaPolicy(
+      this.ctx(req),
+      warehouseId,
+      taskType,
+      body
+    );
+    return {ok:true,data:{updated:true}};
   }
 
   @Get("warehouses/:warehouseId/exceptions")
@@ -393,7 +412,10 @@ export class WmsController{
   async resolveException(
     @Req() req:AuthenticatedRequest,
     @Param("exceptionId") exceptionId:string,
-    @Body() body:{action:"REQUEUE"|"CANCEL"}
+    @Body() body:{
+      action:"RESUME"|"RETRY"|"CANCEL";
+      note?:string;
+    }
   ):Promise<ApiSuccess<unknown>>{
     return {
       ok:true,
