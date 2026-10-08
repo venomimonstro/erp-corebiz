@@ -831,3 +831,25 @@ button, .primary, .secondary { font: inherit; }
   .wms-mobile-task-head h1 { font-size:24px; }
   .wms-mobile-route strong { font-size:17px; }
 }
+
+
+.wms-risk-row {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-top:10px;
+}
+.wms-risk-row span {
+  border:1px solid #e5e7e9;
+  border-radius:999px;
+  padding:6px 9px;
+  font-size:10px;
+  color:#6f757c;
+  background:#fff;
+}
+.wms-risk-row b { color:#202327; }
+.wms-dispatcher-grid strong small {
+  font-size:10px;
+  font-weight:500;
+  color:#858a91;
+}
