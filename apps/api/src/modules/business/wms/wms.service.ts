@@ -3581,6 +3581,365 @@ export class WmsService {
     });
   }
 
+  async createSlottingRun(
+    context:TenantContext,
+    warehouseId:string,
+    daysInput=30
+  ):Promise<{runId:string;recommendations:number}>{
+    const days=this.integer(daysInput,7,90,"Период slotting");
+    const live=await this.slottingRecommendations(context,warehouseId,days);
+
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertProfile(client,context.tenantId,warehouseId);
+
+      const run=await client.query<{id:string}>(
+        `INSERT INTO wms_slotting_run(
+           tenant_id,warehouse_id,lookback_days,status,
+           created_by_membership_id
+         ) VALUES ($1,$2,$3,'COMPLETED',$4)
+         RETURNING id`,
+        [context.tenantId,warehouseId,days,context.membershipId]
+      );
+      const runId=run.rows[0]!.id;
+      let recommendations=0;
+
+      for(const raw of live){
+        const row=raw as Record<string,unknown>;
+        const rec=String(row.recommendation??"");
+        const skuId=String(row.sku_id??"");
+        const targetId=String(row.suggested_location_id??"");
+        if(rec==="OK"||!skuId||!targetId) continue;
+
+        const source=await client.query<{
+          location_id:string;
+          physical_milli:string;
+        }>(
+          `SELECT b.location_id,b.physical_milli::text
+           FROM warehouse_location_balance b
+           JOIN warehouse_location l
+             ON l.tenant_id=b.tenant_id AND l.id=b.location_id
+           JOIN warehouse_zone z
+             ON z.tenant_id=l.tenant_id AND z.id=l.zone_id
+           WHERE b.tenant_id=$1 AND b.warehouse_id=$2
+             AND b.sku_id=$3 AND b.physical_milli>0
+             AND l.status='ACTIVE' AND l.is_system=false
+             AND z.status='ACTIVE' AND z.zone_type='STORAGE'
+           ORDER BY b.physical_milli DESC,l.pick_sequence,l.full_code
+           LIMIT 1`,
+          [context.tenantId,warehouseId,skuId]
+        );
+        const src=source.rows[0];
+        if(!src) continue;
+
+        const storage=BigInt(src.physical_milli);
+        const suggestedMax=BigInt(String(row.suggested_max_milli??"0"));
+        const quantity=storage<suggestedMax?storage:suggestedMax;
+        if(quantity<=0n) continue;
+
+        const pickEvents=Number(row.pick_events??0);
+        const picked=BigInt(String(row.picked_milli??"0"));
+        const score=
+          pickEvents*1000+
+          Number(picked>9000000000000n?9000000000000n:picked)/1000;
+
+        const inserted=await client.query(
+          `INSERT INTO wms_slotting_recommendation(
+             tenant_id,run_id,warehouse_id,sku_id,
+             source_location_id,target_location_id,
+             suggested_quantity_milli,pick_events,picked_quantity_milli,
+             score,reason
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           ON CONFLICT (run_id,sku_id) DO NOTHING
+           RETURNING id`,
+          [
+            context.tenantId,runId,warehouseId,skuId,
+            src.location_id,targetId,quantity.toString(),
+            pickEvents,picked.toString(),score,
+            JSON.stringify({
+              recommendation:rec,
+              text:String(row.reason??""),
+              suggestedMinMilli:String(row.suggested_min_milli??"0"),
+              suggestedMaxMilli:String(row.suggested_max_milli??"0"),
+              suggestedLocationCode:row.suggested_location_code??null
+            })
+          ]
+        );
+        if(inserted.rowCount) recommendations+=1;
+      }
+
+      await this.audit(
+        client,context,"wms.slotting_run_created","wms_slotting_run",runId,
+        {warehouseId,days,recommendations}
+      );
+      return {runId,recommendations};
+    });
+  }
+
+  async persistedSlotting(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<Array<Record<string,unknown>>>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const run=await client.query<{id:string}>(
+        `SELECT id FROM wms_slotting_run
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND status='COMPLETED'
+         ORDER BY created_at DESC LIMIT 1`,
+        [context.tenantId,warehouseId]
+      );
+      if(!run.rows[0]) return [];
+
+      const result=await client.query(
+        `SELECT
+           r.id,r.status,r.score,r.sku_id,
+           s.code AS sku_code,p.name AS product_name,
+           r.suggested_quantity_milli::text,
+           r.pick_events,r.picked_quantity_milli::text,
+           src.full_code AS source_location_code,
+           dst.full_code AS target_location_code,
+           r.reason,r.move_task_id,r.created_at,r.acted_at
+         FROM wms_slotting_recommendation r
+         JOIN sku s ON s.tenant_id=r.tenant_id AND s.id=r.sku_id
+         JOIN product_variant v
+           ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+         JOIN product p
+           ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+         JOIN warehouse_location src
+           ON src.tenant_id=r.tenant_id AND src.id=r.source_location_id
+         JOIN warehouse_location dst
+           ON dst.tenant_id=r.tenant_id AND dst.id=r.target_location_id
+         WHERE r.tenant_id=$1 AND r.warehouse_id=$2 AND r.run_id=$3
+         ORDER BY
+           CASE r.status WHEN 'PROPOSED' THEN 0 ELSE 1 END,
+           r.score DESC,s.code`,
+        [context.tenantId,warehouseId,run.rows[0].id]
+      );
+      return result.rows;
+    });
+  }
+
+  async actOnSlottingRecommendation(
+    context:TenantContext,
+    recommendationId:string,
+    actionInput:"CREATE_TASK"|"DISMISS"
+  ):Promise<{status:"TASK_CREATED"|"DISMISSED";taskId?:string}>{
+    const action=String(actionInput??"").toUpperCase();
+    if(!["CREATE_TASK","DISMISS"].includes(action)){
+      throw new BadRequestException("Неизвестное действие slotting");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{
+        warehouse_id:string;sku_id:string;
+        source_location_id:string;target_location_id:string;
+        suggested_quantity_milli:string;reason:Record<string,unknown>;
+        status:string;move_task_id:string|null;
+      }>(
+        `SELECT warehouse_id,sku_id,source_location_id,target_location_id,
+                suggested_quantity_milli::text,reason,status,move_task_id
+         FROM wms_slotting_recommendation
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,recommendationId]
+      );
+      const row=result.rows[0];
+      if(!row) throw new NotFoundException("Рекомендация slotting не найдена");
+      if(row.status==="TASK_CREATED"&&row.move_task_id){
+        return {status:"TASK_CREATED",taskId:row.move_task_id};
+      }
+      if(row.status==="DISMISSED") return {status:"DISMISSED"};
+      if(row.status!=="PROPOSED"){
+        throw new ConflictException("Рекомендация уже обработана");
+      }
+
+      if(action==="DISMISS"){
+        await client.query(
+          `UPDATE wms_slotting_recommendation
+           SET status='DISMISSED',acted_by_membership_id=$3,acted_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,recommendationId,context.membershipId]
+        );
+        return {status:"DISMISSED"};
+      }
+
+      const source=await client.query<{physical_milli:string}>(
+        `SELECT physical_milli::text
+         FROM warehouse_location_balance
+         WHERE tenant_id=$1 AND warehouse_id=$2
+           AND location_id=$3 AND sku_id=$4 FOR UPDATE`,
+        [
+          context.tenantId,row.warehouse_id,row.source_location_id,row.sku_id
+        ]
+      );
+      const available=BigInt(source.rows[0]?.physical_milli??"0");
+      if(available<=0n) throw new ConflictException("Источник рекомендации уже пуст");
+      const suggested=BigInt(row.suggested_quantity_milli);
+      const quantity=available<suggested?available:suggested;
+
+      const task=await client.query<{id:string}>(
+        `INSERT INTO warehouse_task(
+           tenant_id,warehouse_id,task_type,status,priority,
+           sku_id,quantity_milli,from_location_id,to_location_id,
+           source_type,source_id,idempotency_key,instructions
+         ) VALUES (
+           $1,$2,'MOVE','OPEN',70,$3,$4,$5,$6,
+           'WMS_SLOTTING',$7,$8,$9
+         )
+         ON CONFLICT (tenant_id,idempotency_key)
+         DO UPDATE SET updated_at=warehouse_task.updated_at
+         RETURNING id`,
+        [
+          context.tenantId,row.warehouse_id,row.sku_id,quantity.toString(),
+          row.source_location_id,row.target_location_id,recommendationId,
+          "slotting-move:"+recommendationId,
+          JSON.stringify({
+            recommendationId,
+            suggestedMinMilli:String(row.reason?.suggestedMinMilli??"0"),
+            suggestedMaxMilli:String(row.reason?.suggestedMaxMilli??"0")
+          })
+        ]
+      );
+      const taskId=task.rows[0]!.id;
+
+      await client.query(
+        `UPDATE wms_slotting_recommendation
+         SET status='TASK_CREATED',move_task_id=$3,
+             acted_by_membership_id=$4,acted_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,recommendationId,taskId,context.membershipId]
+      );
+
+      return {status:"TASK_CREATED",taskId};
+    });
+  }
+
+  async completeMove(
+    context:TenantContext,
+    taskId:string
+  ):Promise<void>{
+    await this.database.withTenantTransaction(context,async client=>{
+      const task=await client.query<{
+        status:string;warehouse_id:string;sku_id:string;
+        quantity_milli:string;from_location_id:string;to_location_id:string;
+        claimed_by_membership_id:string|null;
+        source_type:string|null;source_id:string|null;
+        instructions:Record<string,unknown>;
+      }>(
+        `SELECT status,warehouse_id,sku_id,quantity_milli::text,
+                from_location_id,to_location_id,claimed_by_membership_id,
+                source_type,source_id,instructions
+         FROM warehouse_task
+         WHERE tenant_id=$1 AND id=$2 AND task_type='MOVE'
+         FOR UPDATE`,
+        [context.tenantId,taskId]
+      );
+      const row=task.rows[0];
+      if(!row) throw new NotFoundException("MOVE-задача не найдена");
+      if(row.status==="COMPLETED") return;
+      if(row.status!=="CLAIMED"||row.claimed_by_membership_id!==context.membershipId){
+        throw new ConflictException("Сначала возьмите MOVE-задачу");
+      }
+
+      const source=await client.query<{physical_milli:string}>(
+        `SELECT physical_milli::text FROM warehouse_location_balance
+         WHERE tenant_id=$1 AND warehouse_id=$2
+           AND location_id=$3 AND sku_id=$4 FOR UPDATE`,
+        [context.tenantId,row.warehouse_id,row.from_location_id,row.sku_id]
+      );
+      const quantity=BigInt(row.quantity_milli);
+      if(BigInt(source.rows[0]?.physical_milli??"0")<quantity){
+        throw new ConflictException("В исходной ячейке недостаточно товара");
+      }
+
+      const target=await client.query<{status:string;allow_mixed_sku:boolean}>(
+        `SELECT status,allow_mixed_sku FROM warehouse_location
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND id=$3 FOR UPDATE`,
+        [context.tenantId,row.warehouse_id,row.to_location_id]
+      );
+      const targetRow=target.rows[0];
+      if(!targetRow||targetRow.status!=="ACTIVE"){
+        throw new ConflictException("Целевая ячейка недоступна");
+      }
+
+      if(!targetRow.allow_mixed_sku){
+        const mixed=await client.query(
+          `SELECT 1 FROM warehouse_location_balance
+           WHERE tenant_id=$1 AND warehouse_id=$2
+             AND location_id=$3 AND physical_milli>0 AND sku_id<>$4 LIMIT 1`,
+          [context.tenantId,row.warehouse_id,row.to_location_id,row.sku_id]
+        );
+        if(mixed.rowCount){
+          throw new ConflictException("Целевая ячейка не допускает смешивание SKU");
+        }
+      }
+
+      await client.query(
+        `UPDATE warehouse_location_balance
+         SET physical_milli=physical_milli-$5::bigint,updated_at=now()
+         WHERE tenant_id=$1 AND warehouse_id=$2
+           AND location_id=$3 AND sku_id=$4`,
+        [
+          context.tenantId,row.warehouse_id,row.from_location_id,
+          row.sku_id,quantity.toString()
+        ]
+      );
+      await client.query(
+        `INSERT INTO warehouse_location_balance(
+           tenant_id,warehouse_id,location_id,sku_id,physical_milli
+         ) VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (tenant_id,warehouse_id,location_id,sku_id)
+         DO UPDATE SET physical_milli=
+           warehouse_location_balance.physical_milli+EXCLUDED.physical_milli,
+           updated_at=now()`,
+        [
+          context.tenantId,row.warehouse_id,row.to_location_id,
+          row.sku_id,quantity.toString()
+        ]
+      );
+      await client.query(
+        `INSERT INTO wms_location_movement(
+           tenant_id,warehouse_id,sku_id,movement_type,
+           from_location_id,to_location_id,quantity_milli,
+           source_type,source_id,idempotency_key,actor_membership_id
+         ) VALUES ($1,$2,$3,'MOVE',$4,$5,$6,'WAREHOUSE_TASK',$7,$8,$9)
+         ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
+        [
+          context.tenantId,row.warehouse_id,row.sku_id,
+          row.from_location_id,row.to_location_id,quantity.toString(),
+          taskId,"move-task:"+taskId,context.membershipId
+        ]
+      );
+
+      if(row.source_type==="WMS_SLOTTING"&&row.source_id){
+        const min=String(row.instructions?.suggestedMinMilli??"0");
+        const max=String(row.instructions?.suggestedMaxMilli??"0");
+        await client.query(
+          `INSERT INTO warehouse_location_sku_rule(
+             tenant_id,warehouse_id,sku_id,rule_type,location_id,
+             priority,min_quantity_milli,max_quantity_milli,
+             created_by_membership_id
+           ) VALUES ($1,$2,$3,'FIXED_PICK',$4,10,$5,$6,$7)
+           ON CONFLICT DO NOTHING`,
+          [
+            context.tenantId,row.warehouse_id,row.sku_id,row.to_location_id,
+            /^\d+$/.test(min)?min:null,/^\d+$/.test(max)?max:null,
+            context.membershipId
+          ]
+        );
+      }
+
+      await client.query(
+        `UPDATE warehouse_task
+         SET status='COMPLETED',completed_at=now(),
+             result=$3,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,taskId,JSON.stringify({completedBy:context.membershipId})]
+      );
+
+      await this.assertLocationReconciliation(
+        client,context.tenantId,row.warehouse_id
+      );
+    });
+  }
+
   async inventoryOwners(
     context:TenantContext
   ):Promise<Array<Record<string,unknown>>>{
