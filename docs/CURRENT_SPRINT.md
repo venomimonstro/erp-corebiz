@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R6 / Sprint 28 — OMS / ATP / Allocation.  
+**Активная разработка:** R6 / Sprint 30 — Marketplaces Ozon/WB.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -270,19 +270,42 @@
 - order import idempotency;
 - provider contract reserved for Ozon/WB/Yandex Market.
 
-## Активно — Sprint 28: OMS / ATP / Allocation
+### Sprint 28 — OMS / ATP / Allocation
+- OMS auto-attach for confirmed SalesOrder;
+- global ATP = physical - reserved - safety stock;
+- per-SKU/warehouse inventory policy;
+- deterministic sourcing;
+- split allocation across warehouses;
+- row-lock reservation through InventoryService;
+- allocation explanation and snapshots;
+- OMS state machine;
+- split shipment through reservation warehouse.
+
+### Sprint 29 — Returns / Backorder / Sourcing
+- partial allocation without rollback of successful reservations;
+- persistent backorder lines;
+- repeated sourcing to close remaining demand;
+- backorder ETA/cancel management;
+- Return Request lifecycle;
+- authorization quantities;
+- receive/inspect disposition;
+- RESTOCK posts immutable Inventory RETURN;
+- non-restock dispositions do not increase available inventory;
+- over-return protection.
+
+## Активно — Sprint 30: Marketplaces Ozon/WB
 
 Scope:
-- OMS orchestration order linked to SalesOrder;
-- global ATP by SKU/warehouse;
-- safety stock policy;
-- allocation/split allocation;
-- deterministic sourcing score;
-- allocation explanation;
-- reservation integration;
-- OMS state machine.
+- provider-specific encrypted credentials;
+- Ozon order pull adapter;
+- Wildberries order pull adapter;
+- normalized import into Channel Inbox;
+- cursor/watermark sync;
+- retry/rate-limit/backoff;
+- provider health;
+- manual sync and worker queue;
+- no direct writes into Sales/Inventory from marketplace API.
 
 ## Следом
 
-Sprint 29 — Returns / Backorder / Sourcing.  
-Sprint 30 — Marketplaces Ozon/WB.
+R7 / Sprint 31 — Site builder block core.
