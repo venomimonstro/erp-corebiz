@@ -1010,9 +1010,26 @@ export class InventoryService {
       let adjustments = 0;
 
       for (const line of lines.rows) {
-        const expected = BigInt(line.expected_milli);
         const counted = BigInt(line.counted_milli!);
-        const delta = counted - expected;
+
+        await this.lockBalance(
+          client,
+          context.tenantId,
+          count.warehouse_id,
+          line.sku_id
+        );
+
+        const currentBalance = await client.query<{ physical_milli: string }>(
+          `SELECT physical_milli::text
+           FROM inventory_balance
+           WHERE tenant_id = $1 AND warehouse_id = $2 AND sku_id = $3
+           FOR UPDATE`,
+          [context.tenantId, count.warehouse_id, line.sku_id]
+        );
+
+        const currentPhysical =
+          BigInt(currentBalance.rows[0]?.physical_milli ?? "0");
+        const delta = counted - currentPhysical;
 
         if (delta === 0n) continue;
 
