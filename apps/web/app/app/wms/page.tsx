@@ -84,6 +84,23 @@ type Order = {
   fulfillmentStatus: string;
 };
 
+type Wave = {
+  id: string;
+  strategy: string;
+  status: string;
+  priority: number;
+  max_tasks: number;
+  tasks: number;
+  open_tasks: number;
+  claimed_tasks: number;
+  completed_tasks: number;
+  failed_tasks: number;
+  created_at: string;
+  released_at: string | null;
+};
+
+
+
 type Topology = {
   profile: {
     mode: string;
@@ -123,6 +140,7 @@ export default function WmsPage() {
   const [topology, setTopology] = useState<Topology | null>(null);
   const [balances, setBalances] = useState<LocationBalance[]>([]);
   const [tasks, setTasks] = useState<WmsTask[]>([]);
+  const [waves, setWaves] = useState<Wave[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [error, setError] = useState("");
 
@@ -155,19 +173,24 @@ export default function WmsPage() {
       setTopology(next);
 
       if (next.profile?.stock_tracking_state === "LOCATION_LEDGER") {
-        const [locationRows, taskRows] = await Promise.all([
+        const [locationRows, taskRows, waveRows] = await Promise.all([
           apiRequest<LocationBalance[]>(
             "/wms/warehouses/" + id + "/location-balances"
           ),
           apiRequest<WmsTask[]>(
             "/wms/warehouses/" + id + "/tasks"
+          ),
+          apiRequest<Wave[]>(
+            "/wms/warehouses/" + id + "/waves"
           )
         ]);
         setBalances(locationRows);
         setTasks(taskRows);
+        setWaves(waveRows);
       } else {
         setBalances([]);
         setTasks([]);
+        setWaves([]);
       }
 
       setError("");
@@ -327,6 +350,99 @@ export default function WmsPage() {
         cause instanceof Error
           ? cause.message
           : "Не удалось запланировать отбор"
+      );
+    }
+  }
+
+  async function createWave() {
+    if (!warehouseId) return;
+
+    const strategy = (
+      window.prompt(
+        "Стратегия wave: ORDER, BATCH, ZONE, CLUSTER",
+        "CLUSTER"
+      ) ?? ""
+    ).toUpperCase();
+    if (!["ORDER","BATCH","ZONE","CLUSTER"].includes(strategy)) return;
+
+    const maxRaw = window.prompt("Максимум PICK-задач в wave", "40");
+    if (!maxRaw) return;
+    const maxTasks = Number(maxRaw);
+    if (!Number.isInteger(maxTasks) || maxTasks < 1 || maxTasks > 500) {
+      setError("Некорректный размер wave");
+      return;
+    }
+
+    try {
+      const result = await apiRequest<{
+        waveId: string;
+        tasks: number;
+        orders: number;
+      }>("/wms/warehouses/" + warehouseId + "/waves", {
+        method: "POST",
+        body: JSON.stringify({
+          strategy,
+          maxTasks,
+          priority: 80
+        })
+      });
+      window.alert(
+        "Wave создан: " + result.tasks + " задач, " + result.orders + " заказов."
+      );
+      await loadTopology(warehouseId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось создать wave"
+      );
+    }
+  }
+
+  async function releaseWave(wave: Wave) {
+    try {
+      await apiRequest("/wms/waves/" + wave.id + "/release", {
+        method: "POST"
+      });
+      await loadTopology(warehouseId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось выпустить wave"
+      );
+    }
+  }
+
+  async function claimNextWave(wave: Wave) {
+    try {
+      const task = await apiRequest<{
+        id: string;
+        from_code: string | null;
+        to_code: string | null;
+        cluster_slot: string | null;
+      } | null>("/wms/waves/" + wave.id + "/claim-next", {
+        method: "POST"
+      });
+
+      if (!task) {
+        window.alert("В wave больше нет свободных задач.");
+      } else {
+        window.alert(
+          "Следующая задача: " +
+            (task.from_code ?? "—") +
+            " → " +
+            (task.to_code ?? "—") +
+            (task.cluster_slot ? " · ячейка тележки " + task.cluster_slot : "")
+        );
+      }
+
+      await loadTopology(warehouseId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось получить следующую задачу wave"
       );
     }
   }
@@ -692,6 +808,12 @@ export default function WmsPage() {
                   <>
                     <button
                       className="secondary-button"
+                      onClick={() => void createWave()}
+                    >
+                      + Wave
+                    </button>
+                    <button
+                      className="secondary-button"
                       onClick={() => void planReplenishment()}
                     >
                       Пополнить pick-face
@@ -929,6 +1051,72 @@ export default function WmsPage() {
                     <section className="section-block">
                       <div className="section-heading">
                         <div>
+                          <p className="muted">Dispatcher</p>
+                          <h2>Waves</h2>
+                        </div>
+                        <button
+                          className="secondary-button"
+                          onClick={() => void createWave()}
+                          type="button"
+                        >
+                          Создать wave
+                        </button>
+                      </div>
+
+                      <div className="wms-task-list">
+                        {waves.map((wave) => {
+                          const progress = wave.tasks
+                            ? Math.round((wave.completed_tasks / wave.tasks) * 100)
+                            : 0;
+
+                          return (
+                            <article key={wave.id} className="wms-task-card">
+                              <div>
+                                <span>{wave.strategy} · {wave.status}</span>
+                                <strong>
+                                  {wave.completed_tasks}/{wave.tasks} задач · {progress}%
+                                </strong>
+                                <small>
+                                  Открыто {wave.open_tasks} · в работе {wave.claimed_tasks}
+                                  {wave.failed_tasks ? " · ошибок " + wave.failed_tasks : ""}
+                                </small>
+                              </div>
+
+                              <div className="table-actions">
+                                {wave.status === "DRAFT" ? (
+                                  <button
+                                    onClick={() => void releaseWave(wave)}
+                                    type="button"
+                                  >
+                                    Выпустить
+                                  </button>
+                                ) : ["RELEASED","IN_PROGRESS"].includes(wave.status) ? (
+                                  <button
+                                    onClick={() => void claimNextWave(wave)}
+                                    type="button"
+                                  >
+                                    Следующая задача
+                                  </button>
+                                ) : null}
+                              </div>
+                            </article>
+                          );
+                        })}
+
+                        {!waves.length ? (
+                          <div className="table-empty">
+                            <strong>Waves ещё нет</strong>
+                            <span>
+                              Сначала подготовьте заказ, затем сгруппируйте OPEN PICK-задачи.
+                            </span>
+                          </div>
+                        ) : null}
+                      </div>
+                    </section>
+
+                    <section className="section-block">
+                      <div className="section-heading">
+                        <div>
                           <p className="muted">Warehouse Tasks</p>
                           <h2>Задачи склада</h2>
                         </div>
@@ -940,7 +1128,12 @@ export default function WmsPage() {
                           .map((task) => (
                             <article key={task.id} className="wms-task-card">
                               <div>
-                                <span>{task.task_type} · {task.status}</span>
+                                <span>
+                                  {task.task_type} · {task.status}
+                                  {(task as any).cluster_slot
+                                    ? " · " + (task as any).cluster_slot
+                                    : ""}
+                                </span>
                                 <strong>
                                   {task.product_name
                                     ? task.product_name + " · " + task.sku_code
