@@ -30,6 +30,14 @@ export class AccountingController {
     return {ok:true,data:await this.accounting.createPeriod(this.context(request),body)};
   }
 
+  @Post("periods/lock")
+  @RequirePermission("accounting.period.close")
+  async lockPeriod(@Req() request:AuthenticatedRequest,@Body() body:{
+    periodId:string;targetState:"SOFT_LOCKED"|"HARD_LOCKED";reason:string;
+  }):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.accounting.lockPeriod(this.context(request),body)};
+  }
+
   @Get("periods")
   @RequirePermission("accounting.read")
   async periods(@Req() request: AuthenticatedRequest,@Query("legalEntityId") legalEntityId:string): Promise<ApiSuccess<unknown>> {
