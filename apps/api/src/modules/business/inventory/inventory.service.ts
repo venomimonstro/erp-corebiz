@@ -252,6 +252,23 @@ export class InventoryService {
         idempotencyKey:
           `goods-receipt:${input.receiptId}:line:${line.sourceLineId}`
       });
+
+      await client.query(
+        `SELECT corebiz_wms_receive_unassigned(
+           $1,$2,$3,$4,$5,$6,$7,$8,$9
+         )`,
+        [
+          context.tenantId,
+          input.warehouseId,
+          line.skuId,
+          line.quantityMilli.toString(),
+          "GOODS_RECEIPT",
+          input.receiptId,
+          line.sourceLineId,
+          `wms-goods-receipt:${input.receiptId}:line:${line.sourceLineId}`,
+          context.membershipId
+        ]
+      );
     }
   }
 
@@ -721,6 +738,26 @@ export class InventoryService {
 
       if (!reservations.rowCount) {
         throw new ConflictException("Активные резервы заказа не найдены");
+      }
+
+      const reservationWarehouseIds = Array.from(
+        new Set(reservations.rows.map((reservation) => reservation.warehouse_id))
+      );
+
+      const wmsWarehouses = await client.query<{ warehouse_id: string }>(
+        `SELECT warehouse_id
+         FROM warehouse_wms_profile
+         WHERE tenant_id=$1
+           AND warehouse_id=ANY($2::uuid[])
+           AND status='ACTIVE'
+           AND stock_tracking_state='LOCATION_LEDGER'`,
+        [context.tenantId, reservationWarehouseIds]
+      );
+
+      if (wmsWarehouses.rowCount) {
+        throw new ConflictException(
+          "Адресный WMS требует отбор и отгрузку через WMS-задачи"
+        );
       }
 
       const warehouseIds = new Set<string>();
@@ -1500,6 +1537,24 @@ export class InventoryService {
 
     await this.assertWarehouse(client, context.tenantId, input.warehouseId);
     await this.assertSku(client, context.tenantId, input.skuId);
+
+    if (input.movementType !== "RECEIPT") {
+      const wms = await client.query(
+        `SELECT 1
+         FROM warehouse_wms_profile
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND status='ACTIVE'
+           AND stock_tracking_state='LOCATION_LEDGER'`,
+        [context.tenantId, input.warehouseId]
+      );
+
+      if (wms.rowCount) {
+        throw new ConflictException(
+          "Для адресного WMS эта операция должна выполняться через WMS-задачу"
+        );
+      }
+    }
     await this.lockBalance(
       client,
       context.tenantId,
