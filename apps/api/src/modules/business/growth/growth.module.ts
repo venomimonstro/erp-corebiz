@@ -1,6 +1,8 @@
 import { Module } from "@nestjs/common";
 import { AttributionController } from "./attribution.controller";
 import { AttributionService } from "./attribution.service";
+import { ConversionBridgeController } from "./conversion-bridge.controller";
+import { ConversionBridgeService } from "./conversion-bridge.service";
 import { IntegrationCryptoService } from "./integration-crypto.service";
 import { MarketingController } from "./marketing.controller";
 import { MarketingService } from "./marketing.service";
@@ -14,20 +16,23 @@ import { TrackerService } from "./tracker.service";
     TrackerController,
     MarketingController,
     AttributionController,
-    ProfitabilityController
+    ProfitabilityController,
+    ConversionBridgeController
   ],
   providers: [
     TrackerService,
     MarketingService,
     AttributionService,
     ProfitabilityService,
+    ConversionBridgeService,
     IntegrationCryptoService
   ],
   exports: [
     TrackerService,
     MarketingService,
     AttributionService,
-    ProfitabilityService
+    ProfitabilityService,
+    ConversionBridgeService
   ]
 })
 export class GrowthModule {}
