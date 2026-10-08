@@ -101,6 +101,37 @@ export class SiteFormsService {
     });
   }
 
+  async bookingAvailability(publicKey:string, from:string, to:string):Promise<Array<{
+    resourceId:string;resourceName:string;startsAt:string;endsAt:string;
+  }>> {
+    if (!publicKey || publicKey.length > 160) throw new BadRequestException("Invalid booking link");
+    const start=new Date(from), end=new Date(to);
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) ||
+        end<=start || end.getTime()-start.getTime()>86400000 ||
+        start.getTime()<Date.now()-60000 || start.getTime()>Date.now()+90*86400000)
+      throw new BadRequestException("Select a future day within 90 days");
+    const result=await this.database.query<{
+      binding_id:string;tenant_id:string;action:string;config:Record<string,unknown>;
+    }>("SELECT * FROM corebiz_resolve_site_form_binding($1)",[publicKey]);
+    const binding=result.rows[0];
+    if (!binding || binding.action!=="BOOKING") throw new NotFoundException("Booking form not found");
+    const hits=await this.redis.incrementWindow("site-form-availability:"+binding.binding_id,60);
+    if(hits>120) throw new BadRequestException("Too many availability requests");
+    const serviceId=typeof binding.config.serviceId==="string"?binding.config.serviceId:"";
+    const allowed=Array.isArray(binding.config.resourceIds)?binding.config.resourceIds.filter(
+      (id):id is string=>typeof id==="string"
+    ):[];
+    if(!serviceId || !allowed.length) return [];
+    const context:TenantContext={
+      tenantId:binding.tenant_id,userId:"00000000-0000-0000-0000-000000000000",
+      membershipId:"00000000-0000-0000-0000-000000000000"
+    };
+    const slots=await this.bookings.availability(context,{
+      serviceId,from:start.toISOString(),to:end.toISOString(),slotStepMinutes:30
+    });
+    return slots.filter(slot=>allowed.includes(slot.resourceId)).slice(0,100);
+  }
+
   async submit(
     publicKey:string,
     input:{
