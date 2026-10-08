@@ -2849,6 +2849,249 @@ export class WmsService {
     return {completed:true,taskId};
   }
 
+  async dispatcher(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<Record<string,unknown>>{
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertProfile(client,context.tenantId,warehouseId);
+
+      const backlog=await client.query(
+        `SELECT
+           count(*) FILTER (WHERE status='OPEN')::int AS open,
+           count(*) FILTER (WHERE status='CLAIMED')::int AS claimed,
+           count(*) FILTER (
+             WHERE task_type='PICK'
+               AND status='OPEN'
+               AND wave_id IS NULL
+           )::int AS unplanned_pick,
+           min(created_at) FILTER (WHERE status='OPEN') AS oldest_open_at
+         FROM warehouse_task
+         WHERE tenant_id=$1 AND warehouse_id=$2`,
+        [context.tenantId,warehouseId]
+      );
+
+      const waves=await client.query(
+        `SELECT
+           w.id,w.strategy,w.status,w.priority,w.max_tasks,
+           w.created_at,w.released_at,w.completed_at,
+           count(t.id)::int AS tasks,
+           count(t.id) FILTER (WHERE t.status='OPEN')::int AS open_tasks,
+           count(t.id) FILTER (WHERE t.status='CLAIMED')::int AS claimed_tasks,
+           count(t.id) FILTER (WHERE t.status='COMPLETED')::int AS completed_tasks,
+           count(t.id) FILTER (WHERE t.status='FAILED')::int AS failed_tasks,
+           CASE
+             WHEN count(t.id)=0 THEN 0
+             ELSE round(
+               100.0*count(t.id) FILTER (WHERE t.status='COMPLETED')/
+               count(t.id),
+               1
+             )
+           END AS progress_percent
+         FROM wms_wave w
+         LEFT JOIN warehouse_task t
+           ON t.tenant_id=w.tenant_id AND t.wave_id=w.id
+         WHERE w.tenant_id=$1
+           AND w.warehouse_id=$2
+           AND w.status IN ('DRAFT','RELEASED','IN_PROGRESS')
+         GROUP BY w.id
+         ORDER BY w.priority,w.created_at`,
+        [context.tenantId,warehouseId]
+      );
+
+      const taskFlow=await client.query(
+        `SELECT task_type,status,count(*)::int AS count
+         FROM warehouse_task
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND status IN ('OPEN','CLAIMED','BLOCKED','FAILED')
+         GROUP BY task_type,status
+         ORDER BY task_type,status`,
+        [context.tenantId,warehouseId]
+      );
+
+      const exceptions=await client.query(
+        `SELECT
+           e.id AS exception_id,
+           t.id,
+           t.task_type,t.status,t.last_error,t.cluster_slot,
+           e.exception_type,e.message,e.reported_at,
+           s.code AS sku_code,
+           fl.full_code AS from_code,
+           tl.full_code AS to_code
+         FROM warehouse_task t
+         LEFT JOIN wms_task_exception e
+           ON e.tenant_id=t.tenant_id
+          AND e.task_id=t.id
+          AND e.status='OPEN'
+         LEFT JOIN sku s
+           ON s.tenant_id=t.tenant_id AND s.id=t.sku_id
+         LEFT JOIN warehouse_location fl
+           ON fl.tenant_id=t.tenant_id AND fl.id=t.from_location_id
+         LEFT JOIN warehouse_location tl
+           ON tl.tenant_id=t.tenant_id AND tl.id=t.to_location_id
+         WHERE t.tenant_id=$1
+           AND t.warehouse_id=$2
+           AND (
+             t.status IN ('BLOCKED','FAILED')
+             OR (
+               t.status='CLAIMED'
+               AND t.claimed_at<now()-interval '60 minutes'
+             )
+           )
+         ORDER BY
+           CASE t.status WHEN 'BLOCKED' THEN 0 WHEN 'FAILED' THEN 1 ELSE 2 END,
+           COALESCE(e.reported_at,t.claimed_at,t.created_at)
+         LIMIT 100`,
+        [context.tenantId,warehouseId]
+      );
+
+      return {
+        warehouseId,
+        backlog:backlog.rows[0]??{
+          open:0,
+          claimed:0,
+          unplanned_pick:0,
+          oldest_open_at:null
+        },
+        waves:waves.rows,
+        taskFlow:taskFlow.rows,
+        exceptions:exceptions.rows
+      };
+    });
+  }
+
+  async exceptions(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<Array<Record<string,unknown>>>{
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertProfile(client,context.tenantId,warehouseId);
+
+      const result=await client.query(
+        `SELECT
+           e.id,e.task_id,e.exception_type,e.message,e.status,
+           e.reported_at,e.resolved_at,
+           t.task_type,t.status AS task_status,t.last_error,
+           t.wave_id,t.cluster_slot,
+           s.code AS sku_code,p.name AS product_name,
+           fl.full_code AS from_code,tl.full_code AS to_code
+         FROM wms_task_exception e
+         JOIN warehouse_task t
+           ON t.tenant_id=e.tenant_id AND t.id=e.task_id
+         LEFT JOIN sku s
+           ON s.tenant_id=t.tenant_id AND s.id=t.sku_id
+         LEFT JOIN product_variant v
+           ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+         LEFT JOIN product p
+           ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+         LEFT JOIN warehouse_location fl
+           ON fl.tenant_id=t.tenant_id AND fl.id=t.from_location_id
+         LEFT JOIN warehouse_location tl
+           ON tl.tenant_id=t.tenant_id AND tl.id=t.to_location_id
+         WHERE e.tenant_id=$1
+           AND t.warehouse_id=$2
+         ORDER BY
+           CASE e.status WHEN 'OPEN' THEN 0 ELSE 1 END,
+           e.reported_at DESC
+         LIMIT 200`,
+        [context.tenantId,warehouseId]
+      );
+      return result.rows;
+    });
+  }
+
+  async resolveException(
+    context:TenantContext,
+    exceptionId:string,
+    input:{action:"REQUEUE"|"CANCEL"}
+  ):Promise<{taskId:string;taskStatus:"OPEN"|"CANCELLED"}>{
+    const action=String(input.action??"").toUpperCase();
+    if(!["REQUEUE","CANCEL"].includes(action)){
+      throw new BadRequestException("Неизвестное действие диспетчера");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const exception=await client.query<{
+        task_id:string;
+        exception_status:string;
+        task_status:string;
+        task_type:string;
+      }>(
+        `SELECT
+           e.task_id,e.status AS exception_status,
+           t.status AS task_status,t.task_type
+         FROM wms_task_exception e
+         JOIN warehouse_task t
+           ON t.tenant_id=e.tenant_id AND t.id=e.task_id
+         WHERE e.tenant_id=$1 AND e.id=$2
+         FOR UPDATE OF e,t`,
+        [context.tenantId,exceptionId]
+      );
+      const row=exception.rows[0];
+      if(!row) throw new NotFoundException("Исключение WMS не найдено");
+
+      if(row.exception_status!=="OPEN"){
+        throw new ConflictException("Исключение уже закрыто");
+      }
+      if(!["BLOCKED","FAILED"].includes(row.task_status)){
+        throw new ConflictException(
+          "Задача уже не находится в состоянии исключения"
+        );
+      }
+
+      if(action==="CANCEL"){
+        if(["PICK","PACK","SHIP"].includes(row.task_type)){
+          throw new ConflictException(
+            "Outbound-задачу нельзя отменить из диспетчера: верните её в очередь или отмените бизнес-процесс заказа"
+          );
+        }
+
+        await client.query(
+          `UPDATE warehouse_task
+           SET status='CANCELLED',
+               claimed_by_membership_id=NULL,
+               claimed_at=NULL,
+               updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,row.task_id]
+        );
+      }else{
+        await client.query(
+          `UPDATE warehouse_task
+           SET status='OPEN',
+               claimed_by_membership_id=NULL,
+               claimed_at=NULL,
+               last_error=NULL,
+               updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,row.task_id]
+        );
+      }
+
+      await client.query(
+        `UPDATE wms_task_exception
+         SET status='RESOLVED',
+             resolved_at=now(),
+             resolved_by_membership_id=$3
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,exceptionId,context.membershipId]
+      );
+
+      await this.audit(
+        client,context,"wms.exception_resolved","warehouse_task",row.task_id,{
+          exceptionId,
+          action
+        }
+      );
+
+      return {
+        taskId:row.task_id,
+        taskStatus:action==="REQUEUE"?"OPEN":"CANCELLED"
+      };
+    });
+  }
+
   async laborMetrics(
     context:TenantContext,
     warehouseId:string,
