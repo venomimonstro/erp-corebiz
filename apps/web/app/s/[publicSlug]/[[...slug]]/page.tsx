@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { PublicStorefront } from "../../../../components/public-storefront";
 import { PublicSiteForm } from "../../../../components/public-site-form";
+import { PublicAnalyticsConsent } from "../../../../components/public-analytics-consent";
 
 type ApiResponse<T> =
   | { ok: true; data: T }
@@ -12,6 +13,7 @@ type PublicPageData = {
     id: string;
     name: string;
     publicSlug: string;
+    hostname?: string | null;
     theme: Record<string, unknown>;
     settings: Record<string, unknown>;
   };
@@ -26,7 +28,15 @@ type PublicPageData = {
     versionNo: number;
     title: string;
     metaDescription: string | null;
+    metaRobots?: string | null;
+    canonicalPath?: string | null;
+    ogTitle?: string | null;
+    ogDescription?: string | null;
+    ogImageUrl?: string | null;
     publishedAt: string;
+  };
+  analytics?: {
+    trackerKey: string | null;
   };
   blocks: Array<{
     id: string;
@@ -75,12 +85,44 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const data = await loadPage(resolved.publicSlug, resolved.slug);
   if (!data) return {};
 
+  const robots = (data.version.metaRobots ?? "index,follow")
+    .toLowerCase()
+    .split(",")
+    .map((item) => item.trim());
+
+  const canonicalPath =
+    data.version.canonicalPath ||
+    (data.page.slug === "/" ? "/" : data.page.slug);
+
+  const canonical = data.site.hostname
+    ? "https://" + data.site.hostname + canonicalPath
+    : "/s/" +
+      data.site.publicSlug +
+      (canonicalPath === "/" ? "" : canonicalPath);
+
   return {
     title: data.version.title || data.page.name,
     description: data.version.metaDescription ?? undefined,
     robots: {
-      index: true,
-      follow: true
+      index: robots.includes("index"),
+      follow: robots.includes("follow")
+    },
+    alternates: {
+      canonical
+    },
+    openGraph: {
+      title:
+        data.version.ogTitle ||
+        data.version.title ||
+        data.page.name,
+      description:
+        data.version.ogDescription ||
+        data.version.metaDescription ||
+        undefined,
+      images: data.version.ogImageUrl
+        ? [{ url: data.version.ogImageUrl }]
+        : undefined,
+      type: "website"
     }
   };
 }
@@ -112,6 +154,10 @@ export default async function PublicSitePage({ params }: Props) {
       <footer className="public-site-footer">
         <span>{data.site.name}</span>
       </footer>
+
+      <PublicAnalyticsConsent
+        trackerKey={data.analytics?.trackerKey ?? null}
+      />
     </main>
   );
 }
