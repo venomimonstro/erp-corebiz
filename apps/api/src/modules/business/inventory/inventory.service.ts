@@ -201,6 +201,9 @@ export class InventoryService {
       quantityDeltaMilli: string;
       reason: string;
       idempotencyKey: string;
+    },
+    options?: {
+      wmsLocationId?: string;
     }
   ): Promise<{ movementId: string; applied: boolean }> {
     if (!/^-?\d+$/.test(input.quantityDeltaMilli)) {
@@ -216,16 +219,113 @@ export class InventoryService {
       throw new BadRequestException("Укажите причину корректировки");
     }
 
-    return this.database.withTenantTransaction(context, (client) =>
-      this.postMovement(client, context, {
+    return this.database.withTenantTransaction(context, async (client) => {
+      if (options?.wmsLocationId) {
+        const profile = await client.query(
+          `SELECT 1
+           FROM warehouse_wms_profile
+           WHERE tenant_id=$1
+             AND warehouse_id=$2
+             AND status='ACTIVE'
+             AND stock_tracking_state='LOCATION_LEDGER'`,
+          [context.tenantId, input.warehouseId]
+        );
+        if (!profile.rowCount) {
+          throw new ConflictException(
+            "WMS location adjustment доступен только при активном ячеечном учёте"
+          );
+        }
+
+        const location = await client.query<{ physical_milli: string }>(
+          `SELECT b.physical_milli::text
+           FROM warehouse_location l
+           LEFT JOIN warehouse_location_balance b
+             ON b.tenant_id=l.tenant_id
+            AND b.warehouse_id=l.warehouse_id
+            AND b.location_id=l.id
+            AND b.sku_id=$4
+           WHERE l.tenant_id=$1
+             AND l.warehouse_id=$2
+             AND l.id=$3
+             AND l.status='ACTIVE'
+           FOR UPDATE OF l,b`,
+          [
+            context.tenantId,
+            input.warehouseId,
+            options.wmsLocationId,
+            input.skuId
+          ]
+        );
+
+        if (!location.rows[0]) {
+          throw new NotFoundException("WMS-ячейка не найдена");
+        }
+
+        const locationPhysical =
+          BigInt(location.rows[0].physical_milli ?? "0");
+
+        if (locationPhysical + delta < 0n) {
+          throw new ConflictException(
+            "Корректировка создаст отрицательный остаток в ячейке"
+          );
+        }
+      }
+
+      const movement = await this.postMovement(client, context, {
         warehouseId: input.warehouseId,
         skuId: input.skuId,
         movementType: "ADJUSTMENT",
         quantityDeltaMilli: delta,
         reason: input.reason.trim(),
         idempotencyKey: input.idempotencyKey
-      })
-    );
+      });
+
+      if (options?.wmsLocationId && movement.applied) {
+        await client.query(
+          `INSERT INTO warehouse_location_balance(
+             tenant_id,warehouse_id,location_id,sku_id,physical_milli
+           ) VALUES ($1,$2,$3,$4,$5)
+           ON CONFLICT (tenant_id,warehouse_id,location_id,sku_id)
+           DO UPDATE SET
+             physical_milli=
+               warehouse_location_balance.physical_milli+
+               EXCLUDED.physical_milli,
+             updated_at=now()`,
+          [
+            context.tenantId,
+            input.warehouseId,
+            options.wmsLocationId,
+            input.skuId,
+            delta.toString()
+          ]
+        );
+
+        await client.query(
+          `INSERT INTO wms_location_movement(
+             tenant_id,warehouse_id,sku_id,movement_type,
+             from_location_id,to_location_id,quantity_milli,
+             source_type,idempotency_key,actor_membership_id
+           ) VALUES (
+             $1,$2,$3,'ADJUSTMENT',
+             $4,$5,$6,
+             'CYCLE_COUNT',$7,$8
+           )
+           ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
+          [
+            context.tenantId,
+            input.warehouseId,
+            input.skuId,
+            delta < 0n ? options.wmsLocationId : null,
+            delta > 0n ? options.wmsLocationId : null,
+            (delta < 0n ? -delta : delta).toString(),
+            "wms-adjustment:" + input.idempotencyKey,
+            context.membershipId
+          ]
+        );
+      }
+
+      return movement;
+    });
   }
 
   async postGoodsReceipt(
