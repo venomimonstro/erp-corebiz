@@ -580,7 +580,8 @@ export class ProcurementService {
   async receive(
     context: TenantContext,
     orderId: string,
-    lines: ReceiptLineInput[]
+    lines: ReceiptLineInput[],
+    options?: { inboundAsnId?: string }
   ): Promise<{ receiptId: string; number: string; orderStatus: string }> {
     if (!lines.length) {
       throw new BadRequestException("Укажите полученные позиции");
@@ -678,12 +679,13 @@ export class ProcurementService {
       const receiptResult = await client.query<{ id: string }>(
         `INSERT INTO goods_receipt(
            tenant_id, purchase_order_id, business_number,
-           inventory_owner_id, posted_by_membership_id
-         ) VALUES ($1,$2,$3,$4,$5)
+           inventory_owner_id, inbound_asn_id, posted_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6)
          RETURNING id`,
         [
           context.tenantId,orderId,number,
-          order.inventory_owner_id,context.membershipId
+          order.inventory_owner_id,options?.inboundAsnId??null,
+          context.membershipId
         ]
       );
 
@@ -780,7 +782,11 @@ export class ProcurementService {
         "procurement.receipt_posted",
         "goods_receipt",
         receipt.id,
-        { purchaseOrderId: orderId, number }
+        {
+          purchaseOrderId: orderId,
+          number,
+          inboundAsnId: options?.inboundAsnId ?? null
+        }
       );
 
       await this.events.enqueue(client, context, {
@@ -792,7 +798,8 @@ export class ProcurementService {
           purchaseOrderId: orderId,
           number,
           warehouseId,
-          orderStatus: newStatus
+          orderStatus: newStatus,
+          inboundAsnId: options?.inboundAsnId ?? null
         }
       });
 
