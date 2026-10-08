@@ -1118,13 +1118,17 @@ export class InventoryService {
       materialLineId: string;
       skuId: string;
       quantityMilli: bigint;
+      idempotencyKey: string;
     }
-  ): Promise<void> {
+  ): Promise<{ applied: boolean }> {
     if (input.quantityMilli <= 0n) {
       throw new BadRequestException("Количество расхода должно быть больше нуля");
     }
+    if (!input.idempotencyKey?.trim()) {
+      throw new BadRequestException("Требуется ключ идемпотентности");
+    }
 
-    await this.postMovement(client, context, {
+    const movement = await this.postMovement(client, context, {
       warehouseId: input.warehouseId,
       skuId: input.skuId,
       movementType: "WRITE_OFF",
@@ -1138,9 +1142,11 @@ export class InventoryService {
         input.bookingId +
         ":material:" +
         input.materialLineId +
-        ":consume:" +
-        input.quantityMilli.toString()
+        ":" +
+        input.idempotencyKey.trim()
     });
+
+    return { applied: movement.applied };
   }
 
   private async nextNumber(
