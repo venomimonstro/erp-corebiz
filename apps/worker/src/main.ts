@@ -1,3 +1,4 @@
+import { processMarketingSyncOnce } from "./marketing-sync.js";
 import { createDecipheriv, createHash } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 
@@ -704,8 +705,10 @@ async function loop(): Promise<void> {
 
   while (!stopping) {
     try {
-      const worked = await workOnce();
-      if (!worked) {
+      const workflowWorked = await workOnce();
+      const marketingWorked = await processMarketingSyncOnce(pool);
+
+      if (!workflowWorked && !marketingWorked) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch (error) {
