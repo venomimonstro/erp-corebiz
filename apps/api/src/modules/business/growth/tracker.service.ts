@@ -213,14 +213,17 @@ export class TrackerService {
         return { accepted: true, duplicate: true };
       }
 
-      const visitorResult = await client.query<{ id: string }>(
+      const visitorResult = await client.query<{
+        id: string;
+        party_id: string | null;
+      }>(
         "INSERT INTO marketing_visitor(" +
         "tenant_id,visitor_key_hash,analytics_consent,ads_consent,first_seen_at,last_seen_at" +
         ") VALUES ($1,$2,'GRANTED',$3,$4,$4) " +
         "ON CONFLICT (tenant_id,visitor_key_hash) DO UPDATE SET " +
         "analytics_consent='GRANTED',ads_consent=EXCLUDED.ads_consent," +
         "last_seen_at=GREATEST(marketing_visitor.last_seen_at,EXCLUDED.last_seen_at) " +
-        "RETURNING id",
+        "RETURNING id,party_id",
         [
           site.tenant_id,
           visitorHash,
@@ -264,9 +267,26 @@ export class TrackerService {
       const sessionId = sessionResult.rows[0]!.id;
 
       await client.query(
+        "INSERT INTO marketing_touchpoint(" +
+        "tenant_id,touchpoint_key,visitor_id,session_id,party_id,channel,event_name," +
+        "source,medium,campaign,content,term,yclid,gclid,vk_click_id,is_direct,occurred_at" +
+        ") SELECT s.tenant_id,'session:'||s.id::text,s.visitor_id,s.id,v.party_id," +
+        "'WEB','session_start',s.source,s.medium,s.campaign,s.content,s.term," +
+        "s.yclid,s.gclid,s.vk_click_id," +
+        "(COALESCE(NULLIF(lower(s.source),''),'direct') IN ('direct','(direct)') " +
+        "OR (s.source IS NULL AND s.referrer_url IS NULL)),s.started_at " +
+        "FROM marketing_session s JOIN marketing_visitor v " +
+        "ON v.tenant_id=s.tenant_id AND v.id=s.visitor_id " +
+        "WHERE s.tenant_id=$1 AND s.id=$2 " +
+        "ON CONFLICT (tenant_id,touchpoint_key) DO UPDATE SET " +
+        "party_id=COALESCE(EXCLUDED.party_id,marketing_touchpoint.party_id)",
+        [site.tenant_id, sessionId]
+      );
+
+      await client.query(
         "INSERT INTO marketing_event(" +
-        "tenant_id,visitor_id,session_id,event_key,event_name,occurred_at,page_url,title,properties" +
-        ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        "tenant_id,visitor_id,session_id,event_key,event_name,occurred_at,page_url,title,properties,party_id" +
+        ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
         [
           site.tenant_id,
           visitorId,
@@ -276,7 +296,8 @@ export class TrackerService {
           occurredAt,
           pageUrl,
           this.limit(input.title, 1000),
-          JSON.stringify(properties)
+          JSON.stringify(properties),
+          visitorResult.rows[0]!.party_id
         ]
       );
 
