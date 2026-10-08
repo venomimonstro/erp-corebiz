@@ -331,7 +331,162 @@ export default function WmsPage() {
     }
   }
 
+  async function startCycleCount() {
+    if (!warehouseId) return;
+    const reason = window.prompt(
+      "Причина пересчёта",
+      "Плановый cycle count"
+    );
+    if (reason === null) return;
+
+    try {
+      const result = await apiRequest<{
+        countId: string;
+        tasks: number;
+      }>("/wms/warehouses/" + warehouseId + "/cycle-counts", {
+        method: "POST",
+        body: JSON.stringify({
+          reason: reason.trim() || undefined
+        })
+      });
+      window.alert("Создано COUNT-задач: " + result.tasks);
+      await loadTopology(warehouseId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось создать пересчёт"
+      );
+    }
+  }
+
+  async function planReplenishment() {
+    if (!warehouseId) return;
+
+    try {
+      const result = await apiRequest<{
+        tasks: number;
+        shortages: Array<{
+          skuId: string;
+          targetLocationId: string;
+          missingMilli: string;
+        }>;
+      }>(
+        "/wms/warehouses/" + warehouseId + "/replenishment/plan",
+        { method: "POST" }
+      );
+
+      window.alert(
+        "Создано REPLENISH-задач: " +
+          result.tasks +
+          (result.shortages.length
+            ? ". Дефицит по " + result.shortages.length + " pick-face."
+            : ".")
+      );
+      await loadTopology(warehouseId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось спланировать пополнение"
+      );
+    }
+  }
+
+  async function configurePickFace(balance: LocationBalance) {
+    const minRaw = window.prompt(
+      "Минимальный остаток в pick-face, шт.",
+      "5"
+    );
+    if (!minRaw) return;
+    const maxRaw = window.prompt(
+      "Пополнять до, шт.",
+      "20"
+    );
+    if (!maxRaw) return;
+
+    const min = Number(minRaw.replace(",", "."));
+    const max = Number(maxRaw.replace(",", "."));
+    if (
+      !Number.isFinite(min) ||
+      !Number.isFinite(max) ||
+      min < 0 ||
+      max <= 0 ||
+      max < min
+    ) {
+      setError("Некорректные min/max для pick-face");
+      return;
+    }
+
+    try {
+      await apiRequest(
+        "/wms/warehouses/" + warehouseId + "/sku-rules",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            skuId: balance.sku_id,
+            locationId: balance.location_id,
+            ruleType: "FIXED_PICK",
+            priority: 10,
+            minQuantityMilli: String(Math.round(min * 1000)),
+            maxQuantityMilli: String(Math.round(max * 1000))
+          })
+        }
+      );
+      window.alert("Pick-face правило сохранено.");
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось настроить pick-face"
+      );
+    }
+  }
+
   async function completeTask(task: WmsTask) {
+    if (task.task_type === "COUNT") {
+      const raw = window.prompt(
+        "Фактическое количество, шт.",
+        task.quantity_milli
+          ? String(Number(task.quantity_milli) / 1000)
+          : "0"
+      );
+      if (raw === null) return;
+
+      const quantity = Number(raw.replace(",", "."));
+      if (!Number.isFinite(quantity) || quantity < 0) {
+        setError("Некорректный фактический остаток");
+        return;
+      }
+
+      try {
+        const result = await apiRequest<{
+          varianceMilli: string;
+          countCompleted: boolean;
+        }>("/wms/tasks/" + task.id + "/complete-count", {
+          method: "POST",
+          body: JSON.stringify({
+            countedMilli: String(Math.round(quantity * 1000))
+          })
+        });
+
+        const variance = Number(result.varianceMilli) / 1000;
+        window.alert(
+          variance === 0
+            ? "Остаток подтверждён без расхождения."
+            : "Пересчёт проведён. Расхождение: " + variance
+        );
+        await loadTopology(warehouseId);
+      } catch (cause) {
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Не удалось провести пересчёт"
+        );
+      }
+      return;
+    }
+
     const label =
       task.task_type === "PUTAWAY"
         ? "размещение"
@@ -341,11 +496,11 @@ export default function WmsPage() {
             ? "упаковку"
             : task.task_type === "SHIP"
               ? "отгрузку"
-              : "задачу";
+              : task.task_type === "REPLENISH"
+                ? "пополнение pick-face"
+                : "задачу";
 
-    if (!window.confirm("Подтвердить " + label + "?")) {
-      return;
-    }
+    if (!window.confirm("Подтвердить " + label + "?")) return;
 
     const endpoint =
       task.task_type === "PUTAWAY"
@@ -356,7 +511,9 @@ export default function WmsPage() {
             ? "complete-pack"
             : task.task_type === "SHIP"
               ? "complete-ship"
-              : null;
+              : task.task_type === "REPLENISH"
+                ? "complete-replenishment"
+                : null;
 
     if (!endpoint) {
       setError("Для этого типа задачи завершение ещё не поддерживается.");
@@ -531,6 +688,22 @@ export default function WmsPage() {
                 >
                   Подготовить заказ
                 </button>
+                {topology.profile.stock_tracking_state === "LOCATION_LEDGER" ? (
+                  <>
+                    <button
+                      className="secondary-button"
+                      onClick={() => void planReplenishment()}
+                    >
+                      Пополнить pick-face
+                    </button>
+                    <button
+                      className="secondary-button"
+                      onClick={() => void startCycleCount()}
+                    >
+                      Пересчёт
+                    </button>
+                  </>
+                ) : null}
                 <button className="secondary-button" onClick={() => void addZone()}>
                   + Зона
                 </button>
@@ -697,6 +870,54 @@ export default function WmsPage() {
                                     >
                                       Разместить
                                     </button>
+                                  </td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+
+                    <section className="section-block">
+                      <div className="section-heading">
+                        <div>
+                          <p className="muted">Location stock</p>
+                          <h2>Остатки по ячейкам</h2>
+                        </div>
+                      </div>
+
+                      <div className="data-table-wrap">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Ячейка</th>
+                              <th>Зона</th>
+                              <th>SKU</th>
+                              <th>Товар</th>
+                              <th>Факт</th>
+                              <th />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {balances
+                              .filter((row) => !row.is_system)
+                              .map((row) => (
+                                <tr key={row.location_id + ":" + row.sku_id}>
+                                  <td><strong>{row.full_code}</strong></td>
+                                  <td>{row.zone_name}</td>
+                                  <td>{row.sku_code}</td>
+                                  <td>{row.product_name}</td>
+                                  <td>{Number(row.physical_milli) / 1000}</td>
+                                  <td className="table-actions">
+                                    {row.zone_type === "PICKING" ? (
+                                      <button
+                                        className="secondary-button"
+                                        onClick={() => void configurePickFace(row)}
+                                        type="button"
+                                      >
+                                        Pick-face min/max
+                                      </button>
+                                    ) : null}
                                   </td>
                                 </tr>
                               ))}
