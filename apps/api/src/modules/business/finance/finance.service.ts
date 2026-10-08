@@ -7,10 +7,14 @@ import {
 import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { DomainEventService } from "../../platform/events/domain-event.service";
 
 @Injectable()
 export class FinanceService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly events: DomainEventService
+  ) {}
 
   async summary(context: TenantContext): Promise<{
     accounts: Array<{
@@ -543,6 +547,21 @@ export class FinanceService {
         { orderId: row.id, amountMinor: amount.toString() }
       );
 
+      await this.events.enqueue(client, context, {
+        eventName: "finance.payment_posted",
+        entityType: "PAYMENT",
+        entityId: payment.id,
+        payload: {
+          paymentId: payment.id,
+          orderId: row.id,
+          direction: "IN",
+          kind: "PAYMENT",
+          amountMinor: amount.toString(),
+          currency: row.currency,
+          paymentStatus
+        }
+      });
+
       return {
         paymentId: payment.id,
         number: payment.business_number,
@@ -679,6 +698,21 @@ export class FinanceService {
         payment.id,
         { purchaseOrderId: row.id, amountMinor: amount.toString() }
       );
+
+      await this.events.enqueue(client, context, {
+        eventName: "finance.payment_posted",
+        entityType: "PAYMENT",
+        entityId: payment.id,
+        payload: {
+          paymentId: payment.id,
+          purchaseOrderId: row.id,
+          direction: "OUT",
+          kind: "PAYMENT",
+          amountMinor: amount.toString(),
+          currency: row.currency,
+          obligationStatus
+        }
+      });
 
       return {
         paymentId: payment.id,
@@ -818,6 +852,21 @@ export class FinanceService {
         payment.id,
         { orderId: row.id, amountMinor: amount.toString() }
       );
+
+      await this.events.enqueue(client, context, {
+        eventName: "finance.refund_posted",
+        entityType: "PAYMENT",
+        entityId: payment.id,
+        payload: {
+          paymentId: payment.id,
+          orderId: row.id,
+          direction: "OUT",
+          kind: "REFUND",
+          amountMinor: amount.toString(),
+          currency: row.currency,
+          paymentStatus
+        }
+      });
 
       return {
         paymentId: payment.id,
