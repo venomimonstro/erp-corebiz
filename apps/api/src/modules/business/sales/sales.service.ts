@@ -272,8 +272,9 @@ export class SalesService {
         await client.query(
           `INSERT INTO sales_order_line(
              tenant_id, order_id, sku_id, description,
-             quantity_milli, unit_price_minor, discount_minor, line_total_minor
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+             quantity_milli, unit_price_minor, cost_price_minor_snapshot,
+             discount_minor, line_total_minor
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
           [
             context.tenantId,
             order.id,
@@ -281,6 +282,7 @@ export class SalesService {
             line.description,
             line.quantityMilli.toString(),
             line.unitPriceMinor.toString(),
+            line.costPriceMinorSnapshot.toString(),
             line.discountMinor.toString(),
             line.lineTotalMinor.toString()
           ]
@@ -464,6 +466,7 @@ export class SalesService {
     description: string;
     quantityMilli: bigint;
     unitPriceMinor: bigint;
+    costPriceMinorSnapshot: bigint;
     discountMinor: bigint;
     lineTotalMinor: bigint;
   }> {
@@ -474,6 +477,7 @@ export class SalesService {
 
     let description = input.description?.trim() ?? "";
     let unitPriceMinor: bigint;
+    let costPriceMinorSnapshot = 0n;
     let skuId: string | null = null;
 
     if (input.skuId) {
@@ -481,12 +485,14 @@ export class SalesService {
         id: string;
         code: string;
         sale_price_minor: string;
+        cost_price_minor: string;
         product_name: string;
       }>(
         `SELECT
            s.id,
            s.code,
            s.sale_price_minor::text,
+           s.cost_price_minor::text,
            p.name AS product_name
          FROM sku s
          JOIN product_variant v
@@ -506,6 +512,7 @@ export class SalesService {
       skuId = sku.id;
       description ||= sku.product_name;
       unitPriceMinor = BigInt(input.unitPriceMinor ?? sku.sale_price_minor);
+      costPriceMinorSnapshot = BigInt(sku.cost_price_minor);
     } else {
       if (!description) {
         throw new BadRequestException("Для строки без SKU нужно описание");
@@ -535,6 +542,7 @@ export class SalesService {
       description,
       quantityMilli,
       unitPriceMinor,
+      costPriceMinorSnapshot,
       discountMinor,
       lineTotalMinor: gross - discountMinor
     };
