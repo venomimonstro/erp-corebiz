@@ -399,8 +399,11 @@ export class WmsService {
     return this.database.withTenantTransaction(context, async (client) => {
       await this.assertProfile(client,context.tenantId,warehouseId);
 
-      const profile=await client.query<{stock_tracking_state:string}>(
-        `SELECT stock_tracking_state
+      const profile=await client.query<{
+        stock_tracking_state:string;
+        owner_tracking_state:string;
+      }>(
+        `SELECT stock_tracking_state,owner_tracking_state
          FROM warehouse_wms_profile
          WHERE tenant_id=$1 AND warehouse_id=$2
          FOR UPDATE`,
@@ -600,6 +603,7 @@ export class WmsService {
     input: {
       skuId: string;
       quantityMilli: string;
+      ownerId?: string;
     }
   ): Promise<{
     taskId:string;
@@ -643,6 +647,48 @@ export class WmsService {
       const sourceRow=source.rows[0];
       if(!sourceRow||BigInt(sourceRow.physical_milli)<quantity){
         throw new ConflictException("В UNASSIGNED недостаточно товара");
+      }
+
+      let ownerId:string|null=null;
+      if(profile.rows[0]?.owner_tracking_state==="OWNER_LEDGER"){
+        const owners=await client.query<{
+          owner_id:string;
+          owner_type:string;
+          owner_name:string;
+          physical_milli:string;
+        }>(
+          `SELECT
+             b.owner_id,o.owner_type,o.name AS owner_name,
+             b.physical_milli::text
+           FROM warehouse_location_owner_balance b
+           JOIN inventory_owner o
+             ON o.tenant_id=b.tenant_id AND o.id=b.owner_id
+           WHERE b.tenant_id=$1
+             AND b.warehouse_id=$2
+             AND b.location_id=$3
+             AND b.sku_id=$4
+             AND b.physical_milli >= $5::bigint
+             AND o.status='ACTIVE'
+             AND ($6::uuid IS NULL OR b.owner_id=$6)
+           ORDER BY o.is_default DESC,o.name
+           FOR UPDATE OF b`,
+          [
+            context.tenantId,warehouseId,sourceRow.id,input.skuId,
+            quantity.toString(),input.ownerId??null
+          ]
+        );
+
+        if(!owners.rowCount){
+          throw new ConflictException(
+            "У выбранного владельца недостаточно товара в UNASSIGNED"
+          );
+        }
+        if(!input.ownerId && owners.rows.length>1){
+          throw new ConflictException(
+            "SKU принадлежит нескольким владельцам. Укажите ownerId для put-away."
+          );
+        }
+        ownerId=owners.rows[0]!.owner_id;
       }
 
       const candidates=await client.query<{
@@ -742,15 +788,15 @@ export class WmsService {
       const task=await client.query<{id:string}>(
         `INSERT INTO warehouse_task(
            tenant_id,warehouse_id,task_type,status,priority,
-           sku_id,quantity_milli,from_location_id,to_location_id,
+           owner_id,sku_id,quantity_milli,from_location_id,to_location_id,
            idempotency_key,instructions
          ) VALUES (
            $1,$2,'PUTAWAY','OPEN',100,
-           $3,$4,$5,$6,$7,$8
+           $3,$4,$5,$6,$7,$8,$9
          )
          RETURNING id`,
         [
-          context.tenantId,warehouseId,input.skuId,quantity.toString(),
+          context.tenantId,warehouseId,ownerId,input.skuId,quantity.toString(),
           sourceRow.id,target.id,taskKey,
           JSON.stringify({
             targetCode:target.full_code,
@@ -857,11 +903,12 @@ export class WmsService {
         quantity_milli:string;
         from_location_id:string;
         to_location_id:string;
+        owner_id:string|null;
         claimed_by_membership_id:string|null;
       }>(
         `SELECT
            warehouse_id,task_type,status,sku_id,quantity_milli::text,
-           from_location_id,to_location_id,claimed_by_membership_id
+           from_location_id,to_location_id,owner_id,claimed_by_membership_id
          FROM warehouse_task
          WHERE tenant_id=$1 AND id=$2
          FOR UPDATE`,
@@ -926,6 +973,38 @@ export class WmsService {
       const quantity=BigInt(row.quantity_milli);
       if(BigInt(source.rows[0]?.physical_milli??"0")<quantity){
         throw new ConflictException("В исходном адресе недостаточно товара");
+      }
+
+      const ownerTracking=await client.query<{owner_tracking_state:string}>(
+        `SELECT owner_tracking_state
+         FROM warehouse_wms_profile
+         WHERE tenant_id=$1 AND warehouse_id=$2`,
+        [context.tenantId,row.warehouse_id]
+      );
+      if(
+        ownerTracking.rows[0]?.owner_tracking_state==="OWNER_LEDGER" &&
+        !row.owner_id
+      ){
+        throw new ConflictException(
+          "Owner-aware WMS требует owner_id у PUTAWAY-задачи"
+        );
+      }
+
+      if(row.owner_id){
+        await this.inventory.moveOwnerLocation(
+          client,context,{
+            warehouseId:row.warehouse_id,
+            ownerId:row.owner_id,
+            skuId:row.sku_id,
+            fromLocationId:row.from_location_id,
+            toLocationId:row.to_location_id,
+            quantityMilli:quantity,
+            movementType:"PUTAWAY",
+            sourceType:"WAREHOUSE_TASK",
+            sourceId:taskId,
+            idempotencyKey:"owner-putaway-task:"+taskId
+          }
+        );
       }
 
       await client.query(
@@ -1006,10 +1085,11 @@ export class WmsService {
         sales_order_line_id:string;
         warehouse_id:string;
         sku_id:string;
+        owner_id:string;
         quantity_milli:string;
       }>(
         `SELECT
-           r.id,r.sales_order_line_id,r.warehouse_id,r.sku_id,
+           r.id,r.sales_order_line_id,r.warehouse_id,r.sku_id,r.owner_id,
            r.quantity_milli::text
          FROM inventory_reservation r
          JOIN warehouse_wms_profile p
@@ -1082,7 +1162,7 @@ export class WmsService {
           planned_milli:string;
         }>(
           `SELECT
-             b.location_id,l.full_code,b.physical_milli::text,
+             b.location_id,l.full_code,ob.physical_milli::text,
              COALESCE((
                SELECT sum(a.quantity_milli)
                FROM wms_pick_allocation a
@@ -1090,9 +1170,16 @@ export class WmsService {
                  AND a.warehouse_id=b.warehouse_id
                  AND a.source_location_id=b.location_id
                  AND a.sku_id=b.sku_id
+                 AND a.owner_id=$4
                  AND a.status='PLANNED'
              ),0)::text AS planned_milli
            FROM warehouse_location_balance b
+           JOIN warehouse_location_owner_balance ob
+             ON ob.tenant_id=b.tenant_id
+            AND ob.warehouse_id=b.warehouse_id
+            AND ob.location_id=b.location_id
+            AND ob.sku_id=b.sku_id
+            AND ob.owner_id=$4
            JOIN warehouse_location l
              ON l.tenant_id=b.tenant_id AND l.id=b.location_id
            JOIN warehouse_zone z
@@ -1123,7 +1210,8 @@ export class WmsService {
           [
             context.tenantId,
             reservation.warehouse_id,
-            reservation.sku_id
+            reservation.sku_id,
+            reservation.owner_id
           ]
         );
 
@@ -1140,13 +1228,13 @@ export class WmsService {
           const allocation=await client.query<{id:string}>(
             `INSERT INTO wms_pick_allocation(
                tenant_id,sales_order_id,reservation_id,warehouse_id,sku_id,
-               source_location_id,outbound_location_id,quantity_milli
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+               owner_id,source_location_id,outbound_location_id,quantity_milli
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
              ON CONFLICT (reservation_id,source_location_id) DO NOTHING
              RETURNING id`,
             [
               context.tenantId,orderId,reservation.id,
-              reservation.warehouse_id,reservation.sku_id,
+              reservation.warehouse_id,reservation.sku_id,reservation.owner_id,
               source.location_id,outboundRow.id,quantity.toString()
             ]
           );
@@ -1157,19 +1245,19 @@ export class WmsService {
           const task=await client.query<{id:string}>(
             `INSERT INTO warehouse_task(
                tenant_id,warehouse_id,task_type,status,priority,
-               sku_id,quantity_milli,from_location_id,to_location_id,
+               owner_id,sku_id,quantity_milli,from_location_id,to_location_id,
                source_type,source_id,source_line_id,
                idempotency_key,instructions
              ) VALUES (
                $1,$2,'PICK','OPEN',100,
-               $3,$4,$5,$6,
-               'INVENTORY_RESERVATION',$7,$8,
-               $9,$10
+               $3,$4,$5,$6,$7,
+               'INVENTORY_RESERVATION',$8,$9,
+               $10,$11
              )
              RETURNING id`,
             [
-              context.tenantId,reservation.warehouse_id,reservation.sku_id,
-              quantity.toString(),source.location_id,outboundRow.id,
+              context.tenantId,reservation.warehouse_id,reservation.owner_id,
+              reservation.sku_id,quantity.toString(),source.location_id,outboundRow.id,
               reservation.id,reservation.sales_order_line_id,
               "pick:"+reservation.id+":"+source.location_id,
               JSON.stringify({
@@ -1224,6 +1312,7 @@ export class WmsService {
         allocation_id:string;
         allocation_status:string;
         sales_order_id:string;
+        owner_id:string;
         wave_id:string|null;
       }>(
         `SELECT
@@ -1231,7 +1320,7 @@ export class WmsService {
            t.from_location_id,t.to_location_id,t.claimed_by_membership_id,
            t.wave_id,
            a.id AS allocation_id,a.status AS allocation_status,
-           a.sales_order_id
+           a.sales_order_id,a.owner_id
          FROM warehouse_task t
          JOIN wms_pick_allocation a
            ON a.tenant_id=t.tenant_id AND a.pick_task_id=t.id
@@ -1287,6 +1376,22 @@ export class WmsService {
       if(BigInt(source.rows[0]?.physical_milli??"0")<quantity){
         throw new ConflictException("В исходной ячейке недостаточно товара");
       }
+
+      await this.inventory.moveOwnerLocation(
+        client,context,{
+          warehouseId:row.warehouse_id,
+          ownerId:row.owner_id,
+          skuId:row.sku_id,
+          fromLocationId:row.from_location_id,
+          toLocationId:row.to_location_id,
+          quantityMilli:quantity,
+          movementType:"PICK",
+          sourceType:"WAREHOUSE_TASK",
+          sourceId:taskId,
+          sourceLineId:row.allocation_id,
+          idempotencyKey:"owner-pick-task:"+taskId
+        }
+      );
 
       await client.query(
         `UPDATE warehouse_location_balance
@@ -1364,14 +1469,14 @@ export class WmsService {
         await client.query(
           `INSERT INTO warehouse_task(
              tenant_id,warehouse_id,task_type,status,priority,
-             source_type,source_id,idempotency_key,instructions
+             owner_id,source_type,source_id,idempotency_key,instructions
            ) VALUES (
              $1,$2,'PACK','OPEN',100,
-             'SALES_ORDER',$3,$4,$5
+             $3,'SALES_ORDER',$4,$5,$6
            )
            ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
           [
-            context.tenantId,row.warehouse_id,row.sales_order_id,
+            context.tenantId,row.warehouse_id,row.owner_id,row.sales_order_id,
             "pack:"+row.sales_order_id+":"+row.warehouse_id,
             JSON.stringify({
               orderId:row.sales_order_id,
@@ -1614,12 +1719,13 @@ export class WmsService {
         id:string;
         reservation_id:string;
         sku_id:string;
+        owner_id:string;
         outbound_location_id:string;
         quantity_milli:string;
         status:string;
       }>(
         `SELECT
-           id,reservation_id,sku_id,outbound_location_id,
+           id,reservation_id,sku_id,owner_id,outbound_location_id,
            quantity_milli::text,status
          FROM wms_pick_allocation
          WHERE tenant_id=$1
@@ -1700,6 +1806,21 @@ export class WmsService {
             "В outbound ячейке недостаточно товара для отгрузки"
           );
         }
+
+        await this.inventory.moveOwnerLocation(
+          client,context,{
+            warehouseId:row.warehouse_id,
+            ownerId:allocation.owner_id,
+            skuId:allocation.sku_id,
+            fromLocationId:allocation.outbound_location_id,
+            quantityMilli:quantity,
+            movementType:"SHIP",
+            sourceType:"SALES_ORDER",
+            sourceId:row.source_id,
+            sourceLineId:allocation.id,
+            idempotencyKey:"owner-ship-allocation:"+allocation.id
+          }
+        );
 
         await client.query(
           `UPDATE warehouse_location_balance
