@@ -3581,6 +3581,232 @@ export class WmsService {
     });
   }
 
+  async inventoryOwners(
+    context:TenantContext
+  ):Promise<Array<Record<string,unknown>>>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           o.id,o.owner_type,o.code,o.name,o.is_default,o.status,
+           o.party_id,p.display_name AS party_name,
+           o.created_at,o.updated_at
+         FROM inventory_owner o
+         LEFT JOIN party p
+           ON p.tenant_id=o.tenant_id AND p.id=o.party_id
+         WHERE o.tenant_id=$1
+         ORDER BY o.is_default DESC,o.name`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async createInventoryOwner(
+    context:TenantContext,
+    input:{
+      partyId:string;
+      code:string;
+      name?:string;
+    }
+  ):Promise<{id:string}>{
+    const code=this.code(input.code,60);
+    const name=String(input.name??"").trim();
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const party=await client.query<{display_name:string}>(
+        `SELECT display_name
+         FROM party
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+        [context.tenantId,input.partyId]
+      );
+      const partyRow=party.rows[0];
+      if(!partyRow) throw new NotFoundException("3PL-клиент не найден");
+
+      try{
+        const result=await client.query<{id:string}>(
+          `INSERT INTO inventory_owner(
+             tenant_id,party_id,owner_type,code,name,is_default,
+             created_by_membership_id
+           ) VALUES ($1,$2,'CLIENT',$3,$4,false,$5)
+           RETURNING id`,
+          [
+            context.tenantId,input.partyId,code,
+            name||partyRow.display_name,context.membershipId
+          ]
+        );
+
+        const id=result.rows[0]!.id;
+        await this.audit(
+          client,context,"wms.inventory_owner_created","inventory_owner",id,{
+            partyId:input.partyId,code,name:name||partyRow.display_name
+          }
+        );
+        return {id};
+      }catch(error){
+        if(this.unique(error)){
+          throw new ConflictException(
+            "Для этого клиента уже есть inventory owner или код занят"
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  async configure3plContract(
+    context:TenantContext,
+    warehouseId:string,
+    ownerId:string,
+    input:{
+      status?:"ACTIVE"|"SUSPENDED"|"CLOSED";
+      services?:Record<string,unknown>;
+      billingRules?:Record<string,unknown>;
+    }
+  ):Promise<void>{
+    const services=input.services??{};
+    const billingRules=input.billingRules??{};
+    if(JSON.stringify(services).length>20000||
+       JSON.stringify(billingRules).length>20000){
+      throw new BadRequestException("Слишком большая конфигурация 3PL-контракта");
+    }
+
+    await this.database.withTenantTransaction(context,async client=>{
+      await this.assertWarehouse(client,context.tenantId,warehouseId);
+
+      const owner=await client.query(
+        `SELECT 1
+         FROM inventory_owner
+         WHERE tenant_id=$1 AND id=$2
+           AND owner_type='CLIENT' AND status='ACTIVE'`,
+        [context.tenantId,ownerId]
+      );
+      if(!owner.rowCount){
+        throw new NotFoundException("Активный 3PL owner не найден");
+      }
+
+      await client.query(
+        `INSERT INTO warehouse_3pl_contract(
+           tenant_id,warehouse_id,owner_id,status,
+           services,billing_rules,created_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (warehouse_id,owner_id)
+         DO UPDATE SET
+           status=EXCLUDED.status,
+           services=EXCLUDED.services,
+           billing_rules=EXCLUDED.billing_rules,
+           updated_at=now()`,
+        [
+          context.tenantId,warehouseId,ownerId,
+          input.status??"ACTIVE",
+          JSON.stringify(services),JSON.stringify(billingRules),
+          context.membershipId
+        ]
+      );
+    });
+  }
+
+  async ownerLedgerReconciliation(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<Record<string,unknown>>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const profile=await client.query<{
+        owner_tracking_state:string;
+      }>(
+        `SELECT owner_tracking_state
+         FROM warehouse_wms_profile
+         WHERE tenant_id=$1 AND warehouse_id=$2`,
+        [context.tenantId,warehouseId]
+      );
+      if(!profile.rows[0]){
+        throw new NotFoundException("WMS-профиль склада не найден");
+      }
+
+      const aggregate=await client.query(
+        `WITH owner_total AS (
+           SELECT sku_id,
+                  sum(physical_milli) AS physical_milli,
+                  sum(reserved_milli) AS reserved_milli
+           FROM inventory_owner_balance
+           WHERE tenant_id=$1 AND warehouse_id=$2
+           GROUP BY sku_id
+         )
+         SELECT
+           COALESCE(i.sku_id,o.sku_id) AS sku_id,
+           s.code AS sku_code,
+           COALESCE(i.physical_milli,0)::text AS aggregate_physical_milli,
+           COALESCE(o.physical_milli,0)::text AS owner_physical_milli,
+           (
+             COALESCE(i.physical_milli,0)-COALESCE(o.physical_milli,0)
+           )::text AS physical_difference_milli,
+           COALESCE(i.reserved_milli,0)::text AS aggregate_reserved_milli,
+           COALESCE(o.reserved_milli,0)::text AS owner_reserved_milli,
+           (
+             COALESCE(i.reserved_milli,0)-COALESCE(o.reserved_milli,0)
+           )::text AS reserved_difference_milli
+         FROM inventory_balance i
+         FULL OUTER JOIN owner_total o
+           ON o.sku_id=i.sku_id
+         JOIN sku s
+           ON s.tenant_id=$1 AND s.id=COALESCE(i.sku_id,o.sku_id)
+         WHERE COALESCE(i.tenant_id,$1::uuid)=$1
+           AND COALESCE(i.warehouse_id,$2::uuid)=$2
+         ORDER BY s.code`,
+        [context.tenantId,warehouseId]
+      );
+
+      const locations=await client.query(
+        `WITH owner_total AS (
+           SELECT location_id,sku_id,sum(physical_milli) AS physical_milli
+           FROM warehouse_location_owner_balance
+           WHERE tenant_id=$1 AND warehouse_id=$2
+           GROUP BY location_id,sku_id
+         )
+         SELECT
+           COALESCE(l.location_id,o.location_id) AS location_id,
+           wl.full_code,
+           COALESCE(l.sku_id,o.sku_id) AS sku_id,
+           s.code AS sku_code,
+           COALESCE(l.physical_milli,0)::text AS aggregate_milli,
+           COALESCE(o.physical_milli,0)::text AS owner_milli,
+           (
+             COALESCE(l.physical_milli,0)-COALESCE(o.physical_milli,0)
+           )::text AS difference_milli
+         FROM warehouse_location_balance l
+         FULL OUTER JOIN owner_total o
+           ON o.location_id=l.location_id AND o.sku_id=l.sku_id
+         JOIN warehouse_location wl
+           ON wl.tenant_id=$1
+          AND wl.id=COALESCE(l.location_id,o.location_id)
+         JOIN sku s
+           ON s.tenant_id=$1 AND s.id=COALESCE(l.sku_id,o.sku_id)
+         WHERE COALESCE(l.tenant_id,$1::uuid)=$1
+           AND COALESCE(l.warehouse_id,$2::uuid)=$2
+         ORDER BY wl.full_code,s.code`,
+        [context.tenantId,warehouseId]
+      );
+
+      const aggregateMismatch=aggregate.rows.filter(
+        row=>
+          row.physical_difference_milli!=="0"||
+          row.reserved_difference_milli!=="0"
+      ).length;
+      const locationMismatch=locations.rows.filter(
+        row=>row.difference_milli!=="0"
+      ).length;
+
+      return {
+        warehouseId,
+        ownerTrackingState:profile.rows[0].owner_tracking_state,
+        reconciled:aggregateMismatch===0&&locationMismatch===0,
+        aggregateMismatch,
+        locationMismatch,
+        aggregate:aggregate.rows,
+        locations:locations.rows
+      };
+    });
+  }
+
   async reconciliation(
     context:TenantContext,
     warehouseId:string
