@@ -3911,19 +3911,49 @@ export class WmsService {
       if(row.source_type==="WMS_SLOTTING"&&row.source_id){
         const min=String(row.instructions?.suggestedMinMilli??"0");
         const max=String(row.instructions?.suggestedMaxMilli??"0");
-        await client.query(
-          `INSERT INTO warehouse_location_sku_rule(
-             tenant_id,warehouse_id,sku_id,rule_type,location_id,
-             priority,min_quantity_milli,max_quantity_milli,
-             created_by_membership_id
-           ) VALUES ($1,$2,$3,'FIXED_PICK',$4,10,$5,$6,$7)
-           ON CONFLICT DO NOTHING`,
-          [
-            context.tenantId,row.warehouse_id,row.sku_id,row.to_location_id,
-            /^\d+$/.test(min)?min:null,/^\d+$/.test(max)?max:null,
-            context.membershipId
-          ]
+        const existingRule=await client.query<{id:string}>(
+          `SELECT id
+           FROM warehouse_location_sku_rule
+           WHERE tenant_id=$1
+             AND warehouse_id=$2
+             AND sku_id=$3
+             AND rule_type='FIXED_PICK'
+           ORDER BY priority,id
+           LIMIT 1
+           FOR UPDATE`,
+          [context.tenantId,row.warehouse_id,row.sku_id]
         );
+
+        if(existingRule.rows[0]){
+          await client.query(
+            `UPDATE warehouse_location_sku_rule
+             SET location_id=$4,
+                 zone_id=NULL,
+                 priority=10,
+                 min_quantity_milli=$5,
+                 max_quantity_milli=$6
+             WHERE tenant_id=$1 AND id=$2 AND sku_id=$3`,
+            [
+              context.tenantId,existingRule.rows[0].id,row.sku_id,
+              row.to_location_id,
+              /^\d+$/.test(min)?min:null,
+              /^\d+$/.test(max)?max:null
+            ]
+          );
+        }else{
+          await client.query(
+            `INSERT INTO warehouse_location_sku_rule(
+               tenant_id,warehouse_id,sku_id,rule_type,location_id,
+               priority,min_quantity_milli,max_quantity_milli,
+               created_by_membership_id
+             ) VALUES ($1,$2,$3,'FIXED_PICK',$4,10,$5,$6,$7)`,
+            [
+              context.tenantId,row.warehouse_id,row.sku_id,row.to_location_id,
+              /^\d+$/.test(min)?min:null,/^\d+$/.test(max)?max:null,
+              context.membershipId
+            ]
+          );
+        }
       }
 
       await client.query(
