@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Req } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
@@ -57,6 +57,80 @@ export class InventoryController {
     return {
       ok: true,
       data: await this.inventory.adjust(this.context(request), body)
+    };
+  }
+
+  @Post("transfers")
+  @RequirePermission("inventory.write")
+  async transfer(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: {
+      fromWarehouseId: string;
+      toWarehouseId: string;
+      idempotencyKey: string;
+      lines: Array<{ skuId: string; quantityMilli: string }>;
+    }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.inventory.transfer(this.context(request), body)
+    };
+  }
+
+  @Post("stock-counts")
+  @RequirePermission("inventory.write")
+  async createStockCount(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: { warehouseId: string }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.inventory.createStockCount(
+        this.context(request),
+        body.warehouseId
+      )
+    };
+  }
+
+  @Get("stock-counts/:id/lines")
+  @RequirePermission("inventory.read")
+  async stockCountLines(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.inventory.stockCountLines(this.context(request), id)
+    };
+  }
+
+  @Patch("stock-counts/:id/lines/:lineId")
+  @RequirePermission("inventory.write")
+  async updateStockCountLine(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Param("lineId") lineId: string,
+    @Body() body: { countedMilli: string }
+  ): Promise<ApiSuccess<{ updated: true }>> {
+    await this.inventory.updateStockCountLine(
+      this.context(request),
+      id,
+      lineId,
+      body.countedMilli
+    );
+
+    return { ok: true, data: { updated: true } };
+  }
+
+  @Post("stock-counts/:id/post")
+  @RequirePermission("inventory.write")
+  async postStockCount(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.inventory.postStockCount(this.context(request), id)
     };
   }
 
