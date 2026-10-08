@@ -133,11 +133,23 @@ export class SiteDomainsService{
     makePrimary=true
   ):Promise<void>{
     await this.database.withTenantTransaction(context,async client=>{
-      const domain=await client.query<{site_id:string;status:string}>(
-        `SELECT site_id,status
-         FROM site_domain
-         WHERE tenant_id=$1 AND id=$2
-         FOR UPDATE`,
+      const domain=await client.query<{
+        site_id:string;
+        status:string;
+        hostname:string;
+        site_name:string;
+        tracker_site_id:string|null;
+        created_by_membership_id:string;
+      }>(
+        `SELECT
+           d.site_id,d.status,d.hostname,
+           s.name AS site_name,s.tracker_site_id,
+           s.created_by_membership_id
+         FROM site_domain d
+         JOIN site s
+           ON s.tenant_id=d.tenant_id AND s.id=d.site_id
+         WHERE d.tenant_id=$1 AND d.id=$2
+         FOR UPDATE OF d,s`,
         [context.tenantId,domainId]
       );
       const row=domain.rows[0];
@@ -164,6 +176,50 @@ export class SiteDomainsService{
          WHERE tenant_id=$1 AND id=$2`,
         [context.tenantId,domainId,makePrimary]
       );
+
+      let trackerSiteId=row.tracker_site_id;
+
+      if(!trackerSiteId){
+        const trackerKey="cb_"+randomBytes(24).toString("base64url");
+        const tracker=await client.query<{id:string}>(
+          `INSERT INTO tracker_site(
+             tenant_id,name,tracker_key,allowed_domains,created_by_membership_id
+           ) VALUES ($1,$2,$3,$4,$5)
+           RETURNING id`,
+          [
+            context.tenantId,
+            "Сайт: "+row.site_name,
+            trackerKey,
+            JSON.stringify([row.hostname]),
+            row.created_by_membership_id
+          ]
+        );
+        trackerSiteId=tracker.rows[0]!.id;
+
+        await client.query(
+          `UPDATE site
+           SET tracker_site_id=$3,updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,row.site_id,trackerSiteId]
+        );
+      }else{
+        await client.query(
+          `UPDATE tracker_site
+           SET allowed_domains=(
+             SELECT jsonb_agg(value ORDER BY value)
+             FROM (
+               SELECT DISTINCT value
+               FROM jsonb_array_elements_text(
+                 COALESCE(allowed_domains,'[]'::jsonb) || to_jsonb($3::text)
+               ) AS d(value)
+             ) q
+           ),
+           status='ACTIVE',
+           updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,trackerSiteId,row.hostname]
+        );
+      }
     });
   }
 
