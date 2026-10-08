@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R8 / Sprint 37 — Picking / Packing / Shipping Tasks.  
+**Активная разработка:** R8 / Sprint 39 — Wave / Cluster Picking / Dispatcher.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -390,20 +390,43 @@
 - location ledger reconciliation to Inventory Balance after operations;
 - bypass movements blocked once location ledger is active.
 
-## Активно — Sprint 37: Picking / Packing / Shipping Tasks
+### Sprint 37 — Picking / Packing / Shipping Tasks
+- OMS reservation → WMS location pick allocation;
+- concurrent pick availability by location;
+- PICK task generation;
+- outbound PACKING/SHIPPING staging;
+- last PICK automatically opens PACK;
+- PACK automatically opens SHIP;
+- WMS shipment consumes Inventory reservation transactionally;
+- multi-warehouse PARTIALLY_SHIPPED → SHIPPED;
+- location and aggregate ledger reconciliation.
+
+### Sprint 38 — Cycle Count / Replenishment
+- cycle count document/line snapshot;
+- COUNT task generation;
+- stale-snapshot protection;
+- factual count posting;
+- variance adjusts Inventory Ledger + location ledger atomically;
+- count cannot reduce physical below active reservations;
+- FIXED_PICK min/max configuration;
+- replenishment planner from STORAGE;
+- duplicate active replenishment prevention;
+- REPLENISH task completion with reconciliation;
+- client UI for count/replenishment/pick-face setup.
+
+## Активно — Sprint 39: Wave / Cluster Picking / Dispatcher
 
 Scope:
-- OMS reservation → location pick allocation;
-- location-level availability against concurrent pick tasks;
-- PICK task generation;
-- outbound staging;
-- PACK tasks;
-- SHIP tasks;
-- WMS shipment finalization through InventoryService;
-- multi-warehouse order support without double shipment;
-- full location/aggregate reconciliation.
+- group existing PICK tasks into waves;
+- ORDER / BATCH / ZONE / CLUSTER strategies;
+- release lifecycle;
+- cluster slots by sales order;
+- wave priority;
+- claim-next task;
+- dispatcher progress and exceptions;
+- no quantity mutation in wave orchestration itself.
 
 ## Следом
 
-Sprint 38 — Cycle Count / Replenishment.
+Sprint 40 — TSD / PWA scanner-first execution.
 
