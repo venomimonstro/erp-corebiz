@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   Query,
   Req
@@ -37,6 +38,55 @@ export class FinanceController {
   @RequirePermission("finance.read")
   async payments(@Req() request: AuthenticatedRequest): Promise<ApiSuccess<unknown>> {
     return { ok: true, data: await this.finance.listPayments(this.context(request)) };
+  }
+
+  @Get("invoices")
+  @RequirePermission("finance.invoice.read")
+  async invoices(
+    @Req() request: AuthenticatedRequest
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.finance.listInvoices(this.context(request))
+    };
+  }
+
+  @Post("invoices/from-3pl/:statementId")
+  @RequirePermission("finance.invoice.manage")
+  async invoiceFrom3pl(
+    @Req() request: AuthenticatedRequest,
+    @Param("statementId") statementId: string,
+    @Body() body: { dueAt?: string }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.finance.create3plStatementInvoice(
+        this.context(request),
+        statementId,
+        body
+      )
+    };
+  }
+
+  @Post("invoice-payment")
+  @RequirePermission("finance.write")
+  async invoicePayment(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: {
+      invoiceId: string;
+      amountMinor: string;
+      cashAccountId?: string;
+      idempotencyKey: string;
+      note?: string;
+    }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.finance.receiveInvoicePayment(
+        this.context(request),
+        body
+      )
+    };
   }
 
   @Post("accounts")
