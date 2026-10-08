@@ -643,6 +643,201 @@ export class InventoryService {
     });
   }
 
+  async consumeWmsReservation(
+    client: PoolClient,
+    context: TenantContext,
+    input: {
+      reservationId: string;
+      idempotencyKey: string;
+    }
+  ): Promise<{
+    applied: boolean;
+    orderId: string;
+    warehouseId: string;
+    skuId: string;
+    quantityMilli: string;
+  }> {
+    if (!input.idempotencyKey?.trim()) {
+      throw new BadRequestException("Требуется ключ идемпотентности WMS");
+    }
+
+    const reservation = await client.query<{
+      id: string;
+      sales_order_id: string;
+      sales_order_line_id: string;
+      warehouse_id: string;
+      sku_id: string;
+      quantity_milli: string;
+      status: string;
+    }>(
+      `SELECT id,sales_order_id,sales_order_line_id,warehouse_id,sku_id,
+              quantity_milli::text,status
+       FROM inventory_reservation
+       WHERE tenant_id=$1 AND id=$2
+       FOR UPDATE`,
+      [context.tenantId,input.reservationId]
+    );
+
+    const row=reservation.rows[0];
+    if(!row) throw new NotFoundException("Резерв WMS не найден");
+
+    if(row.status==="CONSUMED"){
+      return {
+        applied:false,
+        orderId:row.sales_order_id,
+        warehouseId:row.warehouse_id,
+        skuId:row.sku_id,
+        quantityMilli:row.quantity_milli
+      };
+    }
+    if(row.status!=="ACTIVE"){
+      throw new ConflictException("Резерв WMS уже недоступен для отгрузки");
+    }
+
+    const wms=await client.query(
+      `SELECT 1
+       FROM warehouse_wms_profile
+       WHERE tenant_id=$1 AND warehouse_id=$2
+         AND status='ACTIVE'
+         AND stock_tracking_state='LOCATION_LEDGER'`,
+      [context.tenantId,row.warehouse_id]
+    );
+    if(!wms.rowCount){
+      throw new ConflictException("Склад не находится под активным адресным WMS");
+    }
+
+    await this.lockBalance(
+      client,context.tenantId,row.warehouse_id,row.sku_id
+    );
+
+    const balance=await client.query<{
+      physical_milli:string;
+      reserved_milli:string;
+    }>(
+      `SELECT physical_milli::text,reserved_milli::text
+       FROM inventory_balance
+       WHERE tenant_id=$1 AND warehouse_id=$2 AND sku_id=$3
+       FOR UPDATE`,
+      [context.tenantId,row.warehouse_id,row.sku_id]
+    );
+
+    const current=balance.rows[0];
+    const quantity=BigInt(row.quantity_milli);
+    if(
+      !current ||
+      BigInt(current.physical_milli)<quantity ||
+      BigInt(current.reserved_milli)<quantity
+    ){
+      throw new ConflictException(
+        "Inventory Balance не позволяет завершить WMS-отгрузку"
+      );
+    }
+
+    await client.query(
+      `UPDATE inventory_balance
+       SET physical_milli=physical_milli-$4::bigint,
+           reserved_milli=reserved_milli-$4::bigint,
+           updated_at=now()
+       WHERE tenant_id=$1 AND warehouse_id=$2 AND sku_id=$3`,
+      [
+        context.tenantId,row.warehouse_id,row.sku_id,quantity.toString()
+      ]
+    );
+
+    await this.insertMovementOnly(client,context,{
+      warehouseId:row.warehouse_id,
+      skuId:row.sku_id,
+      movementType:"SHIPMENT",
+      quantityDeltaMilli:-quantity,
+      sourceType:"SALES_ORDER",
+      sourceId:row.sales_order_id,
+      sourceLineId:row.sales_order_line_id,
+      idempotencyKey:input.idempotencyKey.trim()
+    });
+
+    await client.query(
+      `UPDATE inventory_reservation
+       SET status='CONSUMED',consumed_at=now()
+       WHERE tenant_id=$1 AND id=$2`,
+      [context.tenantId,row.id]
+    );
+
+    return {
+      applied:true,
+      orderId:row.sales_order_id,
+      warehouseId:row.warehouse_id,
+      skuId:row.sku_id,
+      quantityMilli:row.quantity_milli
+    };
+  }
+
+  async finalizeWmsOrderShipment(
+    client: PoolClient,
+    context: TenantContext,
+    orderId: string
+  ): Promise<{
+    fulfillmentStatus:"PARTIALLY_SHIPPED"|"SHIPPED";
+    remainingReservations:number;
+  }> {
+    const order=await client.query<{fulfillment_status:string}>(
+      `SELECT fulfillment_status
+       FROM sales_order
+       WHERE tenant_id=$1 AND id=$2
+       FOR UPDATE`,
+      [context.tenantId,orderId]
+    );
+    const row=order.rows[0];
+    if(!row) throw new NotFoundException("Заказ не найден");
+
+    const remaining=await client.query<{count:string}>(
+      `SELECT count(*)::text AS count
+       FROM inventory_reservation
+       WHERE tenant_id=$1 AND sales_order_id=$2 AND status='ACTIVE'`,
+      [context.tenantId,orderId]
+    );
+
+    const remainingReservations=Number(remaining.rows[0]?.count??"0");
+    const fulfillmentStatus=
+      remainingReservations===0 ? "SHIPPED" : "PARTIALLY_SHIPPED";
+
+    if(row.fulfillment_status!==fulfillmentStatus){
+      await client.query(
+        `UPDATE sales_order
+         SET fulfillment_status=$3,version=version+1,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,orderId,fulfillmentStatus]
+      );
+
+      await this.audit(
+        client,
+        context,
+        fulfillmentStatus==="SHIPPED"
+          ? "inventory.order_shipped"
+          : "inventory.order_partially_shipped",
+        "sales_order",
+        orderId,
+        {remainingReservations,source:"WMS"}
+      );
+
+      await this.events.enqueue(client,context,{
+        eventName:
+          fulfillmentStatus==="SHIPPED"
+            ? "inventory.order_shipped"
+            : "inventory.order_partially_shipped",
+        entityType:"SALES_ORDER",
+        entityId:orderId,
+        payload:{
+          orderId,
+          fulfillmentStatus,
+          remainingReservations,
+          source:"WMS"
+        }
+      });
+    }
+
+    return {fulfillmentStatus,remainingReservations};
+  }
+
   async shipOrder(
     context: TenantContext,
     input: {
