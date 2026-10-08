@@ -648,6 +648,9 @@ export class InventoryService {
     input: {
       orderId: string;
       idempotencyKey: string;
+    },
+    options?: {
+      allowWms?: boolean;
     }
   ): Promise<{ orderId: string; fulfillmentStatus: "SHIPPED" }> {
     if (!input.idempotencyKey?.trim()) {
@@ -754,7 +757,7 @@ export class InventoryService {
         [context.tenantId, reservationWarehouseIds]
       );
 
-      if (wmsWarehouses.rowCount) {
+      if (wmsWarehouses.rowCount && !options?.allowWms) {
         throw new ConflictException(
           "Адресный WMS требует отбор и отгрузку через WMS-задачи"
         );
