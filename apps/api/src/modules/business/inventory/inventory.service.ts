@@ -255,6 +255,159 @@ export class InventoryService {
     }
   }
 
+  async reserveAllocation(
+    client: PoolClient,
+    context: TenantContext,
+    input: {
+      salesOrderId: string;
+      salesOrderLineId: string;
+      warehouseId: string;
+      skuId: string;
+      quantityMilli: bigint;
+      safetyStockMilli?: bigint;
+      idempotencyKey: string;
+    }
+  ): Promise<{ reservationId: string; applied: boolean }> {
+    if (input.quantityMilli <= 0n) {
+      throw new BadRequestException("Количество резерва должно быть больше нуля");
+    }
+    if (!input.idempotencyKey?.trim()) {
+      throw new BadRequestException("Требуется ключ идемпотентности");
+    }
+
+    const existing = await client.query<{ id: string }>(
+      `SELECT id FROM inventory_reservation
+       WHERE tenant_id = $1 AND idempotency_key = $2`,
+      [context.tenantId, input.idempotencyKey.trim()]
+    );
+
+    if (existing.rows[0]) {
+      return {
+        reservationId: existing.rows[0].id,
+        applied: false
+      };
+    }
+
+    await this.assertWarehouse(
+      client,
+      context.tenantId,
+      input.warehouseId
+    );
+    await this.assertSku(client, context.tenantId, input.skuId);
+
+    const line = await client.query(
+      `SELECT 1
+       FROM sales_order_line
+       WHERE tenant_id = $1
+         AND id = $2
+         AND order_id = $3
+         AND sku_id = $4`,
+      [
+        context.tenantId,
+        input.salesOrderLineId,
+        input.salesOrderId,
+        input.skuId
+      ]
+    );
+
+    if (!line.rowCount) {
+      throw new NotFoundException("Строка заказа для резерва не найдена");
+    }
+
+    await this.lockBalance(
+      client,
+      context.tenantId,
+      input.warehouseId,
+      input.skuId
+    );
+
+    const balance = await client.query<{
+      physical_milli: string;
+      reserved_milli: string;
+    }>(
+      `SELECT physical_milli::text, reserved_milli::text
+       FROM inventory_balance
+       WHERE tenant_id = $1
+         AND warehouse_id = $2
+         AND sku_id = $3
+       FOR UPDATE`,
+      [context.tenantId, input.warehouseId, input.skuId]
+    );
+
+    const row = balance.rows[0]!;
+    const available =
+      BigInt(row.physical_milli) - BigInt(row.reserved_milli);
+    const safety = input.safetyStockMilli ?? 0n;
+
+    if (safety < 0n) {
+      throw new BadRequestException("Safety stock не может быть отрицательным");
+    }
+
+    if (available - input.quantityMilli < safety) {
+      throw new ConflictException(
+        "Недостаточно ATP с учётом страхового остатка"
+      );
+    }
+
+    const activeSameLineWarehouse = await client.query<{ id: string }>(
+      `SELECT id
+       FROM inventory_reservation
+       WHERE tenant_id = $1
+         AND sales_order_line_id = $2
+         AND warehouse_id = $3
+         AND status = 'ACTIVE'
+       FOR UPDATE`,
+      [
+        context.tenantId,
+        input.salesOrderLineId,
+        input.warehouseId
+      ]
+    );
+
+    if (activeSameLineWarehouse.rows[0]) {
+      throw new ConflictException(
+        "Для строки и склада уже существует активный резерв"
+      );
+    }
+
+    await client.query(
+      `UPDATE inventory_balance
+       SET reserved_milli = reserved_milli + $4::bigint,
+           updated_at = now()
+       WHERE tenant_id = $1
+         AND warehouse_id = $2
+         AND sku_id = $3`,
+      [
+        context.tenantId,
+        input.warehouseId,
+        input.skuId,
+        input.quantityMilli.toString()
+      ]
+    );
+
+    const reservation = await client.query<{ id: string }>(
+      `INSERT INTO inventory_reservation(
+         tenant_id, sales_order_id, sales_order_line_id,
+         warehouse_id, sku_id, quantity_milli, idempotency_key
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING id`,
+      [
+        context.tenantId,
+        input.salesOrderId,
+        input.salesOrderLineId,
+        input.warehouseId,
+        input.skuId,
+        input.quantityMilli.toString(),
+        input.idempotencyKey.trim()
+      ]
+    );
+
+    return {
+      reservationId: reservation.rows[0]!.id,
+      applied: true
+    };
+  }
+
   async reserveOrder(
     context: TenantContext,
     input: {
