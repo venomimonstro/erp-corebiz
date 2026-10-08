@@ -24,6 +24,7 @@ import { ServiceOpsModule } from "./modules/business/service-ops/service-ops.mod
 import { SitesModule } from "./modules/business/sites/sites.module";
 import { SupportModule } from "./modules/business/support/support.module";
 import { WorkflowModule } from "./modules/business/workflow/workflow.module";
+import { WmsModule } from "./modules/business/wms/wms.module";
 import { TasksModule } from "./modules/business/tasks/tasks.module";
 import { AuthModule } from "./modules/platform/auth/auth.module";
 import { BillingModule } from "./modules/platform/billing/billing.module";
@@ -62,6 +63,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     ProcurementModule,
     SupportModule,
     WorkflowModule,
+    WmsModule,
     HealthModule
   ],
   providers: [
