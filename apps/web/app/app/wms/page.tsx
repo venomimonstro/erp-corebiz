@@ -125,6 +125,44 @@ type Dispatcher = {
   }>;
 };
 
+type LaborMetrics = {
+  warehouseId: string;
+  windowHours: number;
+  summary: {
+    completed: number;
+    active_tasks: number;
+    active_operators: number;
+    tasks_per_hour: string | number | null;
+    median_cycle_minutes: string | number | null;
+  };
+  operators: Array<{
+    membership_id: string;
+    email: string;
+    completed: number;
+    active: number;
+    median_cycle_minutes: string | number | null;
+    last_completed_at: string | null;
+  }>;
+  throughput: Array<{
+    task_type: string;
+    completed: number;
+    median_cycle_minutes: string | number | null;
+  }>;
+  backlogRisk: {
+    fresh: number;
+    watch: number;
+    risk: number;
+    critical: number;
+    exceptions: number;
+  };
+  workload: Array<{
+    zone_name: string;
+    task_type: string;
+    status: string;
+    tasks: number;
+  }>;
+};
+
 
 
 type Topology = {
@@ -168,6 +206,7 @@ export default function WmsPage() {
   const [tasks, setTasks] = useState<WmsTask[]>([]);
   const [waves, setWaves] = useState<Wave[]>([]);
   const [dispatcher, setDispatcher] = useState<Dispatcher | null>(null);
+  const [labor, setLabor] = useState<LaborMetrics | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [error, setError] = useState("");
 
@@ -200,7 +239,7 @@ export default function WmsPage() {
       setTopology(next);
 
       if (next.profile?.stock_tracking_state === "LOCATION_LEDGER") {
-        const [locationRows, taskRows, waveRows, dispatcherData] = await Promise.all([
+        const [locationRows, taskRows, waveRows, dispatcherData, laborData] = await Promise.all([
           apiRequest<LocationBalance[]>(
             "/wms/warehouses/" + id + "/location-balances"
           ),
@@ -212,17 +251,22 @@ export default function WmsPage() {
           ),
           apiRequest<Dispatcher>(
             "/wms/warehouses/" + id + "/dispatcher"
+          ),
+          apiRequest<LaborMetrics>(
+            "/wms/warehouses/" + id + "/labor?hours=24"
           )
         ]);
         setBalances(locationRows);
         setTasks(taskRows);
         setWaves(waveRows);
         setDispatcher(dispatcherData);
+        setLabor(laborData);
       } else {
         setBalances([]);
         setTasks([]);
         setWaves([]);
         setDispatcher(null);
+        setLabor(null);
       }
 
       setError("");
@@ -1128,6 +1172,66 @@ export default function WmsPage() {
                               <small>{item.last_error ?? "Задача слишком долго находится в работе"}</small>
                             </article>
                           ))}
+                        </div>
+                      ) : null}
+                    </section>
+
+                    <section className="section-block">
+                      <div className="section-heading">
+                        <div>
+                          <p className="muted">Labor / 24 часа</p>
+                          <h2>Производительность склада</h2>
+                        </div>
+                      </div>
+
+                      <div className="wms-dispatcher-grid">
+                        <article>
+                          <span>Завершено</span>
+                          <strong>{labor?.summary.completed ?? 0}</strong>
+                        </article>
+                        <article>
+                          <span>Задач / час</span>
+                          <strong>{labor?.summary.tasks_per_hour ?? 0}</strong>
+                        </article>
+                        <article>
+                          <span>Медиана цикла</span>
+                          <strong>{labor?.summary.median_cycle_minutes ?? "—"}<small> мин</small></strong>
+                        </article>
+                        <article>
+                          <span>Активные сотрудники</span>
+                          <strong>{labor?.summary.active_operators ?? 0}</strong>
+                        </article>
+                      </div>
+
+                      <div className="wms-risk-row">
+                        <span>до 15м: <b>{labor?.backlogRisk.fresh ?? 0}</b></span>
+                        <span>15–30м: <b>{labor?.backlogRisk.watch ?? 0}</b></span>
+                        <span>30–60м: <b>{labor?.backlogRisk.risk ?? 0}</b></span>
+                        <span>60м+: <b>{labor?.backlogRisk.critical ?? 0}</b></span>
+                      </div>
+
+                      {labor?.operators.length ? (
+                        <div className="data-table-wrap">
+                          <table className="data-table">
+                            <thead>
+                              <tr>
+                                <th>Сотрудник</th>
+                                <th>Завершено</th>
+                                <th>В работе</th>
+                                <th>Медиана</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {labor.operators.slice(0, 12).map((operator) => (
+                                <tr key={operator.membership_id}>
+                                  <td>{operator.email}</td>
+                                  <td>{operator.completed}</td>
+                                  <td>{operator.active}</td>
+                                  <td>{operator.median_cycle_minutes ?? "—"} мин</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
                       ) : null}
                     </section>
