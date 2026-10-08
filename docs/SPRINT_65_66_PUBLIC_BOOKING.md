@@ -14,7 +14,7 @@ Implemented directly in main, without CI or GitHub Actions:
 - Concurrency test: two simultaneous public bookings on last slot; exactly one succeeds.
 - Set up BOOKING form with an explicitly configured resource; empty resource configuration yields no public slots.
 - Verify time zones, DST, at-limit request throttling, broken stale slots, inactive form keys and invalid resource IDs.
-- Revisit submission idempotency: concurrent duplicates must not create duplicate clients, and retries must return the original booking.
+- Migration 117 adds PROCESSING state; submission is atomically claimed, so two requests with the same idempotency key cannot concurrently create two bookings. A FAILED submission is intentionally not auto-retried: manual reconciliation is needed because customer creation and booking creation are not one transaction. Add a recovery workflow before production.
 - Public data abuse: use per-IP limits in addition to per-form throttling, reject unbounded or malicious payloads, and monitor form spam.
 - For multi-resource sessions and group capacity, design a separate slot/allocation model; current public selection is single resource only.
 - Sprint 66 payment reconciliation and fiscal integration are **not** implemented by these changes.
