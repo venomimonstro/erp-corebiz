@@ -442,53 +442,7 @@ export class WmsController{
     };
   }
 
-  @Get("warehouses/:warehouseId/mobile/next")
-  @RequirePermission("wms.manage")
-  async mobileNext(
-    @Req() req:AuthenticatedRequest,
-    @Param("warehouseId") warehouseId:string
-  ):Promise<ApiSuccess<unknown>>{
-    return {
-      ok:true,
-      data:await this.wms.nextMobileTask(this.ctx(req),warehouseId)
-    };
-  }
-
-  @Post("tasks/:taskId/mobile/scan")
-  @RequirePermission("wms.manage")
-  async mobileScan(
-    @Req() req:AuthenticatedRequest,
-    @Param("taskId") taskId:string,
-    @Body() body:{
-      kind:"FROM_LOCATION"|"SKU"|"TO_LOCATION";
-      value:string;
-      idempotencyKey:string;
-    }
-  ):Promise<ApiSuccess<unknown>>{
-    return {
-      ok:true,
-      data:await this.wms.scanMobileTask(
-        this.ctx(req),taskId,body
-      )
-    };
-  }
-
-  @Post("tasks/:taskId/mobile/problem")
-  @RequirePermission("wms.manage")
-  async mobileProblem(
-    @Req() req:AuthenticatedRequest,
-    @Param("taskId") taskId:string,
-    @Body() body:any
-  ):Promise<ApiSuccess<unknown>>{
-    return {
-      ok:true,
-      data:await this.wms.reportMobileTaskProblem(
-        this.ctx(req),taskId,body
-      )
-    };
-  }
-
-  @Post("tasks/:taskId/mobile/complete")
+  @Post("mobile/tasks/:taskId/complete")
   @RequirePermission("wms.manage")
   async mobileComplete(
     @Req() req:AuthenticatedRequest,
