@@ -337,6 +337,54 @@ export class WmsController{
     };
   }
 
+  @Get("mobile/warehouses/:warehouseId/next")
+  @RequirePermission("wms.manage")
+  async mobileNext(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.nextMobileTask(
+        this.ctx(req),warehouseId
+      )
+    };
+  }
+
+  @Post("mobile/tasks/:taskId/scan")
+  @RequirePermission("wms.manage")
+  async mobileScan(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string,
+    @Body() body:{
+      kind:"FROM_LOCATION"|"SKU"|"TO_LOCATION";
+      value:string;
+      idempotencyKey:string;
+    }
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.scanMobileTask(
+        this.ctx(req),taskId,body
+      )
+    };
+  }
+
+  @Post("mobile/tasks/:taskId/problem")
+  @RequirePermission("wms.manage")
+  async mobileProblem(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.reportMobileTaskProblem(
+        this.ctx(req),taskId,body
+      )
+    };
+  }
+
   @Get("warehouses/:warehouseId/reconciliation")
   @RequirePermission("wms.read")
   async reconciliation(
