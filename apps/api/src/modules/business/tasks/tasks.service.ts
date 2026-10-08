@@ -31,13 +31,21 @@ export class TasksService {
     const scope = await this.authorization.resolveScope(context, "tasks.read");
     if (!scope) throw new BadRequestException("Недостаточно прав");
 
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
+
     return this.database.withTenantTransaction(context, async (client) => {
       const values: unknown[] = [context.tenantId];
       const clauses = ["t.tenant_id = $1"];
 
-      if (scope === "own" || filter === "mine") {
-        values.push(context.membershipId);
-        clauses.push(`t.responsible_membership_id = $${values.length}`);
+      const effectiveMembershipIds =
+        filter === "mine" ? [context.membershipId] : scopedMembershipIds;
+
+      if (effectiveMembershipIds) {
+        values.push(effectiveMembershipIds);
+        clauses.push(
+          `t.responsible_membership_id = ANY(${values.length}::uuid[])`
+        );
       }
 
       if (filter === "today") {
@@ -113,15 +121,23 @@ export class TasksService {
     const scope = await this.authorization.resolveScope(context, "tasks.write");
     if (!scope) throw new BadRequestException("Недостаточно прав");
 
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
+
     const title = input.title.trim();
     if (title.length < 2 || title.length > 240) {
       throw new BadRequestException("Некорректное название задачи");
     }
 
     const responsible =
-      scope === "own"
-        ? context.membershipId
-        : input.responsibleMembershipId ?? context.membershipId;
+      input.responsibleMembershipId ?? context.membershipId;
+
+    if (
+      scopedMembershipIds &&
+      !scopedMembershipIds.includes(responsible)
+    ) {
+      throw new BadRequestException("Ответственный сотрудник недоступен");
+    }
 
     let dueAt: Date | null = null;
     if (input.dueAt) {
@@ -197,6 +213,9 @@ export class TasksService {
     const scope = await this.authorization.resolveScope(context, "tasks.write");
     if (!scope) throw new BadRequestException("Недостаточно прав");
 
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
+
     return this.database.withTenantTransaction(context, async (client) => {
       const values: unknown[] = [
         context.tenantId,
@@ -205,9 +224,10 @@ export class TasksService {
       ];
 
       let scopeSql = "";
-      if (scope === "own") {
-        values.push(context.membershipId);
-        scopeSql = `AND responsible_membership_id = $${values.length}`;
+      if (scopedMembershipIds) {
+        values.push(scopedMembershipIds);
+        scopeSql =
+          `AND responsible_membership_id = ANY(${values.length}::uuid[])`;
       }
 
       const result = await client.query<{ id: string; state: string }>(
