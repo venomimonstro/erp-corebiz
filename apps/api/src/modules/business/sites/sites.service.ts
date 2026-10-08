@@ -714,6 +714,23 @@ export class SitesService {
     };
   }
 
+  async publicRoutes(
+    publicSlug:string
+  ):Promise<Array<{pageSlug:string;publishedAt:string}>>{
+    const slug=this.publicSlug(publicSlug);
+    const result=await this.database.query<{
+      page_slug:string;
+      published_at:Date;
+    }>(
+      `SELECT * FROM corebiz_public_site_routes($1)`,
+      [slug]
+    );
+    return result.rows.map(row=>({
+      pageSlug:row.page_slug,
+      publishedAt:row.published_at.toISOString()
+    }));
+  }
+
   private validateBlock(
     type: BlockType,
     config: Record<string, unknown>
