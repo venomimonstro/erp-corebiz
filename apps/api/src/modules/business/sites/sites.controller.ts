@@ -92,6 +92,17 @@ export class SitesController{
     };
   }
 
+  @Public()
+  @Get("public/:publicSlug/routes")
+  async publicRoutes(
+    @Param("publicSlug") publicSlug:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.sitesService.publicRoutes(publicSlug)
+    };
+  }
+
   private ctx(req:AuthenticatedRequest):TenantContext{
     const a=req.auth!;
     return {tenantId:a.tenantId,userId:a.userId,membershipId:a.membershipId};
