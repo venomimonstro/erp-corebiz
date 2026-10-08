@@ -783,6 +783,7 @@ export class WmsService {
            t.from_location_id,fl.full_code AS from_code,
            t.to_location_id,tl.full_code AS to_code,
            t.source_type,t.source_id,t.source_line_id,
+           t.wave_id,t.cluster_slot,
            t.claimed_by_membership_id,t.claimed_at,t.completed_at,
            t.instructions,t.last_error,t.created_at
          FROM warehouse_task t
@@ -1224,10 +1225,12 @@ export class WmsService {
         allocation_id:string;
         allocation_status:string;
         sales_order_id:string;
+        wave_id:string|null;
       }>(
         `SELECT
            t.status,t.warehouse_id,t.sku_id,t.quantity_milli::text,
            t.from_location_id,t.to_location_id,t.claimed_by_membership_id,
+           t.wave_id,
            a.id AS allocation_id,a.status AS allocation_status,
            a.sales_order_id
          FROM warehouse_task t
@@ -1377,6 +1380,26 @@ export class WmsService {
             })
           ]
         );
+      }
+
+      if(row.wave_id){
+        const activeWaveTask=await client.query(
+          `SELECT 1
+           FROM warehouse_task
+           WHERE tenant_id=$1 AND wave_id=$2
+             AND status IN ('OPEN','CLAIMED')
+           LIMIT 1`,
+          [context.tenantId,row.wave_id]
+        );
+        if(!activeWaveTask.rowCount){
+          await client.query(
+            `UPDATE wms_wave
+             SET status='COMPLETED',completed_at=COALESCE(completed_at,now())
+             WHERE tenant_id=$1 AND id=$2
+               AND status IN ('RELEASED','IN_PROGRESS')`,
+            [context.tenantId,row.wave_id]
+          );
+        }
       }
 
       await this.assertLocationReconciliation(
@@ -2365,6 +2388,312 @@ export class WmsService {
       await this.assertLocationReconciliation(
         client,context.tenantId,row.warehouse_id
       );
+    });
+  }
+
+  async waves(
+    context:TenantContext,
+    warehouseId:string
+  ):Promise<Array<Record<string,unknown>>>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           w.id,w.strategy,w.status,w.priority,w.max_tasks,
+           w.created_at,w.released_at,w.completed_at,
+           count(t.id)::int AS tasks,
+           count(t.id) FILTER (WHERE t.status='OPEN')::int AS open_tasks,
+           count(t.id) FILTER (WHERE t.status='CLAIMED')::int AS claimed_tasks,
+           count(t.id) FILTER (WHERE t.status='COMPLETED')::int AS completed_tasks,
+           count(t.id) FILTER (WHERE t.status='FAILED')::int AS failed_tasks
+         FROM wms_wave w
+         LEFT JOIN warehouse_task t
+           ON t.tenant_id=w.tenant_id AND t.wave_id=w.id
+         WHERE w.tenant_id=$1 AND w.warehouse_id=$2
+         GROUP BY w.id
+         ORDER BY
+           CASE w.status
+             WHEN 'IN_PROGRESS' THEN 0
+             WHEN 'RELEASED' THEN 1
+             WHEN 'DRAFT' THEN 2
+             ELSE 3
+           END,
+           w.priority,w.created_at DESC
+         LIMIT 100`,
+        [context.tenantId,warehouseId]
+      );
+      return result.rows;
+    });
+  }
+
+  async createWave(
+    context:TenantContext,
+    warehouseId:string,
+    input:{
+      strategy:"ORDER"|"BATCH"|"ZONE"|"CLUSTER";
+      maxTasks?:number;
+      priority?:number;
+    }
+  ):Promise<{
+    waveId:string;
+    tasks:number;
+    orders:number;
+  }>{
+    const strategy=String(input.strategy??"").toUpperCase();
+    if(!["ORDER","BATCH","ZONE","CLUSTER"].includes(strategy)){
+      throw new BadRequestException("Неизвестная стратегия wave");
+    }
+    const maxTasks=this.integer(input.maxTasks??50,1,500,"Максимум задач");
+    const priority=this.integer(input.priority??100,0,10000,"Приоритет wave");
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const profile=await client.query(
+        `SELECT 1
+         FROM warehouse_wms_profile
+         WHERE tenant_id=$1 AND warehouse_id=$2
+           AND status='ACTIVE'
+           AND stock_tracking_state='LOCATION_LEDGER'`,
+        [context.tenantId,warehouseId]
+      );
+      if(!profile.rowCount){
+        throw new BadRequestException("Wave picking требует активный адресный WMS");
+      }
+
+      const candidates=await client.query<{
+        task_id:string;
+        sales_order_id:string;
+        sku_id:string;
+        zone_priority:number;
+        pick_sequence:number;
+      }>(
+        `SELECT
+           t.id AS task_id,
+           a.sales_order_id,
+           a.sku_id,
+           z.priority AS zone_priority,
+           l.pick_sequence
+         FROM warehouse_task t
+         JOIN wms_pick_allocation a
+           ON a.tenant_id=t.tenant_id AND a.pick_task_id=t.id
+         JOIN warehouse_location l
+           ON l.tenant_id=t.tenant_id AND l.id=t.from_location_id
+         JOIN warehouse_zone z
+           ON z.tenant_id=l.tenant_id AND z.id=l.zone_id
+         WHERE t.tenant_id=$1
+           AND t.warehouse_id=$2
+           AND t.task_type='PICK'
+           AND t.status='OPEN'
+           AND t.wave_id IS NULL
+           AND a.status='PLANNED'
+         ORDER BY
+           CASE WHEN $3='ORDER' THEN a.sales_order_id::text ELSE '' END,
+           CASE WHEN $3='BATCH' THEN a.sku_id::text ELSE '' END,
+           CASE WHEN $3='ZONE' THEN z.priority ELSE 0 END,
+           CASE WHEN $3='CLUSTER' THEN l.pick_sequence ELSE 0 END,
+           l.pick_sequence,
+           a.sales_order_id,
+           t.created_at
+         LIMIT $4
+         FOR UPDATE OF t SKIP LOCKED`,
+        [context.tenantId,warehouseId,strategy,maxTasks]
+      );
+
+      if(!candidates.rowCount){
+        throw new ConflictException("Нет свободных PICK-задач для wave");
+      }
+
+      const wave=await client.query<{id:string}>(
+        `INSERT INTO wms_wave(
+           tenant_id,warehouse_id,strategy,status,priority,max_tasks,
+           created_by_membership_id
+         ) VALUES ($1,$2,$3,'DRAFT',$4,$5,$6)
+         RETURNING id`,
+        [
+          context.tenantId,warehouseId,strategy,priority,maxTasks,
+          context.membershipId
+        ]
+      );
+      const waveId=wave.rows[0]!.id;
+
+      const orderSlots=new Map<string,string>();
+      let nextSlot=1;
+
+      for(const row of candidates.rows){
+        let clusterSlot:string|null=null;
+        if(strategy==="CLUSTER"){
+          clusterSlot=orderSlots.get(row.sales_order_id)??null;
+          if(!clusterSlot){
+            clusterSlot="C"+String(nextSlot).padStart(2,"0");
+            orderSlots.set(row.sales_order_id,clusterSlot);
+            nextSlot+=1;
+          }
+        }
+
+        await client.query(
+          `UPDATE warehouse_task
+           SET wave_id=$3,
+               cluster_slot=$4,
+               priority=LEAST(priority,$5),
+               updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status='OPEN' AND wave_id IS NULL`,
+          [
+            context.tenantId,row.task_id,waveId,clusterSlot,priority
+          ]
+        );
+      }
+
+      const orders=new Set(candidates.rows.map(row=>row.sales_order_id)).size;
+
+      await this.audit(
+        client,context,"wms.wave_created","wms_wave",waveId,{
+          warehouseId,strategy,tasks:candidates.rowCount??0,orders
+        }
+      );
+
+      return {
+        waveId,
+        tasks:candidates.rowCount??0,
+        orders
+      };
+    });
+  }
+
+  async releaseWave(
+    context:TenantContext,
+    waveId:string
+  ):Promise<{status:string}>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const wave=await client.query<{
+        status:string;
+      }>(
+        `SELECT status
+         FROM wms_wave
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,waveId]
+      );
+      const row=wave.rows[0];
+      if(!row) throw new NotFoundException("Wave не найден");
+
+      if(["RELEASED","IN_PROGRESS","COMPLETED"].includes(row.status)){
+        return {status:row.status};
+      }
+      if(row.status!=="DRAFT"){
+        throw new ConflictException("Wave нельзя выпустить в работу");
+      }
+
+      const tasks=await client.query(
+        `SELECT 1 FROM warehouse_task
+         WHERE tenant_id=$1 AND wave_id=$2 AND status='OPEN'
+         LIMIT 1`,
+        [context.tenantId,waveId]
+      );
+      if(!tasks.rowCount){
+        throw new ConflictException("В wave нет открытых задач");
+      }
+
+      await client.query(
+        `UPDATE wms_wave
+         SET status='RELEASED',
+             released_by_membership_id=$3,
+             released_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,waveId,context.membershipId]
+      );
+
+      return {status:"RELEASED"};
+    });
+  }
+
+  async claimNextWaveTask(
+    context:TenantContext,
+    waveId:string
+  ):Promise<Record<string,unknown>|null>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const wave=await client.query<{
+        status:string;
+        warehouse_id:string;
+      }>(
+        `SELECT status,warehouse_id
+         FROM wms_wave
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,waveId]
+      );
+      const waveRow=wave.rows[0];
+      if(!waveRow) throw new NotFoundException("Wave не найден");
+      if(!["RELEASED","IN_PROGRESS"].includes(waveRow.status)){
+        throw new ConflictException("Wave ещё не выпущен в работу");
+      }
+
+      const task=await client.query<{
+        id:string;
+        task_type:string;
+        sku_id:string|null;
+        quantity_milli:string|null;
+        from_code:string|null;
+        to_code:string|null;
+        cluster_slot:string|null;
+      }>(
+        `SELECT
+           t.id,t.task_type,t.sku_id,t.quantity_milli::text,
+           fl.full_code AS from_code,tl.full_code AS to_code,
+           t.cluster_slot
+         FROM warehouse_task t
+         LEFT JOIN warehouse_location fl
+           ON fl.tenant_id=t.tenant_id AND fl.id=t.from_location_id
+         LEFT JOIN warehouse_location tl
+           ON tl.tenant_id=t.tenant_id AND tl.id=t.to_location_id
+         WHERE t.tenant_id=$1
+           AND t.wave_id=$2
+           AND t.status='OPEN'
+         ORDER BY t.priority,fl.pick_sequence,t.created_at
+         FOR UPDATE OF t SKIP LOCKED
+         LIMIT 1`,
+        [context.tenantId,waveId]
+      );
+
+      const row=task.rows[0];
+      if(!row){
+        const active=await client.query(
+          `SELECT 1 FROM warehouse_task
+           WHERE tenant_id=$1 AND wave_id=$2 AND status='CLAIMED'
+           LIMIT 1`,
+          [context.tenantId,waveId]
+        );
+        if(!active.rowCount){
+          await client.query(
+            `UPDATE wms_wave
+             SET status='COMPLETED',completed_at=COALESCE(completed_at,now())
+             WHERE tenant_id=$1 AND id=$2
+               AND status IN ('RELEASED','IN_PROGRESS')`,
+            [context.tenantId,waveId]
+          );
+        }
+        return null;
+      }
+
+      await client.query(
+        `UPDATE warehouse_task
+         SET status='CLAIMED',
+             claimed_by_membership_id=$3,
+             claimed_at=COALESCE(claimed_at,now()),
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,row.id,context.membershipId]
+      );
+
+      await client.query(
+        `UPDATE wms_wave
+         SET status='IN_PROGRESS'
+         WHERE tenant_id=$1 AND id=$2 AND status='RELEASED'`,
+        [context.tenantId,waveId]
+      );
+
+      return {
+        ...row,
+        waveId,
+        warehouseId:waveRow.warehouse_id
+      };
     });
   }
 
