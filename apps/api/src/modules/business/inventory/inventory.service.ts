@@ -7,6 +7,7 @@ import {
 import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { DomainEventService } from "../../platform/events/domain-event.service";
 
 export type InventoryReceiptLine = {
   skuId: string;
@@ -38,7 +39,10 @@ type MovementInput = {
 
 @Injectable()
 export class InventoryService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly events: DomainEventService
+  ) {}
 
   async listWarehouses(context: TenantContext): Promise<Array<{
     id: string;
@@ -634,6 +638,17 @@ export class InventoryService {
         input.orderId
       );
 
+      await this.events.enqueue(client, context, {
+        eventName: "inventory.order_shipped",
+        entityType: "SALES_ORDER",
+        entityId: input.orderId,
+        payload: {
+          orderId: input.orderId,
+          warehouseId: row.warehouse_id,
+          fulfillmentStatus: "SHIPPED"
+        }
+      });
+
       return {
         orderId: input.orderId,
         fulfillmentStatus: "SHIPPED"
@@ -801,6 +816,18 @@ export class InventoryService {
           toWarehouseId: input.toWarehouseId
         }
       );
+
+      await this.events.enqueue(client, context, {
+        eventName: "inventory.transfer_posted",
+        entityType: "INVENTORY_TRANSFER",
+        entityId: transfer.id,
+        payload: {
+          transferId: transfer.id,
+          number,
+          fromWarehouseId: input.fromWarehouseId,
+          toWarehouseId: input.toWarehouseId
+        }
+      });
 
       return {
         transferId: transfer.id,
@@ -1065,6 +1092,17 @@ export class InventoryService {
         stockCountId,
         { adjustments }
       );
+
+      await this.events.enqueue(client, context, {
+        eventName: "inventory.stock_count_posted",
+        entityType: "STOCK_COUNT",
+        entityId: stockCountId,
+        payload: {
+          stockCountId,
+          warehouseId: count.warehouse_id,
+          adjustments
+        }
+      });
 
       return { stockCountId, adjustments };
     });
