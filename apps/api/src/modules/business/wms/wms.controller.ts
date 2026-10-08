@@ -1,5 +1,5 @@
 import {
-  Body,Controller,Get,Param,Patch,Post,Put,Req
+  Body,Controller,Get,Param,Patch,Post,Put,Query,Req
 } from "@nestjs/common";
 import type {ApiSuccess,TenantContext} from "@corebiz/contracts";
 import type {AuthenticatedRequest} from "../../platform/auth/auth.types";
@@ -327,6 +327,23 @@ export class WmsController{
       ok:true,
       data:await this.wms.completeMobileTask(
         this.ctx(req),taskId,body
+      )
+    };
+  }
+
+  @Get("warehouses/:warehouseId/labor")
+  @RequirePermission("wms.read")
+  async labor(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string,
+    @Query("hours") hours?:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.laborMetrics(
+        this.ctx(req),
+        warehouseId,
+        hours?Number(hours):24
       )
     };
   }
