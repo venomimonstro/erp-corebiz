@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Get,
-  Param,
   Post,
   Query,
   Req
@@ -20,7 +19,20 @@ export class AttributionController {
   @RequirePermission("analytics.manage")
   async link(
     @Req() request: AuthenticatedRequest,
-    @Body() body: any
+    @Body() body: {
+      trackerKey: string;
+      visitorId: string;
+      partyId: string;
+      source?:
+        | "MANUAL"
+        | "FORM"
+        | "CHECKOUT"
+        | "BOOKING"
+        | "CALL"
+        | "IMPORT"
+        | "API";
+      confidence?: number;
+    }
   ): Promise<ApiSuccess<unknown>> {
     return {
       ok: true,
@@ -31,51 +43,23 @@ export class AttributionController {
     };
   }
 
-  @Post("recalculate")
-  @RequirePermission("analytics.manage")
-  async recalculate(
-    @Req() request: AuthenticatedRequest,
-    @Body() body: { partyId?: string }
-  ): Promise<ApiSuccess<unknown>> {
-    return {
-      ok: true,
-      data: await this.attribution.recalculate(
-        this.context(request),
-        body.partyId
-      )
-    };
-  }
-
   @Get("results")
   @RequirePermission("analytics.read")
   async results(
     @Req() request: AuthenticatedRequest,
-    @Query("model") model = "LAST_PAID_TOUCH",
+    @Query("model") model:
+      | "FIRST_TOUCH"
+      | "LAST_TOUCH"
+      | "LAST_NON_DIRECT"
+      | "LINEAR" = "LAST_NON_DIRECT",
     @Query("from") from?: string,
     @Query("to") to?: string
   ): Promise<ApiSuccess<unknown>> {
     return {
       ok: true,
-      data: await this.attribution.results(
+      data: await this.attribution.attribution(
         this.context(request),
-        model as any,
-        from,
-        to
-      )
-    };
-  }
-
-  @Get("party/:id")
-  @RequirePermission("analytics.read")
-  async journey(
-    @Req() request: AuthenticatedRequest,
-    @Param("id") id: string
-  ): Promise<ApiSuccess<unknown>> {
-    return {
-      ok: true,
-      data: await this.attribution.journey(
-        this.context(request),
-        id
+        { model, from, to }
       )
     };
   }
