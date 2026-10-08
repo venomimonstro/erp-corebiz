@@ -8,6 +8,7 @@ import {
 } from "@nestjs/common";
 import type { Response } from "express";
 import type { ApiSuccess } from "@corebiz/contracts";
+import { AuthRateLimitService } from "./auth-rate-limit.service";
 import { AuthService } from "./auth.service";
 import type { AuthenticatedRequest } from "./auth.types";
 import {
@@ -18,14 +19,20 @@ import { Public } from "./public.decorator";
 
 @Controller("auth")
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly rateLimit: AuthRateLimitService
+  ) {}
 
   @Public()
   @Post("register")
   async register(
+    @Req() request: AuthenticatedRequest,
     @Body() body: { email: string; password: string; companyName: string },
     @Res({ passthrough: true }) response: Response
   ): Promise<ApiSuccess<{ auth: unknown }>> {
+    await this.rateLimit.assertRegistrationAllowed(request.ip ?? "unknown");
+
     const result = await this.authService.register(body);
     setSessionCookie(response, result.token);
 
@@ -38,10 +45,16 @@ export class AuthController {
   @Public()
   @Post("login")
   async login(
+    @Req() request: AuthenticatedRequest,
     @Body() body: { email: string; password: string },
     @Res({ passthrough: true }) response: Response
   ): Promise<ApiSuccess<{ auth: unknown }>> {
+    const ip = request.ip ?? "unknown";
+
+    await this.rateLimit.assertLoginAllowed(ip, body.email);
     const result = await this.authService.login(body);
+    await this.rateLimit.resetLogin(ip, body.email);
+
     setSessionCookie(response, result.token);
 
     return {
