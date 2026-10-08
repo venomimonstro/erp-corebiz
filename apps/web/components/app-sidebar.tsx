@@ -26,6 +26,7 @@ export function AppSidebar({ active }: { active: string }) {
       {link("/app/settings", "Настройки", "settings")}
       {link("/app/settings/billing", "Тариф", "billing")}
       {link("/app/settings/customization", "Настройка системы", "customization")}
+      {link("/app/workflows", "Автоматизации", "workflows")}
     </aside>
   );
 }
