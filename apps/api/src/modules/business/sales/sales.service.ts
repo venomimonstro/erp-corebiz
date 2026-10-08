@@ -8,6 +8,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
+import { DomainEventService } from "../../platform/events/domain-event.service";
 import { InventoryService } from "../inventory/inventory.service";
 import { FinanceService } from "../finance/finance.service";
 
@@ -25,7 +26,8 @@ export class SalesService {
     private readonly database: DatabaseService,
     private readonly authorization: AuthorizationService,
     private readonly inventory: InventoryService,
-    private readonly finance: FinanceService
+    private readonly finance: FinanceService,
+    private readonly events: DomainEventService
   ) {}
 
   async list(context: TenantContext): Promise<Array<{
@@ -418,6 +420,17 @@ export class SalesService {
         "sales.order_confirmed",
         order.id
       );
+
+      await this.events.enqueue(client, context, {
+        eventName: "sales.order_confirmed",
+        entityType: "SALES_ORDER",
+        entityId: order.id,
+        payload: {
+          orderId: order.id,
+          orderStatus: order.order_status,
+          version: order.version
+        }
+      });
 
       return {
         id: order.id,
