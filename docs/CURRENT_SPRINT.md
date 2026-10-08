@@ -2,89 +2,146 @@
 
 ## Статус
 
-**R0 — Foundation**  
-**Активно:** Sprint 0 → Sprint 1.
+**Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
+**Активная разработка:** R3 / Sprint 13 — Onboarding & Migration.  
+**Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
-## Sprint 0 — Engineering Foundation
+## Реализовано в main
 
-### Уже создано
+### Sprint 0 — Engineering Foundation
 - pnpm monorepo;
-- `apps/api` NestJS;
-- `apps/web` Next.js;
-- `apps/worker`;
-- shared contracts;
-- public landing shell;
-- Owner Workspace shell;
-- API `/api/v1/health`;
-- AsyncLocalStorage TenantContext foundation;
+- NestJS API / Next.js Web / worker;
 - PostgreSQL + Redis local compose;
-- initial tenant/user/membership/session/audit SQL;
-- RLS policies foundation;
-- architecture/security/product/roadmap docs;
-- ADR-001..004.
-
-### Осталось до Sprint 0 Gate
-- package installation lockfile;
-- validate full build/typecheck;
-- environment loader/validation;
-- database adapter/migration runner;
-- structured logging + trace id;
+- env fail-fast validation;
+- migration runner;
+- request trace id;
 - common API error envelope;
-- test harness;
-- one-command local bootstrap;
-- architecture boundary test foundation.
+- local bootstrap scripts;
+- Jest harness foundation.
 
-## Sprint 0 Gate
-
-Sprint 0 считается завершённым, когда:
-1. `pnpm install` воспроизводим;
-2. `pnpm build` проходит;
-3. `pnpm typecheck` проходит;
-4. Postgres/Redis стартуют одной командой;
-5. API health работает;
-6. web public/app shells открываются;
-7. migration runner применяет DB schema;
-8. environment validation fail-fast;
-9. README описывает запуск.
-
-## Sprint 1 — Identity / Tenant / Membership
-
-### Scope
-- User repository/service;
-- Tenant repository/service;
-- TenantMembership;
-- create tenant;
-- invite membership foundation;
+### Sprint 1 — Identity / Tenant / Membership
 - signup/login/logout;
-- email verification model;
-- password reset model;
-- secure session;
+- Argon2id;
+- hashed session token;
+- HttpOnly cookie;
+- server-side active tenant membership;
 - tenant switching;
-- request authentication guard;
-- request TenantContext binding.
+- tenant invitation model/API;
+- CSRF origin guard;
+- Redis login/registration rate limit;
+- email verification/password reset DB models.
 
-### Security requirements
-- Argon2id password hashes;
-- session secret never stored plaintext in DB;
-- HttpOnly/Secure cookie in production;
-- CSRF strategy;
-- session revocation;
-- login rate limit;
-- generic auth error messages;
-- audit events.
+### Sprint 2 — Security / RLS / RBAC / Audit
+- PostgreSQL RLS foundation;
+- OWNER/ADMIN/SALES/PROCUREMENT/WAREHOUSE/FINANCE/VIEWER roles;
+- own/team/branch/all scopes;
+- permission guard;
+- audit events;
+- tenant-safe business validation.
 
-## Sprint 1 Gate
+### Sprint 3–6 — CRM Alpha
+- Organization: legal entities, branches, teams;
+- Party Customer/Supplier;
+- CRM Pipeline/Stage/Deal;
+- Kanban drag&drop;
+- optimistic deal version;
+- won/lost transitions;
+- Deal→Order;
+- Tasks with today/overdue/mine;
+- CRM and task scope enforcement.
 
-1. User can register.
-2. User can create first Tenant.
-3. Owner membership created atomically.
-4. One User can belong to multiple Tenants.
-5. Switching Tenant changes server-side TenantContext.
-6. Request cannot forge `tenant_id`.
-7. Logout revokes session.
-8. Suspended membership cannot enter tenant.
-9. auth/tenant tests pass.
+### Sprint 7 — Catalog
+- Product → Variant → SKU;
+- stockable/non-stock;
+- sale price / cost;
+- catalog workspace.
 
-## Следующий этап
+### Sprint 8 — Sales
+- SalesOrder + lines;
+- independent order/payment/fulfillment statuses;
+- tenant-safe order numbering;
+- idempotent Deal→Order;
+- cost snapshot in sales line;
+- confirm → reserve → ship workflow.
 
-Только после Sprint 1/2 security gates начинается Organization/Party и CRM.
+### Sprint 9 — Procurement
+- Supplier;
+- PurchaseOrder;
+- partial receipts;
+- receipt lines;
+- confirmation creates payable;
+- receipt atomically posts Inventory Ledger.
+
+### Sprint 10 — Inventory
+- Warehouse;
+- immutable InventoryTransaction;
+- physical/reserved/available balance projection;
+- reservations with row locks;
+- shipment;
+- adjustments;
+- inter-warehouse transfers;
+- stock count;
+- stock-count reconciliation against current physical balance.
+
+### Sprint 11 — Finance Lite
+- CashAccount;
+- cash flow categories;
+- receivable/payable obligations;
+- customer payments;
+- supplier payments;
+- refunds;
+- idempotent payment posting;
+- immutable financial payment fields;
+- finance workspace.
+
+### Sprint 12 — Owner Dashboard & Action Queue
+- cash;
+- sales 30d;
+- cost-snapshot gross profit;
+- open orders;
+- AR/AP;
+- stock value;
+- overdue tasks;
+- deal-without-next-action risk;
+- overdue obligation risk;
+- stock risk.
+
+## Verification debt / Gate не закрыт автоматически
+
+Функциональная реализация опережает подтверждённые engineering gates. До production launch обязательно локально подтвердить:
+
+1. `pnpm install` и lockfile reproducibility.
+2. `pnpm build`.
+3. `pnpm typecheck`.
+4. `pnpm test`.
+5. Полный migration run на чистой PostgreSQL.
+6. Cross-tenant integration tests.
+7. Auth/session integration tests.
+8. Sales→Finance→Inventory end-to-end tests.
+9. Procurement→Receipt→Inventory→AP end-to-end tests.
+10. Load baseline.
+11. Backup/restore drill.
+
+Отсутствие GitHub Actions не означает отсутствие проверок: проверки должны запускаться локально/на сервере перед production release.
+
+## Активно — Sprint 13: Onboarding / Migration
+
+Scope:
+- migration batch;
+- CSV/XLSX ingestion;
+- entity mapping;
+- dry-run;
+- row validation;
+- duplicate detection;
+- product/customer import first;
+- idempotent import;
+- reconciliation report;
+- first-company onboarding state.
+
+## Следом
+
+Sprint 14 — Billing.  
+Sprint 15 — Ticket System / Knowledge Base.  
+Sprint 16 — Customization.  
+Sprint 17 — Workflow V1.  
+Sprint 18 — Production Hardening.
