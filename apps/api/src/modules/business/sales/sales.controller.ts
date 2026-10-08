@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -58,7 +59,7 @@ export class SalesController {
     @Body() body: { idempotencyKey: string }
   ): Promise<ApiSuccess<unknown>> {
     if (!body.idempotencyKey?.trim()) {
-      throw new Error("IDEMPOTENCY_KEY_REQUIRED");
+      throw new BadRequestException("Требуется ключ идемпотентности");
     }
 
     return {
