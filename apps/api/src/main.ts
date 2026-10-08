@@ -1,16 +1,23 @@
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
+import { json, urlencoded } from "express";
 import { AppModule } from "./app.module";
 import { getEnv } from "./infrastructure/config/env";
 import { ApiExceptionFilter } from "./infrastructure/http/api-exception.filter";
 import { traceMiddleware } from "./infrastructure/http/trace.middleware";
+import { securityHeadersMiddleware } from "./infrastructure/http/security-headers.middleware";
 
 async function bootstrap(): Promise<void> {
   const env = getEnv();
 
   const app = await NestFactory.create(AppModule, {
-    bufferLogs: true
+    bufferLogs: true,
+    bodyParser: false
   });
+
+  app.use(json({ limit: "22mb" }));
+  app.use(urlencoded({ extended: true, limit: "1mb" }));
+  app.use(securityHeadersMiddleware);
 
   app.enableCors({
     origin: env.webOrigin,
