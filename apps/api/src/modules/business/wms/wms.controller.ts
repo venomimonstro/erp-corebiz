@@ -214,6 +214,60 @@ export class WmsController{
     };
   }
 
+  @Post("warehouses/:warehouseId/cycle-counts")
+  @RequirePermission("wms.manage")
+  async cycleCount(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string,
+    @Body() body:{zoneId?:string;locationId?:string;reason?:string}
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.createCycleCount(
+        this.ctx(req),warehouseId,body??{}
+      )
+    };
+  }
+
+  @Post("tasks/:taskId/complete-count")
+  @RequirePermission("wms.manage")
+  async completeCount(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string,
+    @Body() body:{countedMilli:string}
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.completeCycleCountTask(
+        this.ctx(req),taskId,body.countedMilli
+      )
+    };
+  }
+
+  @Post("warehouses/:warehouseId/replenishment/plan")
+  @RequirePermission("wms.manage")
+  async planReplenishment(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.planReplenishment(
+        this.ctx(req),warehouseId
+      )
+    };
+  }
+
+  @Post("tasks/:taskId/complete-replenishment")
+  @RequirePermission("wms.manage")
+  async completeReplenishment(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string
+  ):Promise<ApiSuccess<{updated:true}>>{
+    await this.wms.completeReplenishment(this.ctx(req),taskId);
+    return {ok:true,data:{updated:true}};
+  }
+
   @Get("warehouses/:warehouseId/reconciliation")
   @RequirePermission("wms.read")
   async reconciliation(
