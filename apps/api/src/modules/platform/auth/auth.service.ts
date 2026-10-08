@@ -243,10 +243,16 @@ export class AuthService {
     const row = result.rows[0];
     if (!row) return null;
 
-    void this.database.query(
-      "UPDATE user_session SET last_seen_at = now() WHERE id = $1",
-      [row.session_id]
-    );
+    // The activity timestamp is best-effort telemetry, not part of
+    // authentication. Handle its rejection to avoid an unhandled promise.
+    void this.database
+      .query(
+        "UPDATE user_session SET last_seen_at = now() WHERE id = $1",
+        [row.session_id]
+      )
+      .catch(() => {
+        // A transient telemetry write failure must not crash the API process.
+      });
 
     return {
       sessionId: row.session_id,
