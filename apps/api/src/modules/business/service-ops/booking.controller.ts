@@ -79,6 +79,12 @@ export class BookingController {
     };
   }
 
+  @Get("bookings/:id")
+  @RequirePermission("service.read")
+  async bookingDetails(@Req() request: AuthenticatedRequest, @Param("id") id: string): Promise<ApiSuccess<unknown>> {
+    return { ok: true, data: await this.booking.bookingDetails(this.context(request), id) };
+  }
+
   @Post("bookings")
   @RequirePermission("service.write")
   async createBooking(
