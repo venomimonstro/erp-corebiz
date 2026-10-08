@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R8 / Sprint 35 — WMS Address Storage Foundation.  
+**Активная разработка:** R8 / Sprint 36 — Receiving / Put-away Tasks.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -365,22 +365,34 @@
 
 **R7 Gate:** business can launch a public site/store, collect CRM leads/bookings/orders, use its own domain, and connect first-party marketing analytics without a separate CMS/landing/lead-form stack.
 
-## Активно — Sprint 35: WMS Address Storage Foundation
+### Sprint 35 — WMS Address Storage Foundation
+- optional WMS profile per warehouse;
+- progressive ADDRESS / ADVANCED modes;
+- zone types for receiving/storage/picking/packing/shipping/quarantine/returns/cross-dock;
+- hierarchical address locations;
+- capacity and mixed-SKU/lot restrictions;
+- block/maintenance states;
+- pick sequence;
+- 2D topology coordinates;
+- SKU put-away eligibility rules;
+- WMS UI only for warehouses where it is enabled;
+- Inventory Ledger remains the only quantity source of truth while topology is configured.
+
+## Активно — Sprint 36: Receiving / Put-away Tasks
 
 Scope:
-- optional WMS profile per warehouse;
-- warehouse zones;
-- hierarchical address locations;
-- receiving/storage/picking/packing/shipping/quarantine zones;
-- cell capacity and lock state;
-- 2D coordinates for topology;
-- put-away eligibility metadata;
-- WMS workspace without affecting simple warehouses;
-- no duplicate inventory source of truth.
+- explicit location-ledger initialization;
+- UNASSIGNED system location for safe bootstrap;
+- immutable WMS location movements;
+- receiving buffer assignment;
+- put-away suggestion engine;
+- put-away tasks;
+- task claim/complete;
+- location balance reconciled to warehouse Inventory Balance;
+- no double posting into aggregate Inventory Ledger.
 
 ## Следом
 
-Sprint 36 — Receiving / Put-away Tasks.  
 Sprint 37 — Picking / Packing / Shipping Tasks.  
 Sprint 38 — Cycle Count / Replenishment.
 
