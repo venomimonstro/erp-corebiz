@@ -28,6 +28,31 @@ type MarketingJob = {
   client_login: string | null;
 };
 
+type OfflineConversionJob = {
+  job_id: string;
+  tenant_id: string;
+  connection_id: string;
+  counter_id: string;
+  target: string;
+  credentials_ciphertext: string;
+  conversion_type: string;
+  conversion_id: string;
+  yclid: string;
+  occurred_at: Date;
+  value_minor: string;
+  currency: string;
+  attempts: number;
+};
+
+type OfflineConversionStatusJob = {
+  job_id: string;
+  tenant_id: string;
+  connection_id: string;
+  counter_id: string;
+  credentials_ciphertext: string;
+  provider_upload_id: string;
+};
+
 type Condition = {
   path: string;
   operator: "EQ" | "NEQ" | "GT" | "GTE" | "LT" | "LTE" | "IN" | "EXISTS";
@@ -695,6 +720,241 @@ async function processMarketingJob(job: MarketingJob): Promise<void> {
   }
 }
 
+async function claimOfflineConversionJob(): Promise<OfflineConversionJob | null> {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const result = await client.query<OfflineConversionJob>(
+      "SELECT * FROM corebiz_claim_offline_conversion_job()"
+    );
+    await client.query("COMMIT");
+    return result.rows[0] ?? null;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function claimOfflineConversionStatusJob(): Promise<OfflineConversionStatusJob | null> {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const result = await client.query<OfflineConversionStatusJob>(
+      "SELECT * FROM corebiz_claim_offline_conversion_status_job()"
+    );
+    await client.query("COMMIT");
+    return result.rows[0] ?? null;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function csvCell(value: string): string {
+  return '"' + value.replace(/"/g, '""') + '"';
+}
+
+async function processOfflineConversionJob(
+  job: OfflineConversionJob
+): Promise<void> {
+  try {
+    const credentials = decryptIntegrationSecret(job.credentials_ciphertext);
+    const oauthToken = String(credentials.oauthToken ?? "");
+    if (!oauthToken) throw new Error("YANDEX_METRICA_OAUTH_TOKEN_MISSING");
+
+    const timestamp = Math.floor(
+      new Date(job.occurred_at).getTime() / 1000
+    );
+    if (!Number.isFinite(timestamp) || timestamp > Math.floor(Date.now() / 1000)) {
+      throw new Error("OFFLINE_CONVERSION_DATETIME_INVALID");
+    }
+
+    const price = (Number(job.value_minor) / 100).toFixed(2);
+    const csv = [
+      "Yclid,Target,DateTime,Price,Currency",
+      [
+        csvCell(job.yclid),
+        csvCell(job.target),
+        String(timestamp),
+        price,
+        csvCell(job.currency)
+      ].join(",")
+    ].join("\n");
+
+    const form = new FormData();
+    form.append(
+      "file",
+      new Blob([csv], { type: "text/csv;charset=utf-8" }),
+      "corebiz-offline-conversion.csv"
+    );
+
+    const url =
+      "https://api-metrika.yandex.net/management/v1/counter/" +
+      encodeURIComponent(job.counter_id) +
+      "/offline_conversions/upload?type=BASIC&comment=" +
+      encodeURIComponent("CoreBiz " + job.conversion_type);
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: "OAuth " + oauthToken
+      },
+      body: form
+    });
+
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(
+        "YANDEX_METRIKA_UPLOAD_HTTP_" +
+        response.status +
+        ":" +
+        body.replace(/\s+/g, " ").slice(0, 500)
+      );
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      throw new Error("YANDEX_METRIKA_UPLOAD_RESPONSE_INVALID");
+    }
+
+    const uploading = parsed?.uploading;
+    const uploadId = uploading?.id;
+    const providerStatus = String(uploading?.status ?? "UPLOADED");
+
+    if (uploadId === undefined || uploadId === null) {
+      throw new Error("YANDEX_METRIKA_UPLOAD_ID_MISSING");
+    }
+
+    await pool.query(
+      "UPDATE offline_conversion_job SET status='UPLOADED'," +
+      "provider_upload_id=$2,provider_status=$3,uploaded_at=now()," +
+      "retry_at=now()+interval '2 minutes',last_error=NULL " +
+      "WHERE id=$1",
+      [job.job_id, String(uploadId), providerStatus]
+    );
+
+    await pool.query(
+      "UPDATE offline_conversion_connection SET status='ACTIVE'," +
+      "last_export_at=now(),last_error=NULL,updated_at=now() " +
+      "WHERE tenant_id=$1 AND id=$2",
+      [job.tenant_id, job.connection_id]
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const retrySeconds = Math.min(
+      1800,
+      2 ** Math.min(job.attempts + 2, 10)
+    );
+
+    await pool.query(
+      "UPDATE offline_conversion_job SET status='FAILED'," +
+      "retry_at=now()+($2::text || ' seconds')::interval,last_error=$3 " +
+      "WHERE id=$1",
+      [job.job_id, String(retrySeconds), message.slice(0, 2000)]
+    );
+
+    await pool.query(
+      "UPDATE offline_conversion_connection SET status='DEGRADED'," +
+      "last_error=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2",
+      [job.tenant_id, job.connection_id, message.slice(0, 2000)]
+    );
+
+    process.stderr.write(
+      "[worker] offline conversion " +
+      job.job_id +
+      " failed: " +
+      message.replace(/\s+/g, " ").slice(0, 500) +
+      "\n"
+    );
+  }
+}
+
+async function processOfflineConversionStatus(
+  job: OfflineConversionStatusJob
+): Promise<void> {
+  try {
+    const credentials = decryptIntegrationSecret(job.credentials_ciphertext);
+    const oauthToken = String(credentials.oauthToken ?? "");
+    if (!oauthToken) throw new Error("YANDEX_METRIKA_OAUTH_TOKEN_MISSING");
+
+    const url =
+      "https://api-metrika.yandex.net/management/v1/counter/" +
+      encodeURIComponent(job.counter_id) +
+      "/offline_conversions/uploading/" +
+      encodeURIComponent(job.provider_upload_id);
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: "OAuth " + oauthToken
+      }
+    });
+
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(
+        "YANDEX_METRIKA_STATUS_HTTP_" +
+        response.status +
+        ":" +
+        body.replace(/\s+/g, " ").slice(0, 500)
+      );
+    }
+
+    const parsed = JSON.parse(body);
+    const uploading = parsed?.uploading ?? parsed;
+    const status = String(uploading?.status ?? "UNKNOWN");
+
+    if (status === "PROCESSED") {
+      await pool.query(
+        "UPDATE offline_conversion_job SET status='PROCESSED'," +
+        "provider_status=$2,processed_at=now(),retry_at=NULL,last_error=NULL " +
+        "WHERE id=$1",
+        [job.job_id, status]
+      );
+      return;
+    }
+
+    if (status === "LINKAGE_FAILURE") {
+      await pool.query(
+        "UPDATE offline_conversion_job SET status='FAILED'," +
+        "provider_status=$2,retry_at=NULL,last_error='Yandex Metrica linkage failure' " +
+        "WHERE id=$1",
+        [job.job_id, status]
+      );
+      return;
+    }
+
+    if (["PREPARED","UPLOADED","EXPORTED","MATCHED"].includes(status)) {
+      await pool.query(
+        "UPDATE offline_conversion_job SET provider_status=$2," +
+        "retry_at=now()+interval '2 minutes' WHERE id=$1",
+        [job.job_id, status]
+      );
+      return;
+    }
+
+    await pool.query(
+      "UPDATE offline_conversion_job SET provider_status=$2," +
+      "retry_at=now()+interval '5 minutes' WHERE id=$1",
+      [job.job_id, status]
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await pool.query(
+      "UPDATE offline_conversion_job SET last_error=$2," +
+      "retry_at=now()+interval '5 minutes' WHERE id=$1",
+      [job.job_id, message.slice(0, 2000)]
+    );
+  }
+}
+
 async function workOnce(): Promise<boolean> {
   const client = await pool.connect();
   let event: OutboxEvent | null = null;
@@ -718,6 +978,18 @@ async function workOnce(): Promise<boolean> {
   const marketingJob = await claimMarketingJob();
   if (marketingJob) {
     await processMarketingJob(marketingJob);
+    return true;
+  }
+
+  const offlineJob = await claimOfflineConversionJob();
+  if (offlineJob) {
+    await processOfflineConversionJob(offlineJob);
+    return true;
+  }
+
+  const offlineStatusJob = await claimOfflineConversionStatusJob();
+  if (offlineStatusJob) {
+    await processOfflineConversionStatus(offlineStatusJob);
     return true;
   }
 
