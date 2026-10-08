@@ -73,13 +73,12 @@ export default function AppHomePage() {
     if (!dashboard) return [];
 
     return [
-      ["Деньги", money(dashboard.kpis.cashMinor), "На денежных счетах"],
-      ["Продажи · 30 дней", money(dashboard.kpis.sales30dMinor), "Подтверждённые и незакрытые продажи"],
-      ["Валовая прибыль · 30 дней", money(dashboard.kpis.grossProfit30dMinor), "По себестоимости, зафиксированной в заказах"],
-      ["Заказы в работе", String(dashboard.kpis.openOrders), "Черновики и подтверждённые"],
-      ["Дебиторка", money(dashboard.kpis.receivableMinor), "Нам должны"],
-      ["Кредиторка", money(dashboard.kpis.payableMinor), "Мы должны"],
-      ["Запасы", money(dashboard.kpis.stockValueMinor), "По текущей себестоимости SKU"]
+      ["Деньги (RUB)", money(dashboard.kpis.cashMinor), "Рублёвые счета; без валютной переоценки"],
+      ["Заказы · 30 дней", money(dashboard.kpis.sales30dMinor), "Подтверждённые и выполненные; это не фактическая выручка"],
+      ["Оценка маржи · 30 дней", money(dashboard.kpis.grossProfit30dMinor), "Предварительная оценка по заказам, без расходов и возвратов"],
+      ["Дебиторка (RUB)", money(dashboard.kpis.receivableMinor), "Нам должны в рублях"],
+      ["Кредиторка (RUB)", money(dashboard.kpis.payableMinor), "Мы должны в рублях"],
+      ["Запасы (RUB)", money(dashboard.kpis.stockValueMinor), "Предварительная оценка по стоимости SKU"]
     ];
   }, [dashboard]);
 
