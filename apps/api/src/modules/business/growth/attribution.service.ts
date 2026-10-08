@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
@@ -10,10 +9,22 @@ import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { getEnv } from "../../../infrastructure/config/env";
 
+type ConversionInput = {
+  partyId?: string | null;
+  sourceType: "LEAD" | "SALES_ORDER" | "PAYMENT" | "SERVICE_BOOKING" | "CALL" | "OTHER";
+  sourceId: string;
+  conversionType: "LEAD" | "ORDER" | "PAYMENT" | "REFUND" | "BOOKING" | "COMPLETED_SERVICE";
+  occurredAt?: Date;
+  revenueMinor?: bigint;
+  currency?: string;
+  metadata?: Record<string, unknown>;
+};
+
 type AttributionModel =
   | "FIRST_TOUCH"
   | "LAST_TOUCH"
-  | "LAST_PAID_TOUCH";
+  | "LAST_NON_DIRECT"
+  | "LINEAR";
 
 @Injectable()
 export class AttributionService {
@@ -25,21 +36,21 @@ export class AttributionService {
       trackerKey: string;
       visitorId: string;
       partyId: string;
-      source?: "FORM" | "CRM" | "API" | "IMPORT" | "MANUAL";
+      source?: "MANUAL" | "FORM" | "CHECKOUT" | "BOOKING" | "CALL" | "IMPORT" | "API";
       confidence?: number;
-      evidence?: Record<string, unknown>;
     }
-  ): Promise<{ visitorId: string; partyId: string }> {
+  ): Promise<{ linked: true; visitorId: string }> {
     const confidence = input.confidence ?? 1;
+
     if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-      throw new BadRequestException("confidence должен быть от 0 до 1");
+      throw new BadRequestException("Confidence должен быть от 0 до 1");
     }
 
     const lookup = await this.database.query<{
       site_id: string;
       tenant_id: string;
     }>(
-      "SELECT site_id,tenant_id FROM corebiz_resolve_tracker_site($1)",
+      "SELECT site_id,tenant_id FROM corebiz_tracker_site_lookup($1)",
       [input.trackerKey.trim()]
     );
 
@@ -48,146 +59,163 @@ export class AttributionService {
       throw new NotFoundException("Tracker-site не найден");
     }
 
-    const visitorHash = createHmac(
-      "sha256",
-      getEnv().sessionSecret
-    )
-      .update(site.site_id + "|" + input.visitorId.trim())
-      .digest("hex");
+    const visitorHash = this.hmac(site.site_id + "|" + input.visitorId.trim());
 
     return this.database.withTenantTransaction(context, async (client) => {
       const party = await client.query(
         "SELECT 1 FROM party WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
         [context.tenantId, input.partyId]
       );
-      if (!party.rowCount) throw new NotFoundException("Клиент не найден");
+
+      if (!party.rowCount) {
+        throw new NotFoundException("Клиент не найден");
+      }
 
       const visitorResult = await client.query<{
         id: string;
-        party_id: string | null;
       }>(
-        "SELECT id,party_id FROM marketing_visitor " +
+        "SELECT id FROM marketing_visitor " +
         "WHERE tenant_id=$1 AND visitor_key_hash=$2 FOR UPDATE",
         [context.tenantId, visitorHash]
       );
 
       const visitor = visitorResult.rows[0];
-      if (!visitor) throw new NotFoundException("Visitor не найден");
-
-      if (visitor.party_id && visitor.party_id !== input.partyId) {
-        throw new ConflictException(
-          "Visitor уже связан с другим клиентом"
-        );
+      if (!visitor) {
+        throw new NotFoundException("Посетитель не найден");
       }
 
       await client.query(
         "INSERT INTO marketing_identity_link(" +
-        "tenant_id,visitor_id,party_id,source,confidence,evidence,linked_by_membership_id" +
-        ") VALUES ($1,$2,$3,$4,$5,$6,$7) " +
+        "tenant_id,visitor_id,party_id,source,confidence,linked_by_membership_id" +
+        ") VALUES ($1,$2,$3,$4,$5,$6) " +
         "ON CONFLICT (tenant_id,visitor_id,party_id) DO UPDATE SET " +
-        "source=EXCLUDED.source,confidence=EXCLUDED.confidence," +
-        "evidence=EXCLUDED.evidence,linked_by_membership_id=EXCLUDED.linked_by_membership_id," +
-        "revoked_at=NULL",
+        "source=EXCLUDED.source," +
+        "confidence=GREATEST(marketing_identity_link.confidence,EXCLUDED.confidence)," +
+        "linked_at=now(),linked_by_membership_id=EXCLUDED.linked_by_membership_id",
         [
           context.tenantId,
           visitor.id,
           input.partyId,
-          input.source ?? "FORM",
+          input.source ?? "MANUAL",
           confidence,
-          JSON.stringify(input.evidence ?? {}),
           context.membershipId
         ]
       );
 
       await client.query(
-        "UPDATE marketing_visitor SET party_id=$3,last_seen_at=GREATEST(last_seen_at,now()) " +
+        "UPDATE marketing_visitor SET party_id=$3,last_seen_at=now() " +
         "WHERE tenant_id=$1 AND id=$2",
         [context.tenantId, visitor.id, input.partyId]
       );
 
       await client.query(
         "UPDATE marketing_event SET party_id=$3 " +
-        "WHERE tenant_id=$1 AND visitor_id=$2",
+        "WHERE tenant_id=$1 AND visitor_id=$2 AND party_id IS NULL",
         [context.tenantId, visitor.id, input.partyId]
       );
 
-      await this.materializeTouchpoints(
-        client,
-        context.tenantId,
-        visitor.id,
-        input.partyId
-      );
-
-      await this.recalculateParty(
-        client,
-        context.tenantId,
-        input.partyId
-      );
-
       await client.query(
-        "INSERT INTO audit_event(" +
-        "tenant_id,actor_user_id,actor_membership_id,action,resource_type,resource_id,after_data" +
-        ") VALUES ($1,$2,$3,'growth.visitor_linked','party',$4,$5)",
-        [
-          context.tenantId,
-          context.userId,
-          context.membershipId,
-          input.partyId,
-          JSON.stringify({
-            visitorId: visitor.id,
-            source: input.source ?? "FORM",
-            confidence
-          })
-        ]
+        "UPDATE marketing_touchpoint SET party_id=$3 " +
+        "WHERE tenant_id=$1 AND visitor_id=$2 AND party_id IS NULL",
+        [context.tenantId, visitor.id, input.partyId]
       );
+
+      const conversions = await client.query<{ id: string }>(
+        "SELECT id FROM marketing_conversion " +
+        "WHERE tenant_id=$1 AND party_id=$2 AND status='ACTIVE' ORDER BY occurred_at",
+        [context.tenantId, input.partyId]
+      );
+
+      for (const conversion of conversions.rows) {
+        await this.recalculateConversion(
+          client,
+          context.tenantId,
+          conversion.id
+        );
+      }
 
       return {
-        visitorId: visitor.id,
-        partyId: input.partyId
+        linked: true,
+        visitorId: visitor.id
       };
     });
   }
 
-  async recalculate(
+  async recordConversion(
+    client: PoolClient,
     context: TenantContext,
-    partyId?: string
-  ): Promise<{ parties: number }> {
-    return this.database.withTenantTransaction(context, async (client) => {
-      const parties = partyId
-        ? [{ party_id: partyId }]
-        : (
-            await client.query<{ party_id: string }>(
-              "SELECT DISTINCT party_id FROM marketing_identity_link " +
-              "WHERE tenant_id=$1 AND revoked_at IS NULL",
-              [context.tenantId]
-            )
-          ).rows;
+    input: ConversionInput
+  ): Promise<string> {
+    const occurredAt = input.occurredAt ?? new Date();
+    const revenueMinor = input.revenueMinor ?? 0n;
+    const currency = input.currency?.trim().toUpperCase() || "RUB";
 
-      for (const row of parties) {
-        await this.recalculateParty(
-          client,
-          context.tenantId,
-          row.party_id
-        );
-      }
+    let visitorId: string | null = null;
 
-      return { parties: parties.length };
-    });
-  }
+    if (input.partyId) {
+      const visitor = await client.query<{ visitor_id: string }>(
+        "SELECT visitor_id FROM marketing_identity_link " +
+        "WHERE tenant_id=$1 AND party_id=$2 AND linked_at <= $3 " +
+        "ORDER BY linked_at DESC,confidence DESC LIMIT 1",
+        [context.tenantId, input.partyId, occurredAt]
+      );
 
-  async results(
-    context: TenantContext,
-    model: AttributionModel,
-    fromInput?: string,
-    toInput?: string
-  ): Promise<Record<string, unknown>> {
-    if (!["FIRST_TOUCH","LAST_TOUCH","LAST_PAID_TOUCH"].includes(model)) {
-      throw new BadRequestException("Неизвестная модель атрибуции");
+      visitorId = visitor.rows[0]?.visitor_id ?? null;
     }
 
-    const to = toInput ? new Date(toInput) : new Date();
-    const from = fromInput
-      ? new Date(fromInput)
+    const result = await client.query<{ id: string }>(
+      "INSERT INTO marketing_conversion(" +
+      "tenant_id,party_id,visitor_id,source_type,source_id,conversion_type," +
+      "occurred_at,revenue_minor,currency,metadata" +
+      ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) " +
+      "ON CONFLICT (tenant_id,source_type,source_id,conversion_type) DO UPDATE SET " +
+      "party_id=EXCLUDED.party_id," +
+      "visitor_id=COALESCE(EXCLUDED.visitor_id,marketing_conversion.visitor_id)," +
+      "occurred_at=EXCLUDED.occurred_at,revenue_minor=EXCLUDED.revenue_minor," +
+      "currency=EXCLUDED.currency,metadata=EXCLUDED.metadata,status='ACTIVE' " +
+      "RETURNING id",
+      [
+        context.tenantId,
+        input.partyId ?? null,
+        visitorId,
+        input.sourceType,
+        input.sourceId,
+        input.conversionType,
+        occurredAt,
+        revenueMinor.toString(),
+        currency,
+        JSON.stringify(input.metadata ?? {})
+      ]
+    );
+
+    const conversionId = result.rows[0]!.id;
+
+    await this.recalculateConversion(
+      client,
+      context.tenantId,
+      conversionId
+    );
+
+    return conversionId;
+  }
+
+  async attribution(
+    context: TenantContext,
+    input: {
+      from?: string;
+      to?: string;
+      model?: AttributionModel;
+    }
+  ): Promise<{
+    model: AttributionModel;
+    totalRevenueMinor: string;
+    attributedRevenueMinor: string;
+    rows: Array<Record<string, unknown>>;
+  }> {
+    const model = input.model ?? "LAST_NON_DIRECT";
+    const to = input.to ? new Date(input.to) : new Date();
+    const from = input.from
+      ? new Date(input.from)
       : new Date(to.getTime() - 30 * 86400000);
 
     if (
@@ -199,187 +227,168 @@ export class AttributionService {
     }
 
     return this.database.withTenantTransaction(context, async (client) => {
-      const totals = await client.query(
-        "SELECT count(*)::int AS conversions," +
-        "count(*) FILTER (WHERE touchpoint_id IS NOT NULL)::int AS attributed " +
-        "FROM attribution_result WHERE tenant_id=$1 AND model=$2 " +
-        "AND conversion_at >= $3 AND conversion_at < $4",
+      const total = await client.query<{ revenue: string }>(
+        "SELECT COALESCE(sum(revenue_minor),0)::text AS revenue " +
+        "FROM marketing_conversion WHERE tenant_id=$1 AND status='ACTIVE' " +
+        "AND occurred_at >= $2 AND occurred_at < $3 " +
+        "AND conversion_type IN ('PAYMENT','REFUND','COMPLETED_SERVICE')",
+        [context.tenantId, from, to]
+      );
+
+      const rows = await client.query<{
+        source: string;
+        medium: string;
+        campaign: string;
+        conversions: string;
+        attributed_revenue_minor: string;
+      }>(
+        "SELECT COALESCE(t.source,'direct') AS source," +
+        "COALESCE(t.medium,'(none)') AS medium," +
+        "COALESCE(t.campaign,'(not set)') AS campaign," +
+        "count(DISTINCT a.conversion_id)::text AS conversions," +
+        "COALESCE(sum(a.attributed_revenue_minor),0)::text AS attributed_revenue_minor " +
+        "FROM marketing_attribution_result a " +
+        "JOIN marketing_conversion c ON c.tenant_id=a.tenant_id AND c.id=a.conversion_id " +
+        "JOIN marketing_touchpoint t ON t.tenant_id=a.tenant_id AND t.id=a.touchpoint_id " +
+        "WHERE a.tenant_id=$1 AND a.model=$2 AND c.status='ACTIVE' " +
+        "AND c.occurred_at >= $3 AND c.occurred_at < $4 " +
+        "GROUP BY COALESCE(t.source,'direct'),COALESCE(t.medium,'(none)')," +
+        "COALESCE(t.campaign,'(not set)') " +
+        "ORDER BY sum(a.attributed_revenue_minor) DESC",
         [context.tenantId, model, from, to]
       );
 
-      const sources = await client.query(
-        "SELECT COALESCE(source,'unattributed') AS source," +
-        "COALESCE(medium,'none') AS medium,count(*)::int AS conversions " +
-        "FROM attribution_result WHERE tenant_id=$1 AND model=$2 " +
-        "AND conversion_at >= $3 AND conversion_at < $4 " +
-        "GROUP BY source,medium ORDER BY conversions DESC",
-        [context.tenantId, model, from, to]
-      );
-
-      const campaigns = await client.query(
-        "SELECT COALESCE(campaign,'(not set)') AS campaign," +
-        "COALESCE(source,'unattributed') AS source,count(*)::int AS conversions " +
-        "FROM attribution_result WHERE tenant_id=$1 AND model=$2 " +
-        "AND conversion_at >= $3 AND conversion_at < $4 " +
-        "GROUP BY campaign,source ORDER BY conversions DESC LIMIT 100",
-        [context.tenantId, model, from, to]
+      const attributed = rows.rows.reduce(
+        (sum, row) => sum + BigInt(row.attributed_revenue_minor),
+        0n
       );
 
       return {
         model,
-        period: { from: from.toISOString(), to: to.toISOString() },
-        totals: totals.rows[0] ?? { conversions: 0, attributed: 0 },
-        sources: sources.rows,
-        campaigns: campaigns.rows
+        totalRevenueMinor: total.rows[0]?.revenue ?? "0",
+        attributedRevenueMinor: attributed.toString(),
+        rows: rows.rows
       };
     });
   }
 
-  async journey(
-    context: TenantContext,
-    partyId: string
-  ): Promise<Record<string, unknown>> {
-    return this.database.withTenantTransaction(context, async (client) => {
-      const party = await client.query<{ display_name: string }>(
-        "SELECT display_name FROM party WHERE tenant_id=$1 AND id=$2",
-        [context.tenantId, partyId]
-      );
-      if (!party.rows[0]) throw new NotFoundException("Клиент не найден");
-
-      const touchpoints = await client.query(
-        "SELECT id,occurred_at,source,medium,campaign,landing_url,is_paid " +
-        "FROM marketing_touchpoint WHERE tenant_id=$1 AND party_id=$2 " +
-        "ORDER BY occurred_at",
-        [context.tenantId, partyId]
-      );
-
-      const conversions = await client.query(
-        "SELECT conversion_type,conversion_id,conversion_at,model," +
-        "touchpoint_id,source,medium,campaign " +
-        "FROM attribution_result WHERE tenant_id=$1 AND party_id=$2 " +
-        "ORDER BY conversion_at,model",
-        [context.tenantId, partyId]
-      );
-
-      return {
-        party: {
-          id: partyId,
-          name: party.rows[0].display_name
-        },
-        touchpoints: touchpoints.rows,
-        conversions: conversions.rows
-      };
-    });
-  }
-
-  private async materializeTouchpoints(
+  private async recalculateConversion(
     client: PoolClient,
     tenantId: string,
-    visitorId: string,
-    partyId: string
+    conversionId: string
   ): Promise<void> {
-    await client.query(
-      "INSERT INTO marketing_touchpoint(" +
-      "tenant_id,visitor_id,session_id,party_id,occurred_at,source,medium,campaign," +
-      "content,term,yclid,gclid,vk_click_id,landing_url,referrer_url,is_paid" +
-      ") SELECT s.tenant_id,s.visitor_id,s.id,$3,s.started_at,s.source,s.medium,s.campaign," +
-      "s.content,s.term,s.yclid,s.gclid,s.vk_click_id,s.landing_url,s.referrer_url," +
-      "CASE WHEN s.yclid IS NOT NULL OR s.gclid IS NOT NULL OR s.vk_click_id IS NOT NULL " +
-      "OR lower(COALESCE(s.medium,'')) IN ('cpc','ppc','paid','cpm','display','paid_social') " +
-      "THEN true ELSE false END " +
-      "FROM marketing_session s WHERE s.tenant_id=$1 AND s.visitor_id=$2 " +
-      "ON CONFLICT (tenant_id,session_id) DO UPDATE SET party_id=EXCLUDED.party_id",
-      [tenantId, visitorId, partyId]
-    );
-  }
-
-  private async recalculateParty(
-    client: PoolClient,
-    tenantId: string,
-    partyId: string
-  ): Promise<void> {
-    const conversions = await client.query<{
-      conversion_type: "SALES_ORDER" | "SERVICE_BOOKING";
-      conversion_id: string;
-      conversion_at: Date;
+    const conversionResult = await client.query<{
+      party_id: string | null;
+      visitor_id: string | null;
+      occurred_at: Date;
+      revenue_minor: string;
     }>(
-      "SELECT 'SALES_ORDER'::text AS conversion_type,id AS conversion_id,confirmed_at AS conversion_at " +
-      "FROM sales_order WHERE tenant_id=$1 AND party_id=$2 AND confirmed_at IS NOT NULL " +
-      "UNION ALL " +
-      "SELECT 'SERVICE_BOOKING'::text AS conversion_type,id AS conversion_id,completed_at AS conversion_at " +
-      "FROM service_booking WHERE tenant_id=$1 AND party_id=$2 AND completed_at IS NOT NULL",
-      [tenantId, partyId]
+      "SELECT party_id,visitor_id,occurred_at,revenue_minor::text " +
+      "FROM marketing_conversion WHERE tenant_id=$1 AND id=$2",
+      [tenantId, conversionId]
     );
 
-    for (const conversion of conversions.rows) {
-      for (const model of [
-        "FIRST_TOUCH",
-        "LAST_TOUCH",
-        "LAST_PAID_TOUCH"
-      ] as AttributionModel[]) {
-        const touchpoint = await this.pickTouchpoint(
-          client,
-          tenantId,
-          partyId,
-          conversion.conversion_at,
-          model
-        );
+    const conversion = conversionResult.rows[0];
+    if (!conversion) return;
 
-        await client.query(
-          "INSERT INTO attribution_result(" +
-          "tenant_id,party_id,conversion_type,conversion_id,conversion_at,model," +
-          "touchpoint_id,source,medium,campaign,credit,lookback_days,computed_at" +
-          ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,90,now()) " +
-          "ON CONFLICT (tenant_id,conversion_type,conversion_id,model) DO UPDATE SET " +
-          "party_id=EXCLUDED.party_id,conversion_at=EXCLUDED.conversion_at," +
-          "touchpoint_id=EXCLUDED.touchpoint_id,source=EXCLUDED.source," +
-          "medium=EXCLUDED.medium,campaign=EXCLUDED.campaign,computed_at=now()",
-          [
-            tenantId,
-            partyId,
-            conversion.conversion_type,
-            conversion.conversion_id,
-            conversion.conversion_at,
-            model,
-            touchpoint?.id ?? null,
-            touchpoint?.source ?? null,
-            touchpoint?.medium ?? null,
-            touchpoint?.campaign ?? null
-          ]
-        );
+    await client.query(
+      "DELETE FROM marketing_attribution_result " +
+      "WHERE tenant_id=$1 AND conversion_id=$2",
+      [tenantId, conversionId]
+    );
+
+    const touches = await client.query<{
+      id: string;
+      is_direct: boolean;
+    }>(
+      "SELECT id,is_direct FROM marketing_touchpoint " +
+      "WHERE tenant_id=$1 AND occurred_at <= $2 " +
+      "AND occurred_at >= $2 - interval '90 days' " +
+      "AND (($3::uuid IS NOT NULL AND party_id=$3) OR " +
+      "($3::uuid IS NULL AND $4::uuid IS NOT NULL AND visitor_id=$4)) " +
+      "ORDER BY occurred_at,id",
+      [
+        tenantId,
+        conversion.occurred_at,
+        conversion.party_id,
+        conversion.visitor_id
+      ]
+    );
+
+    if (!touches.rowCount) return;
+
+    const all = touches.rows;
+    const first = all[0]!;
+    const last = all[all.length - 1]!;
+    const nonDirect =
+      [...all].reverse().find((item) => !item.is_direct) ?? last;
+    const revenue = BigInt(conversion.revenue_minor);
+
+    await this.insertAttribution(
+      client, tenantId, conversionId, first.id, "FIRST_TOUCH", 1, revenue
+    );
+    await this.insertAttribution(
+      client, tenantId, conversionId, last.id, "LAST_TOUCH", 1, revenue
+    );
+    await this.insertAttribution(
+      client, tenantId, conversionId, nonDirect.id, "LAST_NON_DIRECT", 1, revenue
+    );
+
+    const count = BigInt(all.length);
+    const base = revenue / count;
+    let remainder = revenue - base * count;
+
+    for (const touch of all) {
+      let amount = base;
+
+      if (remainder !== 0n) {
+        const step = remainder > 0n ? 1n : -1n;
+        amount += step;
+        remainder -= step;
       }
+
+      await this.insertAttribution(
+        client,
+        tenantId,
+        conversionId,
+        touch.id,
+        "LINEAR",
+        1 / all.length,
+        amount
+      );
     }
   }
 
-  private async pickTouchpoint(
+  private async insertAttribution(
     client: PoolClient,
     tenantId: string,
-    partyId: string,
-    conversionAt: Date,
-    model: AttributionModel
-  ): Promise<{
-    id: string;
-    source: string | null;
-    medium: string | null;
-    campaign: string | null;
-  } | null> {
-    const order = model === "FIRST_TOUCH" ? "ASC" : "DESC";
-    const paid = model === "LAST_PAID_TOUCH" ? "AND is_paid=true" : "";
-
-    const result = await client.query<{
-      id: string;
-      source: string | null;
-      medium: string | null;
-      campaign: string | null;
-    }>(
-      "SELECT id,source,medium,campaign FROM marketing_touchpoint " +
-      "WHERE tenant_id=$1 AND party_id=$2 AND occurred_at <= $3 " +
-      "AND occurred_at >= $3::timestamptz - interval '90 days' " +
-      paid +
-      " ORDER BY occurred_at " + order + " LIMIT 1",
-      [tenantId, partyId, conversionAt]
+    conversionId: string,
+    touchpointId: string,
+    model: AttributionModel,
+    weight: number,
+    amount: bigint
+  ): Promise<void> {
+    await client.query(
+      "INSERT INTO marketing_attribution_result(" +
+      "tenant_id,conversion_id,touchpoint_id,model,weight,attributed_revenue_minor" +
+      ") VALUES ($1,$2,$3,$4,$5,$6) " +
+      "ON CONFLICT (conversion_id,touchpoint_id,model) DO UPDATE SET " +
+      "weight=EXCLUDED.weight,attributed_revenue_minor=EXCLUDED.attributed_revenue_minor," +
+      "calculated_at=now()",
+      [
+        tenantId,
+        conversionId,
+        touchpointId,
+        model,
+        weight,
+        amount.toString()
+      ]
     );
+  }
 
-    return result.rows[0] ?? null;
+  private hmac(value: string): string {
+    return createHmac("sha256", getEnv().sessionSecret)
+      .update(value)
+      .digest("hex");
   }
 }
