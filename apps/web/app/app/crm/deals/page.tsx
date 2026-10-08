@@ -123,6 +123,24 @@ export default function DealsPage() {
           ...(lostReason ? { lostReason } : {})
         })
       });
+
+      if (
+        stage.kind === "WON" &&
+        window.confirm("Сделка успешна. Создать заказ?")
+      ) {
+        const order = await apiRequest<{ number: string }>(
+          `/sales/orders/from-deal/${payload.dealId}`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              idempotencyKey: `deal:${payload.dealId}:order:1`
+            })
+          }
+        );
+
+        window.alert(`Создан заказ ${order.number}`);
+      }
+
       await load();
     } catch (cause) {
       setError(
