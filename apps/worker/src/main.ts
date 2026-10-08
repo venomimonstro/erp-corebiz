@@ -1,3 +1,4 @@
+import { createDecipheriv, createHash } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 
 type OutboxEvent = {
@@ -11,6 +12,19 @@ type OutboxEvent = {
   payload: Record<string, unknown>;
   depth: number;
   attempts: number;
+};
+
+type MarketingJob = {
+  job_id: string;
+  tenant_id: string;
+  connection_id: string;
+  provider: string;
+  period_from: string;
+  period_to: string;
+  report_name: string;
+  attempts: number;
+  credentials_ciphertext: string;
+  client_login: string | null;
 };
 
 type Condition = {
@@ -371,6 +385,291 @@ async function processEvent(event: OutboxEvent): Promise<void> {
   }
 }
 
+function decryptIntegrationSecret(
+  payload: string
+): Record<string, unknown> {
+  const sessionSecret = process.env.SESSION_SECRET;
+  if (!sessionSecret) {
+    throw new Error("SESSION_SECRET is required for integration jobs");
+  }
+
+  const [version, ivRaw, tagRaw, dataRaw] = payload.split(".");
+  if (version !== "v1" || !ivRaw || !tagRaw || !dataRaw) {
+    throw new Error("INTEGRATION_SECRET_FORMAT_INVALID");
+  }
+
+  const key = createHash("sha256")
+    .update(sessionSecret + "|corebiz-integrations-v1")
+    .digest();
+
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    key,
+    Buffer.from(ivRaw, "base64url")
+  );
+  decipher.setAuthTag(Buffer.from(tagRaw, "base64url"));
+
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(dataRaw, "base64url")),
+    decipher.final()
+  ]);
+
+  return JSON.parse(decrypted.toString("utf8")) as Record<string, unknown>;
+}
+
+async function claimMarketingJob(): Promise<MarketingJob | null> {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const result = await client.query<MarketingJob>(
+      "SELECT * FROM corebiz_claim_marketing_sync_job()"
+    );
+    await client.query("COMMIT");
+    return result.rows[0] ?? null;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function moneyToMinor(value: string): string {
+  const normalized = value.trim().replace(",", ".");
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw new Error("YANDEX_COST_INVALID");
+  }
+  return String(Math.round(amount * 100));
+}
+
+async function postponeMarketingJob(
+  job: MarketingJob,
+  retrySeconds: number,
+  status: "WAITING_PROVIDER" | "FAILED",
+  errorMessage?: string
+): Promise<void> {
+  const safeDelay = Math.max(5, Math.min(3600, Math.floor(retrySeconds)));
+
+  await pool.query(
+    "UPDATE marketing_sync_job SET status=$2,retry_at=now()+($3::text || ' seconds')::interval," +
+    "last_error=$4 WHERE id=$1",
+    [
+      job.job_id,
+      status,
+      String(safeDelay),
+      errorMessage?.slice(0, 2000) ?? null
+    ]
+  );
+}
+
+async function processMarketingJob(job: MarketingJob): Promise<void> {
+  if (job.provider !== "YANDEX_DIRECT") {
+    await postponeMarketingJob(
+      job,
+      3600,
+      "FAILED",
+      "Unsupported marketing provider"
+    );
+    return;
+  }
+
+  try {
+    const credentials = decryptIntegrationSecret(job.credentials_ciphertext);
+    const oauthToken = String(credentials.oauthToken ?? "");
+    if (!oauthToken) throw new Error("YANDEX_OAUTH_TOKEN_MISSING");
+
+    const headers: Record<string, string> = {
+      "Authorization": "Bearer " + oauthToken,
+      "Accept-Language": "ru",
+      "Content-Type": "application/json",
+      "processingMode": "auto",
+      "returnMoneyInMicros": "false",
+      "skipReportHeader": "true",
+      "skipColumnHeader": "true",
+      "skipReportSummary": "true"
+    };
+
+    if (job.client_login) {
+      headers["Client-Login"] = job.client_login;
+    }
+
+    const body = {
+      params: {
+        SelectionCriteria: {
+          DateFrom: job.period_from,
+          DateTo: job.period_to
+        },
+        FieldNames: [
+          "Date",
+          "CampaignId",
+          "CampaignName",
+          "Impressions",
+          "Clicks",
+          "Cost"
+        ],
+        ReportName: job.report_name,
+        ReportType: "CUSTOM_REPORT",
+        DateRangeType: "CUSTOM_DATE",
+        Format: "TSV",
+        IncludeVAT: "NO",
+        IncludeDiscount: "NO"
+      }
+    };
+
+    const response = await fetch(
+      "https://api.direct.yandex.com/json/v501/reports",
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body)
+      }
+    );
+
+    if (response.status === 201 || response.status === 202) {
+      const retryIn = Number(response.headers.get("retryIn") ?? "30");
+      await postponeMarketingJob(
+        job,
+        Number.isFinite(retryIn) ? retryIn : 30,
+        "WAITING_PROVIDER"
+      );
+      return;
+    }
+
+    const text = await response.text();
+
+    if (response.status !== 200) {
+      throw new Error(
+        "YANDEX_DIRECT_HTTP_" +
+        response.status +
+        ":" +
+        text.replace(/\s+/g, " ").slice(0, 500)
+      );
+    }
+
+    const rows = text
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter(Boolean);
+
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "SELECT set_config('app.tenant_id',$1,true)",
+        [job.tenant_id]
+      );
+
+      for (const line of rows) {
+        const columns = line.split("\t");
+        if (columns.length < 6) continue;
+
+        const [
+          statDate,
+          campaignExternalId,
+          campaignName,
+          impressionsRaw,
+          clicksRaw,
+          costRaw
+        ] = columns;
+
+        if (
+          !/^\d{4}-\d{2}-\d{2}$/.test(statDate ?? "") ||
+          !campaignExternalId
+        ) {
+          continue;
+        }
+
+        const impressions = Math.max(0, Number(impressionsRaw ?? "0") || 0);
+        const clicks = Math.max(0, Number(clicksRaw ?? "0") || 0);
+        const spendMinor = moneyToMinor(costRaw ?? "0");
+
+        const campaign = await client.query<{ id: string }>(
+          "INSERT INTO marketing_campaign(" +
+          "tenant_id,connection_id,external_campaign_id,name,status,currency" +
+          ") VALUES ($1,$2,$3,$4,'UNKNOWN','RUB') " +
+          "ON CONFLICT (connection_id,external_campaign_id) DO UPDATE SET " +
+          "name=EXCLUDED.name,updated_at=now() RETURNING id",
+          [
+            job.tenant_id,
+            job.connection_id,
+            campaignExternalId,
+            (campaignName || "Campaign " + campaignExternalId).slice(0, 500)
+          ]
+        );
+
+        await client.query(
+          "INSERT INTO marketing_daily_stat(" +
+          "tenant_id,connection_id,campaign_id,stat_date,impressions,clicks,spend_minor,raw" +
+          ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8) " +
+          "ON CONFLICT (connection_id,campaign_id,stat_date) DO UPDATE SET " +
+          "impressions=EXCLUDED.impressions,clicks=EXCLUDED.clicks," +
+          "spend_minor=EXCLUDED.spend_minor,raw=EXCLUDED.raw,updated_at=now()",
+          [
+            job.tenant_id,
+            job.connection_id,
+            campaign.rows[0]!.id,
+            statDate,
+            Math.trunc(impressions),
+            Math.trunc(clicks),
+            spendMinor,
+            JSON.stringify({ provider: "YANDEX_DIRECT" })
+          ]
+        );
+      }
+
+      await client.query(
+        "UPDATE marketing_sync_job SET status='SUCCEEDED',retry_at=NULL,last_error=NULL," +
+        "finished_at=now() WHERE tenant_id=$1 AND id=$2",
+        [job.tenant_id, job.job_id]
+      );
+
+      await client.query(
+        "UPDATE marketing_connection SET status='ACTIVE',last_synced_at=now()," +
+        "last_error=NULL,updated_at=now() WHERE tenant_id=$1 AND id=$2",
+        [job.tenant_id, job.connection_id]
+      );
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    const retrySeconds = Math.min(
+      1800,
+      2 ** Math.min(job.attempts + 2, 10)
+    );
+
+    await postponeMarketingJob(
+      job,
+      retrySeconds,
+      "FAILED",
+      message
+    );
+
+    await pool.query(
+      "UPDATE marketing_connection SET status='DEGRADED',last_error=$3,updated_at=now() " +
+      "WHERE tenant_id=$1 AND id=$2",
+      [job.tenant_id, job.connection_id, message.slice(0, 2000)]
+    );
+
+    process.stderr.write(
+      "[worker] marketing job " +
+      job.job_id +
+      " failed: " +
+      message.replace(/\s+/g, " ").slice(0, 500) +
+      "\n"
+    );
+  }
+}
+
 async function workOnce(): Promise<boolean> {
   const client = await pool.connect();
   let event: OutboxEvent | null = null;
@@ -386,9 +685,18 @@ async function workOnce(): Promise<boolean> {
     client.release();
   }
 
-  if (!event) return false;
-  await processEvent(event);
-  return true;
+  if (event) {
+    await processEvent(event);
+    return true;
+  }
+
+  const marketingJob = await claimMarketingJob();
+  if (marketingJob) {
+    await processMarketingJob(marketingJob);
+    return true;
+  }
+
+  return false;
 }
 
 async function loop(): Promise<void> {
