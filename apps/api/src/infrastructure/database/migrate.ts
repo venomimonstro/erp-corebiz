@@ -10,6 +10,12 @@ if (!databaseUrl) {
 
 const pool = new Pool({ connectionString: databaseUrl });
 
+function normalizeMigrationSql(sql: string): string {
+  return sql
+    .replace(/^\s*BEGIN;\s*/i, "")
+    .replace(/\s*COMMIT;\s*$/i, "");
+}
+
 async function migrate(): Promise<void> {
   const client = await pool.connect();
 
@@ -41,7 +47,8 @@ async function migrate(): Promise<void> {
         continue;
       }
 
-      const sql = await readFile(resolve(migrationsDir, filename), "utf8");
+      const raw = await readFile(resolve(migrationsDir, filename), "utf8");
+      const sql = normalizeMigrationSql(raw);
 
       await client.query("BEGIN");
       try {
