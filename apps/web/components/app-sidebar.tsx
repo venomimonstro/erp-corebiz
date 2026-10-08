@@ -22,6 +22,7 @@ export function AppSidebar({ active }: { active: string }) {
       <span>Commerce</span>
       {link("/app/channels", "Каналы продаж", "channels")}
       {link("/app/oms", "OMS", "oms")}
+      {link("/app/returns", "Возвраты", "returns")}
 
       <span>Бизнес</span>
       {link("/app/sales/orders", "Заказы", "orders")}
