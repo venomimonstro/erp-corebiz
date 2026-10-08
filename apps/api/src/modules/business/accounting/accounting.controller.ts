@@ -47,9 +47,18 @@ export class AccountingController {
   async post(@Req() request: AuthenticatedRequest,@Body() body: {
     legalEntityId:string;periodId:string;businessDate:string;
     sourceType:string;sourceId:string;postingKey:string;
-    ruleCode:string;ruleVersion:number;amountMinor:string;reversalOfId?:string;
+    ruleCode:string;ruleVersion:number;amountMinor:string;
   }): Promise<ApiSuccess<unknown>> {
     return {ok:true,data:await this.accounting.post(this.context(request),body)};
+  }
+
+  @Post("entries/reverse")
+  @RequirePermission("accounting.reverse")
+  async reverse(@Req() request:AuthenticatedRequest,@Body() body:{
+    originalEntryId:string;periodId:string;businessDate:string;
+    postingKey:string;ruleCode:string;ruleVersion:number;
+  }):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.accounting.reverse(this.context(request),body)};
   }
 
   private context(request:AuthenticatedRequest):TenantContext {
