@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R7 / Sprint 31 — Site builder block core.  
+**Активная разработка:** R7 / Sprint 32 — Storefront / Catalog / Cart / Checkout.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -309,20 +309,33 @@
 
 **R6 Gate:** external channel → Integration Inbox → mapped SalesOrder → OMS ATP/allocation → Inventory reservation/shipment → return/backorder is now represented end-to-end in one domain chain.
 
-## Активно — Sprint 31: Site builder block core
+### Sprint 31 — Site Builder Core
+- Site / Page / PageVersion;
+- one DRAFT and one PUBLISHED version invariant;
+- typed block allowlist;
+- structured block editor without JSON;
+- safe URL protocol allowlist;
+- no arbitrary HTML/JS;
+- default ready-to-edit homepage;
+- global public slug;
+- immutable publication audit;
+- SSR public renderer;
+- SEO title/meta from published version.
+
+## Активно — Sprint 32: Storefront / Catalog / Cart / Checkout
 
 Scope:
-- Site / Page / PageVersion;
-- DRAFT / PUBLISHED version lifecycle;
-- typed block allowlist;
-- ordered block composition;
-- block config validation;
-- preview renderer;
-- no direct arbitrary HTML/JS execution;
-- internal builder workspace.
+- bind site to internal OWN_SITE channel;
+- public catalog from ERP Product/Variant/SKU;
+- ATP visibility;
+- browser cart;
+- checkout validation and price snapshots;
+- checkout → Integration Inbox READY;
+- idempotent checkout;
+- no public direct write to Sales/Inventory;
+- storefront blocks render live catalog.
 
 ## Следом
 
-Sprint 32 — Forms/CRM/Booking binding.  
-Sprint 33 — Storefront/catalog/cart/checkout.  
-Sprint 34 — Domains/publishing/SEO.
+Sprint 33 — Forms / CRM / Booking binding.  
+Sprint 34 — Domains / SEO / Analytics auto-wiring.
