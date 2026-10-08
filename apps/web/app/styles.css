@@ -445,3 +445,25 @@ button, .primary, .secondary { font: inherit; }
   .channel-inbox-layout { grid-template-columns: 1fr; }
   .channel-order-panel { position: static; }
 }
+
+
+/* OMS */
+.oms-layout { display: grid; grid-template-columns: minmax(0,1fr) 360px; gap: 12px; align-items: start; }
+.oms-panel { background: #fff; border: 1px solid #e1e3e6; border-radius: 16px; padding: 14px; position: sticky; top: 18px; }
+.oms-panel > header { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 11px; border-bottom: 1px solid #eceef0; }
+.oms-panel > header > div { display: grid; gap: 4px; }
+.oms-panel > header span { color: #858a91; font-size: 10px; }
+.oms-panel-section { display: grid; gap: 7px; margin-top: 14px; }
+.oms-panel-section > small { color: #858a91; text-transform: uppercase; letter-spacing: .07em; font-size: 9px; }
+.oms-line { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid #eef0f2; }
+.oms-line > div { display: grid; gap: 3px; }
+.oms-line span { color: #858a91; font-size: 10px; }
+.oms-allocation { border: 1px solid #e8eaed; border-radius: 11px; padding: 10px; display: grid; grid-template-columns: 1fr auto; gap: 5px 9px; }
+.oms-allocation > div { display: grid; gap: 3px; }
+.oms-allocation > div span { color: #858a91; font-size: 10px; }
+.oms-allocation p { grid-column: 1 / -1; margin: 0; color: #73787f; font-size: 10px; line-height: 1.4; }
+
+@media (max-width: 1080px) {
+  .oms-layout { grid-template-columns: 1fr; }
+  .oms-panel { position: static; }
+}
