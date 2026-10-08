@@ -162,4 +162,77 @@ export class AccountingService {
       return {id:inserted.rows[0]!.id,created:true};
     });
   }
+  async reverse(context:TenantContext,input:{
+    originalEntryId:string;periodId:string;businessDate:string;
+    postingKey:string;ruleCode:string;ruleVersion:number;
+  }) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.businessDate) ||
+        !input.postingKey?.trim() || !input.ruleCode?.trim() ||
+        !Number.isInteger(input.ruleVersion) || input.ruleVersion<=0) {
+      throw new BadRequestException("Invalid reversal request");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const previous=await client.query<{
+        id:string;legal_entity_id:string;source_type:string;source_id:string;
+        debit_account_id:string;credit_account_id:string;amount_minor:string;currency:string;
+      }>(
+        `SELECT id,legal_entity_id,source_type,source_id,debit_account_id,
+                credit_account_id,amount_minor::text,currency
+         FROM accounting_journal_entry WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,input.originalEntryId]
+      );
+      const original=previous.rows[0];
+      if (!original) throw new NotFoundException("Original posting not found");
+      const existing=await client.query<{id:string;reversal_of_id:string|null}>(
+        `SELECT id,reversal_of_id FROM accounting_journal_entry
+         WHERE tenant_id=$1 AND (posting_key=$2 OR reversal_of_id=$3) FOR UPDATE`,
+        [context.tenantId,input.postingKey.trim(),input.originalEntryId]
+      );
+      if (existing.rowCount) {
+        const prior=existing.rows[0]!;
+        if(prior.reversal_of_id!==input.originalEntryId) {
+          throw new ConflictException("Posting key belongs to another operation");
+        }
+        return {id:prior.id,created:false};
+      }
+      const period=await client.query(
+        `SELECT 1 FROM accounting_period WHERE tenant_id=$1 AND id=$2
+         AND legal_entity_id=$3 AND state='OPEN'
+         AND $4::date BETWEEN date_from AND date_to FOR UPDATE`,
+        [context.tenantId,input.periodId,original.legal_entity_id,input.businessDate]
+      );
+      if(!period.rowCount) throw new ConflictException("Reversal period unavailable");
+      const rule=await client.query<{debit_account_id:string;credit_account_id:string}>(
+        `SELECT r.debit_account_id,r.credit_account_id
+         FROM accounting_posting_rule r
+         JOIN accounting_policy p ON p.id=r.policy_id AND p.tenant_id=r.tenant_id
+         WHERE r.tenant_id=$1 AND p.legal_entity_id=$2 AND r.code=$3
+         AND r.version=$4 AND r.source_type=$5 AND r.status='APPROVED'
+         AND p.status='APPROVED'
+         AND $6::date BETWEEN r.valid_from AND coalesce(r.valid_to,'infinity'::date)
+         AND $6::date BETWEEN p.valid_from AND coalesce(p.valid_to,'infinity'::date)`,
+        [context.tenantId,original.legal_entity_id,input.ruleCode,input.ruleVersion,
+         original.source_type,input.businessDate]
+      );
+      if(rule.rows.length!==1 || rule.rows[0]!.debit_account_id!==original.credit_account_id ||
+         rule.rows[0]!.credit_account_id!==original.debit_account_id) {
+        throw new ConflictException("Approved reversal rule must swap debit and credit");
+      }
+      const inserted=await client.query<{id:string}>(
+        `INSERT INTO accounting_journal_entry(
+           tenant_id,legal_entity_id,period_id,business_date,source_type,source_id,
+           posting_key,rule_code,rule_version,currency,debit_account_id,
+           credit_account_id,amount_minor,reversal_of_id,posted_by_membership_id
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         RETURNING id`,
+        [context.tenantId,original.legal_entity_id,input.periodId,input.businessDate,
+         original.source_type,original.source_id,input.postingKey.trim(),
+         input.ruleCode,input.ruleVersion,original.currency,
+         original.credit_account_id,original.debit_account_id,
+         original.amount_minor,input.originalEntryId,context.membershipId]
+      );
+      return {id:inserted.rows[0]!.id,created:true};
+    });
+  }
+
 }
