@@ -30,6 +30,20 @@ type Block = {
   config: Record<string, unknown>;
 };
 
+type Binding = {
+  id: string;
+  name: string;
+  public_key: string;
+  action: "CRM_LEAD" | "BOOKING";
+  status: string;
+};
+
+type ServiceItem = {
+  id: string;
+  name: string;
+  duration_minutes: number;
+};
+
 type Editor = {
   page: Page & {
     site_id: string;
@@ -76,6 +90,8 @@ export default function SitesPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [siteId, setSiteId] = useState("");
   const [pages, setPages] = useState<Page[]>([]);
+  const [bindings, setBindings] = useState<Binding[]>([]);
+  const [services, setServices] = useState<ServiceItem[]>([]);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [title, setTitle] = useState("");
@@ -111,6 +127,27 @@ export default function SitesPage() {
 
   useEffect(() => {
     void loadPages(siteId);
+
+    if (!siteId) {
+      setBindings([]);
+      return;
+    }
+
+    void Promise.all([
+      apiRequest<Binding[]>("/site-forms/site/" + siteId),
+      apiRequest<ServiceItem[]>("/service/catalog")
+    ])
+      .then(([bindingRows, serviceRows]) => {
+        setBindings(bindingRows);
+        setServices(serviceRows);
+      })
+      .catch((cause) => {
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Не удалось загрузить связки сайта"
+        );
+      });
   }, [siteId, loadPages]);
 
   async function createSite() {
@@ -163,6 +200,70 @@ export default function SitesPage() {
         cause instanceof Error
           ? cause.message
           : "Не удалось включить интернет-магазин"
+      );
+    }
+  }
+
+  async function createLeadBinding() {
+    if (!siteId) return;
+    const name = window.prompt("Название формы", "Заявка с сайта");
+    if (!name?.trim()) return;
+
+    try {
+      await apiRequest("/site-forms/site/" + siteId, {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          action: "CRM_LEAD"
+        })
+      });
+      setBindings(await apiRequest<Binding[]>("/site-forms/site/" + siteId));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось создать форму");
+    }
+  }
+
+  async function createBookingBinding() {
+    if (!siteId) return;
+
+    if (!services.length) {
+      setError("Сначала создайте хотя бы одну услугу в разделе «Сервис».");
+      return;
+    }
+
+    const list = services
+      .map((service, index) =>
+        (index + 1) + ". " + service.name + " · " + service.duration_minutes + " мин."
+      )
+      .join("\n");
+
+    const selectedIndex =
+      Number(window.prompt("Выберите услугу:\n" + list, "1")) - 1;
+    const service = services[selectedIndex];
+    if (!service) return;
+
+    const name = window.prompt(
+      "Название формы записи",
+      "Запись: " + service.name
+    );
+    if (!name?.trim()) return;
+
+    try {
+      await apiRequest("/site-forms/site/" + siteId, {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          action: "BOOKING",
+          serviceId: service.id,
+          resourceIds: []
+        })
+      });
+      setBindings(await apiRequest<Binding[]>("/site-forms/site/" + siteId));
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось создать форму онлайн-записи"
       );
     }
   }
@@ -447,6 +548,22 @@ export default function SitesPage() {
                   Включить интернет-магазин
                   <small>Каталог, корзина и checkout</small>
                 </button>
+                <button
+                  className="site-store-enable"
+                  onClick={() => void createLeadBinding()}
+                  type="button"
+                >
+                  + Форма заявки
+                  <small>Создаёт клиента и сделку в CRM</small>
+                </button>
+                <button
+                  className="site-store-enable"
+                  onClick={() => void createBookingBinding()}
+                  type="button"
+                >
+                  + Онлайн-запись
+                  <small>Создаёт клиента и запись на услугу</small>
+                </button>
                 <a
                   className="site-public-link"
                 href={"/s/" + selectedSite.public_slug}
@@ -545,6 +662,7 @@ export default function SitesPage() {
 
                       <BlockFields
                         block={block}
+                        bindings={bindings}
                         onChange={(config) => updateBlock(index, config)}
                       />
                     </article>
@@ -591,9 +709,11 @@ export default function SitesPage() {
 
 function BlockFields({
   block,
+  bindings,
   onChange
 }: {
   block: Block;
+  bindings: Binding[];
   onChange: (config: Record<string,unknown>) => void;
 }) {
   const c = block.config as Record<string, any>;
@@ -691,13 +811,46 @@ function BlockFields({
     );
   }
 
+  if (block.block_type === "FORM" || block.block_type === "BOOKING") {
+    const action = block.block_type === "FORM" ? "CRM_LEAD" : "BOOKING";
+    const available = bindings.filter((binding) => binding.action === action);
+
+    return (
+      <div className="builder-field-grid">
+        <Field
+          label="Заголовок"
+          value={c.heading ?? ""}
+          onChange={(v) => set("heading", v)}
+        />
+        <label className="builder-field">
+          <span>Связка формы</span>
+          <select
+            value={c.bindingId ?? ""}
+            onChange={(event) => set("bindingId", event.target.value)}
+          >
+            <option value="">Выберите связку</option>
+            {available.map((binding) => (
+              <option key={binding.id} value={binding.public_key}>
+                {binding.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {!available.length ? (
+          <p className="builder-hint">
+            Создайте связку слева: «Форма заявки» или «Онлайн-запись».
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="builder-field-grid">
-      <Field label="Заголовок" value={c.heading ?? ""} onChange={(v) => set("heading", v)} />
       <Field
-        label="Связка"
-        value={c.bindingId ?? ""}
-        onChange={(v) => set("bindingId", v)}
+        label="Заголовок"
+        value={c.heading ?? ""}
+        onChange={(v) => set("heading", v)}
       />
       <Field
         label="Лимит элементов"
@@ -705,7 +858,7 @@ function BlockFields({
         onChange={(v) => set("limit", Number(v) || 12)}
       />
       <p className="builder-hint">
-        Этот динамический блок будет подключён к данным ERP на следующем спринте.
+        Блок использует актуальные данные ERP.
       </p>
     </div>
   );
