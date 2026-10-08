@@ -10,6 +10,7 @@ import { CrmModule } from "./modules/business/crm/crm.module";
 import { DashboardModule } from "./modules/business/dashboard/dashboard.module";
 import { FinanceModule } from "./modules/business/finance/finance.module";
 import { InventoryModule } from "./modules/business/inventory/inventory.module";
+import { MigrationModule } from "./modules/business/migration/migration.module";
 import { OrganizationModule } from "./modules/business/organization/organization.module";
 import { PartyModule } from "./modules/business/party/party.module";
 import { ProcurementModule } from "./modules/business/procurement/procurement.module";
@@ -39,6 +40,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     SalesModule,
     FinanceModule,
     InventoryModule,
+    MigrationModule,
     ProcurementModule,
     HealthModule
   ]
