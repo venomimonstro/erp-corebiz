@@ -36,6 +36,7 @@ export class SalesController {
       currency?: string;
       notes?: string;
       idempotencyKey?: string;
+      inventoryOwnerId?: string;
       lines: Array<{
         skuId?: string;
         description?: string;
