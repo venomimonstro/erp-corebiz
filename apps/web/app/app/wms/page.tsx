@@ -48,6 +48,35 @@ type Location = {
   level_no: number;
 };
 
+type LocationBalance = {
+  location_id: string;
+  full_code: string;
+  location_name: string | null;
+  is_system: boolean;
+  zone_name: string;
+  zone_type: string;
+  sku_id: string;
+  sku_code: string;
+  product_name: string;
+  physical_milli: string;
+};
+
+type WmsTask = {
+  id: string;
+  task_type: string;
+  status: string;
+  priority: number;
+  sku_id: string;
+  sku_code: string;
+  product_name: string;
+  quantity_milli: string;
+  from_code: string | null;
+  to_code: string | null;
+  claimed_by_membership_id: string | null;
+  instructions: Record<string, unknown>;
+  last_error: string | null;
+};
+
 type Topology = {
   profile: {
     mode: string;
@@ -85,6 +114,8 @@ export default function WmsPage() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [warehouseId, setWarehouseId] = useState("");
   const [topology, setTopology] = useState<Topology | null>(null);
+  const [balances, setBalances] = useState<LocationBalance[]>([]);
+  const [tasks, setTasks] = useState<WmsTask[]>([]);
   const [error, setError] = useState("");
 
   const loadWarehouses = useCallback(async () => {
@@ -107,9 +138,27 @@ export default function WmsPage() {
       return;
     }
     try {
-      setTopology(
-        await apiRequest<Topology>("/wms/warehouses/" + id + "/topology")
+      const next = await apiRequest<Topology>(
+        "/wms/warehouses/" + id + "/topology"
       );
+      setTopology(next);
+
+      if (next.profile?.stock_tracking_state === "LOCATION_LEDGER") {
+        const [locationRows, taskRows] = await Promise.all([
+          apiRequest<LocationBalance[]>(
+            "/wms/warehouses/" + id + "/location-balances"
+          ),
+          apiRequest<WmsTask[]>(
+            "/wms/warehouses/" + id + "/tasks"
+          )
+        ]);
+        setBalances(locationRows);
+        setTasks(taskRows);
+      } else {
+        setBalances([]);
+        setTasks([]);
+      }
+
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить топологию");
@@ -135,6 +184,119 @@ export default function WmsPage() {
       await loadTopology(warehouseId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось включить WMS");
+    }
+  }
+
+  async function initializeLedger() {
+    if (!warehouseId) return;
+    if (
+      !window.confirm(
+        "Инициализировать ячеечный учёт? Текущий физический остаток будет сверочно помещён в системный адрес UNASSIGNED."
+      )
+    ) {
+      return;
+    }
+
+    try {
+      const result = await apiRequest<{
+        initialized: boolean;
+        skuCount: number;
+      }>(
+        "/wms/warehouses/" +
+          warehouseId +
+          "/location-ledger/initialize",
+        { method: "POST" }
+      );
+
+      window.alert(
+        result.initialized
+          ? "Ячеечный учёт включён. SKU перенесено в UNASSIGNED: " + result.skuCount
+          : "Ячеечный учёт уже был инициализирован."
+      );
+      await loadTopology(warehouseId);
+      await loadWarehouses();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось инициализировать ячеечный учёт"
+      );
+    }
+  }
+
+  async function createPutaway(balance: LocationBalance) {
+    const raw = window.prompt(
+      "Количество к размещению, шт.",
+      String(Number(balance.physical_milli) / 1000)
+    );
+    if (!raw) return;
+
+    const quantity = Number(raw.replace(",", "."));
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setError("Некорректное количество");
+      return;
+    }
+
+    try {
+      const result = await apiRequest<{
+        toLocationCode: string;
+      }>("/wms/warehouses/" + warehouseId + "/putaway-tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          skuId: balance.sku_id,
+          quantityMilli: String(Math.round(quantity * 1000))
+        })
+      });
+
+      window.alert("Создана задача размещения → " + result.toLocationCode);
+      await loadTopology(warehouseId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось создать задачу размещения"
+      );
+    }
+  }
+
+  async function claimTask(task: WmsTask) {
+    try {
+      await apiRequest("/wms/tasks/" + task.id + "/claim", {
+        method: "POST"
+      });
+      await loadTopology(warehouseId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось взять задачу");
+    }
+  }
+
+  async function completeTask(task: WmsTask) {
+    if (
+      !window.confirm(
+        "Подтвердить перемещение " +
+          task.sku_code +
+          " из " +
+          (task.from_code ?? "—") +
+          " в " +
+          (task.to_code ?? "—") +
+          "?"
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await apiRequest(
+        "/wms/tasks/" + task.id + "/complete-putaway",
+        { method: "POST" }
+      );
+      await loadTopology(warehouseId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось завершить размещение"
+      );
     }
   }
 
@@ -345,9 +507,17 @@ export default function WmsPage() {
                   </strong>
                   <span>
                     {topology.profile.stock_tracking_state === "TOPOLOGY_ONLY"
-                      ? "Сейчас настраивается только топология. Остатки остаются в Inventory Ledger."
-                      : topology.profile.stock_tracking_state}
+                      ? "Топология готовится. Остатки пока только в Inventory Ledger."
+                      : "Ячеечный субледжер активен и сверяется с Inventory Balance."}
                   </span>
+                  {topology.profile.stock_tracking_state === "TOPOLOGY_ONLY" ? (
+                    <button
+                      onClick={() => void initializeLedger()}
+                      type="button"
+                    >
+                      Инициализировать ячейки
+                    </button>
+                  ) : null}
                 </div>
 
                 <div className="wms-zone-grid">
@@ -406,6 +576,102 @@ export default function WmsPage() {
                     </div>
                   ) : null}
                 </div>
+
+                {topology.profile.stock_tracking_state === "LOCATION_LEDGER" ? (
+                  <>
+                    <section className="section-block">
+                      <div className="section-heading">
+                        <div>
+                          <p className="muted">Receiving buffer</p>
+                          <h2>Не размещено</h2>
+                        </div>
+                      </div>
+
+                      <div className="data-table-wrap">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>SKU</th>
+                              <th>Товар</th>
+                              <th>Количество</th>
+                              <th />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {balances
+                              .filter((row) => row.is_system)
+                              .map((row) => (
+                                <tr key={row.location_id + ":" + row.sku_id}>
+                                  <td><strong>{row.sku_code}</strong></td>
+                                  <td>{row.product_name}</td>
+                                  <td>{Number(row.physical_milli) / 1000}</td>
+                                  <td className="table-actions">
+                                    <button
+                                      onClick={() => void createPutaway(row)}
+                                      type="button"
+                                    >
+                                      Разместить
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+
+                    <section className="section-block">
+                      <div className="section-heading">
+                        <div>
+                          <p className="muted">Warehouse Tasks</p>
+                          <h2>Задачи склада</h2>
+                        </div>
+                      </div>
+
+                      <div className="wms-task-list">
+                        {tasks
+                          .filter((task) => task.status !== "COMPLETED")
+                          .map((task) => (
+                            <article key={task.id} className="wms-task-card">
+                              <div>
+                                <span>{task.task_type} · {task.status}</span>
+                                <strong>
+                                  {task.product_name} · {task.sku_code}
+                                </strong>
+                                <small>
+                                  {task.from_code ?? "—"} → {task.to_code ?? "—"} ·{" "}
+                                  {Number(task.quantity_milli) / 1000}
+                                </small>
+                              </div>
+
+                              {task.status === "OPEN" ? (
+                                <button
+                                  onClick={() => void claimTask(task)}
+                                  type="button"
+                                >
+                                  Взять
+                                </button>
+                              ) : task.status === "CLAIMED" ? (
+                                <button
+                                  onClick={() => void completeTask(task)}
+                                  type="button"
+                                >
+                                  Готово
+                                </button>
+                              ) : null}
+                            </article>
+                          ))}
+
+                        {!tasks.some((task) => task.status !== "COMPLETED") ? (
+                          <div className="table-empty">
+                            <strong>Активных задач нет</strong>
+                            <span>Новые задачи появятся после приёмки или размещения.</span>
+                          </div>
+                        ) : null}
+                      </div>
+                    </section>
+                  </>
+                ) : null}
               </>
             ) : null}
           </section>
