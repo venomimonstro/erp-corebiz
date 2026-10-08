@@ -2229,8 +2229,12 @@ export class WmsService {
 
           const quantity=available<need?available:need;
           const key=
-            "replenish:"+target.location_id+":"+target.sku_id+":"+
-            source.location_id+":"+Date.now().toString()+":"+sequence.toString();
+            "replenish:"+warehouseId+":"+
+            target.location_id+":"+target.sku_id+":"+
+            source.location_id+":"+
+            current.toString()+":"+
+            desired.toString()+":"+
+            sequence.toString();
 
           await client.query(
             `INSERT INTO warehouse_task(
