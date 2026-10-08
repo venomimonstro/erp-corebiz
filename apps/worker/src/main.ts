@@ -1,4 +1,5 @@
 import { processMarketingSyncOnce } from "./marketing-sync.js";
+import { processMarketplaceSyncOnce } from "./marketplace-sync.js";
 import { createDecipheriv, createHash } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 
@@ -990,6 +991,10 @@ async function workOnce(): Promise<boolean> {
   const offlineStatusJob = await claimOfflineConversionStatusJob();
   if (offlineStatusJob) {
     await processOfflineConversionStatus(offlineStatusJob);
+    return true;
+  }
+
+  if (await processMarketplaceSyncOnce(pool)) {
     return true;
   }
 
