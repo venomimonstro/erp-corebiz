@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R5 / Sprint 22 — Tracker / Visitor / Session.  
+**Активная разработка:** R6 / Sprint 27 — Channel connectors foundation.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -209,20 +209,70 @@
 - booking materials;
 - idempotent material consumption through Inventory Ledger.
 
-## Активно — Sprint 22: Tracker / Visitor / Session
+## R5 — Growth Analytics реализовано
+
+### Sprint 22 — Tracker / Visitor / Session
+- privacy-first first-party tracker;
+- consent=GRANTED enforcement;
+- visitor/session/event;
+- UTM/referrer/yclid/gclid;
+- exact-domain allowlist;
+- no raw IP/User-Agent storage;
+- Redis anti-abuse limit;
+- tracker sites and source dashboard.
+
+### Sprint 23 — Marketing Data / Yandex Direct
+- encrypted OAuth credentials;
+- marketing connections/campaigns/daily stats;
+- async sync jobs;
+- Yandex Direct Reports API 200/201/202 flow;
+- retryIn/backoff;
+- spend/impressions/clicks/CPC;
+- campaign aliases.
+
+### Sprint 24 — Identity / Touchpoints / Attribution
+- auditable visitor→party identity link;
+- immutable session-derived touchpoints;
+- FIRST_TOUCH / LAST_TOUCH / LAST_PAID_TOUCH;
+- 90-day lookback;
+- customer journey;
+- recalculable attribution without rewriting raw events.
+
+### Sprint 25 — Profitability / Alerts
+- campaign alias mapping;
+- trade + service conversions;
+- payment/refund-aware revenue;
+- cost snapshots;
+- Gross Profit / Contribution Profit;
+- CPC/CPO/CAC/ROAS/ROMI;
+- data quality and freshness;
+- campaign alert rules.
+
+### Sprint 26 — Calltracking / Offline conversions
+- external calltracking connection/webhook;
+- webhook secret stored as hash;
+- caller phone stored only as HMAC;
+- visitor/session/party binding;
+- Yandex Metrica offline conversion connection;
+- YCLID export queue;
+- CSV upload to Metrica;
+- asynchronous uploading status polling;
+- linkage failure visibility.
+
+## Активно — Sprint 27: Channel connectors foundation
 
 Scope:
-- first-party web tracker;
-- visitor/session/pageview/event;
-- UTM/referrer/click identifiers;
-- consent state;
-- anonymous-to-party identity link;
-- public ingest endpoint;
-- anti-abuse/rate-safe ingestion.
+- unified Channel Connection;
+- external order inbox;
+- product/SKU mapping;
+- idempotent webhook/pull ingestion;
+- retry/rate-limit/health;
+- manual resolve/retry/ignore;
+- channel event audit;
+- connector contract for own site/Ozon/WB/Yandex Market/API.
 
 ## Следом
 
-Sprint 23 — Marketing Data / Yandex Direct.  
-Sprint 24 — Lead identity / Touchpoints / Attribution.  
-Sprint 25 — Profitability Dashboard / Alerts.  
-Sprint 26 — Calltracking / Offline conversions.
+Sprint 28 — OMS / ATP / Allocation.  
+Sprint 29 — Returns / Backorder / Sourcing.  
+Sprint 30 — Marketplaces Ozon/WB.
