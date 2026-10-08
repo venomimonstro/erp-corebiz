@@ -9,6 +9,7 @@ import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
 import { DomainEventService } from "../../platform/events/domain-event.service";
+import { AttributionService } from "../growth/attribution.service";
 import { InventoryService } from "../inventory/inventory.service";
 import { FinanceService } from "../finance/finance.service";
 
@@ -27,7 +28,8 @@ export class SalesService {
     private readonly authorization: AuthorizationService,
     private readonly inventory: InventoryService,
     private readonly finance: FinanceService,
-    private readonly events: DomainEventService
+    private readonly events: DomainEventService,
+    private readonly attribution: AttributionService
   ) {}
 
   async list(context: TenantContext): Promise<Array<{
@@ -413,6 +415,26 @@ export class SalesService {
       }
 
       await this.finance.createSalesReceivable(client, context, order.id);
+
+      const confirmedOrder = await client.query<{
+        party_id: string | null;
+        currency: string;
+      }>(
+        "SELECT party_id,currency FROM sales_order WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId, order.id]
+      );
+
+      await this.attribution.recordConversion(client, context, {
+        partyId: confirmedOrder.rows[0]?.party_id ?? null,
+        sourceType: "SALES_ORDER",
+        sourceId: order.id,
+        conversionType: "ORDER",
+        revenueMinor: 0n,
+        currency: confirmedOrder.rows[0]?.currency ?? "RUB",
+        metadata: {
+          orderStatus: order.order_status
+        }
+      });
 
       await this.audit(
         client,
