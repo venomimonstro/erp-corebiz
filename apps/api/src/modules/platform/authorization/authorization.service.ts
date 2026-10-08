@@ -39,6 +39,61 @@ export class AuthorizationService {
     });
   }
 
+  async membershipIdsForScope(
+    context: TenantContext,
+    scope: PermissionScope
+  ): Promise<string[] | null> {
+    if (scope === "all") return null;
+    if (scope === "own") return [context.membershipId];
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      if (scope === "team") {
+        const result = await client.query<{ membership_id: string }>(
+          `SELECT DISTINCT membership_id
+           FROM (
+             SELECT $2::uuid AS membership_id
+             UNION
+             SELECT tm2.membership_id
+             FROM team_membership tm1
+             JOIN team_membership tm2
+               ON tm2.tenant_id = tm1.tenant_id
+              AND tm2.team_id = tm1.team_id
+             WHERE tm1.tenant_id = $1
+               AND tm1.membership_id = $2
+           ) scoped`,
+          [context.tenantId, context.membershipId]
+        );
+
+        return result.rows.map((row) => row.membership_id);
+      }
+
+      const result = await client.query<{ membership_id: string }>(
+        `SELECT DISTINCT membership_id
+         FROM (
+           SELECT $2::uuid AS membership_id
+           UNION
+           SELECT tm2.membership_id
+           FROM team_membership tm1
+           JOIN team t1
+             ON t1.tenant_id = tm1.tenant_id
+            AND t1.id = tm1.team_id
+           JOIN team t2
+             ON t2.tenant_id = t1.tenant_id
+            AND t2.branch_id = t1.branch_id
+           JOIN team_membership tm2
+             ON tm2.tenant_id = t2.tenant_id
+            AND tm2.team_id = t2.id
+           WHERE tm1.tenant_id = $1
+             AND tm1.membership_id = $2
+             AND t1.branch_id IS NOT NULL
+         ) scoped`,
+        [context.tenantId, context.membershipId]
+      );
+
+      return result.rows.map((row) => row.membership_id);
+    });
+  }
+
   async hasPermission(
     context: TenantContext,
     permissionCode: string
