@@ -72,6 +72,49 @@ export class SalesController {
     };
   }
 
+  @Post(":id/reserve")
+  @RequirePermission("sales.write")
+  async reserve(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: { idempotencyKey: string; warehouseId?: string }
+  ): Promise<ApiSuccess<unknown>> {
+    if (!body.idempotencyKey?.trim()) {
+      throw new BadRequestException("Требуется ключ идемпотентности");
+    }
+
+    return {
+      ok: true,
+      data: await this.sales.reserve(
+        this.context(request),
+        id,
+        body.idempotencyKey.trim(),
+        body.warehouseId
+      )
+    };
+  }
+
+  @Post(":id/ship")
+  @RequirePermission("sales.write")
+  async ship(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: { idempotencyKey: string }
+  ): Promise<ApiSuccess<unknown>> {
+    if (!body.idempotencyKey?.trim()) {
+      throw new BadRequestException("Требуется ключ идемпотентности");
+    }
+
+    return {
+      ok: true,
+      data: await this.sales.ship(
+        this.context(request),
+        id,
+        body.idempotencyKey.trim()
+      )
+    };
+  }
+
   @Patch(":id/confirm")
   @RequirePermission("sales.write")
   async confirm(
