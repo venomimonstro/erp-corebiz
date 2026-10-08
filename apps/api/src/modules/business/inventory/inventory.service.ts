@@ -287,9 +287,7 @@ export class InventoryService {
         throw new BadRequestException("Сначала подтвердите заказ");
       }
 
-      if (["RESERVED", "READY", "PARTIALLY_SHIPPED", "SHIPPED"].includes(
-        order.fulfillment_status
-      )) {
+      if (["RESERVED", "READY"].includes(order.fulfillment_status)) {
         const count = await client.query<{ count: string }>(
           `SELECT count(*)::text AS count
            FROM inventory_reservation
@@ -302,9 +300,13 @@ export class InventoryService {
         return {
           orderId: input.orderId,
           fulfillmentStatus:
-            order.fulfillment_status === "RESERVED" ? "RESERVED" : "READY",
+            order.fulfillment_status as "RESERVED" | "READY",
           reservations: Number(count.rows[0]?.count ?? "0")
         };
+      }
+
+      if (["PARTIALLY_SHIPPED", "SHIPPED"].includes(order.fulfillment_status)) {
+        throw new ConflictException("Заказ уже передан в отгрузку");
       }
 
       const warehouseId =
@@ -499,8 +501,33 @@ export class InventoryService {
         return { orderId: input.orderId, fulfillmentStatus: "SHIPPED" };
       }
 
+      if (row.fulfillment_status === "READY") {
+        await client.query(
+          `UPDATE sales_order
+           SET fulfillment_status = 'SHIPPED',
+               version = version + 1,
+               updated_at = now()
+           WHERE tenant_id = $1 AND id = $2`,
+          [context.tenantId, input.orderId]
+        );
+
+        await this.audit(
+          client,
+          context,
+          "inventory.order_shipped",
+          "sales_order",
+          input.orderId,
+          { inventoryMovements: 0 }
+        );
+
+        return {
+          orderId: input.orderId,
+          fulfillmentStatus: "SHIPPED"
+        };
+      }
+
       if (row.fulfillment_status !== "RESERVED" || !row.warehouse_id) {
-        throw new BadRequestException("Заказ должен быть полностью зарезервирован");
+        throw new BadRequestException("Заказ должен быть готов к отгрузке");
       }
 
       const reservations = await client.query<{
