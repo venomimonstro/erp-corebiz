@@ -13,6 +13,7 @@ import {
 } from "node:crypto";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { SalesService } from "../sales/sales.service";
+import { ChannelCryptoService } from "./channel-crypto.service";
 
 type ChannelProvider =
   | "OWN_SITE"
@@ -25,7 +26,8 @@ type ChannelProvider =
 export class ChannelsService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly sales: SalesService
+    private readonly sales: SalesService,
+    private readonly crypto: ChannelCryptoService
   ) {}
 
   async connections(
@@ -102,6 +104,190 @@ export class ChannelsService {
       };
     });
   }
+
+  async createMarketplaceConnection(
+    context: TenantContext,
+    input:
+      | {
+          provider: "OZON";
+          name: string;
+          clientId: string;
+          apiKey: string;
+        }
+      | {
+          provider: "WILDBERRIES";
+          name: string;
+          apiToken: string;
+        }
+  ): Promise<{ id: string }> {
+    const name = input.name.trim();
+    if (name.length < 2 || name.length > 160) {
+      throw new BadRequestException("Некорректное название подключения");
+    }
+
+    let credentials: Record<string, unknown>;
+    let config: Record<string, unknown>;
+
+    if (input.provider === "OZON") {
+      const clientId = input.clientId.trim();
+      const apiKey = input.apiKey.trim();
+      if (clientId.length < 2 || clientId.length > 100) {
+        throw new BadRequestException("Некорректный Ozon Client-Id");
+      }
+      if (apiKey.length < 16 || apiKey.length > 4096) {
+        throw new BadRequestException("Некорректный Ozon Api-Key");
+      }
+
+      credentials = { clientId, apiKey };
+      config = {
+        mode: "FBS",
+        apiVersion: "v4",
+        ordersEndpoint: "/v4/posting/fbs/list"
+      };
+    } else {
+      const apiToken = input.apiToken.trim();
+      if (apiToken.length < 32 || apiToken.length > 8192) {
+        throw new BadRequestException("Некорректный Wildberries API token");
+      }
+
+      credentials = { apiToken };
+      config = {
+        mode: "FBS",
+        apiVersion: "v3",
+        ordersEndpoint: "/api/v3/orders"
+      };
+    }
+
+    const encrypted = this.crypto.encrypt(credentials);
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO channel_connection(
+           tenant_id,provider,name,credentials_ciphertext,config,
+           created_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6)
+         RETURNING id`,
+        [
+          context.tenantId,
+          input.provider,
+          name,
+          encrypted,
+          JSON.stringify(config),
+          context.membershipId
+        ]
+      );
+
+      const row = result.rows[0];
+      if (!row) throw new Error("MARKETPLACE_CONNECTION_CREATE_FAILED");
+
+      await this.audit(
+        client,
+        context,
+        "channel.marketplace_connection_created",
+        "channel_connection",
+        row.id,
+        { provider: input.provider, name }
+      );
+
+      return row;
+    });
+  }
+
+  async requestSync(
+    context: TenantContext,
+    connectionId: string,
+    input: {
+      from?: string;
+      to?: string;
+    }
+  ): Promise<{ jobId: string; status: string }> {
+    const to = input.to ? new Date(input.to) : new Date();
+    const from = input.from
+      ? new Date(input.from)
+      : new Date(to.getTime() - 7 * 86400000);
+
+    if (
+      Number.isNaN(from.getTime()) ||
+      Number.isNaN(to.getTime()) ||
+      to <= from ||
+      to.getTime() - from.getTime() > 31 * 86400000
+    ) {
+      throw new BadRequestException(
+        "Период sync должен быть больше 0 и не более 31 дня"
+      );
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const connection = await client.query<{
+        provider: string;
+        status: string;
+        credentials_ciphertext: string | null;
+      }>(
+        `SELECT provider,status,credentials_ciphertext
+         FROM channel_connection
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId, connectionId]
+      );
+
+      const row = connection.rows[0];
+      if (!row) throw new NotFoundException("Канал не найден");
+      if (!["OZON","WILDBERRIES"].includes(row.provider)) {
+        throw new BadRequestException(
+          "Ручная синхронизация доступна только marketplace-коннекторам"
+        );
+      }
+      if (row.status === "DISABLED") {
+        throw new BadRequestException("Канал отключён");
+      }
+      if (!row.credentials_ciphertext) {
+        throw new BadRequestException("У канала не настроены credentials");
+      }
+
+      const job = await client.query<{ id: string; status: string }>(
+        `INSERT INTO channel_sync_job(
+           tenant_id,connection_id,provider,period_from,period_to
+         ) VALUES ($1,$2,$3,$4,$5)
+         RETURNING id,status`,
+        [
+          context.tenantId,
+          connectionId,
+          row.provider,
+          from,
+          to
+        ]
+      );
+
+      return {
+        jobId: job.rows[0]!.id,
+        status: job.rows[0]!.status
+      };
+    });
+  }
+
+  async syncJobs(
+    context: TenantContext,
+    connectionId?: string
+  ): Promise<Array<Record<string, unknown>>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `SELECT
+           j.id,j.connection_id,c.name AS connection_name,
+           j.provider,j.period_from,j.period_to,j.status,j.attempts,
+           j.imported_orders,j.updated_orders,j.last_error,
+           j.started_at,j.finished_at,j.created_at
+         FROM channel_sync_job j
+         JOIN channel_connection c
+           ON c.tenant_id=j.tenant_id AND c.id=j.connection_id
+         WHERE j.tenant_id=$1
+           AND ($2::uuid IS NULL OR j.connection_id=$2)
+         ORDER BY j.created_at DESC
+         LIMIT 200`,
+        [context.tenantId, connectionId ?? null]
+      );
+      return result.rows;
+    });
+  }
+
 
   async ingestOrder(
     connectionId: string,
