@@ -20,6 +20,10 @@ async function migrate(): Promise<void> {
   const client = await pool.connect();
 
   try {
+    await client.query("SELECT pg_advisory_lock(hashtext('corebiz-schema-migrate'))");
+    await client.query("SET lock_timeout = '10s'");
+    await client.query("SET statement_timeout = '5min'");
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migration (
         filename text PRIMARY KEY,
@@ -65,6 +69,11 @@ async function migrate(): Promise<void> {
       }
     }
   } finally {
+    try {
+      await client.query("SELECT pg_advisory_unlock(hashtext('corebiz-schema-migrate'))");
+    } catch {
+      // Connection cleanup still continues if unlock fails.
+    }
     client.release();
     await pool.end();
   }
