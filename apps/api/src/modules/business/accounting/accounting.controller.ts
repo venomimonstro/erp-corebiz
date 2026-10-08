@@ -38,6 +38,15 @@ export class AccountingController {
     return {ok:true,data:await this.accounting.lockPeriod(this.context(request),body)};
   }
 
+  @Get("periods/history")
+  @RequirePermission("accounting.read")
+  async periodHistory(
+    @Req() request:AuthenticatedRequest,
+    @Query("periodId") periodId:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.accounting.periodHistory(this.context(request),periodId)};
+  }
+
   @Get("periods")
   @RequirePermission("accounting.read")
   async periods(@Req() request: AuthenticatedRequest,@Query("legalEntityId") legalEntityId:string): Promise<ApiSuccess<unknown>> {
