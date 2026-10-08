@@ -283,6 +283,14 @@ export class BookingService {
   ): Promise<Array<Record<string, unknown>>> {
     const fromDate = from ? new Date(from) : new Date(Date.now() - 86400000);
     const toDate = to ? new Date(to) : new Date(Date.now() + 30 * 86400000);
+    if (
+      Number.isNaN(fromDate.getTime()) ||
+      Number.isNaN(toDate.getTime()) ||
+      toDate <= fromDate ||
+      toDate.getTime() - fromDate.getTime() > 31 * 86400000
+    ) {
+      throw new BadRequestException("Период календаря должен быть от 1 минуты до 31 дня");
+    }
 
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
