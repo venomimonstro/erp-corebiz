@@ -348,6 +348,61 @@ export class WmsController{
     };
   }
 
+  @Get("warehouses/:warehouseId/dispatcher")
+  @RequirePermission("wms.read")
+  async dispatcher(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.dispatcher(this.ctx(req),warehouseId)
+    };
+  }
+
+  @Get("warehouses/:warehouseId/labor")
+  @RequirePermission("wms.read")
+  async labor(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.laborMetrics(
+        this.ctx(req),warehouseId,24
+      )
+    };
+  }
+
+  @Get("warehouses/:warehouseId/exceptions")
+  @RequirePermission("wms.read")
+  async exceptions(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.exceptions(
+        this.ctx(req),warehouseId
+      )
+    };
+  }
+
+  @Post("exceptions/:exceptionId/resolve")
+  @RequirePermission("wms.manage")
+  async resolveException(
+    @Req() req:AuthenticatedRequest,
+    @Param("exceptionId") exceptionId:string,
+    @Body() body:{action:"REQUEUE"|"CANCEL"}
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.resolveException(
+        this.ctx(req),exceptionId,body
+      )
+    };
+  }
+
   @Get("warehouses/:warehouseId/reconciliation")
   @RequirePermission("wms.read")
   async reconciliation(
