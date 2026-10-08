@@ -450,21 +450,33 @@
 - dispatcher drill-down;
 - operational metrics only, no payroll coupling.
 
-## Активно — Sprint 42: WMS Performance Hardening / Slotting
-
-Scope:
-- hot-path database indexes;
+### Sprint 42 — WMS Performance Hardening / Slotting
+- hot-path task/labor/PICK indexes;
 - PICK velocity by SKU;
 - suggested pick-face location;
 - suggested min/max replenishment thresholds;
 - recommendation reasons;
-- explicit apply only;
+- explicit FIXED_PICK apply only;
 - no automatic inventory movement;
-- keep Inventory / WMS ledgers unchanged by recommendation engine.
+- recommendation engine does not mutate stock ledgers.
+
+## Активно — Sprint 43: WMS 3PL / Owner Inventory Foundation
+
+Scope:
+- inventory owner master data;
+- default INTERNAL owner;
+- 3PL client owner linked to Party;
+- warehouse/owner contract;
+- owner aggregate subledger;
+- owner location subledger;
+- controlled TOTAL_ONLY → OWNER_LEDGER initialization;
+- reconciliation owner sums ↔ aggregate Inventory/WMS;
+- no owner-aware shipping until ledger gate is enabled.
 
 ## Следом
 
-Sprint 43 — WMS 3PL / owner-client inventory dimensions foundation.
+Sprint 44 — 3PL owner-aware receipt/reservation/pick/shipment.
+
 
 
 
