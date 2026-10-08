@@ -425,20 +425,35 @@
 - automatic wave completion after final PICK;
 - no inventory mutation in wave orchestration.
 
-## Активно — Sprint 40: TSD / PWA scanner-first execution
-
-Scope:
+### Sprint 40 — TSD / PWA scanner-first execution
 - mobile warehouse workspace;
-- next task command;
+- claim-next task command;
 - keyboard-wedge scanner input;
-- server-side FROM / SKU / TO scan validation;
+- server-side FROM / SKU / TO validation;
+- scanner-validated mobile completion;
 - immutable scan audit;
 - task problem/block flow;
-- offline client queue with idempotent replay;
+- BLOCKED task state;
+- offline client command queue with ordered replay;
 - PWA manifest/service worker;
+- service worker never caches business API responses;
 - no hidden inventory mutation from scanner endpoints.
+
+## Активно — Sprint 41: Advanced WMS Dispatcher / Labor Metrics
+
+Scope:
+- warehouse labor scorecard;
+- tasks/hour and median cycle time;
+- active operators;
+- task-type throughput;
+- aged backlog and SLA-risk bands;
+- blocked/failed exception queue;
+- workload by zone/task type;
+- dispatcher drill-down;
+- operational metrics only, no payroll coupling.
 
 ## Следом
 
-Sprint 41 — Advanced WMS dispatcher / labor metrics.
+Sprint 42 — WMS performance hardening / slotting recommendations.
+
 
