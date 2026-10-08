@@ -55,6 +55,19 @@ type Overview = {
   }>;
 };
 
+type ClientRequest = {
+  id:string;
+  request_number:string;
+  request_type:string;
+  priority:string;
+  status:string;
+  subject:string;
+  sla_due_at:string;
+  first_response_at:string|null;
+  resolved_at:string|null;
+  created_at:string;
+};
+
 const API_URL=process.env.NEXT_PUBLIC_API_URL??"/api/v1";
 
 function qty(value:string){
@@ -70,8 +83,9 @@ export default function ThreePlPortalPage(){
   const [token,setToken]=useState("");
   const [data,setData]=useState<Overview|null>(null);
   const [error,setError]=useState("");
-  const [tab,setTab]=useState<"stock"|"locations"|"movements"|"orders"|"billing">("stock");
+  const [tab,setTab]=useState<"stock"|"locations"|"movements"|"orders"|"billing"|"requests">("stock");
   const [busy,setBusy]=useState(false);
+  const [requests,setRequests]=useState<ClientRequest[]>([]);
 
   useEffect(()=>{
     const saved=sessionStorage.getItem("corebiz_3pl_token");
@@ -96,6 +110,17 @@ export default function ThreePlPortalPage(){
       const payload=(await response.json()) as ApiResponse<Overview>;
       if(!payload.ok)throw new Error(payload.error.message);
       setData(payload.data);
+
+      const requestsResponse=await fetch(
+        API_URL+"/wms/3pl-requests/public/list",
+        {
+          headers:{Authorization:"Bearer "+normalized},
+          cache:"no-store"
+        }
+      );
+      const requestsPayload=(await requestsResponse.json()) as ApiResponse<ClientRequest[]>;
+      if(requestsPayload.ok)setRequests(requestsPayload.data);
+
       sessionStorage.setItem("corebiz_3pl_token",normalized);
     }catch(cause){
       setData(null);
@@ -109,7 +134,61 @@ export default function ThreePlPortalPage(){
   function logout(){
     sessionStorage.removeItem("corebiz_3pl_token");
     setData(null);
+    setRequests([]);
     setToken("");
+  }
+
+  async function createRequest(){
+    const type=(
+      window.prompt(
+        "Тип обращения: DAMAGE, SHORTAGE, DELAY, DOCUMENT, GENERAL",
+        "GENERAL"
+      )??""
+    ).toUpperCase();
+
+    if(!["DAMAGE","SHORTAGE","DELAY","DOCUMENT","GENERAL"].includes(type)){
+      setError("Неизвестный тип обращения");
+      return;
+    }
+
+    const subject=window.prompt("Тема обращения");
+    if(!subject?.trim())return;
+    const body=window.prompt("Опишите проблему или запрос");
+    if(!body?.trim())return;
+
+    setBusy(true);setError("");
+    try{
+      const response=await fetch(
+        API_URL+"/wms/3pl-requests/public/create",
+        {
+          method:"POST",
+          headers:{
+            Authorization:"Bearer "+token,
+            "Content-Type":"application/json"
+          },
+          body:JSON.stringify({
+            requestType:type,
+            subject:subject.trim(),
+            body:body.trim()
+          })
+        }
+      );
+      const payload=(await response.json()) as ApiResponse<{number:string}>;
+      if(!payload.ok)throw new Error(payload.error.message);
+      window.alert("Обращение "+payload.data.number+" создано");
+
+      const listResponse=await fetch(
+        API_URL+"/wms/3pl-requests/public/list",
+        {headers:{Authorization:"Bearer "+token},cache:"no-store"}
+      );
+      const listPayload=(await listResponse.json()) as ApiResponse<ClientRequest[]>;
+      if(listPayload.ok)setRequests(listPayload.data);
+      setTab("requests");
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось создать обращение");
+    }finally{
+      setBusy(false);
+    }
   }
 
   const totalAvailable=useMemo(
@@ -185,7 +264,8 @@ export default function ThreePlPortalPage(){
             ["locations","Ячейки"],
             ["movements","Движения"],
             ["orders","Заказы"],
-            ["billing","Расчёты"]
+            ["billing","Расчёты"],
+            ["requests","Обращения"]
           ].map(([key,label])=>(
             <button
               key={key}
@@ -278,6 +358,45 @@ export default function ThreePlPortalPage(){
               ))}</tbody>
             </table>
           </div>
+        ):null}
+
+        {tab==="requests"?(
+          <section>
+            <div className="header-actions" style={{marginBottom:12}}>
+              <button
+                className="portal-primary"
+                disabled={busy}
+                onClick={()=>void createRequest()}
+                type="button"
+              >
+                + Обращение
+              </button>
+            </div>
+            <div className="data-table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Номер</th>
+                    <th>Тема</th>
+                    <th>Тип</th>
+                    <th>Приоритет</th>
+                    <th>Статус</th>
+                    <th>SLA до</th>
+                  </tr>
+                </thead>
+                <tbody>{requests.map(row=>(
+                  <tr key={row.id}>
+                    <td><strong>{row.request_number}</strong></td>
+                    <td>{row.subject}</td>
+                    <td>{row.request_type}</td>
+                    <td>{row.priority}</td>
+                    <td><span className="status-pill">{row.status}</span></td>
+                    <td>{new Date(row.sla_due_at).toLocaleString("ru-RU")}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </section>
         ):null}
       </section>
     </main>
