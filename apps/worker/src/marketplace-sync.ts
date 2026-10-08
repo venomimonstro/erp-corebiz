@@ -359,6 +359,16 @@ async function persistOrder(
         ]
       );
 
+      await client.query(
+        `UPDATE channel_connection
+         SET last_received_at=now(),
+             status='ACTIVE',
+             last_error=NULL,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [job.tenant_id, job.connection_id]
+      );
+
       return outcome;
     }
   );
