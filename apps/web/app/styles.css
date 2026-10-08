@@ -650,3 +650,19 @@ button, .primary, .secondary { font: inherit; }
 @media (max-width:760px) {
   .public-form-block,.public-form-two { grid-template-columns:1fr; }
 }
+
+
+/* Public analytics consent */
+.public-consent { position:fixed; left:20px; right:20px; bottom:20px; z-index:80; max-width:900px; margin:0 auto; background:#181a1d; color:#fff; border-radius:16px; padding:16px 18px; box-shadow:0 22px 70px rgba(0,0,0,.22); display:flex; justify-content:space-between; align-items:center; gap:18px; }
+.public-consent > div:first-child { display:grid; gap:4px; }
+.public-consent strong { font-size:13px; }
+.public-consent span { color:#c8ccd0; font-size:11px; line-height:1.5; }
+.public-consent-actions { display:flex; gap:7px; flex-shrink:0; }
+.public-consent button { border:0; border-radius:9px; padding:9px 12px; cursor:pointer; font-weight:600; }
+.public-consent-actions > button:last-child { background:#fff; color:#181a1d; }
+.public-consent-secondary { background:#303338; color:#fff; }
+
+@media (max-width:680px) {
+  .public-consent { left:10px; right:10px; bottom:10px; display:grid; }
+  .public-consent-actions { justify-content:flex-end; }
+}
