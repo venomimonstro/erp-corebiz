@@ -65,6 +65,7 @@ export class ProcurementController {
       destinationWarehouseId?: string;
       expectedAt?: string;
       notes?: string;
+      inventoryOwnerId?: string;
       lines: Array<{
         skuId: string;
         quantityMilli?: string;
