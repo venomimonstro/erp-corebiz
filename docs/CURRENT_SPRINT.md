@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R7 / Sprint 33 — Forms / CRM / Booking binding.  
+**Активная разработка:** R7 / Sprint 34 — Domains / SEO / Analytics auto-wiring.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -336,18 +336,33 @@
 - published PRODUCT_GRID/CATALOG blocks render live storefront;
 - global public_slug storefront resolution.
 
-## Активно — Sprint 33: Forms / CRM / Booking binding
+### Sprint 33 — Forms / CRM / Booking binding
+- form bindings per site;
+- CRM_LEAD / BOOKING actions;
+- responsible membership binding;
+- service binding for booking;
+- public submission idempotency;
+- honeypot and Redis rate limit;
+- tenant-isolated submissions;
+- CRM form → Party + Deal through domain services;
+- booking form → Party + ServiceBooking through domain services;
+- structured binding selector in Site Builder;
+- public FORM / BOOKING renderers.
+
+## Активно — Sprint 34: Domains / SEO / Analytics auto-wiring
 
 Scope:
-- form bindings per site;
-- public anti-spam/idempotency;
-- CRM lead submission → Party + Deal;
-- booking submission → Party + ServiceBooking;
-- client-side FORM/BOOKING renderers;
-- binding selector in Site Builder;
-- submissions remain tenant isolated;
-- no anonymous direct write to CRM/Booking tables.
+- custom domain lifecycle;
+- DNS verification;
+- primary domain;
+- SEO robots/canonical/OG in editor and SSR metadata;
+- public host resolution;
+- automatic Tracker Site creation/binding;
+- published site injects first-party tracker only when configured;
+- sitemap/robots foundations;
+- no cross-tenant hostname collisions.
 
 ## Следом
 
-Sprint 34 — Domains / SEO / Analytics auto-wiring.
+R8 / Sprint 35 — WMS address storage foundation.
+
