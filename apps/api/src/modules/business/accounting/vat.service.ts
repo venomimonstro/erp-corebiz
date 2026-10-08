@@ -6,6 +6,54 @@ import { DatabaseService } from "../../../infrastructure/database/database.servi
 export class VatService {
   constructor(private readonly database:DatabaseService) {}
 
+  async periods(context:TenantContext,legalEntityId:string) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT id,date_from,date_to,state,closed_at,close_reason
+         FROM accounting_vat_period WHERE tenant_id=$1 AND legal_entity_id=$2
+         ORDER BY date_from DESC`,
+        [context.tenantId,legalEntityId]
+      );
+      return result.rows;
+    });
+  }
+
+  async createPeriod(context:TenantContext,input:{legalEntityId:string;dateFrom:string;dateTo:string}) {
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(input.dateFrom) ||
+       !/^\d{4}-\d{2}-\d{2}$/.test(input.dateTo) || input.dateFrom>input.dateTo) {
+      throw new BadRequestException("Invalid VAT period");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{id:string}>(
+        `INSERT INTO accounting_vat_period(tenant_id,legal_entity_id,date_from,date_to)
+         VALUES($1,$2,$3,$4) RETURNING id`,
+        [context.tenantId,input.legalEntityId,input.dateFrom,input.dateTo]
+      );
+      return {id:result.rows[0]!.id,state:"OPEN"};
+    });
+  }
+
+  async closePeriod(context:TenantContext,input:{periodId:string;reason:string}) {
+    if(!input.periodId || typeof input.reason!=="string" || input.reason.trim().length<12) {
+      throw new BadRequestException("VAT period closure requires reason");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const period=await client.query<{id:string;state:string}>(
+        `SELECT id,state FROM accounting_vat_period WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,input.periodId]
+      );
+      if(!period.rows[0]) throw new NotFoundException("VAT period not found");
+      if(period.rows[0].state==="CLOSED") return {state:"CLOSED",changed:false};
+      await client.query(
+        `UPDATE accounting_vat_period SET state='CLOSED',
+         closed_by_membership_id=$3,closed_at=now(),close_reason=$4
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,input.periodId,context.membershipId,input.reason.trim()]
+      );
+      return {state:"CLOSED",changed:true};
+    });
+  }
+
   async documents(context:TenantContext,legalEntityId:string) {
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
