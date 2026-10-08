@@ -21,6 +21,7 @@ export function AppSidebar({ active }: { active: string }) {
 
       <span>Commerce</span>
       {link("/app/channels", "Каналы продаж", "channels")}
+      {link("/app/oms", "OMS", "oms")}
 
       <span>Бизнес</span>
       {link("/app/sales/orders", "Заказы", "orders")}
@@ -32,8 +33,6 @@ export function AppSidebar({ active }: { active: string }) {
       <span>Аналитика</span>
       {link("/app/analytics", "Сквозная аналитика", "analytics")}
       {link("/app/analytics/settings", "Трекер", "analytics-settings")}
-
-      <span>Аналитика</span>
       {link("/app/analytics/growth", "Трафик", "growth")}
       {link("/app/analytics/marketing", "Реклама", "marketing")}
       {link("/app/analytics/profitability", "Где деньги", "profitability")}
