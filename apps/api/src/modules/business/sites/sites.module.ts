@@ -3,6 +3,8 @@ import { CrmModule } from "../crm/crm.module";
 import { PartyModule } from "../party/party.module";
 import { SalesModule } from "../sales/sales.module";
 import { ServiceOpsModule } from "../service-ops/service-ops.module";
+import { SiteDomainsController } from "./site-domains.controller";
+import { SiteDomainsService } from "./site-domains.service";
 import { SiteFormsController } from "./site-forms.controller";
 import { SiteFormsService } from "./site-forms.service";
 import { SitesController } from "./sites.controller";
@@ -12,8 +14,23 @@ import { StorefrontService } from "./storefront.service";
 
 @Module({
   imports:[CrmModule,PartyModule,SalesModule,ServiceOpsModule],
-  controllers:[SitesController,SiteFormsController,StorefrontController],
-  providers:[SitesService,SiteFormsService,StorefrontService],
-  exports:[SitesService,SiteFormsService,StorefrontService]
+  controllers:[
+    SitesController,
+    SiteFormsController,
+    StorefrontController,
+    SiteDomainsController
+  ],
+  providers:[
+    SitesService,
+    SiteFormsService,
+    StorefrontService,
+    SiteDomainsService
+  ],
+  exports:[
+    SitesService,
+    SiteFormsService,
+    StorefrontService,
+    SiteDomainsService
+  ]
 })
 export class SitesModule{}
