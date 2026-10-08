@@ -671,7 +671,11 @@ export class BookingService {
          WHERE tenant_id = $1
            AND id = $2
            AND version = $4
-           AND status NOT IN ('COMPLETED','CANCELLED','NO_SHOW')
+           AND (
+             (status IN ('DRAFT','CONFIRMED') AND $3 IN ('ARRIVED','CANCELLED','NO_SHOW'))
+             OR (status = 'ARRIVED' AND $3 IN ('IN_SERVICE','CANCELLED','NO_SHOW'))
+             OR (status = 'IN_SERVICE' AND $3 IN ('COMPLETED','CANCELLED'))
+           )
          RETURNING version, status`,
         [context.tenantId, bookingId, status, version]
       );
