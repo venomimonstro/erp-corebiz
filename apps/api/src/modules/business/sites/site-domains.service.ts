@@ -233,8 +233,23 @@ export class SiteDomainsService{
       `SELECT corebiz_public_site_page_by_host($1,$2) AS payload`,
       [host,path]
     );
-    if(!result.rows[0]?.payload) throw new NotFoundException("Страница не опубликована");
-    return result.rows[0].payload;
+    const payload=result.rows[0]?.payload;
+    if(!payload) throw new NotFoundException("Страница не опубликована");
+
+    const site=(payload as any).site ?? {};
+    const tracker=site.publicSlug
+      ? await this.database.query<{tracker_key:string}>(
+          `SELECT * FROM corebiz_public_site_tracker($1)`,
+          [String(site.publicSlug)]
+        )
+      : null;
+
+    return {
+      ...payload,
+      analytics:{
+        trackerKey:tracker?.rows[0]?.tracker_key ?? null
+      }
+    };
   }
 
   private hostname(value:string):string{
