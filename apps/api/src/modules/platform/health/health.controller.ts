@@ -1,8 +1,10 @@
 import { Controller, Get } from "@nestjs/common";
 import type { ApiSuccess, HealthStatus } from "@corebiz/contracts";
+import { Public } from "../auth/public.decorator";
 
 @Controller("health")
 export class HealthController {
+  @Public()
   @Get()
   getHealth(): ApiSuccess<HealthStatus> {
     return {
