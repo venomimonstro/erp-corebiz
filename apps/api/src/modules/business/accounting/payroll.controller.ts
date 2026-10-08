@@ -31,6 +31,19 @@ export class PayrollController {
   async approve(@Req() req:AuthenticatedRequest,@Param("batchId") batchId:string):Promise<ApiSuccess<unknown>> {
     return {ok:true,data:await this.payroll.approve(this.ctx(req),batchId)};
   }
+  @Get("batches/:batchId/summary")
+  @RequirePermission("accounting.read")
+  async summary(@Req() req:AuthenticatedRequest,@Param("batchId") batchId:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.payroll.batchSummary(this.ctx(req),batchId)};
+  }
+  @Post("exports/prepare")
+  @RequirePermission("accounting.period.close")
+  async prepareExport(@Req() req:AuthenticatedRequest,@Body() body:{
+    batchId:string;kind:"ACCOUNTING_PREVIEW"|"PAYMENT_PREVIEW";
+  }):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.payroll.prepareExport(this.ctx(req),body)};
+  }
+
   private ctx(req:AuthenticatedRequest):TenantContext {
     const a=req.auth!;
     return {tenantId:a.tenantId,userId:a.userId,membershipId:a.membershipId};
