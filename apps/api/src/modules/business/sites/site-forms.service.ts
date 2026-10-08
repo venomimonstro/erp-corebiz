@@ -108,7 +108,7 @@ export class SiteFormsService {
     const start=new Date(from), end=new Date(to);
     if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) ||
         end<=start || end.getTime()-start.getTime()>86400000 ||
-        start.getTime()<Date.now()-60000 || start.getTime()>Date.now()+90*86400000)
+        end.getTime()<Date.now() || start.getTime()>Date.now()+90*86400000)
       throw new BadRequestException("Select a future day within 90 days");
     const result=await this.database.query<{
       binding_id:string;tenant_id:string;action:string;config:Record<string,unknown>;
@@ -129,7 +129,7 @@ export class SiteFormsService {
     const slots=await this.bookings.availability(context,{
       serviceId,from:start.toISOString(),to:end.toISOString(),slotStepMinutes:30
     });
-    return slots.filter(slot=>allowed.includes(slot.resourceId)).slice(0,100);
+    return slots.filter(slot=>allowed.includes(slot.resourceId) && new Date(slot.startsAt).getTime()>Date.now()).slice(0,100);
   }
 
   async submit(
@@ -275,6 +275,8 @@ export class SiteFormsService {
       if(Number.isNaN(startsAt.getTime())){
         throw new BadRequestException("Для записи требуется startsAt");
       }
+      if(startsAt.getTime()<=Date.now() || startsAt.getTime()>Date.now()+90*86400000)
+        throw new BadRequestException("Выберите будущее время в пределах 90 дней");
       const serviceId=String(row.config.serviceId??"");
       const resourceIds=Array.isArray(row.config.resourceIds)
         ? row.config.resourceIds.map(String)
