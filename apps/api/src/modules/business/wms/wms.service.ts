@@ -8,6 +8,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { InventoryService } from "../inventory/inventory.service";
+import { InventoryService } from "../inventory/inventory.service";
 
 const ZONE_TYPES = new Set([
   "RECEIVING","STORAGE","PICKING","PACKING","SHIPPING",
@@ -1709,6 +1710,718 @@ export class WmsService {
         fulfillmentStatus:final.fulfillmentStatus
       };
     });
+  }
+
+  async planOutbound(
+    context: TenantContext,
+    orderId: string
+  ): Promise<{
+    orderId: string;
+    allocations: number;
+    pickTasks: number;
+    warehouses: string[];
+  }> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const order=await client.query<{
+        order_status:string;
+        fulfillment_status:string;
+      }>(
+        `SELECT order_status,fulfillment_status
+         FROM sales_order
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,orderId]
+      );
+      const orderRow=order.rows[0];
+      if(!orderRow) throw new NotFoundException("Заказ не найден");
+      if(orderRow.order_status!=="CONFIRMED"){
+        throw new BadRequestException("Заказ должен быть подтверждён");
+      }
+      if(orderRow.fulfillment_status==="SHIPPED"){
+        return {orderId,allocations:0,pickTasks:0,warehouses:[]};
+      }
+      if(orderRow.fulfillment_status!=="RESERVED"){
+        throw new ConflictException(
+          "Перед отбором заказ должен иметь активные резервы"
+        );
+      }
+
+      const reservations=await client.query<{
+        id:string;
+        warehouse_id:string;
+        sku_id:string;
+        quantity_milli:string;
+      }>(
+        `SELECT
+           r.id,r.warehouse_id,r.sku_id,r.quantity_milli::text
+         FROM inventory_reservation r
+         JOIN warehouse_wms_profile p
+           ON p.tenant_id=r.tenant_id
+          AND p.warehouse_id=r.warehouse_id
+          AND p.status='ACTIVE'
+          AND p.stock_tracking_state='LOCATION_LEDGER'
+         WHERE r.tenant_id=$1
+           AND r.sales_order_id=$2
+           AND r.status='ACTIVE'
+         ORDER BY r.warehouse_id,r.created_at
+         FOR UPDATE OF r`,
+        [context.tenantId,orderId]
+      );
+
+      if(!reservations.rowCount){
+        throw new ConflictException(
+          "Для заказа нет резервов на складах с адресным WMS"
+        );
+      }
+
+      let allocations=0;
+      let pickTasks=0;
+      const warehouses=new Set<string>();
+
+      for(const reservation of reservations.rows){
+        warehouses.add(reservation.warehouse_id);
+        const required=BigInt(reservation.quantity_milli);
+
+        const existing=await client.query<{quantity_milli:string}>(
+          `SELECT quantity_milli::text
+           FROM wms_pick_allocation
+           WHERE tenant_id=$1
+             AND reservation_id=$2
+             AND status<>'RELEASED'
+           FOR UPDATE`,
+          [context.tenantId,reservation.id]
+        );
+
+        let allocated=existing.rows.reduce(
+          (sum,row)=>sum+BigInt(row.quantity_milli),
+          0n
+        );
+
+        if(allocated>required){
+          throw new ConflictException(
+            "WMS allocation превышает количество резерва"
+          );
+        }
+        if(allocated===required) continue;
+
+        const outbound=await client.query<{id:string;full_code:string}>(
+          `SELECT l.id,l.full_code
+           FROM warehouse_location l
+           JOIN warehouse_zone z
+             ON z.tenant_id=l.tenant_id AND z.id=l.zone_id
+           WHERE l.tenant_id=$1
+             AND l.warehouse_id=$2
+             AND l.status='ACTIVE'
+             AND l.is_system=false
+             AND z.status='ACTIVE'
+             AND z.zone_type IN ('PACKING','SHIPPING')
+             AND l.location_type IN ('STAGING','BUFFER','FLOOR','DOCK','BIN')
+           ORDER BY
+             CASE z.zone_type WHEN 'PACKING' THEN 0 ELSE 1 END,
+             z.priority,l.pick_sequence,l.full_code
+           LIMIT 1`,
+          [context.tenantId,reservation.warehouse_id]
+        );
+
+        const outboundRow=outbound.rows[0];
+        if(!outboundRow){
+          throw new ConflictException(
+            "Для склада не настроена активная зона упаковки/отгрузки"
+          );
+        }
+
+        const sources=await client.query<{
+          location_id:string;
+          full_code:string;
+          physical_milli:string;
+          planned_milli:string;
+        }>(
+          `SELECT
+             b.location_id,
+             l.full_code,
+             b.physical_milli::text,
+             COALESCE((
+               SELECT sum(a.quantity_milli)
+               FROM wms_pick_allocation a
+               WHERE a.tenant_id=b.tenant_id
+                 AND a.warehouse_id=b.warehouse_id
+                 AND a.sku_id=b.sku_id
+                 AND a.source_location_id=b.location_id
+                 AND a.status='PLANNED'
+             ),0)::text AS planned_milli
+           FROM warehouse_location_balance b
+           JOIN warehouse_location l
+             ON l.tenant_id=b.tenant_id AND l.id=b.location_id
+           JOIN warehouse_zone z
+             ON z.tenant_id=l.tenant_id AND z.id=l.zone_id
+           WHERE b.tenant_id=$1
+             AND b.warehouse_id=$2
+             AND b.sku_id=$3
+             AND b.physical_milli>0
+             AND l.status='ACTIVE'
+             AND l.is_system=false
+             AND l.id<>$4
+             AND z.status='ACTIVE'
+             AND z.zone_type IN ('STORAGE','PICKING')
+           ORDER BY z.priority,l.pick_sequence,l.full_code
+           FOR UPDATE OF b`,
+          [
+            context.tenantId,
+            reservation.warehouse_id,
+            reservation.sku_id,
+            outboundRow.id
+          ]
+        );
+
+        let remaining=required-allocated;
+
+        for(const source of sources.rows){
+          if(remaining<=0n) break;
+          const available=
+            BigInt(source.physical_milli)-BigInt(source.planned_milli);
+          if(available<=0n) continue;
+
+          const quantity=available<remaining?available:remaining;
+          const taskKey=
+            "pick:"+reservation.id+":"+source.location_id;
+
+          const task=await client.query<{id:string}>(
+            `INSERT INTO warehouse_task(
+               tenant_id,warehouse_id,task_type,status,priority,
+               sku_id,quantity_milli,from_location_id,to_location_id,
+               source_type,source_id,source_line_id,
+               idempotency_key,instructions
+             ) VALUES (
+               $1,$2,'PICK','OPEN',100,
+               $3,$4,$5,$6,
+               'SALES_ORDER',$7,$8,
+               $9,$10
+             )
+             ON CONFLICT (tenant_id,idempotency_key)
+             DO UPDATE SET updated_at=warehouse_task.updated_at
+             RETURNING id`,
+            [
+              context.tenantId,
+              reservation.warehouse_id,
+              reservation.sku_id,
+              quantity.toString(),
+              source.location_id,
+              outboundRow.id,
+              orderId,
+              reservation.id,
+              taskKey,
+              JSON.stringify({
+                sourceCode:source.full_code,
+                outboundCode:outboundRow.full_code,
+                reservationId:reservation.id
+              })
+            ]
+          );
+
+          const allocation=await client.query(
+            `INSERT INTO wms_pick_allocation(
+               tenant_id,sales_order_id,reservation_id,
+               warehouse_id,sku_id,source_location_id,
+               outbound_location_id,quantity_milli,pick_task_id
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             ON CONFLICT (reservation_id,source_location_id)
+             DO NOTHING
+             RETURNING id`,
+            [
+              context.tenantId,
+              orderId,
+              reservation.id,
+              reservation.warehouse_id,
+              reservation.sku_id,
+              source.location_id,
+              outboundRow.id,
+              quantity.toString(),
+              task.rows[0]!.id
+            ]
+          );
+
+          if(allocation.rowCount){
+            allocations+=1;
+            pickTasks+=1;
+            allocated+=quantity;
+            remaining-=quantity;
+          }
+        }
+
+        if(allocated!==required){
+          throw new ConflictException(
+            "Недостаточно товара в доступных WMS-ячейках для отбора"
+          );
+        }
+      }
+
+      await this.audit(
+        client,context,"wms.outbound_planned","sales_order",orderId,
+        {allocations,pickTasks,warehouses:Array.from(warehouses)}
+      );
+
+      return {
+        orderId,
+        allocations,
+        pickTasks,
+        warehouses:Array.from(warehouses)
+      };
+    });
+  }
+
+  async completePick(
+    context: TenantContext,
+    taskId: string
+  ): Promise<{packTaskCreated:boolean}> {
+    return this.database.withTenantTransaction(context,async client=>{
+      const task=await client.query<{
+        warehouse_id:string;
+        status:string;
+        task_type:string;
+        sku_id:string;
+        quantity_milli:string;
+        from_location_id:string;
+        to_location_id:string;
+        source_id:string;
+        claimed_by_membership_id:string|null;
+      }>(
+        `SELECT
+           warehouse_id,status,task_type,sku_id,quantity_milli::text,
+           from_location_id,to_location_id,source_id,
+           claimed_by_membership_id
+         FROM warehouse_task
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,taskId]
+      );
+      const row=task.rows[0];
+      if(!row) throw new NotFoundException("Задача не найдена");
+      if(row.status==="COMPLETED") return {packTaskCreated:false};
+      if(row.task_type!=="PICK"){
+        throw new BadRequestException("Это не задача отбора");
+      }
+      if(
+        row.status!=="CLAIMED" ||
+        row.claimed_by_membership_id!==context.membershipId
+      ){
+        throw new ConflictException("Сначала возьмите задачу в работу");
+      }
+
+      const allocation=await client.query<{
+        id:string;
+        sales_order_id:string;
+        reservation_id:string;
+        status:string;
+      }>(
+        `SELECT id,sales_order_id,reservation_id,status
+         FROM wms_pick_allocation
+         WHERE tenant_id=$1 AND pick_task_id=$2
+         FOR UPDATE`,
+        [context.tenantId,taskId]
+      );
+      const a=allocation.rows[0];
+      if(!a) throw new ConflictException("WMS allocation не найден");
+      if(a.status!=="PLANNED"){
+        throw new ConflictException("Allocation уже обработан");
+      }
+
+      const source=await client.query<{physical_milli:string}>(
+        `SELECT physical_milli::text
+         FROM warehouse_location_balance
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND location_id=$3
+           AND sku_id=$4
+         FOR UPDATE`,
+        [
+          context.tenantId,row.warehouse_id,
+          row.from_location_id,row.sku_id
+        ]
+      );
+      const quantity=BigInt(row.quantity_milli);
+      if(BigInt(source.rows[0]?.physical_milli??"0")<quantity){
+        throw new ConflictException(
+          "В исходной ячейке недостаточно товара"
+        );
+      }
+
+      const target=await client.query<{status:string}>(
+        `SELECT status
+         FROM warehouse_location
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND id=$3
+         FOR UPDATE`,
+        [context.tenantId,row.warehouse_id,row.to_location_id]
+      );
+      if(target.rows[0]?.status!=="ACTIVE"){
+        throw new ConflictException("Зона упаковки/отгрузки недоступна");
+      }
+
+      await client.query(
+        `UPDATE warehouse_location_balance
+         SET physical_milli=physical_milli-$5::bigint,
+             updated_at=now()
+         WHERE tenant_id=$1
+           AND warehouse_id=$2
+           AND location_id=$3
+           AND sku_id=$4`,
+        [
+          context.tenantId,row.warehouse_id,
+          row.from_location_id,row.sku_id,quantity.toString()
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO warehouse_location_balance(
+           tenant_id,warehouse_id,location_id,sku_id,physical_milli
+         ) VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (tenant_id,warehouse_id,location_id,sku_id)
+         DO UPDATE SET
+           physical_milli=warehouse_location_balance.physical_milli+
+             EXCLUDED.physical_milli,
+           updated_at=now()`,
+        [
+          context.tenantId,row.warehouse_id,row.to_location_id,
+          row.sku_id,quantity.toString()
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO wms_location_movement(
+           tenant_id,warehouse_id,sku_id,movement_type,
+           from_location_id,to_location_id,quantity_milli,
+           source_type,source_id,source_line_id,
+           idempotency_key,actor_membership_id
+         ) VALUES (
+           $1,$2,$3,'PICK',$4,$5,$6,
+           'SALES_ORDER',$7,$8,$9,$10
+         )
+         ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
+        [
+          context.tenantId,row.warehouse_id,row.sku_id,
+          row.from_location_id,row.to_location_id,quantity.toString(),
+          a.sales_order_id,a.reservation_id,
+          "wms-pick:"+a.id,context.membershipId
+        ]
+      );
+
+      await client.query(
+        `UPDATE wms_pick_allocation
+         SET status='PICKED',picked_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,a.id]
+      );
+
+      await client.query(
+        `UPDATE warehouse_task
+         SET status='COMPLETED',completed_at=now(),
+             result=$3,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [
+          context.tenantId,taskId,
+          JSON.stringify({completedBy:context.membershipId})
+        ]
+      );
+
+      const pending=await client.query(
+        `SELECT 1
+         FROM wms_pick_allocation
+         WHERE tenant_id=$1
+           AND sales_order_id=$2
+           AND warehouse_id=$3
+           AND status='PLANNED'
+         LIMIT 1`,
+        [context.tenantId,a.sales_order_id,row.warehouse_id]
+      );
+
+      let packTaskCreated=false;
+
+      if(!pending.rowCount){
+        const packed=await client.query<{quantity:string;location_id:string}>(
+          `SELECT
+             sum(quantity_milli)::text AS quantity,
+             min(outbound_location_id::text)::uuid AS location_id
+           FROM wms_pick_allocation
+           WHERE tenant_id=$1
+             AND sales_order_id=$2
+             AND warehouse_id=$3
+             AND status='PICKED'`,
+          [context.tenantId,a.sales_order_id,row.warehouse_id]
+        );
+
+        const packedRow=packed.rows[0];
+        if(packedRow?.quantity&&packedRow.location_id){
+          const pack=await client.query(
+            `INSERT INTO warehouse_task(
+               tenant_id,warehouse_id,task_type,status,priority,
+               quantity_milli,from_location_id,to_location_id,
+               source_type,source_id,idempotency_key,instructions
+             ) VALUES (
+               $1,$2,'PACK','OPEN',100,
+               $3,$4,$4,
+               'SALES_ORDER',$5,$6,$7
+             )
+             ON CONFLICT (tenant_id,idempotency_key) DO NOTHING
+             RETURNING id`,
+            [
+              context.tenantId,row.warehouse_id,packedRow.quantity,
+              packedRow.location_id,a.sales_order_id,
+              "pack:"+a.sales_order_id+":"+row.warehouse_id,
+              JSON.stringify({
+                orderId:a.sales_order_id,
+                warehouseId:row.warehouse_id
+              })
+            ]
+          );
+          packTaskCreated=Boolean(pack.rowCount);
+        }
+      }
+
+      await this.assertLocationReconciliation(
+        client,context.tenantId,row.warehouse_id
+      );
+
+      return {packTaskCreated};
+    });
+  }
+
+  async completePack(
+    context: TenantContext,
+    taskId: string
+  ): Promise<{shipTaskCreated:boolean}> {
+    return this.database.withTenantTransaction(context,async client=>{
+      const task=await client.query<{
+        warehouse_id:string;
+        status:string;
+        task_type:string;
+        source_id:string;
+        claimed_by_membership_id:string|null;
+      }>(
+        `SELECT
+           warehouse_id,status,task_type,source_id,
+           claimed_by_membership_id
+         FROM warehouse_task
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,taskId]
+      );
+      const row=task.rows[0];
+      if(!row) throw new NotFoundException("Задача не найдена");
+      if(row.status==="COMPLETED") return {shipTaskCreated:false};
+      if(row.task_type!=="PACK"){
+        throw new BadRequestException("Это не задача упаковки");
+      }
+      if(
+        row.status!=="CLAIMED" ||
+        row.claimed_by_membership_id!==context.membershipId
+      ){
+        throw new ConflictException("Сначала возьмите задачу в работу");
+      }
+
+      const invalid=await client.query(
+        `SELECT 1
+         FROM wms_pick_allocation
+         WHERE tenant_id=$1
+           AND sales_order_id=$2
+           AND warehouse_id=$3
+           AND status<>'PICKED'
+         LIMIT 1`,
+        [context.tenantId,row.source_id,row.warehouse_id]
+      );
+      if(invalid.rowCount){
+        throw new ConflictException(
+          "Не все позиции склада готовы к упаковке"
+        );
+      }
+
+      await client.query(
+        `UPDATE wms_pick_allocation
+         SET status='PACKED',packed_at=now()
+         WHERE tenant_id=$1
+           AND sales_order_id=$2
+           AND warehouse_id=$3
+           AND status='PICKED'`,
+        [context.tenantId,row.source_id,row.warehouse_id]
+      );
+
+      await client.query(
+        `UPDATE warehouse_task
+         SET status='COMPLETED',completed_at=now(),
+             result=$3,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [
+          context.tenantId,taskId,
+          JSON.stringify({completedBy:context.membershipId})
+        ]
+      );
+
+      const remaining=await client.query(
+        `SELECT 1
+         FROM wms_pick_allocation
+         WHERE tenant_id=$1
+           AND sales_order_id=$2
+           AND status<>'PACKED'
+         LIMIT 1`,
+        [context.tenantId,row.source_id]
+      );
+
+      let shipTaskCreated=false;
+
+      if(!remaining.rowCount){
+        const coordinator=await client.query<{
+          warehouse_id:string;
+          location_id:string;
+          quantity:string;
+        }>(
+          `SELECT
+             min(warehouse_id::text)::uuid AS warehouse_id,
+             min(outbound_location_id::text)::uuid AS location_id,
+             sum(quantity_milli)::text AS quantity
+           FROM wms_pick_allocation
+           WHERE tenant_id=$1
+             AND sales_order_id=$2
+             AND status='PACKED'`,
+          [context.tenantId,row.source_id]
+        );
+        const coordinatorRow=coordinator.rows[0];
+
+        if(
+          coordinatorRow?.warehouse_id &&
+          coordinatorRow.location_id &&
+          coordinatorRow.quantity
+        ){
+          const ship=await client.query(
+            `INSERT INTO warehouse_task(
+               tenant_id,warehouse_id,task_type,status,priority,
+               quantity_milli,from_location_id,to_location_id,
+               source_type,source_id,idempotency_key,instructions
+             ) VALUES (
+               $1,$2,'SHIP','OPEN',100,
+               $3,$4,$4,
+               'SALES_ORDER',$5,$6,$7
+             )
+             ON CONFLICT (tenant_id,idempotency_key) DO NOTHING
+             RETURNING id`,
+            [
+              context.tenantId,
+              coordinatorRow.warehouse_id,
+              coordinatorRow.quantity,
+              coordinatorRow.location_id,
+              row.source_id,
+              "ship:"+row.source_id,
+              JSON.stringify({orderId:row.source_id})
+            ]
+          );
+          shipTaskCreated=Boolean(ship.rowCount);
+        }
+      }
+
+      return {shipTaskCreated};
+    });
+  }
+
+  async completeShip(
+    context: TenantContext,
+    taskId: string
+  ): Promise<{shipped:boolean;orderId:string}> {
+    const task=await this.database.withTenantTransaction(
+      context,
+      async client=>{
+        const result=await client.query<{
+          status:string;
+          task_type:string;
+          source_id:string;
+          claimed_by_membership_id:string|null;
+        }>(
+          `SELECT status,task_type,source_id,claimed_by_membership_id
+           FROM warehouse_task
+           WHERE tenant_id=$1 AND id=$2
+           FOR UPDATE`,
+          [context.tenantId,taskId]
+        );
+        const row=result.rows[0];
+        if(!row) throw new NotFoundException("Задача не найдена");
+        if(row.task_type!=="SHIP"){
+          throw new BadRequestException("Это не задача отгрузки");
+        }
+        if(row.status==="COMPLETED"){
+          return {orderId:row.source_id,already:true};
+        }
+        if(
+          row.status!=="CLAIMED" ||
+          row.claimed_by_membership_id!==context.membershipId
+        ){
+          throw new ConflictException("Сначала возьмите задачу в работу");
+        }
+
+        const invalid=await client.query(
+          `SELECT 1
+           FROM wms_pick_allocation
+           WHERE tenant_id=$1
+             AND sales_order_id=$2
+             AND status<>'PACKED'
+           LIMIT 1`,
+          [context.tenantId,row.source_id]
+        );
+        if(invalid.rowCount){
+          throw new ConflictException(
+            "Не все позиции заказа упакованы"
+          );
+        }
+
+        return {orderId:row.source_id,already:false};
+      }
+    );
+
+    if(task.already){
+      return {shipped:true,orderId:task.orderId};
+    }
+
+    await this.inventory.shipOrder(
+      context,
+      {
+        orderId:task.orderId,
+        idempotencyKey:"wms-ship:"+task.orderId
+      },
+      {allowWms:true}
+    );
+
+    await this.database.withTenantTransaction(context,async client=>{
+      await client.query(
+        `UPDATE warehouse_task
+         SET status='COMPLETED',completed_at=now(),
+             result=$3,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [
+          context.tenantId,taskId,
+          JSON.stringify({
+            completedBy:context.membershipId,
+            orderId:task.orderId
+          })
+        ]
+      );
+
+      const warehouses=await client.query<{warehouse_id:string}>(
+        `SELECT DISTINCT warehouse_id
+         FROM wms_pick_allocation
+         WHERE tenant_id=$1 AND sales_order_id=$2`,
+        [context.tenantId,task.orderId]
+      );
+
+      for(const warehouse of warehouses.rows){
+        await this.assertLocationReconciliation(
+          client,context.tenantId,warehouse.warehouse_id
+        );
+      }
+
+      await this.audit(
+        client,context,"wms.order_shipped","sales_order",task.orderId,
+        {taskId}
+      );
+    });
+
+    return {shipped:true,orderId:task.orderId};
   }
 
   async reconciliation(
