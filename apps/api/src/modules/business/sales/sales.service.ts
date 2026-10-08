@@ -42,6 +42,9 @@ export class SalesService {
     paymentStatus: string;
     fulfillmentStatus: string;
     responsibleMembershipId: string | null;
+    inventoryOwnerId: string;
+    inventoryOwnerName: string;
+    inventoryOwnerType: string;
     createdAt: string;
     version: number;
   }>> {
@@ -70,6 +73,9 @@ export class SalesService {
         payment_status: string;
         fulfillment_status: string;
         responsible_membership_id: string | null;
+        inventory_owner_id: string;
+        inventory_owner_name: string;
+        inventory_owner_type: string;
         created_at: Date;
         version: number;
       }>(
@@ -83,9 +89,15 @@ export class SalesService {
            o.payment_status,
            o.fulfillment_status,
            o.responsible_membership_id,
+           o.inventory_owner_id,
+           io.name AS inventory_owner_name,
+           io.owner_type AS inventory_owner_type,
            o.created_at,
            o.version
          FROM sales_order o
+         JOIN inventory_owner io
+           ON io.tenant_id=o.tenant_id
+          AND io.id=o.inventory_owner_id
          LEFT JOIN party p
            ON p.tenant_id = o.tenant_id
           AND p.id = o.party_id
@@ -106,6 +118,9 @@ export class SalesService {
         paymentStatus: row.payment_status,
         fulfillmentStatus: row.fulfillment_status,
         responsibleMembershipId: row.responsible_membership_id,
+        inventoryOwnerId: row.inventory_owner_id,
+        inventoryOwnerName: row.inventory_owner_name,
+        inventoryOwnerType: row.inventory_owner_type,
         createdAt: row.created_at.toISOString(),
         version: row.version
       }));
