@@ -718,11 +718,16 @@ export class InventoryService {
         order_status: string;
         fulfillment_status: string;
         warehouse_id: string | null;
+        inventory_owner_id: string;
+        owner_type: "INTERNAL"|"CLIENT";
       }>(
-        `SELECT id, order_status, fulfillment_status, warehouse_id
-         FROM sales_order
-         WHERE tenant_id = $1 AND id = $2
-         FOR UPDATE`,
+        `SELECT so.id,so.order_status,so.fulfillment_status,so.warehouse_id,
+                so.inventory_owner_id,o.owner_type
+         FROM sales_order so
+         JOIN inventory_owner o
+           ON o.tenant_id=so.tenant_id AND o.id=so.inventory_owner_id
+         WHERE so.tenant_id = $1 AND so.id = $2
+         FOR UPDATE OF so`,
         [context.tenantId, input.orderId]
       );
 
@@ -760,6 +765,19 @@ export class InventoryService {
         (await this.getDefaultWarehouseId(client, context.tenantId));
 
       await this.assertWarehouse(client, context.tenantId, warehouseId);
+
+      if(order.owner_type==="CLIENT"){
+        await this.assertOwnerContract(
+          client,context.tenantId,warehouseId,order.inventory_owner_id
+        );
+        await this.assertOwnerLedgerEnabled(
+          client,context.tenantId,warehouseId
+        );
+      }
+
+      const ownerLedger=await this.ownerLedgerEnabled(
+        client,context.tenantId,warehouseId
+      );
 
       const lines = await client.query<{
         line_id: string;
@@ -833,6 +851,34 @@ export class InventoryService {
             "Недостаточно доступного остатка для резервирования заказа"
           );
         }
+
+        if(ownerLedger){
+          const ownerBalance=await client.query<{
+            physical_milli:string;
+            reserved_milli:string;
+          }>(
+            `SELECT physical_milli::text,reserved_milli::text
+             FROM inventory_owner_balance
+             WHERE tenant_id=$1
+               AND warehouse_id=$2
+               AND owner_id=$3
+               AND sku_id=$4
+             FOR UPDATE`,
+            [
+              context.tenantId,warehouseId,
+              order.inventory_owner_id,line.sku_id
+            ]
+          );
+          const ownerRow=ownerBalance.rows[0];
+          const ownerAvailable=ownerRow
+            ? BigInt(ownerRow.physical_milli)-BigInt(ownerRow.reserved_milli)
+            : 0n;
+          if(ownerAvailable<quantity){
+            throw new ConflictException(
+              "Недостаточно остатка выбранного владельца товара"
+            );
+          }
+        }
       }
 
       let reservations = 0;
@@ -854,6 +900,23 @@ export class InventoryService {
           continue;
         }
 
+        if(ownerLedger){
+          await this.applyOwnerBalanceDelta(
+            client,context,{
+              warehouseId,
+              ownerId:order.inventory_owner_id,
+              skuId:line.sku_id!,
+              physicalDelta:0n,
+              reservedDelta:quantity,
+              movementType:"RESERVE",
+              sourceType:"SALES_ORDER",
+              sourceId:input.orderId,
+              sourceLineId:line.line_id,
+              idempotencyKey:"owner-reserve:"+reservationKey
+            }
+          );
+        }
+
         await client.query(
           `UPDATE inventory_balance
            SET reserved_milli = reserved_milli + $4::bigint,
@@ -870,15 +933,16 @@ export class InventoryService {
         await client.query(
           `INSERT INTO inventory_reservation(
              tenant_id, sales_order_id, sales_order_line_id,
-             warehouse_id, sku_id, quantity_milli,
+             warehouse_id, sku_id, owner_id, quantity_milli,
              idempotency_key
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
           [
             context.tenantId,
             input.orderId,
             line.line_id,
             warehouseId,
             line.sku_id,
+            order.inventory_owner_id,
             quantity.toString(),
             reservationKey
           ]
@@ -940,9 +1004,10 @@ export class InventoryService {
       sku_id: string;
       quantity_milli: string;
       status: string;
+      owner_id:string;
     }>(
       `SELECT id,sales_order_id,sales_order_line_id,warehouse_id,sku_id,
-              quantity_milli::text,status
+              quantity_milli::text,status,owner_id
        FROM inventory_reservation
        WHERE tenant_id=$1 AND id=$2
        FOR UPDATE`,
@@ -1004,6 +1069,26 @@ export class InventoryService {
       );
     }
 
+    if(await this.ownerLedgerEnabled(
+      client,context.tenantId,row.warehouse_id
+    )){
+      await this.applyOwnerBalanceDelta(
+        client,context,{
+          warehouseId:row.warehouse_id,
+          ownerId:row.owner_id,
+          skuId:row.sku_id,
+          physicalDelta:-quantity,
+          reservedDelta:-quantity,
+          movementType:"SHIPMENT",
+          sourceType:"SALES_ORDER",
+          sourceId:row.sales_order_id,
+          sourceLineId:row.sales_order_line_id,
+          idempotencyKey:
+            "owner-shipment:"+input.idempotencyKey.trim()
+        }
+      );
+    }
+
     await client.query(
       `UPDATE inventory_balance
        SET physical_milli=physical_milli-$4::bigint,
@@ -1023,7 +1108,8 @@ export class InventoryService {
       sourceType:"SALES_ORDER",
       sourceId:row.sales_order_id,
       sourceLineId:row.sales_order_line_id,
-      idempotencyKey:input.idempotencyKey.trim()
+      idempotencyKey:input.idempotencyKey.trim(),
+      ownerId:row.owner_id
     });
 
     await client.query(
@@ -2545,7 +2631,7 @@ export class InventoryService {
          source_type,source_id,source_line_id,
          idempotency_key,actor_membership_id
        ) VALUES (
-         $1,$2,$3,$4,'RETURN',
+         $1,$2,$3,$4,'RECEIPT',
          $5,$6,
          'GOODS_RECEIPT',$7,$8,$9,$10
        )
