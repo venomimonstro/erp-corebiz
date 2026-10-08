@@ -153,6 +153,67 @@ export class WmsController{
     return {ok:true,data:{updated:true}};
   }
 
+  @Post("orders/:orderId/plan-outbound")
+  @RequirePermission("wms.manage")
+  async planOutbound(
+    @Req() req:AuthenticatedRequest,
+    @Param("orderId") orderId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.planOutbound(this.ctx(req),orderId)
+    };
+  }
+
+  @Post("tasks/:taskId/complete-pick")
+  @RequirePermission("wms.manage")
+  async completePick(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string
+  ):Promise<ApiSuccess<{updated:true}>>{
+    await this.wms.completePick(this.ctx(req),taskId);
+    return {ok:true,data:{updated:true}};
+  }
+
+  @Post("orders/:orderId/warehouses/:warehouseId/pack-task")
+  @RequirePermission("wms.manage")
+  async packTask(
+    @Req() req:AuthenticatedRequest,
+    @Param("orderId") orderId:string,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.createPackTask(
+        this.ctx(req),orderId,warehouseId
+      )
+    };
+  }
+
+  @Post("tasks/:taskId/complete-pack")
+  @RequirePermission("wms.manage")
+  async completePack(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.completePack(this.ctx(req),taskId)
+    };
+  }
+
+  @Post("tasks/:taskId/complete-ship")
+  @RequirePermission("wms.manage")
+  async completeShip(
+    @Req() req:AuthenticatedRequest,
+    @Param("taskId") taskId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.wms.completeShip(this.ctx(req),taskId)
+    };
+  }
+
   @Get("warehouses/:warehouseId/reconciliation")
   @RequirePermission("wms.read")
   async reconciliation(
