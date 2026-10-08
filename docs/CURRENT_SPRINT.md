@@ -3,7 +3,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R4 / Sprint 19 — Resource Model.  
+**Активная разработка:** R5 / Sprint 22 — Tracker / Visitor / Session.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -180,18 +180,49 @@
 - local release-check;
 - guarded backup/restore scripts.
 
-## Активно — Sprint 19: Resource Model
+## R4 — Service/Scheduling реализовано
+
+### Sprint 19 — Resource Model
+- универсальный Resource;
+- employee/room/equipment/vehicle/workplace/hall/machine;
+- skills/levels;
+- capacity;
+- branch binding;
+- weekly schedules;
+- time-off/maintenance blocks.
+
+### Sprint 20 — Booking
+- service catalog;
+- duration/price/buffer snapshots;
+- skill requirements by resource type;
+- availability;
+- transactional capacity locks;
+- booking;
+- reschedule;
+- arrived/in-service/completed/cancel/no-show;
+- booking domain events.
+
+### Sprint 21 — Service Workspace
+- today workspace;
+- service/resource analytics;
+- customer service history;
+- booking materials;
+- idempotent material consumption through Inventory Ledger.
+
+## Активно — Sprint 22: Tracker / Visitor / Session
 
 Scope:
-- Resource;
-- employee/room/equipment/vehicle/workplace;
-- skills;
-- capacity;
-- working schedules;
-- availability foundation;
-- branch binding.
+- first-party web tracker;
+- visitor/session/pageview/event;
+- UTM/referrer/click identifiers;
+- consent state;
+- anonymous-to-party identity link;
+- public ingest endpoint;
+- anti-abuse/rate-safe ingestion.
 
 ## Следом
 
-Sprint 20 — Booking.  
-Sprint 21 — Service Workspace.
+Sprint 23 — Marketing Data / Yandex Direct.  
+Sprint 24 — Lead identity / Touchpoints / Attribution.  
+Sprint 25 — Profitability Dashboard / Alerts.  
+Sprint 26 — Calltracking / Offline conversions.
