@@ -98,6 +98,38 @@ export default function OrdersPage() {
     }
   }
 
+  async function reserveOrder(order: Order) {
+    try {
+      await apiRequest(`/sales/orders/${order.id}/reserve`, {
+        method: "POST",
+        body: JSON.stringify({
+          idempotencyKey: `order:${order.id}:reserve:1`
+        })
+      });
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось зарезервировать заказ");
+      await load();
+    }
+  }
+
+  async function shipOrder(order: Order) {
+    if (!window.confirm(`Отгрузить ${order.number}?`)) return;
+
+    try {
+      await apiRequest(`/sales/orders/${order.id}/ship`, {
+        method: "POST",
+        body: JSON.stringify({
+          idempotencyKey: `order:${order.id}:ship:1`
+        })
+      });
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось отгрузить заказ");
+      await load();
+    }
+  }
+
   async function quickCreate() {
     const description = window.prompt("Что продаём?");
     if (!description?.trim()) return;
@@ -206,6 +238,26 @@ export default function OrdersPage() {
                           type="button"
                         >
                           Подтвердить
+                        </button>
+                      ) : null}
+
+                      {order.orderStatus === "CONFIRMED" &&
+                      order.fulfillmentStatus === "UNALLOCATED" ? (
+                        <button
+                          onClick={() => void reserveOrder(order)}
+                          type="button"
+                        >
+                          Зарезервировать
+                        </button>
+                      ) : null}
+
+                      {order.orderStatus === "CONFIRMED" &&
+                      ["RESERVED", "READY"].includes(order.fulfillmentStatus) ? (
+                        <button
+                          onClick={() => void shipOrder(order)}
+                          type="button"
+                        >
+                          Отгрузить
                         </button>
                       ) : null}
                     </td>
