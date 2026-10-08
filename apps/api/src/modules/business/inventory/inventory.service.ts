@@ -35,6 +35,7 @@ type MovementInput = {
   sourceLineId?: string;
   reason?: string;
   idempotencyKey: string;
+  ownerId?: string;
 };
 
 @Injectable()
@@ -449,13 +450,14 @@ export class InventoryService {
     input: {
       receiptId: string;
       warehouseId: string;
+      ownerId: string;
       lines: InventoryReceiptLine[];
     }
   ): Promise<void> {
     await this.assertWarehouse(client, context.tenantId, input.warehouseId);
 
     for (const line of input.lines) {
-      await this.postMovement(client, context, {
+      const movement=await this.postMovement(client, context, {
         warehouseId: input.warehouseId,
         skuId: line.skuId,
         movementType: "RECEIPT",
@@ -465,7 +467,8 @@ export class InventoryService {
         sourceId: input.receiptId,
         sourceLineId: line.sourceLineId,
         idempotencyKey:
-          `goods-receipt:${input.receiptId}:line:${line.sourceLineId}`
+          `goods-receipt:${input.receiptId}:line:${line.sourceLineId}`,
+        ownerId:input.ownerId
       });
 
       await client.query(
@@ -484,6 +487,19 @@ export class InventoryService {
           context.membershipId
         ]
       );
+
+      if(movement.applied){
+        await this.receiveOwnerIntoUnassigned(
+          client,context,{
+            warehouseId:input.warehouseId,
+            ownerId:input.ownerId,
+            skuId:line.skuId,
+            quantityMilli:line.quantityMilli,
+            receiptId:input.receiptId,
+            sourceLineId:line.sourceLineId
+          }
+        );
+      }
     }
   }
 
@@ -527,13 +543,21 @@ export class InventoryService {
     );
     await this.assertSku(client, context.tenantId, input.skuId);
 
-    const line = await client.query(
-      `SELECT 1
-       FROM sales_order_line
-       WHERE tenant_id = $1
-         AND id = $2
-         AND order_id = $3
-         AND sku_id = $4`,
+    const line = await client.query<{
+      inventory_owner_id:string;
+      owner_type:string;
+    }>(
+      `SELECT so.inventory_owner_id,o.owner_type
+       FROM sales_order_line l
+       JOIN sales_order so
+         ON so.tenant_id=l.tenant_id AND so.id=l.order_id
+       JOIN inventory_owner o
+         ON o.tenant_id=so.tenant_id AND o.id=so.inventory_owner_id
+       WHERE l.tenant_id = $1
+         AND l.id = $2
+         AND l.order_id = $3
+         AND l.sku_id = $4
+         AND o.status='ACTIVE'`,
       [
         context.tenantId,
         input.salesOrderLineId,
@@ -542,8 +566,18 @@ export class InventoryService {
       ]
     );
 
-    if (!line.rowCount) {
-      throw new NotFoundException("Строка заказа для резерва не найдена");
+    const owner=line.rows[0];
+    if (!owner) {
+      throw new NotFoundException("Строка заказа или владелец товара не найдены");
+    }
+
+    if(owner.owner_type==="CLIENT"){
+      await this.assertOwnerContract(
+        client,context.tenantId,input.warehouseId,owner.inventory_owner_id
+      );
+      await this.assertOwnerLedgerEnabled(
+        client,context.tenantId,input.warehouseId
+      );
     }
 
     await this.lockBalance(
@@ -602,6 +636,27 @@ export class InventoryService {
       );
     }
 
+    const ownerLedger=await this.ownerLedgerEnabled(
+      client,context.tenantId,input.warehouseId
+    );
+    if(ownerLedger){
+      await this.applyOwnerBalanceDelta(
+        client,context,{
+          warehouseId:input.warehouseId,
+          ownerId:owner.inventory_owner_id,
+          skuId:input.skuId,
+          physicalDelta:0n,
+          reservedDelta:input.quantityMilli,
+          movementType:"RESERVE",
+          sourceType:"SALES_ORDER",
+          sourceId:input.salesOrderId,
+          sourceLineId:input.salesOrderLineId,
+          idempotencyKey:
+            "owner-reserve:"+input.idempotencyKey.trim()
+        }
+      );
+    }
+
     await client.query(
       `UPDATE inventory_balance
        SET reserved_milli = reserved_milli + $4::bigint,
@@ -620,8 +675,8 @@ export class InventoryService {
     const reservation = await client.query<{ id: string }>(
       `INSERT INTO inventory_reservation(
          tenant_id, sales_order_id, sales_order_line_id,
-         warehouse_id, sku_id, quantity_milli, idempotency_key
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+         warehouse_id, sku_id, owner_id, quantity_milli, idempotency_key
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        RETURNING id`,
       [
         context.tenantId,
@@ -629,6 +684,7 @@ export class InventoryService {
         input.salesOrderLineId,
         input.warehouseId,
         input.skuId,
+        owner.inventory_owner_id,
         input.quantityMilli.toString(),
         input.idempotencyKey.trim()
       ]
@@ -2103,6 +2159,20 @@ export class InventoryService {
     await this.assertWarehouse(client, context.tenantId, input.warehouseId);
     await this.assertSku(client, context.tenantId, input.skuId);
 
+    const owner=await this.resolveOwner(
+      client,context.tenantId,input.ownerId
+    );
+    input.ownerId=owner.id;
+
+    if(owner.ownerType==="CLIENT"){
+      await this.assertOwnerContract(
+        client,context.tenantId,input.warehouseId,owner.id
+      );
+      await this.assertOwnerLedgerEnabled(
+        client,context.tenantId,input.warehouseId
+      );
+    }
+
     if (input.movementType !== "RECEIPT") {
       const wms = await client.query(
         `SELECT 1
@@ -2149,6 +2219,25 @@ export class InventoryService {
       );
     }
 
+    if(await this.ownerLedgerEnabled(
+      client,context.tenantId,input.warehouseId
+    )){
+      await this.applyOwnerBalanceDelta(
+        client,context,{
+          warehouseId:input.warehouseId,
+          ownerId:owner.id,
+          skuId:input.skuId,
+          physicalDelta:input.quantityDeltaMilli,
+          reservedDelta:0n,
+          movementType:this.ownerPhysicalMovementType(input.movementType),
+          sourceType:input.sourceType??"INVENTORY",
+          sourceId:input.sourceId,
+          sourceLineId:input.sourceLineId,
+          idempotencyKey:"owner-movement:"+input.idempotencyKey
+        }
+      );
+    }
+
     const movement = await this.insertMovementOnly(client, context, input);
 
     await client.query(
@@ -2175,18 +2264,22 @@ export class InventoryService {
     context: TenantContext,
     input: MovementInput
   ): Promise<{ id: string }> {
+    const owner=await this.resolveOwner(
+      client,context.tenantId,input.ownerId
+    );
     const result = await client.query<{ id: string }>(
       `INSERT INTO inventory_transaction(
-         tenant_id, warehouse_id, sku_id, movement_type,
+         tenant_id, warehouse_id, sku_id, owner_id, movement_type,
          quantity_delta_milli, unit_cost_minor,
          source_type, source_id, source_line_id,
          reason, idempotency_key, actor_membership_id
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING id`,
       [
         context.tenantId,
         input.warehouseId,
         input.skuId,
+        owner.id,
         input.movementType,
         input.quantityDeltaMilli.toString(),
         input.unitCostMinor?.toString() ?? null,
@@ -2202,6 +2295,269 @@ export class InventoryService {
     const row = result.rows[0];
     if (!row) throw new Error("INVENTORY_MOVEMENT_CREATE_FAILED");
     return row;
+  }
+
+  private async resolveOwner(
+    client:PoolClient,
+    tenantId:string,
+    requestedOwnerId?:string
+  ):Promise<{id:string;ownerType:"INTERNAL"|"CLIENT"}>{
+    const result=await client.query<{
+      id:string;
+      owner_type:"INTERNAL"|"CLIENT";
+    }>(
+      requestedOwnerId
+        ? `SELECT id,owner_type
+           FROM inventory_owner
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`
+        : `SELECT id,owner_type
+           FROM inventory_owner
+           WHERE tenant_id=$1
+             AND is_default=true
+             AND status='ACTIVE'
+           LIMIT 1`,
+      requestedOwnerId
+        ? [tenantId,requestedOwnerId]
+        : [tenantId]
+    );
+    const row=result.rows[0];
+    if(!row) throw new NotFoundException("Владелец товара не найден");
+    return {id:row.id,ownerType:row.owner_type};
+  }
+
+  private async ownerLedgerEnabled(
+    client:PoolClient,
+    tenantId:string,
+    warehouseId:string
+  ):Promise<boolean>{
+    const result=await client.query<{owner_tracking_state:string}>(
+      `SELECT owner_tracking_state
+       FROM warehouse_wms_profile
+       WHERE tenant_id=$1 AND warehouse_id=$2 AND status='ACTIVE'`,
+      [tenantId,warehouseId]
+    );
+    return result.rows[0]?.owner_tracking_state==="OWNER_LEDGER";
+  }
+
+  private async assertOwnerLedgerEnabled(
+    client:PoolClient,
+    tenantId:string,
+    warehouseId:string
+  ):Promise<void>{
+    if(!await this.ownerLedgerEnabled(client,tenantId,warehouseId)){
+      throw new ConflictException(
+        "Для операций 3PL сначала включите OWNER_LEDGER на складе"
+      );
+    }
+  }
+
+  private async assertOwnerContract(
+    client:PoolClient,
+    tenantId:string,
+    warehouseId:string,
+    ownerId:string
+  ):Promise<void>{
+    const result=await client.query(
+      `SELECT 1
+       FROM warehouse_3pl_contract
+       WHERE tenant_id=$1
+         AND warehouse_id=$2
+         AND owner_id=$3
+         AND status='ACTIVE'`,
+      [tenantId,warehouseId,ownerId]
+    );
+    if(!result.rowCount){
+      throw new ConflictException(
+        "Для владельца товара нет активного 3PL-контракта на этом складе"
+      );
+    }
+  }
+
+  private ownerPhysicalMovementType(
+    movementType:MovementInput["movementType"]
+  ):
+    |"RECEIPT"|"SHIPMENT"|"RETURN"|"ADJUSTMENT"
+    |"TRANSFER_IN"|"TRANSFER_OUT"{
+    if(movementType==="RECEIPT") return "RECEIPT";
+    if(movementType==="SHIPMENT") return "SHIPMENT";
+    if(movementType==="RETURN") return "RETURN";
+    if(movementType==="TRANSFER_IN") return "TRANSFER_IN";
+    if(movementType==="TRANSFER_OUT") return "TRANSFER_OUT";
+    return "ADJUSTMENT";
+  }
+
+  private async applyOwnerBalanceDelta(
+    client:PoolClient,
+    context:TenantContext,
+    input:{
+      warehouseId:string;
+      ownerId:string;
+      skuId:string;
+      physicalDelta:bigint;
+      reservedDelta:bigint;
+      movementType:
+        |"BOOTSTRAP"|"RECEIPT"|"RESERVE"|"RELEASE"|"SHIPMENT"
+        |"RETURN"|"ADJUSTMENT"|"TRANSFER_IN"|"TRANSFER_OUT";
+      sourceType:string;
+      sourceId?:string;
+      sourceLineId?:string;
+      idempotencyKey:string;
+    }
+  ):Promise<void>{
+    const existing=await client.query(
+      `SELECT 1 FROM inventory_owner_movement
+       WHERE tenant_id=$1 AND idempotency_key=$2`,
+      [context.tenantId,input.idempotencyKey]
+    );
+    if(existing.rowCount) return;
+
+    await client.query(
+      `INSERT INTO inventory_owner_balance(
+         tenant_id,warehouse_id,owner_id,sku_id,
+         physical_milli,reserved_milli
+       ) VALUES ($1,$2,$3,$4,0,0)
+       ON CONFLICT (tenant_id,warehouse_id,owner_id,sku_id) DO NOTHING`,
+      [
+        context.tenantId,input.warehouseId,input.ownerId,input.skuId
+      ]
+    );
+
+    const balance=await client.query<{
+      physical_milli:string;
+      reserved_milli:string;
+    }>(
+      `SELECT physical_milli::text,reserved_milli::text
+       FROM inventory_owner_balance
+       WHERE tenant_id=$1
+         AND warehouse_id=$2
+         AND owner_id=$3
+         AND sku_id=$4
+       FOR UPDATE`,
+      [
+        context.tenantId,input.warehouseId,input.ownerId,input.skuId
+      ]
+    );
+    const row=balance.rows[0]!;
+    const nextPhysical=
+      BigInt(row.physical_milli)+input.physicalDelta;
+    const nextReserved=
+      BigInt(row.reserved_milli)+input.reservedDelta;
+
+    if(
+      nextPhysical<0n ||
+      nextReserved<0n ||
+      nextReserved>nextPhysical
+    ){
+      throw new ConflictException(
+        "Owner balance не позволяет выполнить операцию"
+      );
+    }
+
+    await client.query(
+      `UPDATE inventory_owner_balance
+       SET physical_milli=$5,
+           reserved_milli=$6,
+           updated_at=now()
+       WHERE tenant_id=$1
+         AND warehouse_id=$2
+         AND owner_id=$3
+         AND sku_id=$4`,
+      [
+        context.tenantId,input.warehouseId,input.ownerId,input.skuId,
+        nextPhysical.toString(),nextReserved.toString()
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO inventory_owner_movement(
+         tenant_id,warehouse_id,owner_id,sku_id,movement_type,
+         physical_delta_milli,reserved_delta_milli,
+         source_type,source_id,source_line_id,
+         idempotency_key,actor_membership_id
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [
+        context.tenantId,input.warehouseId,input.ownerId,input.skuId,
+        input.movementType,input.physicalDelta.toString(),
+        input.reservedDelta.toString(),input.sourceType,
+        input.sourceId??null,input.sourceLineId??null,
+        input.idempotencyKey,context.membershipId
+      ]
+    );
+  }
+
+  private async receiveOwnerIntoUnassigned(
+    client:PoolClient,
+    context:TenantContext,
+    input:{
+      warehouseId:string;
+      ownerId:string;
+      skuId:string;
+      quantityMilli:bigint;
+      receiptId:string;
+      sourceLineId:string;
+    }
+  ):Promise<void>{
+    if(!await this.ownerLedgerEnabled(
+      client,context.tenantId,input.warehouseId
+    )) return;
+
+    const location=await client.query<{id:string}>(
+      `SELECT id
+       FROM warehouse_location
+       WHERE tenant_id=$1
+         AND warehouse_id=$2
+         AND is_system=true
+         AND code='UNASSIGNED'
+         AND status='ACTIVE'
+       LIMIT 1
+       FOR UPDATE`,
+      [context.tenantId,input.warehouseId]
+    );
+    const locationId=location.rows[0]?.id;
+    if(!locationId){
+      throw new ConflictException(
+        "Owner receipt требует системную WMS-ячейку UNASSIGNED"
+      );
+    }
+
+    await client.query(
+      `INSERT INTO warehouse_location_owner_balance(
+         tenant_id,warehouse_id,owner_id,location_id,sku_id,physical_milli
+       ) VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (
+         tenant_id,warehouse_id,owner_id,location_id,sku_id
+       )
+       DO UPDATE SET
+         physical_milli=
+           warehouse_location_owner_balance.physical_milli+
+           EXCLUDED.physical_milli,
+         updated_at=now()`,
+      [
+        context.tenantId,input.warehouseId,input.ownerId,
+        locationId,input.skuId,input.quantityMilli.toString()
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO warehouse_location_owner_movement(
+         tenant_id,warehouse_id,owner_id,sku_id,movement_type,
+         to_location_id,quantity_milli,
+         source_type,source_id,source_line_id,
+         idempotency_key,actor_membership_id
+       ) VALUES (
+         $1,$2,$3,$4,'RETURN',
+         $5,$6,
+         'GOODS_RECEIPT',$7,$8,$9,$10
+       )
+       ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
+      [
+        context.tenantId,input.warehouseId,input.ownerId,input.skuId,
+        locationId,input.quantityMilli.toString(),
+        input.receiptId,input.sourceLineId,
+        "owner-wms-receipt:"+input.receiptId+":"+input.sourceLineId,
+        context.membershipId
+      ]
+    );
   }
 
   private async lockBalance(
