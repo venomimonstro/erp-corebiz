@@ -1,11 +1,11 @@
 import {
   Body,
   Controller,
-  ForbiddenException,
   Post,
   Req
 } from "@nestjs/common";
 import type { ApiSuccess } from "@corebiz/contracts";
+import { RequirePermission } from "../authorization/require-permission.decorator";
 import { AuthService } from "../auth/auth.service";
 import type { AuthenticatedRequest } from "../auth/auth.types";
 import { TenantsService } from "./tenants.service";
@@ -39,6 +39,7 @@ export class TenantsController {
   }
 
   @Post("invite")
+  @RequirePermission("users.manage")
   async invite(
     @Req() request: AuthenticatedRequest,
     @Body() body: { email: string }
@@ -48,9 +49,6 @@ export class TenantsController {
     developmentToken?: string;
   }>> {
     const current = request.auth!;
-    if (!current.isOwner) {
-      throw new ForbiddenException("Приглашать сотрудников может владелец компании");
-    }
 
     const invitation = await this.tenants.createInvitation(
       {
