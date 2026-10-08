@@ -127,3 +127,9 @@ button, .primary, .secondary { font: inherit; }
 .data-table td > small { display: block; margin-top: 4px; color: #858a91; }
 .table-empty { min-height: 180px; display: grid; place-content: center; text-align: center; gap: 6px; color: #767b82; }
 .table-empty strong { color: #25282c; }
+
+
+/* Status and row actions */
+.status-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 8px; background: #f1f2f4; color: #50555c; font-size: 11px; white-space: nowrap; }
+.table-actions { text-align: right; }
+.table-actions button { padding: 7px 10px; border-radius: 8px; font-size: 11px; }
