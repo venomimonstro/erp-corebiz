@@ -5,6 +5,7 @@ import {
 } from "@nestjs/common";
 import { RedisModule } from "./infrastructure/cache/redis.module";
 import { DatabaseModule } from "./infrastructure/database/database.module";
+import { CatalogModule } from "./modules/business/catalog/catalog.module";
 import { CrmModule } from "./modules/business/crm/crm.module";
 import { OrganizationModule } from "./modules/business/organization/organization.module";
 import { PartyModule } from "./modules/business/party/party.module";
@@ -28,6 +29,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     PartyModule,
     CrmModule,
     TasksModule,
+    CatalogModule,
     HealthModule
   ]
 })
