@@ -7,6 +7,7 @@ import {
 import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { InventoryService } from "../inventory/inventory.service";
 
 type PurchaseLineInput = {
   skuId: string;
@@ -21,7 +22,10 @@ type ReceiptLineInput = {
 
 @Injectable()
 export class ProcurementService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly inventory: InventoryService
+  ) {}
 
   async listSuppliers(context: TenantContext): Promise<Array<{
     id: string;
@@ -202,6 +206,7 @@ export class ProcurementService {
     input: {
       supplierPartyId: string;
       destinationBranchId?: string;
+      destinationWarehouseId?: string;
       expectedAt?: string;
       notes?: string;
       lines: PurchaseLineInput[];
@@ -242,6 +247,22 @@ export class ProcurementService {
         if (!branch.rowCount) {
           throw new NotFoundException("Филиал назначения не найден");
         }
+      }
+
+      const destinationWarehouseId =
+        input.destinationWarehouseId ??
+        (await this.getDefaultWarehouseId(client, context.tenantId));
+
+      const warehouse = await client.query(
+        `SELECT 1 FROM warehouse
+         WHERE tenant_id = $1
+           AND id = $2
+           AND status = 'ACTIVE'`,
+        [context.tenantId, destinationWarehouseId]
+      );
+
+      if (!warehouse.rowCount) {
+        throw new NotFoundException("Склад назначения не найден");
       }
 
       const preparedLines: Array<{
@@ -311,15 +332,17 @@ export class ProcurementService {
       }>(
         `INSERT INTO purchase_order(
            tenant_id, business_number, supplier_party_id,
-           destination_branch_id, responsible_membership_id,
+           destination_branch_id, destination_warehouse_id,
+           responsible_membership_id,
            total_minor, expected_at, notes
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          RETURNING id, business_number, version`,
         [
           context.tenantId,
           number,
           input.supplierPartyId,
           input.destinationBranchId ?? null,
+          destinationWarehouseId,
           context.membershipId,
           total.toString(),
           expectedAt,
@@ -493,8 +516,9 @@ export class ProcurementService {
       const orderResult = await client.query<{
         id: string;
         status: string;
+        destination_warehouse_id: string | null;
       }>(
-        `SELECT id, status
+        `SELECT id, status, destination_warehouse_id
          FROM purchase_order
          WHERE tenant_id = $1 AND id = $2
          FOR UPDATE`,
@@ -588,12 +612,24 @@ export class ProcurementService {
       const receipt = receiptResult.rows[0];
       if (!receipt) throw new Error("GOODS_RECEIPT_CREATE_FAILED");
 
+      const warehouseId =
+        order.destination_warehouse_id ??
+        (await this.getDefaultWarehouseId(client, context.tenantId));
+
+      const inventoryLines: Array<{
+        skuId: string;
+        quantityMilli: bigint;
+        unitCostMinor: bigint;
+        sourceLineId: string;
+      }> = [];
+
       for (const line of prepared) {
-        await client.query(
+        const receiptLineResult = await client.query<{ id: string }>(
           `INSERT INTO goods_receipt_line(
              tenant_id, receipt_id, purchase_order_line_id,
              sku_id, quantity_milli, unit_cost_minor
-           ) VALUES ($1,$2,$3,$4,$5,$6)`,
+           ) VALUES ($1,$2,$3,$4,$5,$6)
+           RETURNING id`,
           [
             context.tenantId,
             receipt.id,
@@ -603,6 +639,16 @@ export class ProcurementService {
             line.unitCostMinor.toString()
           ]
         );
+
+        const receiptLine = receiptLineResult.rows[0];
+        if (!receiptLine) throw new Error("GOODS_RECEIPT_LINE_CREATE_FAILED");
+
+        inventoryLines.push({
+          skuId: line.skuId,
+          quantityMilli: line.quantityMilli,
+          unitCostMinor: line.unitCostMinor,
+          sourceLineId: receiptLine.id
+        });
 
         await client.query(
           `UPDATE purchase_order_line
@@ -619,6 +665,12 @@ export class ProcurementService {
           ]
         );
       }
+
+      await this.inventory.postGoodsReceipt(client, context, {
+        receiptId: receipt.id,
+        warehouseId,
+        lines: inventoryLines
+      });
 
       const remaining = await client.query<{ remaining: string }>(
         `SELECT
@@ -658,6 +710,24 @@ export class ProcurementService {
         orderStatus: newStatus
       };
     });
+  }
+
+  private async getDefaultWarehouseId(
+    client: PoolClient,
+    tenantId: string
+  ): Promise<string> {
+    const result = await client.query<{ id: string }>(
+      `SELECT id FROM warehouse
+       WHERE tenant_id = $1
+         AND status = 'ACTIVE'
+         AND is_default = true
+       LIMIT 1`,
+      [tenantId]
+    );
+
+    const row = result.rows[0];
+    if (!row) throw new NotFoundException("Основной склад не настроен");
+    return row.id;
   }
 
   private async nextNumber(
