@@ -853,3 +853,30 @@ button, .primary, .secondary { font: inherit; }
   font-weight:500;
   color:#858a91;
 }
+
+
+/* 3PL external owner portal */
+.portal-shell { min-height:100vh; background:#f5f6f7; color:#202327; font-family:Inter,system-ui,sans-serif; }
+.portal-login { width:min(440px,calc(100vw - 32px)); margin:0 auto; padding-top:12vh; display:grid; gap:16px; }
+.portal-login h1 { margin:0; font-size:34px; letter-spacing:-.045em; }
+.portal-login p { margin:0; color:#6d737a; line-height:1.6; }
+.portal-login label { display:grid; gap:6px; }
+.portal-login label span { color:#777d84; font-size:11px; }
+.portal-login input { border:1px solid #d9dde1; border-radius:11px; padding:12px 13px; font:inherit; background:#fff; }
+.portal-mark { font-size:11px; color:#858a91; text-transform:uppercase; letter-spacing:.08em; }
+.portal-primary { border:0; background:#202327; color:#fff; border-radius:10px; padding:11px 15px; font-weight:600; cursor:pointer; width:max-content; }
+.portal-primary:disabled { opacity:.55; cursor:not-allowed; }
+.portal-header { background:#fff; border-bottom:1px solid #e4e6e8; padding:16px max(20px,calc((100vw - 1180px)/2)); display:flex; justify-content:space-between; align-items:center; gap:16px; }
+.portal-header > div { display:grid; gap:2px; }
+.portal-header span { color:#858a91; font-size:9px; text-transform:uppercase; letter-spacing:.08em; }
+.portal-header strong { font-size:17px; }
+.portal-header button { border:1px solid #dde0e3; background:#fff; border-radius:9px; padding:8px 11px; cursor:pointer; }
+.portal-content { max-width:1180px; margin:0 auto; padding:24px 20px 50px; }
+.portal-tabs { display:flex; gap:5px; margin:18px 0 10px; flex-wrap:wrap; }
+.portal-tabs button { border:1px solid #e0e3e5; background:#fff; border-radius:9px; padding:8px 11px; cursor:pointer; color:#555b61; }
+.portal-tabs button.active { background:#202327; color:#fff; border-color:#202327; }
+
+@media (max-width:700px) {
+  .portal-header { padding:14px 16px; }
+  .portal-content { padding:16px 10px 40px; }
+}
