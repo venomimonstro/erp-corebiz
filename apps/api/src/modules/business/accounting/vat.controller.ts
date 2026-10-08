@@ -39,6 +39,25 @@ export class VatController {
   }):Promise<ApiSuccess<unknown>> {
     return {ok:true,data:await this.vat.registerDocument(this.ctx(req),body)};
   }
+  @Get("periods")
+  @RequirePermission("accounting.read")
+  async periods(@Req() req:AuthenticatedRequest,@Query("legalEntityId") legalEntityId:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.vat.periods(this.ctx(req),legalEntityId)};
+  }
+  @Post("periods")
+  @RequirePermission("accounting.period.close")
+  async createPeriod(@Req() req:AuthenticatedRequest,@Body() body:{
+    legalEntityId:string;dateFrom:string;dateTo:string;
+  }):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.vat.createPeriod(this.ctx(req),body)};
+  }
+  @Post("periods/close")
+  @RequirePermission("accounting.period.close")
+  async closePeriod(@Req() req:AuthenticatedRequest,@Body() body:{
+    periodId:string;reason:string;
+  }):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.vat.closePeriod(this.ctx(req),body)};
+  }
   private ctx(req:AuthenticatedRequest):TenantContext {
     const a=req.auth!;
     return {tenantId:a.tenantId,userId:a.userId,membershipId:a.membershipId};
