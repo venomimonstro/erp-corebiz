@@ -114,3 +114,16 @@ button, .primary, .secondary { font: inherit; }
 @media (max-width: 1100px) {
   .task-board { grid-template-columns: repeat(4, 260px); }
 }
+
+
+/* Data tables */
+.data-table-wrap { background: #fff; border: 1px solid #e1e3e6; border-radius: 16px; overflow: auto; }
+.data-table { width: 100%; border-collapse: collapse; min-width: 760px; }
+.data-table th { text-align: left; color: #757a81; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding: 13px 16px; border-bottom: 1px solid #e6e8eb; background: #fafafa; }
+.data-table td { padding: 14px 16px; border-bottom: 1px solid #eef0f2; font-size: 13px; vertical-align: middle; }
+.data-table tbody tr:last-child td { border-bottom: 0; }
+.data-table tbody tr:hover { background: #fafbfb; }
+.data-table td > strong { display: block; }
+.data-table td > small { display: block; margin-top: 4px; color: #858a91; }
+.table-empty { min-height: 180px; display: grid; place-content: center; text-align: center; gap: 6px; color: #767b82; }
+.table-empty strong { color: #25282c; }
