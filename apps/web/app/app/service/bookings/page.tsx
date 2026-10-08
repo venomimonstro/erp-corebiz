@@ -1,0 +1,380 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AppSidebar } from "../../../../components/app-sidebar";
+import { apiRequest } from "../../../../lib/api";
+
+type Service = {
+  id: string;
+  name: string;
+  category: string | null;
+  duration_minutes: number;
+  price_minor: string;
+  currency: string;
+};
+
+type Resource = {
+  id: string;
+  name: string;
+  type: string;
+};
+
+type Booking = {
+  id: string;
+  business_number: string;
+  status: string;
+  source: string;
+  starts_at: string;
+  ends_at: string;
+  price_minor_snapshot: string;
+  currency: string;
+  version: number;
+  party_name: string | null;
+  service_name: string;
+  resources: Array<{
+    resourceId: string;
+    resourceName: string;
+    type: string;
+    capacityUnits: number;
+  }>;
+};
+
+function money(value: string, currency: string): string {
+  return new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 0
+  }).format(Number(value) / 100);
+}
+
+export default function BookingsPage() {
+  const [services, setServices] = useState<Service[]>([]);
+  const [resources, setResources] = useState<Resource[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    setError("");
+
+    try {
+      const from = new Date();
+      from.setHours(0, 0, 0, 0);
+      const to = new Date(from.getTime() + 14 * 86400000);
+
+      const data = await Promise.all([
+        apiRequest<Service[]>("/service/catalog"),
+        apiRequest<Resource[]>("/service/resources"),
+        apiRequest<Booking[]>(
+          "/service/bookings?from=" +
+            encodeURIComponent(from.toISOString()) +
+            "&to=" +
+            encodeURIComponent(to.toISOString())
+        )
+      ]);
+
+      setServices(data[0]);
+      setResources(data[1]);
+      setBookings(data[2]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось загрузить записи");
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, Booking[]>();
+
+    for (const booking of bookings) {
+      const key = new Date(booking.starts_at).toLocaleDateString("ru-RU");
+      const rows = map.get(key) ?? [];
+      rows.push(booking);
+      map.set(key, rows);
+    }
+
+    return Array.from(map.entries());
+  }, [bookings]);
+
+  async function createService() {
+    const name = window.prompt("Название услуги");
+    if (!name?.trim()) return;
+
+    const duration = Number(window.prompt("Длительность, минут", "60") ?? "60");
+    const priceRub = Number(
+      (window.prompt("Цена, ₽", "0") ?? "0").replace(",", ".")
+    );
+
+    if (
+      !Number.isFinite(duration) ||
+      duration < 5 ||
+      !Number.isFinite(priceRub) ||
+      priceRub < 0
+    ) {
+      setError("Некорректная длительность или цена");
+      return;
+    }
+
+    try {
+      await apiRequest("/service/catalog", {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          durationMinutes: Math.round(duration),
+          priceMinor: String(Math.round(priceRub * 100))
+        })
+      });
+
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось создать услугу");
+    }
+  }
+
+  async function createBooking() {
+    if (!services.length) {
+      setError("Сначала создайте услугу");
+      return;
+    }
+    if (!resources.length) {
+      setError("Сначала создайте ресурс");
+      return;
+    }
+
+    const serviceText = services
+      .map(
+        (service, index) =>
+          `${index + 1}. ${service.name} · ${service.duration_minutes} мин · ${money(
+            service.price_minor,
+            service.currency
+          )}`
+      )
+      .join("\n");
+
+    const serviceIndex =
+      Number(window.prompt("Выберите услугу:\n" + serviceText, "1")) - 1;
+    const service = services[serviceIndex];
+    if (!service) return;
+
+    const resourceText = resources
+      .map((resource, index) => `${index + 1}. ${resource.name} · ${resource.type}`)
+      .join("\n");
+
+    const resourceIndex =
+      Number(window.prompt("Выберите ресурс:\n" + resourceText, "1")) - 1;
+    const resource = resources[resourceIndex];
+    if (!resource) return;
+
+    const defaultStart = new Date(Date.now() + 3600000);
+    defaultStart.setMinutes(0, 0, 0);
+
+    const startsAt = window.prompt(
+      "Дата и время начала",
+      defaultStart.toISOString().slice(0, 16)
+    );
+    if (!startsAt) return;
+
+    try {
+      await apiRequest("/service/bookings", {
+        method: "POST",
+        body: JSON.stringify({
+          serviceId: service.id,
+          resourceIds: [resource.id],
+          startsAt,
+          source: "MANUAL",
+          idempotencyKey: crypto.randomUUID()
+        })
+      });
+
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось создать запись");
+    }
+  }
+
+  async function reschedule(booking: Booking) {
+    const startsAt = window.prompt(
+      "Новое время начала",
+      new Date(booking.starts_at).toISOString().slice(0, 16)
+    );
+    if (!startsAt) return;
+
+    try {
+      await apiRequest("/service/bookings/" + booking.id + "/reschedule", {
+        method: "PATCH",
+        body: JSON.stringify({
+          startsAt,
+          version: booking.version
+        })
+      });
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось перенести запись");
+    }
+  }
+
+  async function changeStatus(
+    booking: Booking,
+    status: "ARRIVED" | "IN_SERVICE" | "COMPLETED" | "CANCELLED" | "NO_SHOW"
+  ) {
+    try {
+      await apiRequest("/service/bookings/" + booking.id + "/status", {
+        method: "PATCH",
+        body: JSON.stringify({
+          status,
+          version: booking.version
+        })
+      });
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось изменить статус");
+    }
+  }
+
+  return (
+    <main className="app-shell">
+      <AppSidebar active="bookings" />
+
+      <section className="workspace">
+        <header className="workspace-header">
+          <div>
+            <p className="muted">Сервис / Календарь</p>
+            <h1>Записи</h1>
+            <p className="workspace-summary">
+              Услуга резервирует реальную мощность ресурса и не допускает двойную запись.
+            </p>
+          </div>
+
+          <div className="header-actions">
+            <button className="secondary-button" onClick={() => void createService()} type="button">
+              + Услуга
+            </button>
+            <button onClick={() => void createBooking()} type="button">
+              + Запись
+            </button>
+          </div>
+        </header>
+
+        {error ? (
+          <div className="inline-error">
+            <strong>Не удалось выполнить действие</strong>
+            <span>{error}</span>
+          </div>
+        ) : null}
+
+        <div className="booking-calendar">
+          {grouped.map(([date, rows]) => (
+            <section className="booking-day" key={date}>
+              <header>
+                <strong>{date}</strong>
+                <span>{rows.length} записей</span>
+              </header>
+
+              <div className="booking-list">
+                {rows.map((booking) => (
+                  <article className="booking-card" key={booking.id}>
+                    <div className="booking-time">
+                      <strong>
+                        {new Date(booking.starts_at).toLocaleTimeString("ru-RU", {
+                          hour: "2-digit",
+                          minute: "2-digit"
+                        })}
+                      </strong>
+                      <span>
+                        {new Date(booking.ends_at).toLocaleTimeString("ru-RU", {
+                          hour: "2-digit",
+                          minute: "2-digit"
+                        })}
+                      </span>
+                    </div>
+
+                    <div className="booking-main">
+                      <div>
+                        <strong>{booking.service_name}</strong>
+                        <span>
+                          {booking.party_name ?? "Без клиента"} ·{" "}
+                          {booking.resources.map((item) => item.resourceName).join(", ")}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="status-pill">{booking.status}</span>
+                        <strong>
+                          {money(booking.price_minor_snapshot, booking.currency)}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="booking-actions">
+                      {booking.status === "CONFIRMED" ? (
+                        <>
+                          <button
+                            className="secondary-button"
+                            onClick={() => void reschedule(booking)}
+                            type="button"
+                          >
+                            Перенести
+                          </button>
+                          <button
+                            onClick={() => void changeStatus(booking, "ARRIVED")}
+                            type="button"
+                          >
+                            Пришёл
+                          </button>
+                          <button
+                            className="secondary-button"
+                            onClick={() => void changeStatus(booking, "NO_SHOW")}
+                            type="button"
+                          >
+                            Не пришёл
+                          </button>
+                        </>
+                      ) : null}
+
+                      {booking.status === "ARRIVED" ? (
+                        <button
+                          onClick={() => void changeStatus(booking, "IN_SERVICE")}
+                          type="button"
+                        >
+                          Начать
+                        </button>
+                      ) : null}
+
+                      {booking.status === "IN_SERVICE" ? (
+                        <button
+                          onClick={() => void changeStatus(booking, "COMPLETED")}
+                          type="button"
+                        >
+                          Завершить
+                        </button>
+                      ) : null}
+
+                      {!["COMPLETED", "CANCELLED", "NO_SHOW"].includes(
+                        booking.status
+                      ) ? (
+                        <button
+                          className="secondary-button"
+                          onClick={() => void changeStatus(booking, "CANCELLED")}
+                          type="button"
+                        >
+                          Отменить
+                        </button>
+                      ) : null}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ))}
+
+          {!bookings.length ? (
+            <div className="table-empty">
+              <strong>Записей пока нет</strong>
+              <span>Создайте услугу и первую запись клиента.</span>
+            </div>
+          ) : null}
+        </div>
+      </section>
+    </main>
+  );
+}
