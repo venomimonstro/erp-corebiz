@@ -252,8 +252,8 @@ export class StorefrontService {
 
     const customer=await this.parties.create(context,{
       displayName:input.name,
-      phone:input.phone,
-      email:input.email,
+      ...(input.phone?.trim()?{phone:input.phone.trim()}:{}),
+      ...(input.email?.trim()?{email:input.email.trim()}:{}),
       responsibleMembershipId:config.responsible_membership_id
     });
 
@@ -303,16 +303,31 @@ export class StorefrontService {
   }
 
   private async resolveCart(cartKey:string):Promise<{
-    cart_id:string;tenant_id:string;site_id:string;status:string;expires_at:Date;sales_order_id?:string|null;
+    cart_id:string;tenant_id:string;site_id:string;status:string;expires_at:Date;sales_order_id:string|null;
   }>{
-    const result=await this.database.query<any>(
-      `SELECT c.cart_id,c.tenant_id,c.site_id,c.status,c.expires_at,sc.sales_order_id
-       FROM corebiz_resolve_public_cart($1) c
-       LEFT JOIN storefront_cart sc ON sc.id=c.cart_id`,
+    const publicResult=await this.database.query<{
+      cart_id:string;tenant_id:string;site_id:string;status:string;expires_at:Date;
+    }>(
+      "SELECT * FROM corebiz_resolve_public_cart($1)",
       [cartKey]
     );
-    if(!result.rows[0]) throw new NotFoundException("Корзина не найдена");
-    return result.rows[0];
+    const resolved=publicResult.rows[0];
+    if(!resolved) throw new NotFoundException("Корзина не найдена");
+
+    const row=await this.database.withTenantTransaction(
+      this.systemContext(resolved.tenant_id),
+      async client=>(await client.query<{sales_order_id:string|null}>(
+        `SELECT sales_order_id
+         FROM storefront_cart
+         WHERE tenant_id=$1 AND id=$2`,
+        [resolved.tenant_id,resolved.cart_id]
+      )).rows[0]??null
+    );
+
+    return {
+      ...resolved,
+      sales_order_id:row?.sales_order_id??null
+    };
   }
 
   private systemContext(tenantId:string):TenantContext{
