@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { PublicStorefront } from "../../../../components/public-storefront";
+import { PublicSiteForm } from "../../../../components/public-site-form";
 
 type ApiResponse<T> =
   | { ok: true; data: T }
@@ -203,6 +204,25 @@ function PublicBlock({
         publicSlug={publicSlug}
         heading={c.heading}
         limit={Number(c.limit ?? 12)}
+      />
+    );
+  }
+
+  if (block.type === "FORM") {
+    return (
+      <PublicSiteForm
+        publicKey={String(c.bindingId ?? "")}
+        heading={c.heading}
+      />
+    );
+  }
+
+  if (block.type === "BOOKING") {
+    return (
+      <PublicSiteForm
+        publicKey={String(c.bindingId ?? "")}
+        heading={c.heading}
+        booking
       />
     );
   }
