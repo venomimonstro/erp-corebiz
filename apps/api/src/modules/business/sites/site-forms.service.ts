@@ -196,14 +196,23 @@ export class SiteFormsService {
           `INSERT INTO site_submission(
              tenant_id,binding_id,idempotency_key,payload
            ) VALUES ($1,$2,$3,$4)
+           ON CONFLICT(binding_id,idempotency_key) DO NOTHING
            RETURNING id`,
           [
             row.tenant_id,row.binding_id,input.idempotencyKey.trim(),
             JSON.stringify(payload)
           ]
         );
+        if(!created.rows[0]) {
+          const duplicate=await client.query<{
+            id:string;status:string;result_type:string|null;result_id:string|null;
+          }>(`SELECT id,status,result_type,result_id FROM site_submission
+              WHERE tenant_id=$1 AND binding_id=$2 AND idempotency_key=$3`,
+            [row.tenant_id,row.binding_id,input.idempotencyKey.trim()]);
+          return duplicate.rows[0]!;
+        }
         return {
-          id:created.rows[0]!.id,
+          id:created.rows[0].id,
           status:"RECEIVED",
           result_type:null,
           result_id:null
@@ -221,6 +230,18 @@ export class SiteFormsService {
       };
     }
 
+    if(existing.status!=="RECEIVED") {
+      throw new ConflictException("Заявка уже обрабатывается или требует проверки");
+    }
+    const claimed=await this.database.withTenantTransaction(
+      {tenantId:row.tenant_id,userId:"00000000-0000-0000-0000-000000000000",
+       membershipId:"00000000-0000-0000-0000-000000000000"},
+      async client=>client.query(
+        `UPDATE site_submission SET status='PROCESSING'
+         WHERE tenant_id=$1 AND id=$2 AND status='RECEIVED' RETURNING id`,
+        [row.tenant_id,existing.id])
+    );
+    if(!claimed.rowCount) throw new ConflictException("Заявка уже обрабатывается");
     const responsible=String(row.config?.responsibleMembershipId??"");
     const actor=await this.database.withTenantTransaction(
       {
