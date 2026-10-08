@@ -44,6 +44,84 @@ export class ChannelsController {
     };
   }
 
+  @Post("connections/ozon")
+  @RequirePermission("channels.manage")
+  async createOzon(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: {
+      name: string;
+      clientId: string;
+      apiKey: string;
+    }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.channels.createMarketplaceConnection(
+        this.context(request),
+        {
+          provider: "OZON",
+          name: body.name,
+          clientId: body.clientId,
+          apiKey: body.apiKey
+        }
+      )
+    };
+  }
+
+  @Post("connections/wildberries")
+  @RequirePermission("channels.manage")
+  async createWildberries(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: {
+      name: string;
+      apiToken: string;
+    }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.channels.createMarketplaceConnection(
+        this.context(request),
+        {
+          provider: "WILDBERRIES",
+          name: body.name,
+          apiToken: body.apiToken
+        }
+      )
+    };
+  }
+
+  @Post("connections/:id/sync")
+  @RequirePermission("channels.manage")
+  async sync(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: { from?: string; to?: string }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.channels.requestSync(
+        this.context(request),
+        id,
+        body
+      )
+    };
+  }
+
+  @Get("sync-jobs")
+  @RequirePermission("channels.read")
+  async syncJobs(
+    @Req() request: AuthenticatedRequest,
+    @Query("connectionId") connectionId?: string
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.channels.syncJobs(
+        this.context(request),
+        connectionId
+      )
+    };
+  }
+
   @Public()
   @Post("webhook/:connectionId/:secret/orders")
   async webhookOrder(
