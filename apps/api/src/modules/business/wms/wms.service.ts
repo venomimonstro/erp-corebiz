@@ -8,7 +8,6 @@ import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { InventoryService } from "../inventory/inventory.service";
-import { InventoryService } from "../inventory/inventory.service";
 
 const ZONE_TYPES = new Set([
   "RECEIVING","STORAGE","PICKING","PACKING","SHIPPING",
@@ -2500,7 +2499,7 @@ export class WmsService {
            t.created_at
          LIMIT 500
          FOR UPDATE OF t SKIP LOCKED`,
-        [context.tenantId,warehouseId,strategy,maxTasks]
+        [context.tenantId,warehouseId,strategy]
       );
 
       if(!candidates.rowCount){
