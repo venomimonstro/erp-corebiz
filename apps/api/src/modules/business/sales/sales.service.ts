@@ -9,6 +9,7 @@ import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
 import { InventoryService } from "../inventory/inventory.service";
+import { FinanceService } from "../finance/finance.service";
 
 type CreateLineInput = {
   skuId?: string;
@@ -23,7 +24,8 @@ export class SalesService {
   constructor(
     private readonly database: DatabaseService,
     private readonly authorization: AuthorizationService,
-    private readonly inventory: InventoryService
+    private readonly inventory: InventoryService,
+    private readonly finance: FinanceService
   ) {}
 
   async list(context: TenantContext): Promise<Array<{
@@ -405,6 +407,8 @@ export class SalesService {
           "Заказ уже изменён или не может быть подтверждён"
         );
       }
+
+      await this.finance.createSalesReceivable(client, context, order.id);
 
       await this.audit(
         client,
