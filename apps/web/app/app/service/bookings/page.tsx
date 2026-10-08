@@ -39,6 +39,13 @@ type Booking = {
   }>;
 };
 
+// datetime-local expects wall-clock time, not a UTC ISO timestamp.
+function toLocalDateTimeInput(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" +
+    pad(date.getDate()) + "T" + pad(date.getHours()) + ":" + pad(date.getMinutes());
+}
+
 function money(value: string, currency: string): string {
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
@@ -176,7 +183,7 @@ export default function BookingsPage() {
 
     const startsAt = window.prompt(
       "Дата и время начала",
-      defaultStart.toISOString().slice(0, 16)
+      toLocalDateTimeInput(defaultStart)
     );
     if (!startsAt) return;
 
@@ -201,7 +208,7 @@ export default function BookingsPage() {
   async function reschedule(booking: Booking) {
     const startsAt = window.prompt(
       "Новое время начала",
-      new Date(booking.starts_at).toISOString().slice(0, 16)
+      toLocalDateTimeInput(new Date(booking.starts_at))
     );
     if (!startsAt) return;
 
@@ -287,6 +294,12 @@ export default function BookingsPage() {
           </label>
         </div>
 
+        {!grouped.length ? (
+          <div className="table-empty" role="status">
+            <strong>На выбранной неделе записей нет</strong>
+            <span>Выберите другой период, ресурс или создайте новую запись.</span>
+          </div>
+        ) : null}
         <div className="booking-calendar">
           {grouped.map(([date, rows]) => (
             <section className="booking-day" key={date}>
