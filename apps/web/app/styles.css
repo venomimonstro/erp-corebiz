@@ -467,3 +467,38 @@ button, .primary, .secondary { font: inherit; }
   .oms-layout { grid-template-columns: 1fr; }
   .oms-panel { position: static; }
 }
+
+
+/* Site builder */
+.site-builder-layout { display:grid; grid-template-columns:280px minmax(0,1fr) 340px; gap:12px; align-items:start; }
+.site-list,.site-editor,.site-preview { background:#fff; border:1px solid #e1e3e6; border-radius:16px; padding:14px; }
+.site-list { display:grid; gap:8px; }
+.site-list button { text-align:left; background:#f6f7f8; color:#292c30; border-color:transparent; }
+.site-list button.active { background:#17191c; color:#fff; }
+.site-editor-header { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; padding-bottom:12px; border-bottom:1px solid #eceef0; }
+.site-editor-header > div { display:grid; gap:4px; }
+.site-editor-header h2 { margin:0; font-size:20px; }
+.block-editor-list { display:grid; gap:8px; margin-top:12px; }
+.block-editor { border:1px solid #e8eaed; border-radius:12px; padding:11px; display:grid; gap:8px; }
+.block-editor header { display:flex; justify-content:space-between; gap:10px; align-items:center; }
+.block-editor textarea { min-height:110px; resize:vertical; border:1px solid #dfe2e6; border-radius:9px; padding:9px; font:12px/1.45 ui-monospace,monospace; }
+.builder-actions { display:flex; gap:7px; flex-wrap:wrap; }
+.site-preview { position:sticky; top:18px; display:grid; gap:0; overflow:hidden; }
+.preview-block { padding:20px; border-bottom:1px solid #eef0f2; }
+.preview-block:last-child { border-bottom:0; }
+.preview-block h2,.preview-block h3 { margin:0 0 8px; letter-spacing:-.03em; }
+.preview-block p { margin:0; color:#666b72; line-height:1.55; }
+.preview-hero { padding:32px 20px; }
+.preview-hero h2 { font-size:30px; }
+.preview-image { width:100%; max-height:220px; object-fit:cover; border-radius:10px; }
+.preview-features { display:grid; gap:8px; }
+.preview-features article { background:#f7f8f9; border-radius:10px; padding:10px; }
+.preview-placeholder { background:#f5f6f7; border:1px dashed #cfd3d8; border-radius:10px; padding:16px; color:#73787f; font-size:11px; }
+
+@media (max-width:1200px) {
+ .site-builder-layout { grid-template-columns:220px 1fr; }
+ .site-preview { grid-column:1 / -1; position:static; }
+}
+@media (max-width:760px) {
+ .site-builder-layout { grid-template-columns:1fr; }
+}
