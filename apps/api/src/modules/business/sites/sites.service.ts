@@ -700,7 +700,18 @@ export class SitesService {
     if (!payload) {
       throw new NotFoundException("Страница не опубликована");
     }
-    return payload;
+
+    const tracker=await this.database.query<{tracker_key:string}>(
+      `SELECT * FROM corebiz_public_site_tracker($1)`,
+      [slug]
+    );
+
+    return {
+      ...payload,
+      analytics: {
+        trackerKey: tracker.rows[0]?.tracker_key ?? null
+      }
+    };
   }
 
   private validateBlock(
