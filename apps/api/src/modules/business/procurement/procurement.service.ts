@@ -8,6 +8,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { InventoryService } from "../inventory/inventory.service";
+import { DomainEventService } from "../../platform/events/domain-event.service";
 import { FinanceService } from "../finance/finance.service";
 
 type PurchaseLineInput = {
@@ -26,7 +27,8 @@ export class ProcurementService {
   constructor(
     private readonly database: DatabaseService,
     private readonly inventory: InventoryService,
-    private readonly finance: FinanceService
+    private readonly finance: FinanceService,
+    private readonly events: DomainEventService
   ) {}
 
   async listSuppliers(context: TenantContext): Promise<Array<{
@@ -430,6 +432,17 @@ export class ProcurementService {
         order.id
       );
 
+      await this.events.enqueue(client, context, {
+        eventName: "procurement.order_confirmed",
+        entityType: "PURCHASE_ORDER",
+        entityId: order.id,
+        payload: {
+          purchaseOrderId: order.id,
+          status: order.status,
+          version: order.version
+        }
+      });
+
       return order;
     });
   }
@@ -707,6 +720,19 @@ export class ProcurementService {
         receipt.id,
         { purchaseOrderId: orderId, number }
       );
+
+      await this.events.enqueue(client, context, {
+        eventName: "procurement.receipt_posted",
+        entityType: "GOODS_RECEIPT",
+        entityId: receipt.id,
+        payload: {
+          receiptId: receipt.id,
+          purchaseOrderId: orderId,
+          number,
+          warehouseId,
+          orderStatus: newStatus
+        }
+      });
 
       return {
         receiptId: receipt.id,
