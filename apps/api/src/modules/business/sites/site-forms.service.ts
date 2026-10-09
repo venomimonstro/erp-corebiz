@@ -67,7 +67,14 @@ export class SiteFormsService {
     }else{
       if(!input.serviceId) throw new BadRequestException("Для BOOKING требуется serviceId");
       config.serviceId=input.serviceId;
-      config.resourceIds=Array.from(new Set(input.resourceIds??[])).slice(0,10);
+      const resourceIds=Array.from(new Set(input.resourceIds??[])).slice(0,10);
+      if (!resourceIds.length) {
+        throw new BadRequestException("Укажите хотя бы одного специалиста или ресурс для онлайн-записи");
+      }
+      if (resourceIds.some(id=>typeof id!=="string" || !/^[0-9a-f-]{36}$/i.test(id))) {
+        throw new BadRequestException("Некорректный resourceId");
+      }
+      config.resourceIds=resourceIds;
     }
 
     const publicKey="form_"+randomBytes(24).toString("base64url");
@@ -85,6 +92,24 @@ export class SiteFormsService {
         [context.tenantId,responsible]
       );
       if(!member.rowCount) throw new NotFoundException("Ответственный сотрудник недоступен");
+
+      if (input.action==="BOOKING") {
+        const service=await client.query(
+          `SELECT 1 FROM service_catalog
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,input.serviceId]
+        );
+        if(!service.rowCount) throw new NotFoundException("Услуга недоступна");
+        const resourceIds=config.resourceIds as string[];
+        const resourceRows=await client.query<{id:string}>(
+          `SELECT id FROM service_resource
+           WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND status='ACTIVE'`,
+          [context.tenantId,resourceIds]
+        );
+        if(resourceRows.rowCount!==resourceIds.length) {
+          throw new BadRequestException("Один или несколько ресурсов недоступны");
+        }
+      }
 
       const result=await client.query<{id:string}>(
         `INSERT INTO site_form_binding(
