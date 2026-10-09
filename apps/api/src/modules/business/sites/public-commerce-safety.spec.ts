@@ -1,0 +1,104 @@
+import { ConflictException, BadRequestException } from "@nestjs/common";
+import { StorefrontService } from "./storefront.service";
+import { SiteFormsService } from "./site-forms.service";
+
+const context = {
+  tenantId: "11111111-1111-4111-8111-111111111111",
+  userId: "22222222-2222-4222-8222-222222222222",
+  membershipId: "33333333-3333-4333-8333-333333333333"
+};
+
+const cart = {
+  cart_id: "44444444-4444-4444-8444-444444444444",
+  tenant_id: context.tenantId,
+  site_id: "55555555-5555-4555-8555-555555555555",
+  status: "OPEN",
+  sales_order_id: null,
+  expires_at: new Date(Date.now() + 60000)
+};
+
+describe("public commerce safeguards", () => {
+  it("rejects cart edits when checkout owns the cart row", async () => {
+    const query = jest.fn(async (sql: string) => {
+      if (sql.includes("FOR UPDATE")) {
+        return {
+          rows: [{ status: "PROCESSING", expires_at: cart.expires_at }],
+          rowCount: 1
+        };
+      }
+      throw new Error("unexpected query after locked cart conflict");
+    });
+    const database = {
+      withTenantTransaction: jest.fn(async (_context: unknown, callback: any) =>
+        callback({ query })
+      )
+    };
+    const service = new StorefrontService(
+      database as any,
+      {} as any,
+      {} as any
+    );
+    jest.spyOn(service as any, "resolveCart").mockResolvedValue(cart);
+
+    await expect(
+      service.setLine("cart_key", {
+        skuId: "66666666-6666-4666-8666-666666666666",
+        quantityMilli: "1000"
+      })
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(String(query.mock.calls[0]?.[0])).toContain("FOR UPDATE");
+  });
+
+  it("does not create a customer when a checkout lease is already held", async () => {
+    const query = jest.fn(async () => ({ rows: [], rowCount: 0 }));
+    const database = {
+      withTenantTransaction: jest.fn(async (_context: unknown, callback: any) =>
+        callback({ query })
+      )
+    };
+    const parties = { create: jest.fn() };
+    const sales = { create: jest.fn(), confirm: jest.fn() };
+    const service = new StorefrontService(
+      database as any,
+      parties as any,
+      sales as any
+    );
+    jest.spyOn(service as any, "resolveCart").mockResolvedValue(cart);
+
+    await expect(
+      service.checkout("cart_key", {
+        idempotencyKey: "attempt-one",
+        name: "Тестовый покупатель",
+        phone: "+79990000000"
+      })
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(parties.create).not.toHaveBeenCalled();
+    expect(sales.create).not.toHaveBeenCalled();
+    expect(sales.confirm).not.toHaveBeenCalled();
+  });
+
+  it("rejects public booking bindings with no authorized resources", async () => {
+    const database = {
+      withTenantTransaction: jest.fn()
+    };
+    const service = new SiteFormsService(
+      database as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any
+    );
+    await expect(
+      service.createBinding(context, cart.site_id, {
+        name: "Онлайн-запись",
+        action: "BOOKING",
+        serviceId: "77777777-7777-4777-8777-777777777777",
+        resourceIds: []
+      })
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(database.withTenantTransaction).not.toHaveBeenCalled();
+  });
+});
