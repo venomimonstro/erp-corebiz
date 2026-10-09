@@ -9,8 +9,9 @@
 - Текущий этап: **аудит и стабилизация основного контура после спринтов 54–66**. Основа этих спринтов есть в коде, но production-приёмка не пройдена.
 - Актуальный аудит: [Стабильность, безопасность, UX и сравнение с МойСклад](docs/AUDIT_PRODUCT_SECURITY_UX_MOYSKLAD_2026_10_08.md).
 - Исправления входа при RLS: [Auth/RLS gate](docs/AUTH_RUNTIME_RLS_2026_10_09.md).
-- Проверка миграций: `node scripts/migration-preflight.mjs` (текущий результат BLOCK: 10 повторяющихся номеров).
-- Симуляция API-пути клиента (только одноразовая тестовая БД): `scripts/smoke-user-journey.mjs`.
+- Проверка миграций: `node scripts/migration-preflight.mjs` (10 предупреждений по историческим номерам, не причина автоматического BLOCK).
+- Симуляция клиента (только одноразовая тестовая БД): `scripts/smoke-user-journey.mjs`; браузерная симуляция: `scripts/smoke-browser-journey.mjs` (требует локальный Playwright).
+- Последние P0-исправления: строгая валидация публичных форм, защита повторов платежей, проверка runtime DB-прав авторизации; профильное меню и быстрый старт.
 - Перечень открытых release-блокеров: [Sprints 54–60](docs/SPRINTS_54_TO_60_IMPLEMENTATION_STATUS.md).
 - Первый коммерческий контур: **ERP Core + CRM + Tasks + Catalog + Sales + Procurement + Inventory + Finance Lite + Billing + Support**.
 
