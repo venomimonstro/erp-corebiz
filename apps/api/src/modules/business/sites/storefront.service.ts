@@ -186,109 +186,237 @@ export class StorefrontService {
   }
 
   async checkout(
-    cartKey:string,
-    input:{
-      idempotencyKey:string;
-      name:string;
-      phone?:string;
-      email?:string;
-      comment?:string;
+    cartKey: string,
+    input: {
+      idempotencyKey: string;
+      name: string;
+      phone?: string;
+      email?: string;
+      comment?: string;
     }
-  ):Promise<Record<string,unknown>>{
-    if(!input.idempotencyKey?.trim()||input.idempotencyKey.length>160){
+  ): Promise<Record<string, unknown>> {
+    if (!input.idempotencyKey?.trim() || input.idempotencyKey.length > 160) {
       throw new BadRequestException("Требуется idempotencyKey");
     }
-
-    const cart=await this.resolveCart(cartKey);
-    if(cart.status==="CHECKED_OUT"&&cart.sales_order_id){
-      return {accepted:true,salesOrderId:cart.sales_order_id,reused:true};
+    const name = input.name?.trim();
+    if (!name || name.length < 2 || name.length > 200) {
+      throw new BadRequestException("Укажите имя покупателя");
     }
-    if(cart.status!=="OPEN"||new Date(cart.expires_at)<new Date()){
-      throw new ConflictException("Корзина закрыта или истекла");
+    const phone = input.phone?.trim();
+    const email = input.email?.trim();
+    if (!phone && !email) {
+      throw new BadRequestException("Укажите телефон или email");
+    }
+    if ((phone?.length ?? 0) > 40 || (email?.length ?? 0) > 320) {
+      throw new BadRequestException("Некорректные контакты");
     }
 
-    const sf=await this.database.query<{
-      responsible_membership_id:string;
-      currency:string;
-    }>(
-      `SELECT responsible_membership_id,currency
-       FROM storefront_config
-       WHERE tenant_id=$1 AND site_id=$2 AND enabled=true`,
-      [cart.tenant_id,cart.site_id]
-    );
-    const config=sf.rows[0];
-    if(!config) throw new NotFoundException("Магазин отключён");
+    const cart = await this.resolveCart(cartKey);
+    if (cart.status === "CHECKED_OUT" && cart.sales_order_id) {
+      return {
+        accepted: true,
+        salesOrderId: cart.sales_order_id,
+        reused: true
+      };
+    }
+    if (new Date(cart.expires_at).getTime() <= Date.now()) {
+      throw new ConflictException("Срок действия корзины истёк");
+    }
 
-    const actor=await this.database.withTenantTransaction(
+    // A unique lease token guards against concurrent requests and stale
+    // workers resetting a newer attempt. The public retry key is *not*
+    // an order identity: the cart itself can be checked out only once.
+    const attemptToken = randomBytes(24).toString("base64url");
+    const claimed = await this.database.withTenantTransaction(
       this.systemContext(cart.tenant_id),
-      async client=>(await client.query<{user_id:string}>(
-        `SELECT user_id FROM tenant_membership
-         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
-        [cart.tenant_id,config.responsible_membership_id]
-      )).rows[0]??null
-    );
-    if(!actor) throw new ConflictException("Ответственный магазина недоступен");
-
-    const context:TenantContext={
-      tenantId:cart.tenant_id,
-      userId:actor.user_id,
-      membershipId:config.responsible_membership_id
-    };
-
-    const lines=await this.database.withTenantTransaction(
-      this.systemContext(cart.tenant_id),
-      async client=>(await client.query<{
-        sku_id:string;quantity_milli:string;
-      }>(
-        `SELECT sku_id,quantity_milli::text
-         FROM storefront_cart_line
-         WHERE tenant_id=$1 AND cart_id=$2
-         ORDER BY created_at`,
-        [cart.tenant_id,cart.cart_id]
-      )).rows
-    );
-
-    if(!lines.length) throw new BadRequestException("Корзина пуста");
-
-    const customer=await this.parties.create(context,{
-      displayName:input.name,
-      ...(input.phone?.trim()?{phone:input.phone.trim()}:{}),
-      ...(input.email?.trim()?{email:input.email.trim()}:{}),
-      responsibleMembershipId:config.responsible_membership_id
-    });
-
-    const order=await this.sales.create(context,{
-      partyId:customer.id,
-      responsibleMembershipId:config.responsible_membership_id,
-      currency:config.currency,
-      notes:input.comment?.trim()||"Заказ с сайта",
-      idempotencyKey:"storefront:"+cart.cart_id+":"+input.idempotencyKey.trim(),
-      lines:lines.map(line=>({
-        skuId:line.sku_id,
-        quantityMilli:line.quantity_milli
-      }))
-    });
-
-    const confirmed=await this.sales.confirm(context,order.id,order.version);
-
-    await this.database.withTenantTransaction(
-      context,
-      async client=>{
-        await client.query(
+      async (client) => {
+        const result = await client.query<{
+          checkout_party_id: string | null;
+          sales_order_id: string | null;
+        }>(
           `UPDATE storefront_cart
-           SET status='CHECKED_OUT',sales_order_id=$3,updated_at=now()
-           WHERE tenant_id=$1 AND id=$2`,
-          [cart.tenant_id,cart.cart_id,order.id]
+           SET status='PROCESSING',
+               checkout_started_at=now(),
+               checkout_attempt_token=$3,
+               updated_at=now()
+           WHERE tenant_id=$1 AND id=$2
+             AND expires_at > now()
+             AND (
+               status='OPEN'
+               OR (
+                 status='PROCESSING'
+                 AND checkout_started_at < now()-interval '5 minutes'
+               )
+             )
+           RETURNING checkout_party_id,sales_order_id`,
+          [cart.tenant_id, cart.cart_id, attemptToken]
         );
+        return result.rows[0] ?? null;
       }
     );
+    if (!claimed) {
+      const latest = await this.resolveCart(cartKey);
+      if (latest.status === "CHECKED_OUT" && latest.sales_order_id) {
+        return {
+          accepted: true,
+          salesOrderId: latest.sales_order_id,
+          reused: true
+        };
+      }
+      throw new ConflictException(
+        "Заказ по этой корзине уже оформляется. Повторите проверку через несколько секунд."
+      );
+    }
 
-    return {
-      accepted:true,
-      salesOrderId:order.id,
-      number:order.number,
-      orderStatus:confirmed.orderStatus
-    };
+    try {
+      const config = await this.database.withTenantTransaction(
+        this.systemContext(cart.tenant_id),
+        async (client) => {
+          const result = await client.query<{
+            responsible_membership_id: string;
+            currency: string;
+            user_id: string;
+          }>(
+            `SELECT c.responsible_membership_id,c.currency,m.user_id
+             FROM storefront_config c
+             JOIN tenant_membership m
+               ON m.tenant_id=c.tenant_id
+              AND m.id=c.responsible_membership_id
+              AND m.status='ACTIVE'
+             WHERE c.tenant_id=$1 AND c.site_id=$2 AND c.enabled=true`,
+            [cart.tenant_id, cart.site_id]
+          );
+          return result.rows[0] ?? null;
+        }
+      );
+      if (!config) {
+        throw new ConflictException("Магазин или его ответственный недоступен");
+      }
+
+      const context: TenantContext = {
+        tenantId: cart.tenant_id,
+        userId: config.user_id,
+        membershipId: config.responsible_membership_id
+      };
+
+      const lines = await this.database.withTenantTransaction(
+        context,
+        async (client) => (
+          await client.query<{
+            sku_id: string;
+            quantity_milli: string;
+          }>(
+            `SELECT l.sku_id,l.quantity_milli::text
+             FROM storefront_cart_line l
+             WHERE l.tenant_id=$1 AND l.cart_id=$2
+             ORDER BY l.created_at`,
+            [cart.tenant_id,cart.cart_id]
+          )
+        ).rows
+      );
+      if (!lines.length) throw new BadRequestException("Корзина пуста");
+
+      let customerId = claimed.checkout_party_id;
+      if (!customerId) {
+        const customer = await this.parties.create(context, {
+          displayName: name,
+          ...(phone ? { phone } : {}),
+          ...(email ? { email } : {}),
+          responsibleMembershipId: config.responsible_membership_id
+        });
+        customerId = customer.id;
+        await this.database.withTenantTransaction(context, async (client) => {
+          await client.query(
+            `UPDATE storefront_cart
+             SET checkout_party_id=$4,updated_at=now()
+             WHERE tenant_id=$1 AND id=$2
+               AND status='PROCESSING'
+               AND checkout_attempt_token=$3`,
+            [cart.tenant_id,cart.cart_id,attemptToken,customer.id]
+          );
+        });
+      }
+
+      const order = await this.sales.create(context, {
+        partyId: customerId,
+        responsibleMembershipId: config.responsible_membership_id,
+        currency: config.currency,
+        notes: input.comment?.trim() || "Заказ с сайта",
+        idempotencyKey: "storefront:cart:" + cart.cart_id,
+        lines: lines.map(line => ({
+          skuId: line.sku_id,
+          quantityMilli: line.quantity_milli
+        }))
+      });
+
+      // A retry can find an order created before a process crash.
+      // Never confirm the same SalesOrder twice.
+      const orderState = await this.database.withTenantTransaction(
+        context,
+        async (client) => (
+          await client.query<{
+            order_status: string;
+            version: number;
+          }>(
+            `SELECT order_status,version
+             FROM sales_order
+             WHERE tenant_id=$1 AND id=$2`,
+            [cart.tenant_id,order.id]
+          )
+        ).rows[0]
+      );
+      if (!orderState) throw new NotFoundException("Созданный заказ не найден");
+
+      if (orderState.order_status === "DRAFT") {
+        await this.sales.confirm(context, order.id, orderState.version);
+      } else if (orderState.order_status !== "CONFIRMED") {
+        throw new ConflictException("Заказ уже перешёл в несовместимое состояние");
+      }
+
+      const completed = await this.database.withTenantTransaction(
+        context,
+        async (client) => await client.query(
+          `UPDATE storefront_cart
+           SET status='CHECKED_OUT',
+               sales_order_id=$4,
+               checkout_attempt_token=NULL,
+               updated_at=now()
+           WHERE tenant_id=$1 AND id=$2
+             AND status='PROCESSING'
+             AND checkout_attempt_token=$3
+           RETURNING id`,
+          [cart.tenant_id,cart.cart_id,attemptToken,order.id]
+        )
+      );
+      if (!completed.rowCount) {
+        throw new ConflictException("Состояние корзины изменилось, проверьте заказ");
+      }
+      return {
+        accepted: true,
+        salesOrderId: order.id,
+        number: order.number,
+        orderStatus: "CONFIRMED"
+      };
+    } catch (error) {
+      // Do not unlock an attempt that has already been taken over.
+      await this.database.withTenantTransaction(
+        this.systemContext(cart.tenant_id),
+        async (client) => {
+          await client.query(
+            `UPDATE storefront_cart
+             SET status='OPEN',
+                 checkout_started_at=NULL,
+                 checkout_attempt_token=NULL,
+                 updated_at=now()
+             WHERE tenant_id=$1 AND id=$2
+               AND status='PROCESSING'
+               AND checkout_attempt_token=$3`,
+            [cart.tenant_id,cart.cart_id,attemptToken]
+          );
+        }
+      );
+      throw error;
+    }
   }
 
   private async resolveStorefront(siteCode:string):Promise<{
