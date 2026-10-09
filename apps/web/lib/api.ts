@@ -2,8 +2,10 @@ export type ApiResponse<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string; traceId?: string } };
 
+// Same-origin API by default: the Next.js server rewrites /api/v1 to the
+// configured upstream. Never ask a customer's browser to call its localhost.
 const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "/api/v1";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 

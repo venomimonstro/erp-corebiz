@@ -25,8 +25,12 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const raw =
       exception instanceof HttpException ? exception.getResponse() : undefined;
 
+    // A typed HttpException can still have 5xx status and include internal
+    // database/provider details. Never disclose a 5xx exception message.
     const message =
-      typeof raw === "string"
+      status >= 500
+        ? "Сервис временно недоступен. Повторите попытку позже."
+        : typeof raw === "string"
         ? raw
         : raw && typeof raw === "object" && "message" in raw
           ? Array.isArray(raw.message)

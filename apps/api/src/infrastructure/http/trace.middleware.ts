@@ -7,7 +7,9 @@ export function traceMiddleware(
   next: NextFunction
 ): void {
   const incoming = request.header("x-trace-id")?.trim();
-  const traceId = incoming && incoming.length <= 128 ? incoming : randomUUID();
+  const traceId = incoming && /^[a-zA-Z0-9_.:-]{1,128}$/.test(incoming)
+    ? incoming
+    : randomUUID();
 
   response.setHeader("x-trace-id", traceId);
   (request as Request & { traceId: string }).traceId = traceId;
