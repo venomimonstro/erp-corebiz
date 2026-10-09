@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Post,
@@ -10,6 +11,17 @@ import { AuthService } from "../auth/auth.service";
 import type { AuthenticatedRequest } from "../auth/auth.types";
 import { TenantsService } from "./tenants.service";
 
+function requiredField(body: unknown, key: string, min: number, max: number): string {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new BadRequestException("Некорректные данные");
+  }
+  const value = (body as Record<string, unknown>)[key];
+  if (typeof value !== "string" || value.trim().length < min || value.trim().length > max) {
+    throw new BadRequestException("Некорректное значение: " + key);
+  }
+  return value.trim();
+}
+
 @Controller("tenants")
 export class TenantsController {
   constructor(
@@ -20,14 +32,14 @@ export class TenantsController {
   @Post()
   async create(
     @Req() request: AuthenticatedRequest,
-    @Body() body: { name: string }
+    @Body() body: unknown
   ): Promise<ApiSuccess<{
     tenantId: string;
     membershipId: string;
     tenantName: string;
   }>> {
     const current = request.auth!;
-    const created = await this.tenants.createTenant(current.userId, body.name);
+    const created = await this.tenants.createTenant(current.userId, requiredField(body, "name", 2, 160));
 
     await this.auth.switchTenant(
       current.sessionId,
@@ -42,7 +54,7 @@ export class TenantsController {
   @RequirePermission("users.manage")
   async invite(
     @Req() request: AuthenticatedRequest,
-    @Body() body: { email: string }
+    @Body() body: unknown
   ): Promise<ApiSuccess<{
     invitationId: string;
     expiresAt: string;
@@ -56,7 +68,7 @@ export class TenantsController {
         userId: current.userId,
         membershipId: current.membershipId
       },
-      body.email
+      requiredField(body, "email", 3, 254)
     );
 
     return {
@@ -74,13 +86,13 @@ export class TenantsController {
   @Post("accept-invitation")
   async acceptInvitation(
     @Req() request: AuthenticatedRequest,
-    @Body() body: { token: string }
+    @Body() body: unknown
   ): Promise<ApiSuccess<{ tenantId: string; membershipId: string }>> {
     const current = request.auth!;
     const accepted = await this.tenants.acceptInvitation(
       current.userId,
       current.email,
-      body.token
+      requiredField(body, "token", 32, 256)
     );
 
     return { ok: true, data: accepted };
