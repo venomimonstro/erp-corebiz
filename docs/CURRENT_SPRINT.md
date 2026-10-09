@@ -1,3 +1,5 @@
+> **Update 2026-10-09 (late):** Auth/RLS SECURITY DEFINER migration 119, runtime input validation, collapsible responsive sidebar and disposable customer API smoke journey were committed to main. The migration checker was fixed: it now detects **10 historical duplicate numeric migration prefixes among 129 SQL files**. Checks and browser E2E have **not run** on production or a disposable DB. Production remains NO-GO. See [auth migration gate](AUTH_RUNTIME_RLS_2026_10_09.md).
+
 > **Stabilization update, 2026-10-09:** checkout concurrency, public booking bindings, production RLS readiness and migration drift safeguards have been patched directly in `main`. See [stability patch and NO-GO release gates](STABILITY_PATCH_2026_10_09.md). Do not resume feature sprints or deploy to production before the migration collisions, disposable replay and role/isolation gates are cleared.
 
 # Актуальный этап — аудит и стабилизация (2026-10-08)
