@@ -95,7 +95,7 @@ export class SiteFormsService {
 
       if (input.action==="BOOKING") {
         const service=await client.query(
-          `SELECT 1 FROM service_catalog
+          `SELECT 1 FROM service_catalog_item
            WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
           [context.tenantId,input.serviceId]
         );
