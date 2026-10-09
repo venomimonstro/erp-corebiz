@@ -112,6 +112,18 @@ export default function AppHomePage() {
 
         {!loading && dashboard ? (
           <>
+            {dashboard.kpis.openOrders === 0 && dashboard.queue.length === 0 ? (
+              <section className="quick-start" aria-labelledby="corebiz-get-started">
+                <p className="muted">Первые шаги</p>
+                <h2 id="corebiz-get-started">Начните с одной операции</h2>
+                <p>Не нужно настраивать всю ERP: выберите основное действие своего бизнеса.</p>
+                <div className="quick-start-actions">
+                  <a href="/app/crm/deals"><strong>Добавить клиента и сделку</strong><span>Построить воронку продаж →</span></a>
+                  <a href="/app/catalog/products"><strong>Добавить товар или услугу</strong><span>Создать первую позицию каталога →</span></a>
+                  <a href="/app/service/bookings"><strong>Настроить запись клиентов</strong><span>Рабочее место для услуг →</span></a>
+                </div>
+              </section>
+            ) : null}
             <div className="owner-kpi-grid">
               {kpis.map(([label, value, detail]) => (
                 <article className="owner-kpi" key={label}>

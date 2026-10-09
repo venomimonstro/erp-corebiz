@@ -931,3 +931,17 @@ button, .primary, .secondary { font: inherit; }
   .workspace-header { flex-wrap: wrap; gap: 16px; }
   .workspace-header h1 { font-size: 28px; }
 }
+
+/* Profile-aware navigation and low-friction first-session onboarding. */
+.sidebar-profile { padding: 0 10px 16px; display: grid; gap: 7px; font-size: 11px; color: #666b73; }
+.sidebar-profile select { width: 100%; max-width: 100%; min-height: 38px; font: inherit; font-size: 12px; background: #fff; color: #17191c; border: 1px solid #d9dce0; border-radius: 9px; padding: 8px; }
+.sidebar-profile select:focus-visible { outline: 3px solid #6799ee; outline-offset: 2px; }
+.quick-start { margin-bottom: 22px; padding: 24px; border: 1px solid #d9dce0; border-radius: 18px; background: #fff; }
+.quick-start h2 { margin: 4px 0 8px; font-size: 22px; letter-spacing: -.035em; }
+.quick-start > p:not(.muted) { color: #72767d; font-size: 14px; margin: 0 0 20px; }
+.quick-start-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.quick-start-actions a { display: grid; gap: 8px; padding: 16px; border-radius: 13px; background: #f6f7f8; border: 1px solid #eef0f2; }
+.quick-start-actions a:hover, .quick-start-actions a:focus-visible { background: #ebedf0; outline-offset: 2px; }
+.quick-start-actions a strong { font-size: 13px; }
+.quick-start-actions a span { font-size: 12px; color: #72767d; }
+@media (max-width: 920px) { .quick-start-actions { grid-template-columns: 1fr; } }
