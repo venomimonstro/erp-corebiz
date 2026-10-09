@@ -19,6 +19,9 @@ if [[ -n "${DATABASE_URL:-}" && "${DATABASE_URL}" == "${COREBIZ_DISPOSABLE_DATAB
   exit 1
 fi
 
+echo "[release] migration filename and RLS DDL preflight"
+node scripts/migration-preflight.mjs
+
 echo "[release] static typecheck"
 pnpm typecheck
 
