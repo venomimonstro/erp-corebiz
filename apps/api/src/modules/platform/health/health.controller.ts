@@ -1,4 +1,4 @@
-import { Controller, Get } from "@nestjs/common";
+import { Controller, Get, ServiceUnavailableException } from "@nestjs/common";
 import type { ApiSuccess, HealthStatus } from "@corebiz/contracts";
 import { Public } from "../auth/public.decorator";
 import { RequirePermission } from "../authorization/require-permission.decorator";
@@ -29,10 +29,15 @@ export class HealthController {
   @Public()
   @Get("ready")
   async ready(): Promise<ApiSuccess<unknown>> {
-    return {
-      ok: true,
-      data: await this.health.readiness()
-    };
+    const state = await this.health.readiness();
+    if (state.status !== "ok") {
+      throw new ServiceUnavailableException({
+        code: "SERVICE_NOT_READY",
+        message: "API dependencies or tenant isolation are not ready",
+        readiness: state
+      });
+    }
+    return { ok: true, data: state };
   }
 
   @Get("diagnostics")
