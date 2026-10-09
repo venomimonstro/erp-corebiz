@@ -1,3 +1,5 @@
+> **Stabilization update, 2026-10-09:** checkout concurrency, public booking bindings, production RLS readiness and migration drift safeguards have been patched directly in `main`. See [stability patch and NO-GO release gates](STABILITY_PATCH_2026_10_09.md). Do not resume feature sprints or deploy to production before the migration collisions, disposable replay and role/isolation gates are cleared.
+
 # Актуальный этап — аудит и стабилизация (2026-10-08)
 
 Основные заделы спринтов 54–62 сохранены в main, но **ни production-приёмка, ни полный набор интеграционных тестов не подтверждены**. Прежний раздел «Активно — Sprint 49» ниже — исторический план, а не текущий статус.
