@@ -26,3 +26,10 @@ COREBIZ_SMOKE_BASE_URL=http://127.0.0.1:4000 node scripts/smoke-user-journey.mjs
 COREBIZ_SMOKE_WEB_URL=http://127.0.0.1:3000 node scripts/smoke-browser-journey.mjs (requires Playwright/Chromium)
 
 Production NO-GO until all gates are executed and reviewed.
+
+## Дополнительные стабилизационные исправления
+- Клиентский API по умолчанию использует same-origin /api/v1, а не localhost:4000 в браузере покупателя; reverse proxy upstream настраивается оператором.
+- API 5xx всегда возвращает общий текст без содержимого внутренних exception; диагностический traceId сохраняется.
+- Входящий X-Trace-Id принимается только если удовлетворяет безопасному шаблону ASCII и лимиту длины.
+
+Эти исправления не заменяют browser validation реальной конфигурации reverse proxy, HTTPS и CSRF.
