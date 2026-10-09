@@ -95,6 +95,52 @@ async function main() {
   const orders = await request("GET", "/sales/orders");
   assert.equal(orders.data.filter((item) => item.id === order.data.id).length, 1);
 
+  const confirmed = await request("PATCH", "/sales/orders/" + order.data.id + "/confirm",
+    { version: order.data.version });
+  assert.equal(confirmed.data.orderStatus, "CONFIRMED");
+
+  const account = await request("POST", "/finance/accounts",
+    { name: "Smoke settlement account", kind: "BANK", currency: "RUB" });
+  assert.ok(account.data.id);
+  const paymentInput = {
+    orderId: order.data.id, amountMinor: "15000",
+    cashAccountId: account.data.id, idempotencyKey: "payment-" + suffix
+  };
+  const payment = await request("POST", "/finance/sales-payment", paymentInput);
+  assert.ok(payment.data.paymentId);
+  const paymentRetry = await request("POST", "/finance/sales-payment", paymentInput);
+  assert.equal(paymentRetry.data.paymentId, payment.data.paymentId);
+  const collision = await request("POST", "/finance/sales-payment",
+    { ...paymentInput, amountMinor: "14000" }, 409);
+  assert.equal(collision.ok, false);
+  const payments = await request("GET", "/finance/payments");
+  assert.equal(payments.data.filter((item) => item.id === payment.data.paymentId).length, 1);
+  const paidOrder = await request("GET", "/sales/orders");
+  assert.equal(paidOrder.data.find((item) => item.id === order.data.id)?.paymentStatus, "PAID");
+
+  const warehouse = await request("POST", "/inventory/warehouses",
+    { name: "Smoke warehouse", code: "SMOKE" });
+  assert.ok(warehouse.data.id);
+  const stockProduct = await request("POST", "/catalog/products", {
+    name: "Smoke stock item", kind: "STOCKABLE",
+    salePriceMinor: "2500", costPriceMinor: "800"
+  });
+  const adjustInput = {
+    warehouseId: warehouse.data.id, skuId: stockProduct.data.skuId,
+    quantityDeltaMilli: "5000", reason: "Disposable smoke initial stock",
+    idempotencyKey: "stock-" + suffix
+  };
+  const adjustment = await request("POST", "/inventory/adjustments", adjustInput);
+  assert.ok(adjustment.data.movementId);
+  const duplicateAdjustment = await request("POST", "/inventory/adjustments", adjustInput);
+  assert.equal(duplicateAdjustment.data.movementId, adjustment.data.movementId);
+  const balances = await request("GET", "/inventory/balances");
+  assert.equal(
+    balances.data.find((item) => item.skuId === stockProduct.data.skuId &&
+      item.warehouseId === warehouse.data.id)?.physicalMilli,
+    "5000"
+  );
+
   const newTenant = await request("POST", "/tenants", { name: "Other smoke tenant" });
   assert.notEqual(newTenant.data.tenantId, firstTenantId);
   const switched = await request("GET", "/auth/me");
@@ -102,6 +148,12 @@ async function main() {
   const isolatedOrders = await request("GET", "/sales/orders");
   assert.equal(isolatedOrders.data.some((item) => item.id === order.data.id), false,
     "orders from another tenant must never leak");
+  const isolatedPayments = await request("GET", "/finance/payments");
+  assert.equal(isolatedPayments.data.some((item) => item.id === payment.data.paymentId), false,
+    "payments from another tenant must never leak");
+  const isolatedBalances = await request("GET", "/inventory/balances");
+  assert.equal(isolatedBalances.data.some((item) => item.skuId === stockProduct.data.skuId), false,
+    "stock from another tenant must never leak");
 
   const originalMembership = switched.data.memberships.find(
     (item) => item.tenantId === firstTenantId);
@@ -118,7 +170,7 @@ async function main() {
   await request("POST", "/auth/login", { email, password });
   const afterLogin = await request("GET", "/auth/me");
   assert.equal(afterLogin.data.auth.email, email);
-  console.log("PASS: registration → product → deal → order → idempotency → tenant switch → isolation → logout → login");
+  console.log("PASS: auth → catalog → CRM → sales → finance/payment → inventory → idempotency → cross-tenant isolation → logout/login");
   console.log("Smoke environment only. Production acceptance is still required.");
 }
 
