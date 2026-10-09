@@ -55,6 +55,7 @@ const sections: Section[] = [
 
 export function AppSidebar({ active }: { active: string }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const link = ([href, label, key]: Entry) => (
     <a key={key} className={active === key ? "active" : ""}
       aria-current={active === key ? "page" : undefined}
@@ -80,9 +81,15 @@ export function AppSidebar({ active }: { active: string }) {
         {sections.map((section) => (
           <details key={section.title}
             className="sidebar-group"
-            open={undefined}
-            // Native details: keyboard accessible, keeps inactive modules out of the way.
-            defaultOpen={section.items.some((entry) => entry[2] === active)}>
+            open={expanded[section.title] ?? section.items.some((entry) => entry[2] === active)}
+            onToggle={(event) => {
+              const isOpen = event.currentTarget.open;
+              setExpanded((previous) =>
+                previous[section.title] === isOpen
+                  ? previous
+                  : { ...previous, [section.title]: isOpen }
+              );
+            }}>
             <summary>{section.title}</summary>
             <div className="sidebar-links">{section.items.map(link)}</div>
           </details>
