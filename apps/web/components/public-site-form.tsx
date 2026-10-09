@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 type ApiResponse<T> =
   | { ok: true; data: T }
@@ -40,6 +40,9 @@ export function PublicSiteForm({
   heading?: string;
   booking?: boolean;
 }) {
+  // Keep the same submission key after a network timeout: retries
+  // must not create a second lead or appointment.
+  const submissionKey = useRef<string | null>(null);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -87,11 +90,12 @@ export function PublicSiteForm({
     setError("");
 
     try {
+      if (!submissionKey.current) submissionKey.current = crypto.randomUUID();
       const result = await submit<{
         accepted: boolean;
         reason?: string;
       }>(publicKey, {
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: submissionKey.current,
         name: name.trim(),
         phone: phone.trim() || undefined,
         email: email.trim() || undefined,
@@ -109,6 +113,7 @@ export function PublicSiteForm({
         );
       }
 
+      submissionKey.current = null;
       setSuccess(
         booking
           ? "Запись создана. Компания увидит её в расписании."
