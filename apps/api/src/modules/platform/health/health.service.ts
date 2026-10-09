@@ -60,6 +60,16 @@ export class HealthService {
                      WHERE p.schemaname=n.nspname AND p.tablename=c.relname
                    )
                  )
+             )
+             AND (
+               SELECT bool_and(has_function_privilege(current_user, function_name, 'EXECUTE'))
+               FROM (VALUES
+                 ('public.corebiz_auth_login_identity(text)'),
+                 ('public.corebiz_auth_resolve_session(text)'),
+                 ('public.corebiz_auth_memberships(uuid)'),
+                 ('public.corebiz_auth_switch_tenant(uuid,uuid,uuid)'),
+                 ('public.corebiz_auth_accept_invitation(uuid,text)')
+               ) AS auth_functions(function_name)
              ) AS safe`
         );
         isolationOk = security.rows[0]?.safe === true;
