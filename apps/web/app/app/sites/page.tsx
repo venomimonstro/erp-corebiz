@@ -44,6 +44,13 @@ type ServiceItem = {
   duration_minutes: number;
 };
 
+type ServiceResourceItem = {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+};
+
 type SiteDomain = {
   id: string;
   hostname: string;
@@ -106,6 +113,7 @@ export default function SitesPage() {
   const [pages, setPages] = useState<Page[]>([]);
   const [bindings, setBindings] = useState<Binding[]>([]);
   const [services, setServices] = useState<ServiceItem[]>([]);
+  const [resources, setResources] = useState<ServiceResourceItem[]>([]);
   const [domains, setDomains] = useState<SiteDomain[]>([]);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [blocks, setBlocks] = useState<Block[]>([]);
@@ -156,11 +164,13 @@ export default function SitesPage() {
     void Promise.all([
       apiRequest<Binding[]>("/site-forms/site/" + siteId),
       apiRequest<ServiceItem[]>("/service/catalog"),
-      apiRequest<SiteDomain[]>("/site-domains/site/" + siteId)
+      apiRequest<SiteDomain[]>("/site-domains/site/" + siteId),
+      apiRequest<ServiceResourceItem[]>("/service/resources")
     ])
-      .then(([bindingRows, serviceRows, domainRows]) => {
+      .then(([bindingRows, serviceRows, domainRows, resourceRows]) => {
         setBindings(bindingRows);
         setServices(serviceRows);
+        setResources(resourceRows);
         setDomains(domainRows);
       })
       .catch((cause) => {
@@ -264,6 +274,21 @@ export default function SitesPage() {
     const service = services[selectedIndex];
     if (!service) return;
 
+    if (!resources.length) {
+      setError("Добавьте хотя бы одного специалиста или ресурс в разделе «Сервис → Ресурсы», затем настройте его расписание.");
+      return;
+    }
+
+    const available = resources.filter((resource) => resource.status === "ACTIVE");
+    const resourceOptions = available.map((resource, index) =>
+      (index + 1) + ". " + resource.name + " (" + resource.type + ")"
+    ).join("\n");
+    const resourceIndex = Number(
+      window.prompt("Выберите специалиста или ресурс для записи:\n" + resourceOptions, "1")
+    ) - 1;
+    const selectedResource = available[resourceIndex];
+    if (!selectedResource) return;
+
     const name = window.prompt(
       "Название формы записи",
       "Запись: " + service.name
@@ -277,7 +302,7 @@ export default function SitesPage() {
           name: name.trim(),
           action: "BOOKING",
           serviceId: service.id,
-          resourceIds: []
+          resourceIds: [selectedResource.id]
         })
       });
       setBindings(await apiRequest<Binding[]>("/site-forms/site/" + siteId));
