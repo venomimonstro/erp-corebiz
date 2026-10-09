@@ -47,6 +47,22 @@ async function migrate(): Promise<void> {
       .filter((name) => /^\d+.*\.sql$/.test(name))
       .sort();
 
+    // An applied filename missing from the repository can indicate a
+    // renamed/deleted migration. Never silently replay a renamed SQL file.
+    const known = new Set(filenames);
+    const historical = await client.query<{ filename: string }>(
+      "SELECT filename FROM schema_migration ORDER BY filename"
+    );
+    const missing = historical.rows
+      .map((row) => row.filename)
+      .filter((name) => !known.has(name));
+    if (missing.length) {
+      throw new Error(
+        "APPLIED_MIGRATIONS_MISSING_FROM_REPOSITORY: " +
+        missing.slice(0, 20).join(", ")
+      );
+    }
+
     for (const filename of filenames) {
       const raw = await readFile(resolve(migrationsDir, filename), "utf8");
       const checksum = createHash("sha256").update(raw).digest("hex");
@@ -66,7 +82,7 @@ async function migrate(): Promise<void> {
         if (!previous) {
           process.stderr.write(
             "[db] historical checksum unavailable; verify externally: " +
-            filename + "\\n"
+            filename + "\n"
           );
         } else {
           process.stdout.write(`[db] skip verified ${filename}\n`);
