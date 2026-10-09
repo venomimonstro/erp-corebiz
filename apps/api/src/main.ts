@@ -15,6 +15,12 @@ async function bootstrap(): Promise<void> {
     bodyParser: false
   });
 
+  // Never trust arbitrary X-Forwarded-For: only explicit reverse proxies
+  // (loopback by default) may supply the real client IP used by throttling.
+  const proxies = (process.env.COREBIZ_TRUSTED_PROXIES || "loopback")
+    .split(",").map((value) => value.trim()).filter(Boolean);
+  app.getHttpAdapter().getInstance().set("trust proxy", proxies);
+
   app.use(json({ limit: "22mb" }));
   app.use(urlencoded({ extended: true, limit: "1mb" }));
   app.use(securityHeadersMiddleware);
