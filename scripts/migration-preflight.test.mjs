@@ -28,13 +28,15 @@ test("valid ordered SQL files are recognized", async () => {
   );
 });
 
-test("duplicate numbers block even with different filename padding", async () => {
+test("duplicate ordinals warn but preserve full filename ordering", async () => {
   await withSqlFiles(
     { "01_a.sql": "SELECT 1;", "001_b.sql": "SELECT 2;" },
     async (dir) => {
       const result = await inspectMigrations(dir);
-      assert.equal(result.blocked, 1);
-      assert.match(result.findings[0].message, /duplicate numeric/);
+      assert.equal(result.blocked, 0);
+      assert.equal(result.warnings, 1);
+      assert.deepEqual(result.findings[0].files, ["001_b.sql", "01_a.sql"]);
+      assert.match(result.findings[0].message, /historical duplicate/);
     }
   );
 });

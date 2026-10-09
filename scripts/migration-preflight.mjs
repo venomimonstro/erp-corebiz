@@ -38,11 +38,15 @@ export async function inspectMigrations(directory) {
 
   for (const [ordinal, siblings] of ordinals) {
     if (siblings.length > 1) {
+      // The migrator keys applied migrations by their *full filename* and
+      // sorts the filenames lexicographically. Duplicate numeric ordinals
+      // do not create nondeterminism. Never rename applied SQL: retain the
+      // historical order and verify it with a disposable replay.
       findings.push({
-        severity: "BLOCK",
+        severity: "WARN",
         ordinal,
         files: siblings,
-        message: "duplicate numeric migration prefix: ordering is ambiguous"
+        message: "historical duplicate ordinal (deterministic filename order); verify in disposable replay"
       });
     }
   }
@@ -50,6 +54,7 @@ export async function inspectMigrations(directory) {
   return {
     checked: names.length,
     blocked: findings.filter((finding) => finding.severity === "BLOCK").length,
+    warnings: findings.filter((finding) => finding.severity === "WARN").length,
     findings
   };
 }

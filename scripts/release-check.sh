@@ -22,6 +22,9 @@ fi
 echo "[release] migration filename and RLS DDL preflight"
 node scripts/migration-preflight.mjs
 
+echo "[release] standalone migration gate regression tests"
+node --test scripts/migration-preflight.test.mjs
+
 echo "[release] static typecheck"
 pnpm typecheck
 
