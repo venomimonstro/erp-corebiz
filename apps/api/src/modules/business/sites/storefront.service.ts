@@ -152,6 +152,18 @@ export class StorefrontService {
     await this.database.withTenantTransaction(
       this.systemContext(cart.tenant_id),
       async client=>{
+        // Lock the parent cart for the entire edit. Checkout claims the
+        // same row, so a line can never be changed after checkout begins.
+        const current=await client.query<{status:string;expires_at:Date}>(
+          `SELECT status,expires_at FROM storefront_cart
+           WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+          [cart.tenant_id,cart.cart_id]
+        );
+        const locked=current.rows[0];
+        if(!locked || locked.status!=="OPEN" || locked.expires_at.getTime()<=Date.now()){
+          throw new ConflictException("Корзина уже оформляется, закрыта или истекла");
+        }
+
         const sku=await client.query(
           `SELECT 1 FROM sku s
            JOIN product_variant v ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
