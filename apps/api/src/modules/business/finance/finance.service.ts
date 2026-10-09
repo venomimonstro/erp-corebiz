@@ -671,12 +671,21 @@ export class FinanceService {
     }
   ): Promise<{ paymentId: string; number: string; invoiceStatus: string }> {
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.lockPaymentIdempotencyKey(client, context.tenantId, input.idempotencyKey);
       const existing = await this.findPaymentByKey(
         client,
         context.tenantId,
         input.idempotencyKey
       );
       if (existing) {
+        this.assertPaymentRetryMatches(existing, {
+          sourceType: "FINANCE_INVOICE",
+          sourceId: input.invoiceId,
+          amountMinor: input.amountMinor,
+          direction: "IN",
+          kind: "PAYMENT",
+          cashAccountId: input.cashAccountId
+        });
         const state = await client.query<{ status: string }>(
           `SELECT status FROM finance_invoice
            WHERE tenant_id=$1 AND id=$2`,
