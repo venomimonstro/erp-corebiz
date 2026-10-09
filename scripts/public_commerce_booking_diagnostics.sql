@@ -72,9 +72,9 @@ SELECT
   s.status,
   s.result_type,
   s.result_id,
-  s.created_at,
+  s.submitted_at,
   s.last_error
 FROM site_submission s
 WHERE s.status IN ('FAILED','PROCESSING')
-ORDER BY s.created_at DESC
+ORDER BY s.submitted_at DESC
 LIMIT 200;
