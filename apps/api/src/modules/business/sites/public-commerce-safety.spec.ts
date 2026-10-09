@@ -18,6 +18,36 @@ const cart = {
 };
 
 describe("public commerce safeguards", () => {
+  it("rejects malformed public cart input before querying the database", async () => {
+    const database = { withTenantTransaction: jest.fn(), query: jest.fn() };
+    const service = new StorefrontService(database as any, {} as any, {} as any);
+    await expect(service.setLine("key", null as any))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.setLine("key", { skuId: {}, quantityMilli: 1000 } as any))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.checkout("key", { idempotencyKey: ["x"], name: "John", email: "a@b.test" } as any))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.checkout("key", { idempotencyKey: "x", name: "John", email: [] } as any))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.configure(context, cart.site_id, { enabled: "false" } as any))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(database.withTenantTransaction).not.toHaveBeenCalled();
+    expect(database.query).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed site submissions and form configuration before SQL", async () => {
+    const database = { query: jest.fn(), withTenantTransaction: jest.fn() };
+    const service = new SiteFormsService(database as any, {} as any, {} as any, {} as any, {} as any);
+    await expect(service.submit("form", null as any)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.submit("form", { idempotencyKey: { x: 1 }, name: "John" } as any))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.createBinding(context, cart.site_id,
+      { name: "Book", action: "BOOKING", serviceId: "a", resourceIds: {} } as any))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(database.query).not.toHaveBeenCalled();
+    expect(database.withTenantTransaction).not.toHaveBeenCalled();
+  });
+
   it("rejects cart edits when checkout owns the cart row", async () => {
     const query = jest.fn(async (sql: string) => {
       if (sql.includes("FOR UPDATE")) {

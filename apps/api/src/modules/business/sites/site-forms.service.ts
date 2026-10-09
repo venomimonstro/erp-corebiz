@@ -51,6 +51,20 @@ export class SiteFormsService {
       resourceIds?: string[];
     }
   ): Promise<{ id: string; publicKey: string }> {
+    if (!input || typeof input !== "object" || Array.isArray(input) ||
+        typeof input.name !== "string" ||
+        (input.action !== "CRM_LEAD" && input.action !== "BOOKING") ||
+        (input.responsibleMembershipId !== undefined && typeof input.responsibleMembershipId !== "string") ||
+        (input.pipelineId !== undefined && typeof input.pipelineId !== "string") ||
+        (input.stageId !== undefined && typeof input.stageId !== "string") ||
+        (input.serviceId !== undefined && typeof input.serviceId !== "string") ||
+        (input.resourceIds !== undefined && (
+          !Array.isArray(input.resourceIds) ||
+          input.resourceIds.length > 10 ||
+          input.resourceIds.some(id => typeof id !== "string")
+        ))) {
+      throw new BadRequestException("Некорректная конфигурация формы");
+    }
     const name=input.name.trim();
     if(name.length<2||name.length>160){
       throw new BadRequestException("Некорректное название формы");
@@ -170,10 +184,15 @@ export class SiteFormsService {
       honeypot?:string;
     }
   ):Promise<Record<string,unknown>>{
+    if (!input || typeof input !== "object" || Array.isArray(input) ||
+        typeof input.idempotencyKey !== "string" ||
+        (input.honeypot !== undefined && typeof input.honeypot !== "string")) {
+      throw new BadRequestException("Некорректные данные заявки");
+    }
     if(input.honeypot?.trim()){
       return {accepted:true};
     }
-    if(!input.idempotencyKey?.trim()||input.idempotencyKey.length>160){
+    if(!input.idempotencyKey.trim()||input.idempotencyKey.length>160){
       throw new BadRequestException("Требуется idempotencyKey");
     }
 
@@ -366,6 +385,12 @@ export class SiteFormsService {
   private validatePayload(input:any):{
     name:string;phone?:string;email?:string;message?:string;startsAt?:string;resourceId?:string
   }{
+    for (const field of ["name","phone","email","message","startsAt","resourceId"] as const) {
+      if (input[field] !== undefined && input[field] !== null &&
+          typeof input[field] !== "string") {
+        throw new BadRequestException("Некорректное поле: " + field);
+      }
+    }
     const name=String(input.name??"").trim();
     if(name.length<2||name.length>200) throw new BadRequestException("Укажите имя");
 

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Post, Req } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
 import type { AuthenticatedRequest } from "../auth/auth.types";
 import { RequirePermission } from "../authorization/require-permission.decorator";
@@ -42,11 +42,15 @@ export class BillingController {
   @RequirePermission("billing.manage")
   async cancelAtPeriodEnd(
     @Req() request: AuthenticatedRequest,
-    @Body() body: { value: boolean }
+    @Body() body: unknown
   ): Promise<ApiSuccess<{ updated: true }>> {
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+        typeof (body as Record<string, unknown>).value !== "boolean") {
+      throw new BadRequestException("Параметр value должен быть boolean");
+    }
     await this.billing.setCancelAtPeriodEnd(
       this.context(request),
-      Boolean(body.value)
+      (body as {value: boolean}).value
     );
     return { ok: true, data: { updated: true } };
   }

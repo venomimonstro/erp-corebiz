@@ -23,6 +23,13 @@ export class StorefrontService {
     siteId:string,
     input:{enabled?:boolean;responsibleMembershipId?:string;currency?:string}
   ):Promise<void>{
+    if (!input || typeof input !== "object" || Array.isArray(input) ||
+        (input.enabled !== undefined && typeof input.enabled !== "boolean") ||
+        (input.responsibleMembershipId !== undefined &&
+          typeof input.responsibleMembershipId !== "string") ||
+        (input.currency !== undefined && typeof input.currency !== "string")) {
+      throw new BadRequestException("Некорректные настройки магазина");
+    }
     const responsible=input.responsibleMembershipId??context.membershipId;
     const currency=(input.currency??"RUB").trim().toUpperCase();
     if(!/^[A-Z]{3}$/.test(currency)) throw new BadRequestException("Некорректная валюта");
@@ -140,6 +147,13 @@ export class StorefrontService {
     cartKey:string,
     input:{skuId:string;quantityMilli:string}
   ):Promise<Record<string,unknown>>{
+    if (!input || typeof input !== "object" || Array.isArray(input) ||
+        typeof input.skuId !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.skuId) ||
+        typeof input.quantityMilli !== "string" ||
+        !/^\d{1,18}$/.test(input.quantityMilli)) {
+      throw new BadRequestException("Некорректная позиция корзины");
+    }
     if(!/^\d+$/.test(input.quantityMilli)){
       throw new BadRequestException("Некорректное количество");
     }
@@ -207,6 +221,15 @@ export class StorefrontService {
       comment?: string;
     }
   ): Promise<Record<string, unknown>> {
+    if (!input || typeof input !== "object" || Array.isArray(input) ||
+        typeof input.idempotencyKey !== "string" ||
+        typeof input.name !== "string" ||
+        (input.phone !== undefined && typeof input.phone !== "string") ||
+        (input.email !== undefined && typeof input.email !== "string") ||
+        (input.comment !== undefined && (typeof input.comment !== "string" ||
+          input.comment.length > 4000))) {
+      throw new BadRequestException("Некорректные данные заказа");
+    }
     if (!input.idempotencyKey?.trim() || input.idempotencyKey.length > 160) {
       throw new BadRequestException("Требуется idempotencyKey");
     }
