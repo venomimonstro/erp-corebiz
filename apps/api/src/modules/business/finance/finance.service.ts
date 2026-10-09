@@ -1567,7 +1567,7 @@ export class FinanceService {
         input.currency,
         input.sourceType,
         input.sourceId,
-        input.idempotencyKey,
+        input.idempotencyKey.trim(),
         input.note?.trim() || null,
         context.membershipId
       ]
