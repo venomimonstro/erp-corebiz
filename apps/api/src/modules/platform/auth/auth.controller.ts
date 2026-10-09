@@ -10,6 +10,7 @@ import type { Response } from "express";
 import type { ApiSuccess } from "@corebiz/contracts";
 import { AuthRateLimitService } from "./auth-rate-limit.service";
 import { AuthService } from "./auth.service";
+import { parseLoginPayload, parseRegisterPayload, parseMembershipPayload } from "./auth-payload";
 import type { AuthenticatedRequest } from "./auth.types";
 import {
   clearSessionCookie,
@@ -28,12 +29,12 @@ export class AuthController {
   @Post("register")
   async register(
     @Req() request: AuthenticatedRequest,
-    @Body() body: { email: string; password: string; companyName: string },
+    @Body() body: unknown,
     @Res({ passthrough: true }) response: Response
   ): Promise<ApiSuccess<{ auth: unknown }>> {
     await this.rateLimit.assertRegistrationAllowed(request.ip ?? "unknown");
 
-    const result = await this.authService.register(body);
+    const result = await this.authService.register(parseRegisterPayload(body));
     setSessionCookie(response, result.token);
 
     return {
@@ -46,14 +47,15 @@ export class AuthController {
   @Post("login")
   async login(
     @Req() request: AuthenticatedRequest,
-    @Body() body: { email: string; password: string },
+    @Body() body: unknown,
     @Res({ passthrough: true }) response: Response
   ): Promise<ApiSuccess<{ auth: unknown }>> {
     const ip = request.ip ?? "unknown";
 
-    await this.rateLimit.assertLoginAllowed(ip, body.email);
-    const result = await this.authService.login(body);
-    await this.rateLimit.resetLogin(ip, body.email);
+    const payload = parseLoginPayload(body);
+    await this.rateLimit.assertLoginAllowed(ip, payload.email);
+    const result = await this.authService.login(payload);
+    await this.rateLimit.resetLogin(ip, payload.email);
 
     setSessionCookie(response, result.token);
 
@@ -99,13 +101,13 @@ export class AuthController {
   @Post("switch-tenant")
   async switchTenant(
     @Req() request: AuthenticatedRequest,
-    @Body() body: { membershipId: string }
+    @Body() body: unknown
   ): Promise<ApiSuccess<{ switched: true }>> {
     const auth = request.auth!;
     await this.authService.switchTenant(
       auth.sessionId,
       auth.userId,
-      body.membershipId
+      parseMembershipPayload(body)
     );
 
     return {

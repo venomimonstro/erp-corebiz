@@ -19,4 +19,8 @@ describe("auth utils", () => {
   it("returns undefined for an absent cookie", () => {
     expect(parseCookie("foo=1", "corebiz_session")).toBeUndefined();
   });
+  it("ignores malformed and oversized session cookies without throwing", () => {
+    expect(parseCookie("corebiz_session=%ZZ", "corebiz_session")).toBeUndefined();
+    expect(parseCookie("corebiz_session=" + "a".repeat(9000), "corebiz_session")).toBeUndefined();
+  });
 });

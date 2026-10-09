@@ -16,11 +16,19 @@ export function parseCookie(
   cookieHeader: string | undefined,
   name: string
 ): string | undefined {
-  if (!cookieHeader) return undefined;
+  if (!cookieHeader || cookieHeader.length > 8192) return undefined;
 
   for (const part of cookieHeader.split(";")) {
     const [rawName, ...rest] = part.trim().split("=");
-    if (rawName === name) return decodeURIComponent(rest.join("="));
+    if (rawName === name) {
+      const raw = rest.join("=");
+      if (!raw || raw.length > 256) return undefined;
+      try {
+        return decodeURIComponent(raw);
+      } catch {
+        return undefined;
+      }
+    }
   }
 
   return undefined;
