@@ -34,6 +34,8 @@ export class TenantsService {
       const tenant = tenantResult.rows[0];
       if (!tenant) throw new Error("TENANT_CREATE_FAILED");
 
+      await client.query("SELECT set_config('app.tenant_id', $1, true)", [tenant.id]);
+
       const membershipResult = await client.query<{ id: string }>(
         `INSERT INTO tenant_membership(tenant_id, user_id, status, is_owner)
          VALUES ($1, $2, 'ACTIVE', true)
@@ -137,63 +139,22 @@ export class TenantsService {
     userEmail: string,
     token: string
   ): Promise<{ tenantId: string; membershipId: string }> {
-    const tokenHash = hashToken(token);
-
-    return this.database.withTransaction(async (client) => {
-      const inviteResult = await client.query<{
-        id: string;
-        tenant_id: string;
-        email: string;
-      }>(
-        `SELECT id, tenant_id, email
-         FROM tenant_invitation
-         WHERE token_hash = $1
-           AND status = 'PENDING'
-           AND expires_at > now()
-         FOR UPDATE`,
-        [tokenHash]
-      );
-
-      const invite = inviteResult.rows[0];
-      if (!invite) {
-        throw new NotFoundException("Приглашение недействительно или истекло");
-      }
-
-      if (invite.email.toLowerCase() !== userEmail.toLowerCase()) {
-        throw new BadRequestException("Приглашение предназначено для другого email");
-      }
-
-      const membershipResult = await client.query<{ id: string }>(
-        `INSERT INTO tenant_membership(tenant_id, user_id, status, is_owner)
-         VALUES ($1, $2, 'ACTIVE', false)
-         ON CONFLICT (tenant_id, user_id)
-         DO UPDATE SET status = 'ACTIVE'
-         RETURNING id`,
-        [invite.tenant_id, userId]
-      );
-
-      const membership = membershipResult.rows[0];
-      if (!membership) throw new Error("MEMBERSHIP_ACCEPT_FAILED");
-
-      await client.query(
-        `UPDATE tenant_invitation
-         SET status = 'ACCEPTED', accepted_at = now()
-         WHERE id = $1`,
-        [invite.id]
-      );
-
-      await client.query(
-        `INSERT INTO audit_event(
-           tenant_id, actor_user_id, actor_membership_id,
-           action, resource_type, resource_id
-         ) VALUES ($1, $2, $3, 'membership.accepted', 'tenant_membership', $3::text)`,
-        [invite.tenant_id, userId, membership.id]
-      );
-
-      return {
-        tenantId: invite.tenant_id,
-        membershipId: membership.id
-      };
-    });
+    // The SECURITY DEFINER function checks the invitation's email against
+    // the database user record and locks the token until consumption.
+    // userEmail is retained for the existing service interface.
+    void userEmail;
+    const result = await this.database.query<{
+      tenant_id: string;
+      membership_id: string;
+    }>("SELECT * FROM public.corebiz_auth_accept_invitation($1::uuid, $2)", [
+      userId,
+      hashToken(token)
+    ]);
+    const accepted = result.rows[0];
+    if (!accepted) {
+      throw new NotFoundException("Приглашение недействительно или истекло");
+    }
+    return { tenantId: accepted.tenant_id, membershipId: accepted.membership_id };
   }
+
 }

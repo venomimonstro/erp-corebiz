@@ -76,6 +76,9 @@ export class AuthService {
         const tenant = tenantResult.rows[0];
         if (!tenant) throw new Error("TENANT_CREATE_FAILED");
 
+        // Tenant bootstrap is authorized in the scope of the new tenant only.
+        await client.query("SELECT set_config('app.tenant_id', $1, true)", [tenant.id]);
+
         const membershipResult = await client.query<{
           id: string;
         }>(
@@ -140,23 +143,7 @@ export class AuthService {
       tenant_name: string;
       is_owner: boolean;
     }>(
-      `SELECT
-         u.id,
-         u.email,
-         u.password_hash,
-         m.id AS membership_id,
-         m.tenant_id,
-         t.name AS tenant_name,
-         m.is_owner
-       FROM app_user u
-       JOIN tenant_membership m ON m.user_id = u.id
-       JOIN tenant t ON t.id = m.tenant_id
-       WHERE lower(u.email) = lower($1)
-         AND u.status = 'ACTIVE'
-         AND m.status = 'ACTIVE'
-         AND t.status IN ('ACTIVE', 'GRACE', 'READ_ONLY')
-       ORDER BY m.is_owner DESC, m.created_at ASC
-       LIMIT 1`,
+      "SELECT * FROM public.corebiz_auth_login_identity($1)",
       [email]
     );
 
@@ -177,6 +164,8 @@ export class AuthService {
         user.membership_id,
         token
       );
+
+      await client.query("SELECT set_config('app.tenant_id', $1, true)", [user.tenant_id]);
 
       await client.query(
         `INSERT INTO audit_event(
@@ -217,28 +206,7 @@ export class AuthService {
       tenant_id: string;
       tenant_name: string;
       is_owner: boolean;
-    }>(
-      `SELECT
-         s.id AS session_id,
-         u.id AS user_id,
-         u.email,
-         m.id AS membership_id,
-         m.tenant_id,
-         t.name AS tenant_name,
-         m.is_owner
-       FROM user_session s
-       JOIN app_user u ON u.id = s.user_id
-       JOIN tenant_membership m ON m.id = s.active_membership_id
-       JOIN tenant t ON t.id = m.tenant_id
-       WHERE s.session_hash = $1
-         AND s.revoked_at IS NULL
-         AND s.expires_at > now()
-         AND u.status = 'ACTIVE'
-         AND m.status = 'ACTIVE'
-         AND t.status IN ('ACTIVE', 'GRACE', 'READ_ONLY')
-       LIMIT 1`,
-      [hashToken(token)]
-    );
+    }>("SELECT * FROM public.corebiz_auth_resolve_session($1)", [hashToken(token)]);
 
     const row = result.rows[0];
     if (!row) return null;
@@ -270,22 +238,11 @@ export class AuthService {
     userId: string,
     membershipId: string
   ): Promise<void> {
-    const result = await this.database.query(
-      `UPDATE user_session s
-       SET active_membership_id = m.id
-       FROM tenant_membership m
-       JOIN tenant t ON t.id = m.tenant_id
-       WHERE s.id = $1
-         AND s.user_id = $2
-         AND m.id = $3
-         AND m.user_id = $2
-         AND m.status = 'ACTIVE'
-         AND t.status IN ('ACTIVE', 'GRACE', 'READ_ONLY')
-       RETURNING s.id`,
+    const result = await this.database.query<{ switched: boolean }>(
+      "SELECT public.corebiz_auth_switch_tenant($1::uuid, $2::uuid, $3::uuid) AS switched",
       [sessionId, userId, membershipId]
     );
-
-    if (!result.rowCount) {
+    if (result.rows[0]?.switched !== true) {
       throw new UnauthorizedException("Компания недоступна");
     }
   }
@@ -303,20 +260,7 @@ export class AuthService {
       tenant_id: string;
       tenant_name: string;
       is_owner: boolean;
-    }>(
-      `SELECT
-         m.id AS membership_id,
-         m.tenant_id,
-         t.name AS tenant_name,
-         m.is_owner
-       FROM tenant_membership m
-       JOIN tenant t ON t.id = m.tenant_id
-       WHERE m.user_id = $1
-         AND m.status = 'ACTIVE'
-         AND t.status IN ('ACTIVE', 'GRACE', 'READ_ONLY')
-       ORDER BY m.is_owner DESC, t.name ASC`,
-      [userId]
-    );
+    }>("SELECT * FROM public.corebiz_auth_memberships($1::uuid)", [userId]);
 
     return result.rows.map((row) => ({
       membershipId: row.membership_id,
