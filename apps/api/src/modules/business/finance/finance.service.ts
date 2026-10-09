@@ -10,6 +10,17 @@ import { DatabaseService } from "../../../infrastructure/database/database.servi
 import { DomainEventService } from "../../platform/events/domain-event.service";
 import { AttributionService } from "../growth/attribution.service";
 
+type ExistingPayment = {
+  id: string;
+  business_number: string;
+  source_type: string;
+  source_id: string;
+  amount_minor: string;
+  direction: string;
+  kind: string;
+  cash_account_id: string;
+};
+
 @Injectable()
 export class FinanceService {
   constructor(
@@ -954,12 +965,21 @@ export class FinanceService {
     }
   ): Promise<{ paymentId: string; number: string; paymentStatus: string }> {
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.lockPaymentIdempotencyKey(client, context.tenantId, input.idempotencyKey);
       const existing = await this.findPaymentByKey(
         client,
         context.tenantId,
         input.idempotencyKey
       );
       if (existing) {
+        this.assertPaymentRetryMatches(existing, {
+          sourceType: "SALES_ORDER",
+          sourceId: input.orderId,
+          amountMinor: input.amountMinor,
+          direction: "IN",
+          kind: "PAYMENT",
+          cashAccountId: input.cashAccountId
+        });
         const orderStatus = await this.salesPaymentStatus(
           client,
           context.tenantId,
@@ -1139,12 +1159,21 @@ export class FinanceService {
     }
   ): Promise<{ paymentId: string; number: string; obligationStatus: string }> {
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.lockPaymentIdempotencyKey(client, context.tenantId, input.idempotencyKey);
       const existing = await this.findPaymentByKey(
         client,
         context.tenantId,
         input.idempotencyKey
       );
       if (existing) {
+        this.assertPaymentRetryMatches(existing, {
+          sourceType: "PURCHASE_ORDER",
+          sourceId: input.purchaseOrderId,
+          amountMinor: input.amountMinor,
+          direction: "OUT",
+          kind: "PAYMENT",
+          cashAccountId: input.cashAccountId
+        });
         return {
           paymentId: existing.id,
           number: existing.business_number,
@@ -1291,12 +1320,21 @@ export class FinanceService {
     }
   ): Promise<{ paymentId: string; number: string; paymentStatus: string }> {
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.lockPaymentIdempotencyKey(client, context.tenantId, input.idempotencyKey);
       const existing = await this.findPaymentByKey(
         client,
         context.tenantId,
         input.idempotencyKey
       );
       if (existing) {
+        this.assertPaymentRetryMatches(existing, {
+          sourceType: "SALES_ORDER",
+          sourceId: input.orderId,
+          amountMinor: input.amountMinor,
+          direction: "OUT",
+          kind: "REFUND",
+          cashAccountId: input.cashAccountId
+        });
         return {
           paymentId: existing.id,
           number: existing.business_number,
@@ -1565,25 +1603,58 @@ export class FinanceService {
     return result.rows[0]?.id ?? null;
   }
 
+  private async lockPaymentIdempotencyKey(
+    client: PoolClient,
+    tenantId: string,
+    key: string
+  ): Promise<void> {
+    if (typeof key !== "string" || !key.trim() || key.length > 160) {
+      throw new BadRequestException("Некорректный ключ идемпотентности");
+    }
+    // Lock the tenant+key across payment types before checking for an existing
+    // payment. Concurrent retries now wait and reuse the committed record.
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+      [tenantId, key.trim()]
+    );
+  }
+
+  private assertPaymentRetryMatches(
+    existing: ExistingPayment,
+    expected: {
+      sourceType: string;
+      sourceId: string;
+      amountMinor: string;
+      direction: string;
+      kind: string;
+      cashAccountId?: string;
+    }
+  ): void {
+    const amount = this.parsePositiveAmount(expected.amountMinor);
+    if (existing.source_type !== expected.sourceType ||
+        existing.source_id !== expected.sourceId ||
+        existing.amount_minor !== amount.toString() ||
+        existing.direction !== expected.direction ||
+        existing.kind !== expected.kind ||
+        (expected.cashAccountId && existing.cash_account_id !== expected.cashAccountId)) {
+      throw new ConflictException(
+        "Этот ключ идемпотентности уже использован для другого платежа"
+      );
+    }
+  }
+
   private async findPaymentByKey(
     client: PoolClient,
     tenantId: string,
     key: string
-  ): Promise<{ id: string; business_number: string } | null> {
-    if (!key?.trim()) {
-      throw new BadRequestException("Требуется ключ идемпотентности");
-    }
-
-    const result = await client.query<{
-      id: string;
-      business_number: string;
-    }>(
-      `SELECT id, business_number
+  ): Promise<ExistingPayment | null> {
+    const result = await client.query<ExistingPayment>(
+      `SELECT id, business_number, source_type, source_id,
+              amount_minor::text, direction, kind, cash_account_id
        FROM payment
        WHERE tenant_id = $1 AND idempotency_key = $2`,
       [tenantId, key.trim()]
     );
-
     return result.rows[0] ?? null;
   }
 
