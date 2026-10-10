@@ -24,8 +24,8 @@ const API_URL =
 async function loadByHost(parts?: string[]): Promise<PublicPageData | null> {
   const requestHeaders = await headers();
   const rawHost =
-    requestHeaders.get("x-forwarded-host") ??
     requestHeaders.get("host") ??
+    requestHeaders.get("x-forwarded-host") ??
     "";
   const host = rawHost.split(",")[0]!.trim().split(":")[0]!.toLowerCase();
   if (!host) return null;
