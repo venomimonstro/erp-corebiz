@@ -867,8 +867,9 @@ export class PilotService {
       const item = await client.query<{
         status: string;
         release_blocking: boolean;
+        fix_version: string | null;
       }>(
-        `SELECT status,release_blocking
+        `SELECT status,release_blocking,fix_version
          FROM tenant_pilot_feedback
          WHERE tenant_id=$1 AND id=$2
          FOR UPDATE`,
@@ -910,6 +911,33 @@ export class PilotService {
         throw new BadRequestException(
           "DONE требует verification reference"
         );
+      }
+
+      if (input.status === "DONE" && row.release_blocking) {
+        const fixVersion =
+          String(input.fixVersion ?? row.fix_version ?? "").trim();
+
+        if (!fixVersion) {
+          throw new BadRequestException(
+            "Release-blocking feedback требует fixVersion"
+          );
+        }
+
+        const approved = await client.query(
+          `SELECT 1
+           FROM release_candidate
+           WHERE tenant_id=$1
+             AND target_version=$2
+             AND status='APPROVED'
+           LIMIT 1`,
+          [context.tenantId, fixVersion]
+        );
+
+        if (!approved.rowCount) {
+          throw new BadRequestException(
+            "Release-blocking feedback можно закрыть только после APPROVED release candidate для fixVersion"
+          );
+        }
       }
 
       await client.query(
