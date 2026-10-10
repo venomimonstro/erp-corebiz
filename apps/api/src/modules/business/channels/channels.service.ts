@@ -14,6 +14,7 @@ import {
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { SalesService } from "../sales/sales.service";
 import { ChannelCryptoService } from "./channel-crypto.service";
+import { RuntimePressureService } from "../../platform/runtime-pressure/runtime-pressure.service";
 
 type ChannelProvider =
   | "OWN_SITE"
@@ -27,7 +28,8 @@ export class ChannelsService {
   constructor(
     private readonly database: DatabaseService,
     private readonly sales: SalesService,
-    private readonly crypto: ChannelCryptoService
+    private readonly crypto: ChannelCryptoService,
+    private readonly runtime: RuntimePressureService
   ) {}
 
   async connections(
@@ -247,6 +249,45 @@ export class ChannelsService {
       }
       if (!row.credentials_ciphertext) {
         throw new BadRequestException("У канала не настроены credentials");
+      }
+
+      const depth = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+         FROM channel_sync_job
+         WHERE tenant_id=$1
+           AND status IN ('PENDING','RUNNING','FAILED')`,
+        [context.tenantId]
+      );
+      const queueDepth = Number(depth.rows[0]?.count ?? "0");
+      if (queueDepth >= 10) {
+        await this.runtime.deny(context, {
+          operation: "channel_sync",
+          reason: "tenant marketplace sync queue is full",
+          currentValue: queueDepth,
+          limitValue: 10,
+          retryAfterSeconds: 120
+        });
+      }
+
+      const connectionDepth = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+         FROM channel_sync_job
+         WHERE tenant_id=$1
+           AND connection_id=$2
+           AND status IN ('PENDING','RUNNING','FAILED')`,
+        [context.tenantId, connectionId]
+      );
+      const perConnection = Number(
+        connectionDepth.rows[0]?.count ?? "0"
+      );
+      if (perConnection >= 2) {
+        await this.runtime.deny(context, {
+          operation: "channel_sync_connection",
+          reason: "connection already has queued sync jobs",
+          currentValue: perConnection,
+          limitValue: 2,
+          retryAfterSeconds: 90
+        });
       }
 
       const job = await client.query<{ id: string; status: string }>(
