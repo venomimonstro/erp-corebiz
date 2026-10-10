@@ -154,9 +154,9 @@ export const BUSINESS_VERTICALS: Record<
   DANCE_FITNESS: {
     code: "DANCE_FITNESS",
     title: "Студия танцев / фитнес",
-    summary: "Расписание, тренеры, залы, клиенты и финансовая загрузка.",
+    summary: "Расписание, тренеры, залы, абонементы, посещения и финансовая загрузка.",
     profileCode: "SERVICE",
-    version: 2,
+    version: 3,
     enabledCapabilities: [
       "crm","tasks","sales","finance","service","sites","growth","workflow","support"
     ],
@@ -171,12 +171,14 @@ export const BUSINESS_VERTICALS: Record<
     ],
     primaryWorkspaces: ["service", "crm", "finance", "growth"],
     operatingFlows: [
-      "Лид → пробное занятие → клиент → повторные занятия",
+      "Лид → пробное занятие → клиент → абонемент",
+      "Абонемент → резерв посещения → занятие/no-show → списание или возврат",
       "Расписание → зал/тренер → запись → посещение",
       "Загрузка ресурсов → выручка на час"
     ],
     attentionSignals: [
       "Группа с низкой загрузкой",
+      "Абонемент заканчивается или исчерпан",
       "Клиент перестал посещать",
       "Конфликт расписания тренера или зала"
     ]
