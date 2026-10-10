@@ -456,15 +456,14 @@ export class GoLiveService {
                go_live_at=COALESCE(go_live_at,now()),
                hypercare_until=CASE
                  WHEN go_live_at IS NULL
-                 THEN now()+($3::text || ' days')::interval
+                 THEN now()+($2::text || ' days')::interval
                  ELSE hypercare_until
                END,
-               last_review_id=$4,
-               updated_by_membership_id=$5,
+               last_review_id=$3,
+               updated_by_membership_id=$4,
                updated_at=now()
            WHERE tenant_id=$1`,
           [
-            context.tenantId,
             context.tenantId,
             String(hypercareDays),
             reviewId,
