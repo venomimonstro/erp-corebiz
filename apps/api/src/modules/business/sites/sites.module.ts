@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { CrmModule } from "../crm/crm.module";
+import { DanceStudioModule } from "../dance-studio/dance-studio.module";
 import { PartyModule } from "../party/party.module";
 import { OmsModule } from "../oms/oms.module";
 import { SalesModule } from "../sales/sales.module";
@@ -14,7 +15,7 @@ import { StorefrontController } from "./storefront.controller";
 import { StorefrontService } from "./storefront.service";
 
 @Module({
-  imports:[CrmModule,PartyModule,SalesModule,ServiceOpsModule,OmsModule],
+  imports:[CrmModule,DanceStudioModule,PartyModule,SalesModule,ServiceOpsModule,OmsModule],
   controllers:[
     SitesController,
     SiteFormsController,
