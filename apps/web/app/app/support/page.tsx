@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../components/app-sidebar";
 import { apiRequest } from "../../../lib/api";
 
@@ -50,91 +50,154 @@ type Article = {
   bodyMarkdown: string;
 };
 
+type Telemetry = {
+  periodDays: number;
+  searches: number;
+  noResult: number;
+  helpfulYes: number;
+  helpfulNo: number;
+  ticketsAfterSearch: number;
+  selfServiceRatePercent: number | null;
+  gaps: Array<{
+    query_text: string;
+    searches: string;
+    tickets: string;
+  }>;
+};
+
 export default function SupportPage() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [selected, setSelected] = useState<TicketDetails | null>(null);
   const [articles, setArticles] = useState<Article[]>([]);
-  const [knowledgeSearchId, setKnowledgeSearchId] = useState("");
-  const [openedArticleId, setOpenedArticleId] = useState("");
-  const [telemetry, setTelemetry] = useState<{
-    searches: number;
-    noResult: number;
-    ticketsAfterSearch: number;
-    selfServiceRatePercent: number | null;
-    gaps: Array<{ query: string; searches: number; tickets: number }>;
-  } | null>(null);
+  const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
+  const [searchId, setSearchId] = useState("");
   const [query, setQuery] = useState("");
   const [reply, setReply] = useState("");
+  const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+
+  const contextUrl = useMemo(() => {
+    if (typeof window === "undefined") return "/app/support";
+    const params = new URLSearchParams(window.location.search);
+    return params.get("from") || window.location.pathname;
+  }, []);
 
   const loadTickets = useCallback(async () => {
     setError("");
     try {
       setTickets(await apiRequest<Ticket[]>("/support/tickets"));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось загрузить поддержку");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось загрузить поддержку"
+      );
     }
   }, []);
 
-  const searchKnowledge = useCallback(async (value = "") => {
+  const loadTelemetry = useCallback(async () => {
     try {
-      const result = await apiRequest<{
-        searchId: string;
-        articles: Article[];
-      }>("/support/knowledge/search", {
-        method: "POST",
-        body: JSON.stringify({
-          query: value.trim(),
-          contextUrl:
-            typeof window !== "undefined" ? window.location.href : undefined
-        })
-      });
-      setKnowledgeSearchId(result.searchId);
-      setOpenedArticleId("");
-      setArticles(result.articles);
+      setTelemetry(
+        await apiRequest<Telemetry>("/support/knowledge/telemetry")
+      );
     } catch {
-      setKnowledgeSearchId("");
-      setOpenedArticleId("");
-      setArticles([]);
+      // Telemetry is intentionally owner/admin only.
+      setTelemetry(null);
     }
   }, []);
+
+  const searchKnowledge = useCallback(
+    async (value = "") => {
+      try {
+        const result = await apiRequest<{
+          searchId: string;
+          articles: Article[];
+        }>("/support/knowledge/search", {
+          method: "POST",
+          body: JSON.stringify({
+            query: value.trim(),
+            contextUrl
+          })
+        });
+        setSearchId(result.searchId);
+        setArticles(result.articles);
+        setSelectedArticle(null);
+      } catch {
+        setArticles([]);
+        setSearchId("");
+      }
+    },
+    [contextUrl]
+  );
 
   useEffect(() => {
     void loadTickets();
-    void searchKnowledge();
-
-    void apiRequest<{
-      searches: number;
-      noResult: number;
-      ticketsAfterSearch: number;
-      selfServiceRatePercent: number | null;
-      gaps: Array<{ query: string; searches: number; tickets: number }>;
-    }>("/support/knowledge/telemetry")
-      .then(setTelemetry)
-      .catch(() => setTelemetry(null));
-  }, [loadTickets, searchKnowledge]);
+    void searchKnowledge("");
+    void loadTelemetry();
+  }, [loadTickets, searchKnowledge, loadTelemetry]);
 
   async function openTicket(id: string) {
     setPending(true);
     setError("");
     try {
-      setSelected(await apiRequest<TicketDetails>("/support/tickets/" + id));
+      setSelected(
+        await apiRequest<TicketDetails>("/support/tickets/" + id)
+      );
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось открыть тикет");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось открыть тикет"
+      );
     } finally {
       setPending(false);
     }
   }
 
+  async function selectArticle(article: Article) {
+    setSelectedArticle(article);
+    if (!searchId) return;
+
+    try {
+      await apiRequest(
+        "/support/knowledge/search/" + searchId + "/select",
+        {
+          method: "POST",
+          body: JSON.stringify({ articleId: article.id })
+        }
+      );
+    } catch {
+      // Selection telemetry must never block help content.
+    }
+  }
+
+  async function feedback(helpful: boolean) {
+    if (!searchId) return;
+
+    try {
+      await apiRequest(
+        "/support/knowledge/search/" + searchId + "/feedback",
+        {
+          method: "POST",
+          body: JSON.stringify({ helpful })
+        }
+      );
+      await loadTelemetry();
+    } catch {
+      // Feedback is optional UX telemetry.
+    }
+  }
+
   async function createTicket() {
-    const subject = window.prompt("Кратко опишите проблему");
+    const subject = window.prompt(
+      "Кратко опишите проблему",
+      query.trim() || undefined
+    );
     if (!subject?.trim()) return;
 
     const body = window.prompt("Что произошло и что вы ожидали?");
     if (!body?.trim()) return;
-
-    const contextUrl = window.location.href;
 
     setPending(true);
     setError("");
@@ -147,15 +210,19 @@ export default function SupportPage() {
             subject: subject.trim(),
             body: body.trim(),
             contextUrl,
-            knowledgeSearchId: knowledgeSearchId || undefined
+            knowledgeSearchId: searchId || undefined
           })
         }
       );
 
-      await loadTickets();
+      await Promise.all([loadTickets(), loadTelemetry()]);
       await openTicket(created.id);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось создать тикет");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось создать тикет"
+      );
     } finally {
       setPending(false);
     }
@@ -179,7 +246,11 @@ export default function SupportPage() {
       await openTicket(selected.ticket.id);
       await loadTickets();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось отправить сообщение");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось отправить сообщение"
+      );
     } finally {
       setPending(false);
     }
@@ -187,7 +258,13 @@ export default function SupportPage() {
 
   async function closeTicket() {
     if (!selected) return;
-    if (!window.confirm("Закрыть тикет " + selected.ticket.number + "?")) return;
+    if (
+      !window.confirm(
+        "Закрыть тикет " + selected.ticket.number + "?"
+      )
+    ) {
+      return;
+    }
 
     try {
       await apiRequest(
@@ -197,47 +274,9 @@ export default function SupportPage() {
       await loadTickets();
       await openTicket(selected.ticket.id);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось закрыть тикет");
-    }
-  }
-
-  async function openArticle(articleId: string) {
-    setOpenedArticleId(articleId);
-    if (!knowledgeSearchId) return;
-
-    try {
-      await apiRequest(
-        "/support/knowledge/search/" +
-          knowledgeSearchId +
-          "/select",
-        {
-          method: "POST",
-          body: JSON.stringify({ articleId })
-        }
+      setError(
+        cause instanceof Error ? cause.message : "Не удалось закрыть тикет"
       );
-    } catch {
-      // Telemetry must never block self-service content.
-    }
-  }
-
-  async function feedback(helpful: boolean) {
-    if (!knowledgeSearchId) return;
-
-    try {
-      await apiRequest(
-        "/support/knowledge/search/" +
-          knowledgeSearchId +
-          "/feedback",
-        {
-          method: "POST",
-          body: JSON.stringify({ helpful })
-        }
-      );
-      if (helpful) {
-        window.alert("Спасибо. Отметили, что ответ помог.");
-      }
-    } catch {
-      // Feedback is best-effort and must not block support.
     }
   }
 
@@ -267,7 +306,11 @@ export default function SupportPage() {
         grant.token
       );
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось создать временный доступ");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось создать временный доступ"
+      );
     }
   }
 
@@ -281,15 +324,24 @@ export default function SupportPage() {
             <p className="muted">Помощь / Поддержка</p>
             <h1>Поддержка</h1>
             <p className="workspace-summary">
-              Контекст обращения сохраняется, постоянного доступа поддержки к компании нет.
+              Сначала найдите ответ. Если он не помог, тикет сохранит поиск и
+              экран, на котором возникла проблема.
             </p>
           </div>
 
           <div className="header-actions">
-            <button className="secondary-button" onClick={() => void createGrant()} type="button">
+            <button
+              className="secondary-button"
+              onClick={() => void createGrant()}
+              type="button"
+            >
               Временный доступ
             </button>
-            <button disabled={pending} onClick={() => void createTicket()} type="button">
+            <button
+              disabled={pending}
+              onClick={() => void createTicket()}
+              type="button"
+            >
               + Тикет
             </button>
           </div>
@@ -300,6 +352,44 @@ export default function SupportPage() {
             <strong>Не удалось выполнить действие</strong>
             <span>{error}</span>
           </div>
+        ) : null}
+
+        {telemetry ? (
+          <section className="support-self-service">
+            <article className="owner-kpi">
+              <span>Поисков за {telemetry.periodDays} дней</span>
+              <strong>{telemetry.searches}</strong>
+              <small>Без результата: {telemetry.noResult}</small>
+            </article>
+            <article className="owner-kpi">
+              <span>Решено без тикета</span>
+              <strong>
+                {telemetry.selfServiceRatePercent === null
+                  ? "—"
+                  : telemetry.selfServiceRatePercent + "%"}
+              </strong>
+              <small>Тикетов после поиска: {telemetry.ticketsAfterSearch}</small>
+            </article>
+            <article className="owner-kpi">
+              <span>Ответ помог</span>
+              <strong>{telemetry.helpfulYes}</strong>
+              <small>Не помог: {telemetry.helpfulNo}</small>
+            </article>
+            <article className="owner-kpi">
+              <span>Главный пробел</span>
+              <strong className="support-gap-kpi">
+                {telemetry.gaps[0]?.query_text ?? "Нет данных"}
+              </strong>
+              <small>
+                {telemetry.gaps[0]
+                  ? "поисков " +
+                    telemetry.gaps[0].searches +
+                    " · тикетов " +
+                    telemetry.gaps[0].tickets
+                  : "Проблемные запросы не накоплены"}
+              </small>
+            </article>
+          </section>
         ) : null}
 
         <div className="support-layout">
@@ -332,7 +422,7 @@ export default function SupportPage() {
               {!tickets.length ? (
                 <div className="support-empty">
                   <strong>Обращений нет</strong>
-                  <span>Создайте тикет, если нужна помощь команды.</span>
+                  <span>Если база знаний не поможет, создайте тикет.</span>
                 </div>
               ) : null}
             </div>
@@ -347,7 +437,9 @@ export default function SupportPage() {
                     <h2>{selected.ticket.subject}</h2>
                   </div>
                   <div className="header-actions">
-                    <span className="status-pill">{selected.ticket.status}</span>
+                    <span className="status-pill">
+                      {selected.ticket.status}
+                    </span>
                     {selected.ticket.status !== "CLOSED" ? (
                       <button
                         className="secondary-button"
@@ -368,7 +460,10 @@ export default function SupportPage() {
 
                 <div className="message-stream">
                   {selected.messages.map((message) => (
-                    <article className="support-message" key={message.id}>
+                    <article
+                      className="support-message"
+                      key={message.id}
+                    >
                       <p>{message.body}</p>
                       <small>
                         {new Date(message.createdAt).toLocaleString("ru-RU")}
@@ -385,16 +480,60 @@ export default function SupportPage() {
                       rows={3}
                       value={reply}
                     />
-                    <button disabled={pending || !reply.trim()} type="submit">
+                    <button
+                      disabled={pending || !reply.trim()}
+                      type="submit"
+                    >
                       Отправить
                     </button>
                   </form>
                 ) : null}
               </>
+            ) : selectedArticle ? (
+              <article className="knowledge-article-open">
+                <button
+                  className="secondary-button"
+                  onClick={() => setSelectedArticle(null)}
+                  type="button"
+                >
+                  ← К результатам
+                </button>
+                <span>{selectedArticle.category ?? "Помощь"}</span>
+                <h2>{selectedArticle.title}</h2>
+                <div className="knowledge-article-body">
+                  {selectedArticle.bodyMarkdown}
+                </div>
+                <div className="knowledge-feedback">
+                  <span>Ответ решил вопрос?</span>
+                  <button
+                    className="secondary-button"
+                    onClick={() => void feedback(true)}
+                    type="button"
+                  >
+                    Да
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() => void feedback(false)}
+                    type="button"
+                  >
+                    Нет
+                  </button>
+                  <button
+                    onClick={() => void createTicket()}
+                    type="button"
+                  >
+                    Нужна поддержка
+                  </button>
+                </div>
+              </article>
             ) : (
               <div className="support-empty conversation-empty">
-                <strong>Выберите обращение</strong>
-                <span>История переписки появится здесь.</span>
+                <strong>Сначала попробуйте найти ответ</strong>
+                <span>
+                  Если статья не поможет, создайте тикет — поиск будет связан
+                  с обращением.
+                </span>
               </div>
             )}
           </section>
@@ -402,6 +541,7 @@ export default function SupportPage() {
           <aside className="knowledge-panel">
             <div className="support-panel-title">
               <strong>База знаний</strong>
+              {searchId ? <span>поиск сохранён</span> : null}
             </div>
 
             <div className="knowledge-search">
@@ -410,68 +550,40 @@ export default function SupportPage() {
                 placeholder="Поиск ответа"
                 value={query}
               />
-              <button onClick={() => void searchKnowledge(query)} type="button">
+              <button
+                onClick={() => void searchKnowledge(query)}
+                type="button"
+              >
                 Найти
               </button>
             </div>
 
             <div className="knowledge-list">
               {articles.map((article) => (
-                <article key={article.id}>
+                <button
+                  className="knowledge-result"
+                  key={article.id}
+                  onClick={() => void selectArticle(article)}
+                  type="button"
+                >
                   <span>{article.category ?? "Помощь"}</span>
-                  <button
-                    className="knowledge-article-open"
-                    onClick={() => void openArticle(article.id)}
-                    type="button"
-                  >
-                    <strong>{article.title}</strong>
-                  </button>
+                  <strong>{article.title}</strong>
                   <p>
-                    {openedArticleId === article.id
-                      ? article.bodyMarkdown.replace(/#/g, "")
-                      : article.bodyMarkdown.replace(/#/g, "").slice(0, 180)}
+                    {article.bodyMarkdown.replace(/#/g, "").slice(0, 180)}
                   </p>
-                </article>
+                </button>
               ))}
+
+              {!articles.length ? (
+                <div className="support-empty">
+                  <strong>Ответов не найдено</strong>
+                  <span>
+                    Создайте тикет — этот запрос попадёт в список пробелов базы
+                    знаний.
+                  </span>
+                </div>
+              ) : null}
             </div>
-
-            {knowledgeSearchId ? (
-              <div className="knowledge-feedback">
-                <span>Нашли ответ?</span>
-                <button
-                  className="secondary-button"
-                  onClick={() => void feedback(true)}
-                  type="button"
-                >
-                  Да
-                </button>
-                <button
-                  className="secondary-button"
-                  onClick={() => void feedback(false)}
-                  type="button"
-                >
-                  Нет
-                </button>
-              </div>
-            ) : null}
-
-            {telemetry ? (
-              <div className="knowledge-telemetry">
-                <strong>Самообслуживание · 30 дней</strong>
-                <span>
-                  {telemetry.searches} поисков · без ответа {telemetry.noResult}
-                </span>
-                <span>
-                  тикетов после поиска {telemetry.ticketsAfterSearch}
-                </span>
-                <span>
-                  self-service{" "}
-                  {telemetry.selfServiceRatePercent === null
-                    ? "—"
-                    : telemetry.selfServiceRatePercent + "%"}
-                </span>
-              </div>
-            ) : null}
           </aside>
         </div>
       </section>
