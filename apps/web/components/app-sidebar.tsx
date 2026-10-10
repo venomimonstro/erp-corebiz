@@ -24,7 +24,8 @@ const sections: Section[] = [
     ["/app/purchases", "Закупки", "purchases"],
     ["/app/inventory/stock", "Остатки", "stock"],
     ["/app/finance", "Деньги", "finance"],
-    ["/app/finance/forecast", "Платёжный календарь", "finance-forecast"]
+    ["/app/finance/forecast", "Платёжный календарь", "finance-forecast"],
+    ["/app/finance/budget", "Бюджет план / факт", "finance-budget"]
   ] },
   { title: "Запись и услуги", items: [
     ["/app/service", "Сегодня", "service-home"],
