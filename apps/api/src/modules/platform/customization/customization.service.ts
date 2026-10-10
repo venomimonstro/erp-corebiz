@@ -665,7 +665,7 @@ export class CustomizationService {
       ]),
       SERVICE: new Set([
         "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
-        "service","projects","sites","growth","workflow","support"
+        "service","sites","growth","workflow","support"
       ]),
       WAREHOUSE_3PL: new Set([
         "tasks","catalog","sales","procurement","inventory","finance","accounting",
