@@ -624,13 +624,110 @@ export class ProcurementService {
     context: TenantContext,
     orderId: string,
     lines: ReceiptLineInput[],
-    options?: { inboundAsnId?: string }
+    options: { inboundAsnId?: string; idempotencyKey: string }
   ): Promise<{ receiptId: string; number: string; orderStatus: string }> {
-    if (!lines.length) {
+    const scopedMembershipIds = await this.procurementScope(
+      context,
+      "procurement.write"
+    );
+
+    if (!Array.isArray(lines) || !lines.length) {
       throw new BadRequestException("Укажите полученные позиции");
     }
+    if (lines.length > 300) {
+      throw new BadRequestException("Слишком много позиций в одной приёмке");
+    }
+
+    const idempotencyKey = options.idempotencyKey?.trim();
+    if (
+      !idempotencyKey ||
+      idempotencyKey.length < 8 ||
+      idempotencyKey.length > 160
+    ) {
+      throw new BadRequestException("Некорректный ключ идемпотентности приёмки");
+    }
+
+    const seenLineIds = new Set<string>();
+    const normalizedLines = lines.map((line) => {
+      if (!line?.purchaseOrderLineId || seenLineIds.has(line.purchaseOrderLineId)) {
+        throw new BadRequestException(
+          "Позиции одной закупки не должны дублироваться в приёмке"
+        );
+      }
+      seenLineIds.add(line.purchaseOrderLineId);
+
+      if (!/^\d+$/.test(line.quantityMilli)) {
+        throw new BadRequestException("Некорректное количество");
+      }
+      const quantity = BigInt(line.quantityMilli);
+      if (quantity <= 0n) {
+        throw new BadRequestException("Количество должно быть больше нуля");
+      }
+
+      return {
+        purchaseOrderLineId: line.purchaseOrderLineId,
+        quantityMilli: quantity.toString()
+      };
+    });
+
+    const idempotencyFingerprint = this.receiptIdempotencyFingerprint({
+      orderId,
+      inboundAsnId: options.inboundAsnId ?? null,
+      lines: normalizedLines
+    });
 
     return this.database.withTenantTransaction(context, async (client) => {
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+        [context.tenantId, idempotencyKey]
+      );
+
+      const existing = await client.query<{
+        id: string;
+        business_number: string;
+        idempotency_fingerprint: string | null;
+        purchase_order_id: string;
+        order_status: string;
+        responsible_membership_id: string | null;
+      }>(
+        `SELECT
+           gr.id,gr.business_number,gr.idempotency_fingerprint,
+           gr.purchase_order_id,po.status AS order_status,
+           po.responsible_membership_id
+         FROM goods_receipt gr
+         JOIN purchase_order po
+           ON po.tenant_id=gr.tenant_id AND po.id=gr.purchase_order_id
+         WHERE gr.tenant_id=$1 AND gr.idempotency_key=$2`,
+        [context.tenantId, idempotencyKey]
+      );
+
+      const existingRow = existing.rows[0];
+      if (existingRow) {
+        if (
+          scopedMembershipIds &&
+          (!existingRow.responsible_membership_id ||
+            !scopedMembershipIds.includes(
+              existingRow.responsible_membership_id
+            ))
+        ) {
+          throw new NotFoundException("Приёмка не найдена");
+        }
+        if (
+          existingRow.purchase_order_id !== orderId ||
+          (existingRow.idempotency_fingerprint &&
+            existingRow.idempotency_fingerprint !== idempotencyFingerprint)
+        ) {
+          throw new ConflictException(
+            "Ключ идемпотентности уже использован для другой приёмки"
+          );
+        }
+
+        return {
+          receiptId: existingRow.id,
+          number: existingRow.business_number,
+          orderStatus: existingRow.order_status
+        };
+      }
       const orderResult = await client.query<{
         id: string;
         status: string;
@@ -639,9 +736,14 @@ export class ProcurementService {
       }>(
         `SELECT id, status, destination_warehouse_id, inventory_owner_id
          FROM purchase_order
-         WHERE tenant_id = $1 AND id = $2
+         WHERE tenant_id=$1
+           AND id=$2
+           AND (
+             $3::uuid[] IS NULL
+             OR responsible_membership_id = ANY($3::uuid[])
+           )
          FOR UPDATE`,
-        [context.tenantId, orderId]
+        [context.tenantId, orderId, scopedMembershipIds]
       );
 
       const order = orderResult.rows[0];
@@ -658,15 +760,8 @@ export class ProcurementService {
         unitCostMinor: bigint;
       }> = [];
 
-      for (const line of lines) {
-        if (!/^\d+$/.test(line.quantityMilli)) {
-          throw new BadRequestException("Некорректное количество");
-        }
-
+      for (const line of normalizedLines) {
         const quantity = BigInt(line.quantityMilli);
-        if (quantity <= 0n) {
-          throw new BadRequestException("Количество должно быть больше нуля");
-        }
 
         const lineResult = await client.query<{
           id: string;
@@ -721,14 +816,20 @@ export class ProcurementService {
 
       const receiptResult = await client.query<{ id: string }>(
         `INSERT INTO goods_receipt(
-           tenant_id, purchase_order_id, business_number,
-           inventory_owner_id, inbound_asn_id, posted_by_membership_id
-         ) VALUES ($1,$2,$3,$4,$5,$6)
+           tenant_id,purchase_order_id,business_number,
+           inventory_owner_id,inbound_asn_id,posted_by_membership_id,
+           idempotency_key,idempotency_fingerprint
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          RETURNING id`,
         [
-          context.tenantId,orderId,number,
-          order.inventory_owner_id,options?.inboundAsnId??null,
-          context.membershipId
+          context.tenantId,
+          orderId,
+          number,
+          order.inventory_owner_id,
+          options.inboundAsnId ?? null,
+          context.membershipId,
+          idempotencyKey,
+          idempotencyFingerprint
         ]
       );
 
@@ -852,6 +953,33 @@ export class ProcurementService {
         orderStatus: newStatus
       };
     });
+  }
+
+  private receiptIdempotencyFingerprint(input: {
+    orderId: string;
+    inboundAsnId: string | null;
+    lines: Array<{
+      purchaseOrderLineId: string;
+      quantityMilli: string;
+    }>;
+  }): string {
+    const normalized = {
+      version: 1,
+      orderId: input.orderId,
+      inboundAsnId: input.inboundAsnId,
+      lines: [...input.lines]
+        .sort((a, b) =>
+          a.purchaseOrderLineId.localeCompare(b.purchaseOrderLineId)
+        )
+        .map((line) => ({
+          purchaseOrderLineId: line.purchaseOrderLineId,
+          quantityMilli: BigInt(line.quantityMilli).toString()
+        }))
+    };
+
+    return createHash("sha256")
+      .update(JSON.stringify(normalized))
+      .digest("hex");
   }
 
   private async procurementScope(
