@@ -46,6 +46,14 @@ type Dashboard = {
     room_cost_minor: string;
     margin_minor: string;
   };
+  attention: {
+    unclosed_past_lessons: number;
+    attended_without_payment_source: number;
+    completed_without_profitability: number;
+    completed_without_trainer_accrual: number;
+    lesson_waitlist: number;
+    over_capacity: number;
+  };
 };
 
 function money(value: string, currency = "RUB") {
@@ -134,6 +142,32 @@ export default function DanceDashboardPage() {
                 <small>{data.groups.length} активных групп</small>
               </article>
             </div>
+
+            {Object.values(data.attention).some((value) => Number(value) > 0) ? (
+              <div className="inline-error">
+                <strong>Операционные исключения</strong>
+                <span>
+                  {data.attention.unclosed_past_lessons > 0
+                    ? "Незакрытых прошедших уроков: " + data.attention.unclosed_past_lessons + ". "
+                    : ""}
+                  {data.attention.attended_without_payment_source > 0
+                    ? "Посещений без источника оплаты: " + data.attention.attended_without_payment_source + ". "
+                    : ""}
+                  {data.attention.completed_without_profitability > 0
+                    ? "Уроков без расчёта экономики: " + data.attention.completed_without_profitability + ". "
+                    : ""}
+                  {data.attention.completed_without_trainer_accrual > 0
+                    ? "Уроков без начисления тренеру: " + data.attention.completed_without_trainer_accrual + ". "
+                    : ""}
+                  {data.attention.lesson_waitlist > 0
+                    ? "Учеников в waitlist уроков: " + data.attention.lesson_waitlist + ". "
+                    : ""}
+                  {data.attention.over_capacity > 0
+                    ? "Переполненных уроков: " + data.attention.over_capacity + "."
+                    : ""}
+                </span>
+              </div>
+            ) : null}
 
             {belowBreakEven.length ? (
               <div className="inline-error">
