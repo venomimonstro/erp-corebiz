@@ -19,6 +19,13 @@ type Resource = {
   type: string;
 };
 
+type Customer = {
+  id: string;
+  displayName: string;
+  phone: string | null;
+  email: string | null;
+};
+
 type Booking = {
   id: string;
   business_number: string;
@@ -57,6 +64,7 @@ function money(value: string, currency: string): string {
 export default function BookingsPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [error, setError] = useState("");
   const [weekOffset, setWeekOffset] = useState(0);
@@ -64,6 +72,7 @@ export default function BookingsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedService, setSelectedService] = useState("");
   const [selectedResource, setSelectedResource] = useState("");
+  const [selectedCustomer, setSelectedCustomer] = useState("");
   const [selectedStart, setSelectedStart] = useState("");
   const [slotDate, setSlotDate] = useState("");
   const [availableSlots, setAvailableSlots] = useState<Array<{ resourceId: string; startsAt: string }>>([]);
@@ -86,6 +95,7 @@ export default function BookingsPage() {
       const data = await Promise.all([
         apiRequest<Service[]>("/service/catalog"),
         apiRequest<Resource[]>("/service/resources"),
+        apiRequest<Customer[]>("/crm/customers"),
         apiRequest<Booking[]>(
           "/service/bookings?from=" +
             encodeURIComponent(from.toISOString()) +
@@ -96,7 +106,8 @@ export default function BookingsPage() {
 
       setServices(data[0]);
       setResources(data[1]);
-      setBookings(data[2]);
+      setCustomers(data[2]);
+      setBookings(data[3]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить записи");
     }
@@ -171,6 +182,45 @@ export default function BookingsPage() {
     }
   }
 
+  async function createCustomer() {
+    const name = window.prompt("Имя клиента");
+    if (!name?.trim()) return;
+
+    const phone = window.prompt("Телефон", "")?.trim() || undefined;
+    const email = window.prompt("Email", "")?.trim() || undefined;
+
+    if (!phone && !email) {
+      setError("Укажите телефон или email, чтобы не создавать обезличенную карточку.");
+      return;
+    }
+
+    try {
+      const customer = await apiRequest<{ id: string; displayName: string }>(
+        "/crm/customers",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            type: "PERSON",
+            displayName: name.trim(),
+            phone,
+            email
+          })
+        }
+      );
+
+      const refreshed = await apiRequest<Customer[]>("/crm/customers");
+      setCustomers(refreshed);
+      setSelectedCustomer(customer.id);
+      setError("");
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось создать клиента"
+      );
+    }
+  }
+
   async function fetchSlots() {
     if (!selectedService || !selectedResource || !slotDate) {
       setError("Выберите услугу, ресурс и день");
@@ -223,12 +273,14 @@ export default function BookingsPage() {
           serviceId: selectedService,
           resourceIds: [selectedResource],
           startsAt: parsed.toISOString(),
+          partyId: selectedCustomer || undefined,
           source: "MANUAL",
           idempotencyKey: crypto.randomUUID()
         })
       });
       setShowCreate(false);
       setSelectedStart("");
+      setSelectedCustomer("");
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать запись");
@@ -338,6 +390,26 @@ export default function BookingsPage() {
                   {resources.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
               </label>
+              <label>Клиент{" "}
+                <select
+                  value={selectedCustomer}
+                  onChange={(e) => setSelectedCustomer(e.target.value)}
+                >
+                  <option value="">Без клиента / внутренняя бронь</option>
+                  {customers.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.displayName}{item.phone ? " · " + item.phone : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void createCustomer()}
+              >
+                + Новый клиент
+              </button>
               <label>Начало{" "}
                 <input required type="datetime-local" value={selectedStart} onChange={(e) => setSelectedStart(e.target.value)} />
               </label>
