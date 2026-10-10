@@ -316,12 +316,20 @@ export class BookingService {
     if (!name || name.length > 180) {
       throw new BadRequestException("Некорректное название абонемента");
     }
-    const visitLimit = Math.floor(input.visitLimit);
-    const durationDays = Math.floor(input.durationDays);
-    if (visitLimit < 1 || visitLimit > 10000) {
+    const visitLimit = Number(input.visitLimit);
+    const durationDays = Number(input.durationDays);
+    if (
+      !Number.isSafeInteger(visitLimit) ||
+      visitLimit < 1 ||
+      visitLimit > 10000
+    ) {
       throw new BadRequestException("Количество посещений должно быть от 1 до 10000");
     }
-    if (durationDays < 1 || durationDays > 3650) {
+    if (
+      !Number.isSafeInteger(durationDays) ||
+      durationDays < 1 ||
+      durationDays > 3650
+    ) {
       throw new BadRequestException("Срок действия должен быть от 1 до 3650 дней");
     }
     const priceMinor = String(input.priceMinor ?? "0");
@@ -460,11 +468,14 @@ export class BookingService {
         const order = await client.query(
           `SELECT 1 FROM sales_order
            WHERE tenant_id=$1 AND id=$2
+             AND party_id=$3
              AND order_status NOT IN ('CANCELLED')`,
-          [context.tenantId, input.salesOrderId]
+          [context.tenantId, input.salesOrderId, input.partyId]
         );
         if (!order.rowCount) {
-          throw new NotFoundException("Заказ продажи не найден");
+          throw new NotFoundException(
+            "Заказ продажи клиента не найден или отменён"
+          );
         }
       }
 
