@@ -375,6 +375,7 @@ async function inspectRequiredHardening(root) {
     "167_dance_lesson_timezone.sql",
     "168_dance_rule_ambiguity_guards.sql",
     "169_dance_group_waitlist_terms.sql",
+    "170_sales_order_package_activation.sql",
 
   ];
 
