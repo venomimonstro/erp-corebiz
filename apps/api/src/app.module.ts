@@ -14,6 +14,7 @@ import { CatalogModule } from "./modules/business/catalog/catalog.module";
 import { ChannelsModule } from "./modules/business/channels/channels.module";
 import { CrmModule } from "./modules/business/crm/crm.module";
 import { DashboardModule } from "./modules/business/dashboard/dashboard.module";
+import { DanceStudioModule } from "./modules/business/dance-studio/dance-studio.module";
 import { FinanceModule } from "./modules/business/finance/finance.module";
 import { GrowthModule } from "./modules/business/growth/growth.module";
 import { GlobalSearchModule } from "./modules/business/search/global-search.module";
@@ -64,6 +65,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     PartyModule,
     CrmModule,
     DashboardModule,
+    DanceStudioModule,
     TasksModule,
     CatalogModule,
     ChannelsModule,
