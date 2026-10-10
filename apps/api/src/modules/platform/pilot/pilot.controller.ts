@@ -89,6 +89,58 @@ export class PilotController {
     };
   }
 
+  @Post("feedback")
+  @RequirePermission("pilot.manage")
+  async feedback(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: {
+      category: "BUG" | "UX" | "SPEC_GAP" | "FEATURE";
+      priority?: "P0" | "P1" | "P2" | "P3" | "P4";
+      title: string;
+      description?: string;
+      screenPath?: string;
+      sourceIncidentId?: string;
+      sourceTicketId?: string;
+    }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.pilot.createFeedback(this.context(request), body)
+    };
+  }
+
+  @Post("feedback/:id/triage")
+  @RequirePermission("pilot.manage")
+  async triageFeedback(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: {
+      disposition: "CORE" | "MODULE" | "CONFIG" | "EXTENSION" | "REJECT";
+      rootCause?: string;
+      remediation?: string;
+      ownerMembershipId?: string;
+      releaseBlocking?: boolean;
+    }
+  ): Promise<ApiSuccess<{ updated: true }>> {
+    await this.pilot.triageFeedback(this.context(request), id, body);
+    return { ok: true, data: { updated: true } };
+  }
+
+  @Post("feedback/:id/advance")
+  @RequirePermission("pilot.manage")
+  async advanceFeedback(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: {
+      status: "IN_PROGRESS" | "VERIFY" | "DONE";
+      fixVersion?: string;
+      verificationReference?: string;
+    }
+  ): Promise<ApiSuccess<{ updated: true }>> {
+    await this.pilot.advanceFeedback(this.context(request), id, body);
+    return { ok: true, data: { updated: true } };
+  }
+
   @Post("incidents")
   @RequirePermission("pilot.manage")
   async incident(
