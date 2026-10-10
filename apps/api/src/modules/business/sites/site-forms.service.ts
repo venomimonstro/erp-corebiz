@@ -560,6 +560,7 @@ export class SiteFormsService {
           {
             studentId:student.id,
             chargeMinor:"0",
+            priceSource:"TRIAL",
             allowWaitlist:true
           }
         );
