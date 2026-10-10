@@ -755,6 +755,13 @@ export class DashboardService {
            WHERE tenant_id=$1
              AND state IN ('OPEN','IN_PROGRESS','WAITING','DONE')`,
           [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM work_project
+           WHERE tenant_id=$1
+             AND status IN ('PLANNED','ACTIVE','ON_HOLD','COMPLETED')`,
+          [context.tenantId]
         )
       ]);
 
@@ -769,7 +776,8 @@ export class DashboardService {
         channel: Number(counts[7].rows[0]?.count ?? "0"),
         wmsTask: Number(counts[8].rows[0]?.count ?? "0"),
         migration: Number(counts[9].rows[0]?.count ?? "0"),
-        task: Number(counts[10].rows[0]?.count ?? "0")
+        task: Number(counts[10].rows[0]?.count ?? "0"),
+        project: Number(counts[11].rows[0]?.count ?? "0")
       };
 
       const definitions: Record<string, Array<{
@@ -913,17 +921,24 @@ export class DashboardService {
           },
           {
             key: "deal",
-            title: "Создайте первую клиентскую работу",
-            detail: "Для агентства, IT и консалтинга первый рабочий объект — сделка/проект, а не запись в календарь.",
+            title: "Зафиксируйте клиентскую сделку",
+            detail: "Сделка хранит договорённость до передачи в исполнение.",
             href: "/app/crm/deals",
             done: values.deal > 0
           },
           {
+            key: "project",
+            title: "Запустите клиентский проект",
+            detail: "Проект связывает договорённость, этапы, сроки, бюджет и трудозатраты.",
+            href: "/app/projects",
+            done: values.project > 0
+          },
+          {
             key: "next-action",
-            title: "Зафиксируйте следующее действие",
-            detail: "У клиентской работы должен быть ответственный и конкретная задача.",
+            title: "Поставьте первую задачу по проекту",
+            detail: "Исполнение должно иметь конкретное следующее действие.",
             href: "/app/tasks",
-            done: values.deal > 0 && values.task > 0,
+            done: values.project > 0 && values.task > 0,
             firstValue: true
           }
         ];
