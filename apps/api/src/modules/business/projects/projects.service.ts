@@ -344,6 +344,9 @@ export class ProjectsService {
            ) VALUES (
              $1,$2,$3,$4,$5,$6,$7,'PLANNED',$8,$9,$10,$11,$12,$13,$14,$15,$16
            )
+           ON CONFLICT (tenant_id,source_deal_id)
+             WHERE source_deal_id IS NOT NULL
+           DO NOTHING
            RETURNING id,business_number,version`,
           [
             context.tenantId,
@@ -364,7 +367,27 @@ export class ProjectsService {
             context.membershipId
           ]
         );
-        const row = result.rows[0];
+        let row = result.rows[0];
+        if (!row && input.sourceDealId) {
+          const existing = await client.query<{
+            id: string;
+            business_number: string;
+            version: number;
+          }>(
+            `SELECT id,business_number,version
+             FROM work_project
+             WHERE tenant_id=$1 AND source_deal_id=$2`,
+            [context.tenantId, input.sourceDealId]
+          );
+          row = existing.rows[0];
+          if (row) {
+            return {
+              id: row.id,
+              number: row.business_number,
+              version: row.version
+            };
+          }
+        }
         if (!row) throw new Error("PROJECT_CREATE_FAILED");
 
         await this.audit(client, context, "project.created", "work_project", row.id, {
