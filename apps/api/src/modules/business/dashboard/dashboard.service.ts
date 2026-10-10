@@ -286,6 +286,236 @@ export class DashboardService {
     });
   }
 
+  async operational(
+    context: TenantContext
+  ): Promise<Record<string, unknown>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const today = new Date().toISOString().slice(0, 10);
+
+      const payments = await client.query<{
+        direction: "IN" | "OUT";
+        amount_minor: string;
+      }>(
+        `SELECT direction,COALESCE(sum(amount_minor),0)::text AS amount_minor
+         FROM payment
+         WHERE tenant_id=$1
+           AND status='POSTED'
+           AND currency='RUB'
+           AND created_at >= $2::date
+           AND created_at < ($2::date + 1)
+         GROUP BY direction`,
+        [context.tenantId, today]
+      );
+
+      const obligations = await client.query<{
+        direction: "RECEIVABLE" | "PAYABLE";
+        amount_minor: string;
+      }>(
+        `SELECT direction,
+                COALESCE(sum(amount_minor-settled_minor),0)::text AS amount_minor
+         FROM financial_obligation
+         WHERE tenant_id=$1
+           AND status IN ('OPEN','PARTIALLY_SETTLED')
+           AND currency='RUB'
+         GROUP BY direction`,
+        [context.tenantId]
+      );
+
+      const bank = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+         FROM finance_bank_statement_line l
+         JOIN finance_bank_statement s
+           ON s.tenant_id=l.tenant_id AND s.id=l.statement_id
+         WHERE l.tenant_id=$1
+           AND l.payment_id IS NULL
+           AND s.status='IMPORTED'`,
+        [context.tenantId]
+      );
+
+      const metricValues = new Map<string, bigint>([
+        [
+          "PAYMENTS_IN",
+          BigInt(
+            payments.rows.find((row) => row.direction === "IN")
+              ?.amount_minor ?? "0"
+          )
+        ],
+        [
+          "PAYMENTS_OUT",
+          BigInt(
+            payments.rows.find((row) => row.direction === "OUT")
+              ?.amount_minor ?? "0"
+          )
+        ],
+        [
+          "AR_OPEN",
+          BigInt(
+            obligations.rows.find((row) => row.direction === "RECEIVABLE")
+              ?.amount_minor ?? "0"
+          )
+        ],
+        [
+          "AP_OPEN",
+          BigInt(
+            obligations.rows.find((row) => row.direction === "PAYABLE")
+              ?.amount_minor ?? "0"
+          )
+        ],
+        ["BANK_UNMATCHED", BigInt(bank.rows[0]?.count ?? "0")]
+      ]);
+
+      for (const [metricCode, value] of metricValues) {
+        await client.query(
+          `INSERT INTO tenant_analytics_snapshot(
+             tenant_id,metric_date,metric_code,currency,value_minor,source_updated_at
+           ) VALUES ($1,$2,$3,'RUB',$4,now())
+           ON CONFLICT (tenant_id,metric_date,metric_code,currency)
+           DO UPDATE SET
+             value_minor=EXCLUDED.value_minor,
+             source_updated_at=now()`,
+          [context.tenantId, today, metricCode, value.toString()]
+        );
+      }
+
+      const currentIssues = new Map<string, Set<string>>([
+        ["BANK_UNMATCHED", new Set<string>()],
+        ["VAT_UNREGISTERED", new Set<string>()],
+        ["CLOSE_BLOCKED", new Set<string>()],
+        ["PAYROLL_DRAFT", new Set<string>()]
+      ]);
+
+      const unmatched = await client.query<{ id: string }>(
+        `SELECT l.id
+         FROM finance_bank_statement_line l
+         JOIN finance_bank_statement s
+           ON s.tenant_id=l.tenant_id AND s.id=l.statement_id
+         WHERE l.tenant_id=$1
+           AND l.payment_id IS NULL
+           AND s.status='IMPORTED'`,
+        [context.tenantId]
+      );
+      for (const row of unmatched.rows) {
+        currentIssues.get("BANK_UNMATCHED")!.add(row.id);
+      }
+
+      const vat = await client.query<{ id: string }>(
+        `SELECT d.id
+         FROM accounting_vat_document d
+         WHERE d.tenant_id=$1
+           AND d.status='APPROVED'
+           AND NOT EXISTS(
+             SELECT 1
+             FROM accounting_vat_register r
+             WHERE r.tenant_id=d.tenant_id
+               AND r.vat_document_id=d.id
+           )`,
+        [context.tenantId]
+      );
+      for (const row of vat.rows) {
+        currentIssues.get("VAT_UNREGISTERED")!.add(row.id);
+      }
+
+      const close = await client.query<{ id: string }>(
+        `SELECT p.id
+         FROM accounting_period p
+         WHERE p.tenant_id=$1
+           AND p.state='OPEN'
+           AND EXISTS(
+             SELECT 1
+             FROM accounting_month_close_check c
+             WHERE c.tenant_id=p.tenant_id
+               AND c.period_id=p.id
+               AND c.status<>'DONE'
+           )`,
+        [context.tenantId]
+      );
+      for (const row of close.rows) {
+        currentIssues.get("CLOSE_BLOCKED")!.add(row.id);
+      }
+
+      const payroll = await client.query<{ id: string }>(
+        `SELECT id
+         FROM payroll_accrual_batch
+         WHERE tenant_id=$1 AND status='DRAFT'`,
+        [context.tenantId]
+      );
+      for (const row of payroll.rows) {
+        currentIssues.get("PAYROLL_DRAFT")!.add(row.id);
+      }
+
+      for (const [issueCode, ids] of currentIssues) {
+        for (const referenceId of ids) {
+          await client.query(
+            `INSERT INTO tenant_operational_issue(
+               tenant_id,issue_code,reference_id,state
+             ) VALUES ($1,$2,$3,'OPEN')
+             ON CONFLICT (tenant_id,issue_code,reference_id)
+             DO UPDATE SET
+               state='OPEN',
+               resolved_at=NULL`,
+            [context.tenantId, issueCode, referenceId]
+          );
+        }
+
+        const idArray = Array.from(ids);
+        await client.query(
+          `UPDATE tenant_operational_issue
+           SET state='RESOLVED',resolved_at=now()
+           WHERE tenant_id=$1
+             AND issue_code=$2
+             AND state='OPEN'
+             AND (
+               cardinality($3::uuid[]) = 0
+               OR reference_id <> ALL($3::uuid[])
+             )`,
+          [context.tenantId, issueCode, idArray]
+        );
+      }
+
+      const snapshots = await client.query(
+        `SELECT metric_code,value_minor::text,currency,metric_date,source_updated_at
+         FROM tenant_analytics_snapshot
+         WHERE tenant_id=$1
+           AND metric_date=$2::date
+         ORDER BY metric_code`,
+        [context.tenantId, today]
+      );
+
+      const issues = await client.query<{
+        id: string;
+        issue_code: string;
+        reference_id: string;
+        first_seen_at: Date;
+      }>(
+        `SELECT id,issue_code,reference_id,first_seen_at
+         FROM tenant_operational_issue
+         WHERE tenant_id=$1 AND state='OPEN'
+         ORDER BY first_seen_at ASC
+         LIMIT 200`,
+        [context.tenantId]
+      );
+
+      const href: Record<string, string> = {
+        BANK_UNMATCHED: "/app/finance",
+        VAT_UNREGISTERED: "/app/accounting",
+        CLOSE_BLOCKED: "/app/accounting",
+        PAYROLL_DRAFT: "/app/accounting"
+      };
+
+      return {
+        generatedAt: new Date().toISOString(),
+        snapshots: snapshots.rows,
+        issues: issues.rows.map((issue) => ({
+          id: issue.id,
+          code: issue.issue_code,
+          referenceId: issue.reference_id,
+          firstSeenAt: issue.first_seen_at.toISOString(),
+          href: href[issue.issue_code] ?? "/app"
+        }))
+      };
+    });
+  }
+
   private money(value: string, currency: string): string {
     return new Intl.NumberFormat("ru-RU", {
       style: "currency",
