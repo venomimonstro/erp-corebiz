@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
@@ -90,8 +90,9 @@ export class PartyService {
       phone?: string;
       email?: string;
       responsibleMembershipId?: string;
+      idempotencyKey?: string;
     }
-  ): Promise<{ id: string; displayName: string }> {
+  ): Promise<{ id: string; displayName: string; reused?: boolean }> {
     const scope = await this.authorization.resolveScope(context, "crm.write");
     if (!scope) throw new BadRequestException("Недостаточно прав");
 
@@ -101,6 +102,11 @@ export class PartyService {
     const displayName = input.displayName.trim();
     if (displayName.length < 2 || displayName.length > 200) {
       throw new BadRequestException("Некорректное имя клиента");
+    }
+
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
+    if (idempotencyKey && (idempotencyKey.length < 8 || idempotencyKey.length > 180)) {
+      throw new BadRequestException("Некорректный ключ идемпотентности клиента");
     }
 
     const responsibleMembershipId =
@@ -114,6 +120,51 @@ export class PartyService {
     }
 
     return this.database.withTenantTransaction(context, async (client) => {
+      const normalizedPhone = input.phone?.trim() || "";
+      const normalizedEmail = input.email?.trim().toLowerCase() || "";
+      const fingerprint = JSON.stringify({
+        type: input.type ?? "PERSON",
+        displayName,
+        phone: normalizedPhone,
+        email: normalizedEmail,
+        responsibleMembershipId
+      });
+
+      if (idempotencyKey) {
+        await client.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+          [context.tenantId + "|party-create|" + idempotencyKey]
+        );
+
+        const existing = await client.query<{
+          fingerprint: string;
+          party_id: string;
+          display_name: string;
+        }>(
+          `SELECT i.fingerprint,i.party_id,p.display_name
+           FROM party_create_idempotency i
+           JOIN party p
+             ON p.tenant_id=i.tenant_id AND p.id=i.party_id
+           WHERE i.tenant_id=$1 AND i.idempotency_key=$2`,
+          [context.tenantId,idempotencyKey]
+        );
+
+        const row = existing.rows[0];
+        if (row) {
+          if (row.fingerprint !== fingerprint) {
+            throw new ConflictException(
+              "Ключ идемпотентности уже использован с другими данными клиента"
+            );
+          }
+
+          return {
+            id: row.party_id,
+            displayName: row.display_name,
+            reused: true
+          };
+        }
+      }
+
       const responsible = await client.query(
         `SELECT 1 FROM tenant_membership
          WHERE tenant_id = $1 AND id = $2 AND status = 'ACTIVE'`,
@@ -159,6 +210,20 @@ export class PartyService {
              tenant_id, party_id, type, value, is_primary
            ) VALUES ($1, $2, $3, $4, true)`,
           [context.tenantId, party.id, contact.type, contact.value]
+        );
+      }
+
+      if (idempotencyKey) {
+        await client.query(
+          `INSERT INTO party_create_idempotency(
+             tenant_id,idempotency_key,fingerprint,party_id
+           ) VALUES ($1,$2,$3,$4)`,
+          [
+            context.tenantId,
+            idempotencyKey,
+            fingerprint,
+            party.id
+          ]
         );
       }
 
