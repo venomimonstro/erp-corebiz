@@ -115,6 +115,7 @@ type MakeupCredit = {
 type Pack = {
   id: string;
   party_id: string;
+  beneficiary_party_ids?: string[];
   plan_name: string;
   available_visits: number | null;
   expires_at: string;
@@ -582,7 +583,12 @@ export default function DanceGroupsPage() {
         })
       });
       const studentPackages = packages.filter(
-        (pack) => pack.party_id === student.party_id && pack.status === "ACTIVE"
+        (pack) =>
+          pack.status === "ACTIVE" &&
+          (
+            pack.party_id === student.party_id ||
+            pack.beneficiary_party_ids?.includes(student.party_id)
+          )
       );
       const studentMakeups = makeupCredits.filter(
         (credit) =>
