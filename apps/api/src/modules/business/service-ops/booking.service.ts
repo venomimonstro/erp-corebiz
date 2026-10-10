@@ -578,7 +578,9 @@ export class BookingService {
       await client.query(
         `UPDATE service_package
          SET status='EXPIRED',updated_at=now()
-         WHERE tenant_id=$1 AND status='ACTIVE' AND expires_at<=now()`,
+         WHERE tenant_id=$1
+           AND status IN ('ACTIVE','PENDING_PAYMENT')
+           AND expires_at<=now()`,
         [context.tenantId]
       );
 
