@@ -5,7 +5,7 @@ import {
   NotFoundException
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { RedisService } from "../../../infrastructure/cache/redis.service";
 import { CrmService } from "../crm/crm.service";
@@ -140,7 +140,12 @@ export class SiteFormsService {
     });
   }
 
-  async bookingAvailability(publicKey:string, from:string, to:string):Promise<Array<{
+  async bookingAvailability(
+    publicKey:string,
+    from:string,
+    to:string,
+    clientIdentity="unknown"
+  ):Promise<Array<{
     resourceId:string;resourceName:string;startsAt:string;endsAt:string;
   }>> {
     if (!publicKey || publicKey.length > 160) throw new BadRequestException("Invalid booking link");
@@ -154,8 +159,20 @@ export class SiteFormsService {
     }>("SELECT * FROM corebiz_resolve_site_form_binding($1)",[publicKey]);
     const binding=result.rows[0];
     if (!binding || binding.action!=="BOOKING") throw new NotFoundException("Booking form not found");
-    const hits=await this.redis.incrementWindow("site-form-availability:"+binding.binding_id,60);
-    if(hits>120) throw new BadRequestException("Too many availability requests");
+    const clientKey=this.clientKey(clientIdentity);
+    const [clientHits,totalHits]=await Promise.all([
+      this.redis.incrementWindow(
+        "site-form-availability:client:"+binding.binding_id+":"+clientKey,
+        60
+      ),
+      this.redis.incrementWindow(
+        "site-form-availability:total:"+binding.binding_id,
+        60
+      )
+    ]);
+    if(clientHits>60 || totalHits>3000){
+      throw new BadRequestException("Too many availability requests");
+    }
     const serviceId=typeof binding.config.serviceId==="string"?binding.config.serviceId:"";
     const allowed=Array.isArray(binding.config.resourceIds)?binding.config.resourceIds.filter(
       (id):id is string=>typeof id==="string"
@@ -182,7 +199,8 @@ export class SiteFormsService {
       startsAt?:string;
       resourceId?:string;
       honeypot?:string;
-    }
+    },
+    clientIdentity="unknown"
   ):Promise<Record<string,unknown>>{
     if (!input || typeof input !== "object" || Array.isArray(input) ||
         typeof input.idempotencyKey !== "string" ||
@@ -209,11 +227,18 @@ export class SiteFormsService {
     const row=binding.rows[0];
     if(!row) throw new NotFoundException("Форма недоступна");
 
-    const rate=await this.redis.incrementWindow(
-      "site-form:"+row.binding_id,
-      60
-    );
-    if(rate>120){
+    const clientKey=this.clientKey(clientIdentity);
+    const [clientRate,totalRate]=await Promise.all([
+      this.redis.incrementWindow(
+        "site-form:client:"+row.binding_id+":"+clientKey,
+        60
+      ),
+      this.redis.incrementWindow(
+        "site-form:total:"+row.binding_id,
+        60
+      )
+    ]);
+    if(clientRate>30 || totalRate>600){
       return {accepted:false,reason:"rate_limited"};
     }
 
@@ -432,6 +457,13 @@ export class SiteFormsService {
         );
       }
     );
+  }
+
+  private clientKey(identity:string):string{
+    return createHash("sha256")
+      .update(String(identity||"unknown").slice(0,500))
+      .digest("hex")
+      .slice(0,32);
   }
 
   private async fail(tenantId:string,submissionId:string,message:string):Promise<void>{
