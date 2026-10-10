@@ -371,6 +371,7 @@ async function inspectRequiredHardening(root) {
     "163_room_rental_statements.sql",
     "164_room_rental_payment_terms.sql",
     "165_room_rental_statement_immutability.sql",
+    "166_room_rental_contract_overlap.sql",
 
   ];
 
