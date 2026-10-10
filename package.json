@@ -17,7 +17,8 @@
     "restore:db": "bash scripts/restore-postgres.sh",
     "release:check": "bash scripts/release-check.sh",
     "release:gate": "bash scripts/production-gate.sh",
-    "stability:check": "node scripts/stability-source-preflight.mjs"
+    "stability:check": "node scripts/stability-source-preflight.mjs",
+    "golden:journeys": "node scripts/golden-business-journeys.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
