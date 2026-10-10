@@ -447,7 +447,11 @@ export class ReleaseVerificationService {
       const mandatory = this.mandatoryMatrix();
       const missing = mandatory
         .filter(([component, kind]) => !map.has(component + ":" + kind))
-        .map(([component, kind]) => ({ component, kind }));
+        .map(([component, kind]) => ({
+          component,
+          kind,
+          ...this.remediation(component, kind)
+        }));
 
       const staleBefore = Date.now() - 7 * 86400000;
       const stale = mandatory
@@ -459,7 +463,8 @@ export class ReleaseVerificationService {
         .map((row) => ({
           component: row.component,
           kind: row.kind,
-          executedAt: row.executedAt
+          executedAt: row.executedAt,
+          ...this.remediation(row.component, row.kind)
         }));
 
       const failing = mandatory
@@ -470,7 +475,8 @@ export class ReleaseVerificationService {
           component: row.component,
           kind: row.kind,
           outcome: row.outcome,
-          evidenceReference: row.evidenceReference
+          evidenceReference: row.evidenceReference,
+          ...this.remediation(row.component, row.kind)
         }));
 
       const ready =
