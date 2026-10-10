@@ -26,6 +26,29 @@ type Customer = {
   email: string | null;
 };
 
+type ServiceAsset = {
+  id: string;
+  party_id: string | null;
+  asset_type: string;
+  display_name: string;
+  external_key: string | null;
+  registration_number: string | null;
+  manufacturer: string | null;
+  model: string | null;
+  usage_value: string;
+  usage_unit: string;
+};
+
+type ServicePackage = {
+  id: string;
+  party_id: string;
+  plan_name: string;
+  available_visits: number;
+  expires_at: string;
+  applicable_service_id: string | null;
+  status: string;
+};
+
 type Booking = {
   id: string;
   business_number: string;
@@ -38,6 +61,15 @@ type Booking = {
   version: number;
   party_name: string | null;
   service_name: string;
+  asset?: {
+    id: string;
+    assetType: string;
+    displayName: string;
+    externalKey: string | null;
+    registrationNumber: string | null;
+    usageValue: string;
+    usageUnit: string;
+  } | null;
   resources: Array<{
     resourceId: string;
     resourceName: string;
@@ -65,6 +97,8 @@ export default function BookingsPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customerAssets, setCustomerAssets] = useState<ServiceAsset[]>([]);
+  const [customerPackages, setCustomerPackages] = useState<ServicePackage[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [error, setError] = useState("");
   const [weekOffset, setWeekOffset] = useState(0);
@@ -73,6 +107,8 @@ export default function BookingsPage() {
   const [selectedService, setSelectedService] = useState("");
   const [selectedResource, setSelectedResource] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState("");
+  const [selectedAsset, setSelectedAsset] = useState("");
+  const [selectedPackage, setSelectedPackage] = useState("");
   const [selectedStart, setSelectedStart] = useState("");
   const [slotDate, setSlotDate] = useState("");
   const [availableSlots, setAvailableSlots] = useState<Array<{ resourceId: string; startsAt: string }>>([]);
@@ -116,6 +152,44 @@ export default function BookingsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!selectedCustomer) {
+      setCustomerAssets([]);
+      setCustomerPackages([]);
+      setSelectedAsset("");
+      setSelectedPackage("");
+      return;
+    }
+
+    void Promise.all([
+      apiRequest<ServiceAsset[]>(
+        "/service/assets?partyId=" + encodeURIComponent(selectedCustomer)
+      ),
+      apiRequest<ServicePackage[]>(
+        "/service/packages?partyId=" + encodeURIComponent(selectedCustomer)
+      )
+    ])
+      .then(([assets, packages]) => {
+        setCustomerAssets(assets);
+        setCustomerPackages(
+          packages.filter((item) => item.status === "ACTIVE")
+        );
+        setSelectedAsset((current) =>
+          assets.some((item) => item.id === current) ? current : ""
+        );
+        setSelectedPackage((current) =>
+          packages.some((item) => item.id === current) ? current : ""
+        );
+      })
+      .catch((cause) => {
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Не удалось загрузить объекты и абонементы клиента"
+        );
+      });
+  }, [selectedCustomer]);
 
   useEffect(() => {
     if (!services.length && !resources.length) return;
@@ -221,6 +295,72 @@ export default function BookingsPage() {
     }
   }
 
+  async function createAsset() {
+    if (!selectedCustomer) {
+      setError("Сначала выберите клиента.");
+      return;
+    }
+
+    const typeRaw = (
+      window.prompt(
+        "Тип объекта: VEHICLE / EQUIPMENT / DEVICE / OTHER",
+        "VEHICLE"
+      ) ?? ""
+    ).trim().toUpperCase();
+    if (!["VEHICLE", "EQUIPMENT", "DEVICE", "OTHER"].includes(typeRaw)) {
+      setError("Некорректный тип объекта.");
+      return;
+    }
+
+    const displayName = window.prompt(
+      typeRaw === "VEHICLE"
+        ? "Автомобиль, например BMW X5"
+        : "Название объекта обслуживания"
+    );
+    if (!displayName?.trim()) return;
+
+    const externalKey = window.prompt(
+      typeRaw === "VEHICLE" ? "VIN (необязательно)" : "Серийный номер (необязательно)",
+      ""
+    )?.trim() || undefined;
+    const registrationNumber =
+      typeRaw === "VEHICLE"
+        ? window.prompt("Госномер (необязательно)", "")?.trim() || undefined
+        : undefined;
+    const usageValue = window.prompt(
+      typeRaw === "VEHICLE" ? "Текущий пробег, км" : "Наработка (необязательно)",
+      "0"
+    )?.trim() || "0";
+
+    try {
+      const created = await apiRequest<{ id: string }>("/service/assets", {
+        method: "POST",
+        body: JSON.stringify({
+          partyId: selectedCustomer,
+          assetType: typeRaw,
+          displayName: displayName.trim(),
+          externalKey,
+          registrationNumber,
+          usageValue,
+          usageUnit: typeRaw === "VEHICLE" ? "KM" : "UNIT"
+        })
+      });
+
+      const assets = await apiRequest<ServiceAsset[]>(
+        "/service/assets?partyId=" + encodeURIComponent(selectedCustomer)
+      );
+      setCustomerAssets(assets);
+      setSelectedAsset(created.id);
+      setError("");
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось добавить объект клиента"
+      );
+    }
+  }
+
   async function fetchSlots() {
     if (!selectedService || !selectedResource || !slotDate) {
       setError("Выберите услугу, ресурс и день");
@@ -274,6 +414,8 @@ export default function BookingsPage() {
           resourceIds: [selectedResource],
           startsAt: parsed.toISOString(),
           partyId: selectedCustomer || undefined,
+          assetId: selectedAsset || undefined,
+          packageId: selectedPackage || undefined,
           source: "MANUAL",
           idempotencyKey: crypto.randomUUID()
         })
@@ -281,6 +423,8 @@ export default function BookingsPage() {
       setShowCreate(false);
       setSelectedStart("");
       setSelectedCustomer("");
+      setSelectedAsset("");
+      setSelectedPackage("");
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать запись");
@@ -410,6 +554,56 @@ export default function BookingsPage() {
               >
                 + Новый клиент
               </button>
+              {selectedCustomer ? (
+                <>
+                  <label>Объект клиента{" "}
+                    <select
+                      value={selectedAsset}
+                      onChange={(e) => setSelectedAsset(e.target.value)}
+                    >
+                      <option value="">Не требуется</option>
+                      {customerAssets.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.display_name}
+                          {item.registration_number
+                            ? " · " + item.registration_number
+                            : ""}
+                          {item.external_key ? " · " + item.external_key : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void createAsset()}
+                  >
+                    + Авто / объект
+                  </button>
+                  {customerPackages.length ? (
+                    <label>Абонемент{" "}
+                      <select
+                        value={selectedPackage}
+                        onChange={(e) => setSelectedPackage(e.target.value)}
+                      >
+                        <option value="">Без абонемента</option>
+                        {customerPackages
+                          .filter(
+                            (item) =>
+                              !item.applicable_service_id ||
+                              !selectedService ||
+                              item.applicable_service_id === selectedService
+                          )
+                          .map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.plan_name} · осталось {item.available_visits}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                  ) : null}
+                </>
+              ) : null}
               <label>Начало{" "}
                 <input required type="datetime-local" value={selectedStart} onChange={(e) => setSelectedStart(e.target.value)} />
               </label>
@@ -480,6 +674,17 @@ export default function BookingsPage() {
           <section className="settings-card">
             <h2>Визит {details.business_number}</h2>
             <p>{details.service_name} · {details.party_name ?? "Клиент не указан"}</p>
+            {details.asset ? (
+              <p>
+                Объект: {details.asset.displayName}
+                {details.asset.registrationNumber
+                  ? " · " + details.asset.registrationNumber
+                  : ""}
+                {details.asset.usageValue
+                  ? " · " + details.asset.usageValue + " " + details.asset.usageUnit
+                  : ""}
+              </p>
+            ) : null}
             <p>{new Date(details.starts_at).toLocaleString("ru-RU")}</p>
             <p>{details.resources.map((item) => item.resourceName).join(", ")}</p>
             <p>Статус: {details.status}</p>
