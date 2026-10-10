@@ -15,7 +15,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** Sprint 75 — Pilot stabilization backlog / exit evidence.  
+**Активная разработка:** Sprint 76 — Commercial rollout gate / cohort expansion.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -838,18 +838,34 @@
 - COMPLETED requires fresh PASS exit review after latest snapshot;
 - owner workspace for pilot, snapshots, incidents and exit gate.
 
-## Активно — Sprint 75: Pilot stabilization backlog / exit evidence
+### Sprint 75 — Pilot stabilization backlog / exit evidence
+- pilot feedback classification: BUG / UX / SPEC_GAP / FEATURE;
+- priority P0–P4;
+- disposition: CORE / MODULE / CONFIG / EXTENSION / REJECT;
+- P0 and P1 BUG may be release-blocking;
+- feedback can link to incident / support ticket / screen;
+- root-cause / remediation / owner fields;
+- NEW → TRIAGED → IN_PROGRESS → VERIFY → DONE lifecycle;
+- DONE requires verification evidence;
+- release-blocking fix requires fixVersion;
+- release-blocking item cannot become DONE until fixVersion is an APPROVED RC;
+- open release-blocking feedback blocks pilot exit PASS;
+- P0 incident automatically creates release-blocking BUG;
+- pilot workspace exposes stabilization backlog and triage actions;
+- one tenant request is classified before any Core decision.
+
+## Активно — Sprint 76: Commercial rollout gate / cohort expansion
 
 Scope:
-- classify pilot feedback as BUG / UX / SPEC_GAP / FEATURE;
-- separate P0/P1 release blockers from product ideas;
-- link feedback to incident/support ticket/screen;
-- root-cause and remediation owner;
-- verify-fixed lifecycle;
-- require new RC evidence when a release-blocking code fix is shipped;
-- prohibit direct Core customization from one tenant request;
-- stabilization dashboard and exit backlog gate.
+- require at least one COMPLETED pilot with PASS exit review;
+- require no unresolved release-blocking pilot feedback;
+- require current APPROVED RC and fresh mandatory evidence;
+- formal rollout decision with immutable snapshot;
+- staged cohort limits instead of all-at-once activation;
+- rollback/pause decision;
+- commercial readiness dashboard;
+- explicit NO-GO by default.
 
 ## Следом
 
-Sprint 76 — Commercial rollout gate / cohort expansion.
+Sprint 77 — Controlled cohort rollout / commercial telemetry.
