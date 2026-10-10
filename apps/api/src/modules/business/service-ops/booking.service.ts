@@ -432,6 +432,22 @@ export class BookingService {
       }
     );
 
+    const entitlementKeys=new Set<string>();
+    for(const entitlement of normalizedEntitlements){
+      const key=[
+        entitlement.lessonType??"*",
+        entitlement.danceProgramId??"*",
+        entitlement.danceGroupId??"*",
+        entitlement.priority
+      ].join("|");
+      if(entitlementKeys.has(key)){
+        throw new BadRequestException(
+          "В тарифе дублируется квота с тем же типом занятия, направлением, группой и приоритетом"
+        );
+      }
+      entitlementKeys.add(key);
+    }
+
     const activationPolicy = input.activationPolicy ?? "FULL_PAYMENT";
     if (!["FULL_PAYMENT","IMMEDIATE","PROPORTIONAL","GRACE_PERIOD"].includes(
       activationPolicy
@@ -537,12 +553,21 @@ export class BookingService {
             }
           }
           if (entitlement.danceGroupId) {
-            const group = await client.query(
-              "SELECT 1 FROM dance_group WHERE tenant_id=$1 AND id=$2 AND status<>'ARCHIVED'",
+            const group = await client.query<{program_id:string}>(
+              "SELECT program_id FROM dance_group WHERE tenant_id=$1 AND id=$2 AND status<>'ARCHIVED'",
               [context.tenantId,entitlement.danceGroupId]
             );
-            if (!group.rowCount) {
+            const groupRow=group.rows[0];
+            if (!groupRow) {
               throw new NotFoundException("Группа квоты не найдена");
+            }
+            if (
+              entitlement.danceProgramId &&
+              groupRow.program_id!==entitlement.danceProgramId
+            ) {
+              throw new ConflictException(
+                "Группа квоты относится к другому направлению"
+              );
             }
           }
           await client.query(
