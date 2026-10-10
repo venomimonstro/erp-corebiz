@@ -752,6 +752,7 @@ export class BookingService {
         if (!payer.rowCount) throw new NotFoundException("Плательщик не найден");
       }
 
+      let salesOrderSettled=false;
       if (input.salesOrderId) {
         const order = await client.query(
           `SELECT 1 FROM sales_order
@@ -765,6 +766,17 @@ export class BookingService {
             "Заказ продажи клиента не найден или отменён"
           );
         }
+        const receivable=await client.query<{status:string}>(
+          `SELECT status
+           FROM financial_obligation
+           WHERE tenant_id=$1
+             AND direction='RECEIVABLE'
+             AND source_type='SALES_ORDER'
+             AND source_id=$2
+           LIMIT 1`,
+          [context.tenantId,input.salesOrderId]
+        );
+        salesOrderSettled=receivable.rows[0]?.status==="SETTLED";
       }
 
       const danceStudent = await client.query<{ id: string }>(
@@ -791,11 +803,16 @@ export class BookingService {
         }
       }
 
+      const requiresFullPayment =
+        Boolean(danceStudentId) &&
+        BigInt(planRow.price_minor)>0n &&
+        planRow.activation_policy==="FULL_PAYMENT";
       const initialStatus =
-        danceStudentId &&
-        BigInt(planRow.price_minor) > 0n &&
-        !input.salesOrderId &&
-        planRow.activation_policy === "FULL_PAYMENT"
+        requiresFullPayment &&
+        (
+          !input.salesOrderId ||
+          !salesOrderSettled
+        )
           ? "PENDING_PAYMENT"
           : "ACTIVE";
 
