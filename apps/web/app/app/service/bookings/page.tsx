@@ -106,6 +106,22 @@ export default function BookingsPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (!services.length && !resources.length) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("create") !== "1") return;
+
+    params.delete("create");
+    const next = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      window.location.pathname + (next ? "?" + next : "")
+    );
+    setError("");
+    setShowCreate(true);
+  }, [services.length, resources.length]);
+
   const grouped = useMemo(() => {
     const map = new Map<string, Booking[]>();
 
