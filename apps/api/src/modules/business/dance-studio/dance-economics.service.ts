@@ -316,9 +316,10 @@ export class DanceEconomicsService {
         throw new ConflictException("Сначала отметьте посещаемость всех записанных учеников");
 
       const participants=await client.query<{
-        id:string;status:string;package_id:string|null;charge_minor:string;
+        id:string;status:string;package_id:string|null;
+        makeup_credit_id:string|null;charge_minor:string;
       }>(
-        `SELECT id,status,package_id,charge_minor::text
+        `SELECT id,status,package_id,makeup_credit_id,charge_minor::text
          FROM dance_lesson_participant
          WHERE tenant_id=$1 AND lesson_id=$2
          ORDER BY id
@@ -334,6 +335,67 @@ export class DanceEconomicsService {
           bookedCount++;
         }
         if(["ATTENDED","LATE"].includes(participant.status)) attendedCount++;
+        if(participant.makeup_credit_id){
+          const credit=await client.query<{
+            status:string;
+            management_value_minor:string;
+            reserved_participant_id:string|null;
+          }>(
+            `SELECT
+               status,management_value_minor::text,reserved_participant_id
+             FROM dance_makeup_credit
+             WHERE tenant_id=$1 AND id=$2
+             FOR UPDATE`,
+            [context.tenantId,participant.makeup_credit_id]
+          );
+          const makeupCredit=credit.rows[0];
+          if(
+            !makeupCredit ||
+            makeupCredit.status!=="RESERVED" ||
+            makeupCredit.reserved_participant_id!==participant.id
+          ){
+            throw new ConflictException(
+              "Нарушена целостность отработки"
+            );
+          }
+
+          const consumeMakeup=[
+            "ATTENDED","LATE","NO_SHOW","CANCELLED_LATE"
+          ].includes(participant.status);
+
+          if(consumeMakeup){
+            const used=await client.query(
+              `UPDATE dance_makeup_credit
+               SET status='USED',reserved_participant_id=NULL,
+                   used_participant_id=$3,updated_at=now()
+               WHERE tenant_id=$1 AND id=$2
+                 AND status='RESERVED'
+                 AND reserved_participant_id=$3
+               RETURNING id`,
+              [context.tenantId,participant.makeup_credit_id,participant.id]
+            );
+            if(!used.rowCount){
+              throw new ConflictException("Отработка уже была обработана");
+            }
+            earnedRevenue+=BigInt(makeupCredit.management_value_minor);
+          }else{
+            const released=await client.query(
+              `UPDATE dance_makeup_credit
+               SET status='AVAILABLE',reserved_participant_id=NULL,
+                   updated_at=now()
+               WHERE tenant_id=$1 AND id=$2
+                 AND status='RESERVED'
+                 AND reserved_participant_id=$3
+               RETURNING id`,
+              [context.tenantId,participant.makeup_credit_id,participant.id]
+            );
+            if(!released.rowCount){
+              throw new ConflictException("Отработка уже была обработана");
+            }
+          }
+          continue;
+        }
+
         if(!participant.package_id){
           if(["ATTENDED","LATE","NO_SHOW","CANCELLED_LATE"].includes(participant.status)){
             earnedRevenue+=BigInt(participant.charge_minor);
@@ -419,25 +481,34 @@ export class DanceEconomicsService {
             visitValue=
               BigInt(red.price_minor_snapshot)/BigInt(red.visit_limit_snapshot);
           }
-          earnedRevenue+=visitValue;
 
           if(makeup){
             const days=Math.max(1,red.makeup_days_valid||14);
             await client.query(
               `INSERT INTO dance_makeup_credit(
                  tenant_id,student_id,source_lesson_id,source_participant_id,
-                 expires_at,status
+                 expires_at,dance_program_id,management_value_minor,status
                )
-               SELECT $1,student_id,$2,id,$3,'AVAILABLE'
+               SELECT
+                 $1,student_id,$2,id,$3,$4,$5,'AVAILABLE'
                FROM dance_lesson_participant
-               WHERE tenant_id=$1 AND id=$4
-               ON CONFLICT(tenant_id,source_participant_id) DO NOTHING`,
+               WHERE tenant_id=$1 AND id=$6
+               ON CONFLICT(tenant_id,source_participant_id)
+               DO UPDATE SET
+                 expires_at=EXCLUDED.expires_at,
+                 dance_program_id=EXCLUDED.dance_program_id,
+                 management_value_minor=EXCLUDED.management_value_minor,
+                 updated_at=now()`,
               [
                 context.tenantId,lessonId,
                 new Date(new Date(lesson.ends_at).getTime()+days*86400000),
+                lesson.program_id??null,
+                visitValue.toString(),
                 participant.id
               ]
             );
+          }else{
+            earnedRevenue+=visitValue;
           }
         }else{
           const update=await client.query(
