@@ -639,6 +639,24 @@ export class PilotService {
         ]
       );
 
+      if (input.severity === "P0") {
+        await client.query(
+          `INSERT INTO tenant_pilot_feedback(
+             tenant_id,pilot_enrollment_id,category,priority,
+             release_blocking,title,description,source_incident_id,
+             created_by_membership_id
+           ) VALUES ($1,$2,'BUG','P0',true,$3,$4,$5,$6)`,
+          [
+            context.tenantId,
+            pilot.id,
+            "P0: " + summary,
+            "Автоматически создано из pilot incident " + code,
+            result.rows[0]!.id,
+            context.membershipId
+          ]
+        );
+      }
+
       if (input.severity === "P0" && pilot.status === "RUNNING") {
         await client.query(
           `UPDATE tenant_pilot_enrollment
