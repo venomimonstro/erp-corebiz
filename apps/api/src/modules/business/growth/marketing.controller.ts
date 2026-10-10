@@ -8,6 +8,7 @@ import {
   Req
 } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
+import { ApiCost } from "../../../infrastructure/http/api-cost.decorator";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
 import { MarketingService } from "./marketing.service";
@@ -48,6 +49,7 @@ export class MarketingController {
   }
 
   @Post("connections/:id/sync")
+  @ApiCost("EXPENSIVE")
   @RequirePermission("analytics.manage")
   async sync(
     @Req() request: AuthenticatedRequest,
@@ -80,6 +82,7 @@ export class MarketingController {
   }
 
   @Get("stats")
+  @ApiCost("HEAVY")
   @RequirePermission("analytics.read")
   async stats(
     @Req() request: AuthenticatedRequest,
