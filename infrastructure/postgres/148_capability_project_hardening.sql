@@ -95,13 +95,12 @@ RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
-AS $
+AS $$
 BEGIN
   PERFORM corebiz_seed_project_permissions(NEW.id);
   RETURN NEW;
 END;
-$;
-
+$$;
 REVOKE ALL ON FUNCTION corebiz_tenant_project_permission_bootstrap_trigger() FROM PUBLIC;
 
 DROP TRIGGER IF EXISTS zz_tenant_seed_project_permissions ON tenant;
