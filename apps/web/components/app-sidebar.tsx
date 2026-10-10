@@ -244,11 +244,21 @@ export function AppSidebar({ active }: { active: string }) {
     profile === "all" || profileSections[profile].includes(section.title) ||
     section.items.some((entry) => entry[2] === active)
   );
-  const link = ([href, label, key]: Entry) => (
-    <a key={key} className={active === key ? "active" : ""}
-      aria-current={active === key ? "page" : undefined}
-      href={href} onClick={() => setMobileOpen(false)}>{label}</a>
-  );
+  const link = ([href, label, key]: Entry) => {
+    const resolvedHref =
+      key === "support" && typeof window !== "undefined"
+        ? "/app/support?from=" +
+          encodeURIComponent(
+            window.location.pathname + window.location.search
+          )
+        : href;
+
+    return (
+      <a key={key} className={active === key ? "active" : ""}
+        aria-current={active === key ? "page" : undefined}
+        href={resolvedHref} onClick={() => setMobileOpen(false)}>{label}</a>
+    );
+  };
 
   return (
     <aside className="sidebar">
