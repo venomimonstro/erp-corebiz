@@ -286,6 +286,376 @@ export class DashboardService {
     });
   }
 
+  async memberWorkspace(
+    context: TenantContext
+  ): Promise<Record<string, unknown>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const rolesResult = await client.query<{ code: string }>(
+        `SELECT r.code
+         FROM membership_role mr
+         JOIN tenant_role r
+           ON r.tenant_id=mr.tenant_id AND r.id=mr.role_id
+         WHERE mr.tenant_id=$1 AND mr.membership_id=$2`,
+        [context.tenantId, context.membershipId]
+      );
+
+      const roles = rolesResult.rows.map((row) => row.code);
+      const has = (code: string) => roles.includes(code);
+
+      let workspace =
+        has("WAREHOUSE") ? "WAREHOUSE" :
+        has("FINANCE") ? "FINANCE" :
+        has("PROCUREMENT") ? "PROCUREMENT" :
+        has("SERVICE_STAFF") ? "SERVICE" :
+        (has("SALES_HEAD") || has("SALES_MANAGER")) ? "SALES" :
+        "VIEWER";
+
+      const metrics: Array<{
+        label: string;
+        value: string;
+        detail: string;
+      }> = [];
+      const actions: Array<{
+        id: string;
+        title: string;
+        detail: string;
+        href: string;
+        severity: "INFO" | "WARNING" | "CRITICAL";
+      }> = [];
+
+      if (workspace === "SALES") {
+        const [deals,tasks,orders] = await Promise.all([
+          client.query<{ count: string; amount_minor: string }>(
+            `SELECT count(*)::text AS count,
+                    COALESCE(sum(d.amount_minor),0)::text AS amount_minor
+             FROM crm_deal d
+             JOIN crm_stage s
+               ON s.tenant_id=d.tenant_id AND s.id=d.stage_id
+             WHERE d.tenant_id=$1
+               AND d.responsible_membership_id=$2
+               AND s.kind='NORMAL'`,
+            [context.tenantId, context.membershipId]
+          ),
+          client.query<{ count: string }>(
+            `SELECT count(*)::text AS count
+             FROM task
+             WHERE tenant_id=$1
+               AND responsible_membership_id=$2
+               AND state IN ('OPEN','IN_PROGRESS','WAITING')`,
+            [context.tenantId, context.membershipId]
+          ),
+          client.query<{ count: string; total_minor: string }>(
+            `SELECT count(*)::text AS count,
+                    COALESCE(sum(total_minor),0)::text AS total_minor
+             FROM sales_order
+             WHERE tenant_id=$1
+               AND responsible_membership_id=$2
+               AND order_status IN ('DRAFT','CONFIRMED')`,
+            [context.tenantId, context.membershipId]
+          )
+        ]);
+
+        metrics.push(
+          {
+            label: "Мои сделки",
+            value: deals.rows[0]?.count ?? "0",
+            detail: "Активная воронка"
+          },
+          {
+            label: "Сумма сделок",
+            value: this.money(deals.rows[0]?.amount_minor ?? "0","RUB"),
+            detail: "Активные сделки"
+          },
+          {
+            label: "Мои задачи",
+            value: tasks.rows[0]?.count ?? "0",
+            detail: "Открытые / в работе"
+          },
+          {
+            label: "Мои заказы",
+            value: orders.rows[0]?.count ?? "0",
+            detail: this.money(orders.rows[0]?.total_minor ?? "0","RUB")
+          }
+        );
+
+        const overdue = await client.query<{
+          id: string;
+          title: string;
+          due_at: Date;
+        }>(
+          `SELECT id,title,due_at
+           FROM task
+           WHERE tenant_id=$1
+             AND responsible_membership_id=$2
+             AND state IN ('OPEN','IN_PROGRESS','WAITING')
+             AND due_at < now()
+           ORDER BY due_at
+           LIMIT 20`,
+          [context.tenantId, context.membershipId]
+        );
+
+        for (const row of overdue.rows) {
+          actions.push({
+            id: "task:" + row.id,
+            title: row.title,
+            detail: "Просрочено " + row.due_at.toLocaleString("ru-RU"),
+            href: "/app/tasks?filter=overdue",
+            severity: "CRITICAL"
+          });
+        }
+      } else if (workspace === "SERVICE") {
+        const [todayBookings,tasks] = await Promise.all([
+          client.query<{ count: string }>(
+            `SELECT count(DISTINCT b.id)::text AS count
+             FROM service_booking b
+             JOIN service_booking_resource br
+               ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
+             JOIN service_resource r
+               ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+             WHERE b.tenant_id=$1
+               AND r.membership_id=$2
+               AND b.status NOT IN ('CANCELLED','NO_SHOW')
+               AND b.starts_at >= date_trunc('day',now())
+               AND b.starts_at < date_trunc('day',now()) + interval '1 day'`,
+            [context.tenantId, context.membershipId]
+          ),
+          client.query<{ count: string }>(
+            `SELECT count(*)::text AS count
+             FROM task
+             WHERE tenant_id=$1
+               AND responsible_membership_id=$2
+               AND state IN ('OPEN','IN_PROGRESS','WAITING')`,
+            [context.tenantId, context.membershipId]
+          )
+        ]);
+
+        metrics.push(
+          {
+            label: "Записи сегодня",
+            value: todayBookings.rows[0]?.count ?? "0",
+            detail: "Моё расписание"
+          },
+          {
+            label: "Мои задачи",
+            value: tasks.rows[0]?.count ?? "0",
+            detail: "Открытые / в работе"
+          }
+        );
+
+        const upcoming = await client.query<{
+          id: string;
+          business_number: string;
+          starts_at: Date;
+          customer: string | null;
+          service: string;
+        }>(
+          `SELECT DISTINCT
+             b.id,b.business_number,b.starts_at,
+             p.display_name AS customer,
+             s.name AS service
+           FROM service_booking b
+           JOIN service_booking_resource br
+             ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
+           JOIN service_resource r
+             ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+           JOIN service_catalog_item s
+             ON s.tenant_id=b.tenant_id AND s.id=b.service_id
+           LEFT JOIN party p
+             ON p.tenant_id=b.tenant_id AND p.id=b.party_id
+           WHERE b.tenant_id=$1
+             AND r.membership_id=$2
+             AND b.status IN ('CONFIRMED','ARRIVED','IN_SERVICE')
+             AND b.starts_at >= now()
+           ORDER BY b.starts_at
+           LIMIT 20`,
+          [context.tenantId, context.membershipId]
+        );
+
+        for (const row of upcoming.rows) {
+          actions.push({
+            id: "booking:" + row.id,
+            title: row.service,
+            detail:
+              row.starts_at.toLocaleString("ru-RU") +
+              " · " +
+              (row.customer ?? "Клиент"),
+            href: "/app/service/bookings",
+            severity: "INFO"
+          });
+        }
+      } else if (workspace === "WAREHOUSE") {
+        const tasks = await client.query<{
+          status: string;
+          count: string;
+        }>(
+          `SELECT status,count(*)::text AS count
+           FROM warehouse_task
+           WHERE tenant_id=$1
+             AND status NOT IN ('COMPLETED','CANCELLED')
+             AND (
+               assigned_membership_id=$2
+               OR claimed_by_membership_id=$2
+               OR (
+                 assigned_membership_id IS NULL
+                 AND claimed_by_membership_id IS NULL
+               )
+             )
+           GROUP BY status`,
+          [context.tenantId, context.membershipId]
+        );
+
+        const total = tasks.rows.reduce(
+          (sum,row) => sum + Number(row.count),
+          0
+        );
+        const failed = Number(
+          tasks.rows.find((row) => row.status === "FAILED")?.count ?? "0"
+        );
+
+        metrics.push(
+          {
+            label: "Доступные задания",
+            value: String(total),
+            detail: "Назначенные и свободная очередь"
+          },
+          {
+            label: "Проблемные",
+            value: String(failed),
+            detail: "Требуют разбора"
+          }
+        );
+
+        actions.push({
+          id: "wms-next",
+          title: "Взять следующее складское задание",
+          detail: "Scanner-first рабочее место",
+          href: "/app/wms/mobile",
+          severity: failed > 0 ? "WARNING" : "INFO"
+        });
+      } else if (workspace === "FINANCE") {
+        const [obligations,bank] = await Promise.all([
+          client.query<{
+            direction: string;
+            amount_minor: string;
+          }>(
+            `SELECT direction,
+                    COALESCE(sum(amount_minor-settled_minor),0)::text AS amount_minor
+             FROM financial_obligation
+             WHERE tenant_id=$1
+               AND status IN ('OPEN','PARTIALLY_SETTLED')
+               AND currency='RUB'
+             GROUP BY direction`,
+            [context.tenantId]
+          ),
+          client.query<{ count: string }>(
+            `SELECT count(*)::text AS count
+             FROM finance_bank_statement_line l
+             JOIN finance_bank_statement s
+               ON s.tenant_id=l.tenant_id AND s.id=l.statement_id
+             WHERE l.tenant_id=$1
+               AND l.payment_id IS NULL
+               AND s.status='IMPORTED'`,
+            [context.tenantId]
+          )
+        ]);
+
+        const ar = obligations.rows.find(
+          (row) => row.direction === "RECEIVABLE"
+        )?.amount_minor ?? "0";
+        const ap = obligations.rows.find(
+          (row) => row.direction === "PAYABLE"
+        )?.amount_minor ?? "0";
+
+        metrics.push(
+          {
+            label: "Дебиторка",
+            value: this.money(ar,"RUB"),
+            detail: "Открыто к получению"
+          },
+          {
+            label: "Кредиторка",
+            value: this.money(ap,"RUB"),
+            detail: "Открыто к оплате"
+          },
+          {
+            label: "Банк не сопоставлен",
+            value: bank.rows[0]?.count ?? "0",
+            detail: "Строк выписки"
+          }
+        );
+
+        if (Number(bank.rows[0]?.count ?? "0") > 0) {
+          actions.push({
+            id: "bank-unmatched",
+            title: "Сопоставить банковские операции",
+            detail: bank.rows[0]!.count + " строк без payment",
+            href: "/app/finance",
+            severity: "WARNING"
+          });
+        }
+      } else if (workspace === "PROCUREMENT") {
+        const orders = await client.query<{
+          count: string;
+          total_minor: string;
+          overdue: string;
+        }>(
+          `SELECT
+             count(*)::text AS count,
+             COALESCE(sum(total_minor),0)::text AS total_minor,
+             count(*) FILTER (
+               WHERE expected_at IS NOT NULL
+                 AND expected_at < now()
+             )::text AS overdue
+           FROM purchase_order
+           WHERE tenant_id=$1
+             AND (
+               responsible_membership_id=$2
+               OR responsible_membership_id IS NULL
+             )
+             AND status IN ('DRAFT','CONFIRMED','PARTIALLY_RECEIVED')`,
+          [context.tenantId, context.membershipId]
+        );
+
+        metrics.push(
+          {
+            label: "Закупки в работе",
+            value: orders.rows[0]?.count ?? "0",
+            detail: this.money(orders.rows[0]?.total_minor ?? "0","RUB")
+          },
+          {
+            label: "Просрочено поставок",
+            value: orders.rows[0]?.overdue ?? "0",
+            detail: "Ожидаемая дата прошла"
+          }
+        );
+
+        if (Number(orders.rows[0]?.overdue ?? "0") > 0) {
+          actions.push({
+            id: "purchase-overdue",
+            title: "Проверить просроченные поставки",
+            detail: orders.rows[0]!.overdue + " закупок",
+            href: "/app/purchases",
+            severity: "WARNING"
+          });
+        }
+      }
+
+      return {
+        workspace,
+        roles,
+        title:
+          workspace === "SALES" ? "Мои продажи" :
+          workspace === "SERVICE" ? "Мой рабочий день" :
+          workspace === "WAREHOUSE" ? "Мои складские задания" :
+          workspace === "FINANCE" ? "Финансы сегодня" :
+          workspace === "PROCUREMENT" ? "Закупки сегодня" :
+          "Моя работа",
+        metrics,
+        actions
+      };
+    });
+  }
+
   async activation(
     context: TenantContext
   ): Promise<Record<string, unknown>> {
