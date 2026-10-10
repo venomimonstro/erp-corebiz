@@ -1122,6 +1122,7 @@ export class DanceStudioService {
       studentId:string;
       packageId?:string;
       chargeMinor?:string;
+      priceSource?:"DIRECT"|"TRIAL"|"FREE"|"MAKEUP";
       allowWaitlist?:boolean;
     }
   ){
@@ -1130,8 +1131,8 @@ export class DanceStudioService {
     if(!/^\d+$/.test(charge)){
       throw new BadRequestException("Некорректная стоимость");
     }
-    const priceSource:"PACKAGE"|"DIRECT"=
-      input.packageId ? "PACKAGE" : "DIRECT";
+    const priceSource:"PACKAGE"|"DIRECT"|"TRIAL"|"FREE"|"MAKEUP"=
+      input.packageId ? "PACKAGE" : (input.priceSource ?? "DIRECT");
 
     return this.database.withTenantTransaction(context,async client=>{
       const lesson=await this.assertLessonAccess(
