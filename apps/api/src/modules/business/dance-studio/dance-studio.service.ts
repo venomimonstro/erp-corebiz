@@ -1426,6 +1426,23 @@ export class DanceStudioService {
         throw new BadRequestException("Некорректная вместимость");
       }
 
+      const timezoneResult=await client.query<{timezone:string}>(
+        `SELECT coalesce(
+           (
+             SELECT timezone FROM service_resource
+             WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+           ),
+           (
+             SELECT timezone FROM service_resource
+             WHERE tenant_id=$1 AND id=$3 AND status='ACTIVE'
+           ),
+           'Europe/Moscow'
+         ) AS timezone`,
+        [context.tenantId,roomId,trainerId]
+      );
+      const lessonTimezone=
+        timezoneResult.rows[0]?.timezone??"Europe/Moscow";
+
       const invalidPackage=await client.query(
         `SELECT 1
          FROM dance_lesson_participant lp
@@ -1443,12 +1460,12 @@ export class DanceStudioService {
                WHERE f.tenant_id=sp.tenant_id
                  AND f.package_id=sp.id
                  AND f.status='APPLIED'
-                 AND ($3::timestamptz AT TIME ZONE 'UTC')::date
+                 AND ($3::timestamptz AT TIME ZONE $4)::date
                      BETWEEN f.starts_on AND f.ends_on
              )
            )
          LIMIT 1`,
-        [context.tenantId,lessonId,startsAt]
+        [context.tenantId,lessonId,startsAt,lessonTimezone]
       );
       if(invalidPackage.rowCount){
         throw new ConflictException(
@@ -1493,8 +1510,9 @@ export class DanceStudioService {
       ).sort();
       const resourceRows=await client.query<{
         id:string;type:string;name:string;membership_id:string|null;
+        timezone:string;
       }>(
-        `SELECT id,type,name,membership_id
+        `SELECT id,type,name,membership_id,timezone
          FROM service_resource
          WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND status='ACTIVE'
          ORDER BY id
@@ -1603,14 +1621,15 @@ export class DanceStudioService {
         `UPDATE dance_lesson
          SET starts_at=$3,ends_at=$4,
              trainer_resource_id=$5,room_resource_id=$6,
-             capacity=$7,version=version+1,updated_at=now()
-         WHERE tenant_id=$1 AND id=$2 AND version=$8
+             capacity=$7,timezone=$8,
+             version=version+1,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND version=$9
          RETURNING
            id,starts_at,ends_at,trainer_resource_id,room_resource_id,
-           capacity,status,version`,
+           capacity,timezone,status,version`,
         [
           context.tenantId,lessonId,startsAt,endsAt,trainerId,roomId,
-          capacity,input.version
+          capacity,lessonTimezone,input.version
         ]
       );
       const row=updated.rows[0];
@@ -2127,7 +2146,7 @@ export class DanceStudioService {
              AND lp.package_id=$2
              AND lp.status IN ('BOOKED','WAITLIST')
              AND l.status IN ('PLANNED','OPEN_FOR_BOOKING')
-             AND (l.starts_at AT TIME ZONE 'UTC')::date
+             AND (l.starts_at AT TIME ZONE l.timezone)::date
                  BETWEEN $3::date AND $4::date
            ORDER BY l.starts_at,lp.id
            FOR UPDATE OF lp`,
@@ -2257,8 +2276,9 @@ export class DanceStudioService {
     const resources=Array.from(new Set([trainerId,roomId].filter(Boolean) as string[])).sort();
     const resourceRows=await client.query<{
       id:string;type:string;name:string;membership_id:string|null;
+      timezone:string;
     }>(
-      `SELECT id,type,name,membership_id
+      `SELECT id,type,name,membership_id,timezone
        FROM service_resource
        WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND status='ACTIVE'
        ORDER BY id
@@ -2277,6 +2297,12 @@ export class DanceStudioService {
       if(!room||!["ROOM","HALL","WORKPLACE"].includes(room.type))
         throw new BadRequestException("Зал должен быть ресурсом ROOM/HALL");
     }
+    const lessonTimezone=
+      (roomId
+        ? resourceRows.rows.find(r=>r.id===roomId)?.timezone
+        : undefined) ??
+      trainer.timezone ??
+      "Europe/Moscow";
 
     const blocked=await client.query(
       `SELECT r.name
@@ -2343,12 +2369,15 @@ export class DanceStudioService {
       `INSERT INTO dance_lesson(
          tenant_id,group_id,host_booking_id,lesson_type,
          trainer_resource_id,room_resource_id,starts_at,ends_at,
-         capacity,status,currency,created_by_membership_id
-       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'OPEN_FOR_BOOKING',$10,$11)
-       RETURNING id,status,version`,
+         capacity,status,currency,timezone,created_by_membership_id
+       ) VALUES(
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,'OPEN_FOR_BOOKING',$10,$11,$12
+       )
+       RETURNING id,status,version,timezone`,
       [
         context.tenantId,input.groupId??null,br.id,lessonType,trainerId,
-        roomId,startsAt,endsAt,capacity,sr.currency,context.membershipId
+        roomId,startsAt,endsAt,capacity,sr.currency,lessonTimezone,
+        context.membershipId
       ]
     );
     const row=lesson.rows[0];
@@ -2984,8 +3013,12 @@ export class DanceStudioService {
     const frozen=await client.query(
       `SELECT 1 FROM service_package_freeze
        WHERE tenant_id=$1 AND package_id=$2 AND status='APPLIED'
-         AND $3::date BETWEEN starts_on AND ends_on`,
-      [tenantId,packageId,lesson.starts_at]
+         AND ($3::timestamptz AT TIME ZONE $4)::date
+             BETWEEN starts_on AND ends_on`,
+      [
+        tenantId,packageId,lesson.starts_at,
+        lesson.timezone??"Europe/Moscow"
+      ]
     );
     if(frozen.rowCount) throw new ConflictException("Абонемент заморожен на дату урока");
 
