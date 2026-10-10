@@ -211,7 +211,7 @@ export class SiteDomainsService{
              FROM (
                SELECT DISTINCT value
                FROM jsonb_array_elements_text(
-                 COALESCE(allowed_domains,'[]'::jsonb) || to_jsonb($3::text)
+                 COALESCE(allowed_domains,'[]'::jsonb) || jsonb_build_array($3::text)
                ) AS d(value)
              ) q
            ),
