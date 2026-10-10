@@ -7,6 +7,7 @@ import {
 import type { TenantContext } from "@corebiz/contracts";
 import { randomBytes } from "node:crypto";
 import { resolveTxt } from "node:dns/promises";
+import { domainToASCII } from "node:url";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 
 @Injectable()
@@ -273,13 +274,41 @@ export class SiteDomainsService{
   }
 
   private hostname(value:string):string{
-    const raw=value.trim().toLowerCase().replace(/\.$/,"");
-    if(raw.length<4||raw.length>253||raw.includes("/")||raw.includes(":")){
+    const input=value.trim().toLowerCase().replace(/\.$/,"");
+    if(
+      input.length<4 ||
+      input.length>253 ||
+      input.includes("/") ||
+      input.includes(":")
+    ){
       throw new BadRequestException("Некорректный домен");
     }
-    if(!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(raw)){
+
+    const raw=domainToASCII(input).toLowerCase().replace(/\.$/,"");
+    if(!raw || raw.length>253){
       throw new BadRequestException("Некорректный домен");
     }
+
+    const labels=raw.split(".");
+    if(labels.length<2){
+      throw new BadRequestException("Некорректный домен");
+    }
+
+    for(const label of labels){
+      if(
+        label.length<1 ||
+        label.length>63 ||
+        !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
+      ){
+        throw new BadRequestException("Некорректный домен");
+      }
+    }
+
+    const tld=labels[labels.length-1]!;
+    if(tld.length<2 || (!/^[a-z]{2,63}$/.test(tld) && !/^xn--[a-z0-9-]{2,59}$/.test(tld))){
+      throw new BadRequestException("Некорректная доменная зона");
+    }
+
     return raw;
   }
 }
