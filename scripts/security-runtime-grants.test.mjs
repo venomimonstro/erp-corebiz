@@ -8,7 +8,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function allowlist(sql, variable) {
   const match = sql.match(
-    new RegExp(variable + String.raw`\\s+text\\[\\]\\s*:=\\s*ARRAY\\[([\\s\\S]*?)\\];`)
+    new RegExp(variable + String.raw`\s+text\[\]\s*:=\s*ARRAY\[([\s\S]*?)\];`)
   );
   assert.ok(match, variable + " array must be explicit");
   return new Set(
