@@ -990,3 +990,21 @@ button, .primary, .secondary { font: inherit; }
 .assistant-insight strong { font-size:12px; }
 .assistant-insight p { margin:0; color:#70767d; font-size:10px; line-height:1.45; }
 .assistant-insight b { font-size:10px; white-space:nowrap; }
+
+
+/* Vertical business presets */
+.profile-preset-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
+.profile-preset-card { min-height:170px; text-align:left; border:1px solid #e2e5e8; background:#fff; color:#25282c; border-radius:14px; padding:13px; display:flex; flex-direction:column; align-items:flex-start; gap:9px; cursor:pointer; }
+.profile-preset-card:hover { border-color:#cdd1d5; background:#fafafa; }
+.profile-preset-card.active { border-color:#8f979f; box-shadow:inset 0 0 0 1px #8f979f; }
+.profile-preset-card > strong { font-size:13px; line-height:1.25; }
+.profile-preset-card > p { margin:0; color:#747a81; font-size:10px; line-height:1.5; }
+.profile-preset-card .status-pill { margin-bottom:auto; }
+
+@media (max-width:1100px) {
+  .profile-preset-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+}
+@media (max-width:720px) {
+  .profile-preset-grid { grid-template-columns:1fr; }
+  .profile-preset-card { min-height:0; }
+}
