@@ -392,7 +392,7 @@ export class PilotService {
   async captureSnapshot(
     context: TenantContext
   ): Promise<Record<string, unknown>> {
-    const hypercare = await this.goLive.hypercare(context) as any;
+    const captured = await this.goLive.captureHypercare(context);
 
     return this.database.withTenantTransaction(context, async (client) => {
       const enrollment = await client.query<{ id: string }>(
@@ -405,31 +405,23 @@ export class PilotService {
       if (!row) throw new NotFoundException("Pilot enrollment не создан");
 
       const snapshot = await client.query(
-        `SELECT id,stage,health,metrics,blockers,warnings,captured_at
-         FROM tenant_hypercare_snapshot
-         WHERE tenant_id=$1
-         ORDER BY captured_at DESC
-         LIMIT 1`,
-        [context.tenantId]
+        `UPDATE tenant_hypercare_snapshot
+         SET pilot_enrollment_id=$3
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING id,stage,health,metrics,blockers,warnings,captured_at`,
+        [context.tenantId, captured.id, row.id]
       );
+
       const latest = snapshot.rows[0];
       if (!latest) {
         throw new BadRequestException(
-          "Hypercare snapshot не был создан"
+          "Созданный hypercare snapshot не найден"
         );
       }
 
-      await client.query(
-        `UPDATE tenant_hypercare_snapshot
-         SET pilot_enrollment_id=$3
-         WHERE tenant_id=$1 AND id=$2`,
-        [context.tenantId, latest.id, row.id]
-      );
-
       return {
         ...latest,
-        pilotEnrollmentId: row.id,
-        current: hypercare
+        pilotEnrollmentId: row.id
       };
     });
   }
