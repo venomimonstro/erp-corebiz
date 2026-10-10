@@ -39,6 +39,100 @@ export class AuthorizationService {
     });
   }
 
+  async workspaceContext(
+    context: TenantContext
+  ): Promise<{
+    roles: string[];
+    permissions: Array<{ code: string; scope: PermissionScope }>;
+    profileCode: string;
+    workspace:
+      | "OWNER"
+      | "ADMIN"
+      | "SALES"
+      | "SERVICE"
+      | "WAREHOUSE"
+      | "FINANCE"
+      | "PROCUREMENT"
+      | "VIEWER";
+  }> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const roles = await client.query<{ code: string }>(
+        `SELECT r.code
+         FROM membership_role mr
+         JOIN tenant_role r
+           ON r.tenant_id=mr.tenant_id AND r.id=mr.role_id
+         WHERE mr.tenant_id=$1 AND mr.membership_id=$2
+         ORDER BY r.code`,
+        [context.tenantId, context.membershipId]
+      );
+
+      const permissions = await client.query<{
+        permission_code: string;
+        scope: PermissionScope;
+      }>(
+        `SELECT rp.permission_code,
+                CASE max(
+                  CASE rp.scope
+                    WHEN 'all' THEN 4
+                    WHEN 'branch' THEN 3
+                    WHEN 'team' THEN 2
+                    ELSE 1
+                  END
+                )
+                  WHEN 4 THEN 'all'
+                  WHEN 3 THEN 'branch'
+                  WHEN 2 THEN 'team'
+                  ELSE 'own'
+                END::text AS scope
+         FROM membership_role mr
+         JOIN role_permission rp
+           ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
+         WHERE mr.tenant_id=$1 AND mr.membership_id=$2
+         GROUP BY rp.permission_code
+         ORDER BY rp.permission_code`,
+        [context.tenantId, context.membershipId]
+      );
+
+      const profile = await client.query<{ profile_code: string }>(
+        `SELECT profile_code
+         FROM tenant_business_profile
+         WHERE tenant_id=$1`,
+        [context.tenantId]
+      );
+
+      const roleCodes = roles.rows.map((row) => row.code);
+      const has = (code: string) => roleCodes.includes(code);
+
+      let workspace:
+        | "OWNER"
+        | "ADMIN"
+        | "SALES"
+        | "SERVICE"
+        | "WAREHOUSE"
+        | "FINANCE"
+        | "PROCUREMENT"
+        | "VIEWER" = "VIEWER";
+
+      if (has("OWNER")) workspace = "OWNER";
+      else if (has("ADMIN")) workspace = "ADMIN";
+      else if (has("WAREHOUSE")) workspace = "WAREHOUSE";
+      else if (has("FINANCE")) workspace = "FINANCE";
+      else if (has("PROCUREMENT")) workspace = "PROCUREMENT";
+      else if (has("SERVICE_STAFF")) workspace = "SERVICE";
+      else if (has("SALES_HEAD") || has("SALES_MANAGER")) workspace = "SALES";
+
+      return {
+        roles: roleCodes,
+        permissions: permissions.rows.map((row) => ({
+          code: row.permission_code,
+          scope: row.scope
+        })),
+        profileCode: profile.rows[0]?.profile_code ?? "GENERAL",
+        workspace
+      };
+    });
+  }
+
   async membershipIdsForScope(
     context: TenantContext,
     scope: PermissionScope
