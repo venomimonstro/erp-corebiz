@@ -15,7 +15,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** Sprint 72 — Performance budgets / noisy-neighbor controls.  
+**Активная разработка:** Sprint 73 — Production release candidate hardening.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -788,18 +788,32 @@
 - production gate executes matrix before reconciliation checks;
 - no SQL shortcuts inside journeys.
 
-## Активно — Sprint 72: Performance Budgets / Noisy-neighbor Controls
+### Sprint 72 — Performance Budgets / Noisy-neighbor Controls
+- @ApiCost metadata classes for HEAVY / EXPENSIVE / SEARCH / WEBHOOK;
+- global API guard reads explicit metadata first, URL heuristics only as fallback;
+- atomic Redis sorted-set semaphores with TTL leases;
+- EXPENSIVE concurrency: 1 per user / 2 per tenant per route;
+- HEAVY concurrency: 2 per user / 4 per tenant per route;
+- semaphore release on response finish/close with TTL safety fallback;
+- tenant runtime pressure events with retry guidance;
+- marketplace sync queue depth budgets;
+- marketing sync queue depth budgets;
+- offline conversion hard queue/batch budgets;
+- one active tenant export invariant;
+- conversion/calltracking endpoints classified by cost;
+- owner/admin runtime pressure workspace;
+- unit regression coverage for metadata-aware concurrency protection.
+
+## Активно — Sprint 73: Production release candidate hardening
 
 Scope:
-- tenant/user concurrency leases for expensive operations;
-- endpoint cost classes;
-- export/report/search/AI/integration quotas;
-- bounded queue depth and payload sizes;
-- tenant-level runtime pressure diagnostics;
-- heavy operations fail fast with retry guidance instead of exhausting workers;
-- global product remains usable when one tenant creates a workload spike.
+- reconcile source-level release controls into one deterministic RC verdict;
+- block RC when migration replay/runtime RLS/business journey/restore evidence is stale or missing;
+- include runtime-pressure/noisy-neighbor evidence in RC readiness;
+- surface exact blockers with remediation links;
+- ensure no feature sprint can be marked production-ready without immutable verification evidence;
+- refresh release documentation and pilot checklist.
 
 ## Следом
 
-Sprint 73 — Production release candidate hardening.  
 Sprint 74 — Pilot rollout / hypercare telemetry.
