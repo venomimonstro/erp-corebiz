@@ -246,6 +246,7 @@ export class DanceStudioController {
       studentId:string;
       packageId?:string;
       chargeMinor?:string;
+      priceSource?:"DIRECT"|"TRIAL"|"FREE"|"MAKEUP";
       allowWaitlist?:boolean;
     }
   ):Promise<ApiSuccess<unknown>> {
