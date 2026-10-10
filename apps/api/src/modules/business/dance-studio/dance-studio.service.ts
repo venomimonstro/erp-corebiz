@@ -550,6 +550,71 @@ export class DanceStudioService {
     });
   }
 
+  async groupMembers(
+    context:TenantContext,
+    groupId:string
+  ){
+    const scopeIds=await this.scopeIds(context,"dance.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertGroupAccess(
+        client,context.tenantId,groupId,scopeIds,false
+      );
+      const result=await client.query(
+        `SELECT
+           gm.id,gm.student_id,p.display_name AS student_name,
+           s.birth_date,s.training_level,s.status AS student_status,
+           gm.status,gm.joined_at,gm.left_at,gm.reserved_place,
+           gm.discount_bps,
+           payer.id AS payer_party_id,payer.display_name AS payer_name
+         FROM dance_group_member gm
+         JOIN dance_student s
+           ON s.tenant_id=gm.tenant_id AND s.id=gm.student_id
+         JOIN party p
+           ON p.tenant_id=s.tenant_id AND p.id=s.party_id
+         LEFT JOIN LATERAL (
+           SELECT pp.id,pp.display_name
+           FROM party_relationship rel
+           JOIN party pp
+             ON pp.tenant_id=rel.tenant_id AND pp.id=rel.to_party_id
+           WHERE rel.tenant_id=s.tenant_id
+             AND rel.from_party_id=s.party_id
+             AND rel.relation_type='PAYER'
+             AND (rel.ends_on IS NULL OR rel.ends_on>=current_date)
+           ORDER BY rel.is_primary DESC,rel.created_at
+           LIMIT 1
+         ) payer ON true
+         WHERE gm.tenant_id=$1 AND gm.group_id=$2
+         ORDER BY
+           CASE gm.status
+             WHEN 'ACTIVE' THEN 0
+             WHEN 'TRIAL' THEN 1
+             WHEN 'PAUSED' THEN 2
+             WHEN 'WAITLIST' THEN 3
+             ELSE 4
+           END,
+           p.display_name`,
+        [context.tenantId,groupId]
+      );
+
+      const waitlist=await client.query(
+        `SELECT
+           w.id,w.student_id,p.display_name AS student_name,
+           w.priority,w.status,w.offered_at,w.offer_expires_at,w.created_at
+         FROM dance_group_waitlist w
+         JOIN dance_student s
+           ON s.tenant_id=w.tenant_id AND s.id=w.student_id
+         JOIN party p
+           ON p.tenant_id=s.tenant_id AND p.id=s.party_id
+         WHERE w.tenant_id=$1 AND w.group_id=$2
+           AND w.status IN ('WAITING','OFFERED')
+         ORDER BY w.priority,w.created_at`,
+        [context.tenantId,groupId]
+      );
+
+      return {members:result.rows,waitlist:waitlist.rows};
+    });
+  }
+
   async addGroupMember(
     context: TenantContext,
     groupId: string,
