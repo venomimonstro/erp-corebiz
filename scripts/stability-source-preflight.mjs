@@ -234,6 +234,16 @@ async function inspectRequiredHardening(root) {
       path: "apps/api/src/modules/business/projects/projects.service.ts",
       patterns: [/projects\.read/, /projects\.write/, /membershipIdsForScope/, /source_deal_id/],
       message: "Project scope or deal-conversion hardening is missing"
+    },
+    {
+      path: "apps/api/src/modules/platform/customization/customization.service.ts",
+      patterns: [/entityScopeMembershipIds/, /normalizeEntityType/, /responsible_membership_id = ANY/],
+      message: "Custom-field entity access is not permission/scope guarded"
+    },
+    {
+      path: "apps/api/src/modules/business/sales/sales.service.ts",
+      patterns: [/scopedMembershipIds/, /party_commercial_terms/, /responsible_membership_id = ANY/],
+      message: "B2B commercial terms are not sales-scope guarded"
     }
   ];
 
