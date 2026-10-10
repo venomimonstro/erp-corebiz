@@ -31,6 +31,8 @@ const EXPORT_ENTITIES: ExportEntity[] = [
   { table: "sku", label: "skus" },
   { table: "sales_order", label: "sales_orders" },
   { table: "sales_order_line", label: "sales_order_lines" },
+  { table: "party_commercial_terms", label: "party_commercial_terms" },
+  { table: "party_sku_price", label: "party_sku_prices" },
   { table: "purchase_order", label: "purchase_orders" },
   { table: "purchase_order_line", label: "purchase_order_lines" },
   { table: "goods_receipt", label: "goods_receipts" },
