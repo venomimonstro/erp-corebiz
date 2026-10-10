@@ -38,6 +38,7 @@ import { SessionContextMiddleware } from "./modules/platform/auth/session-contex
 import { AuthorizationModule } from "./modules/platform/authorization/authorization.module";
 import { HealthModule } from "./modules/platform/health/health.module";
 import { GoLiveModule } from "./modules/platform/go-live/go-live.module";
+import { PilotModule } from "./modules/platform/pilot/pilot.module";
 import { ReleaseVerificationModule } from "./modules/platform/release/release-verification.module";
 import { RuntimePressureModule } from "./modules/platform/runtime-pressure/runtime-pressure.module";
 import { SecurityCenterModule } from "./modules/platform/security-center/security-center.module";
@@ -80,6 +81,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     WmsModule,
     HealthModule,
     GoLiveModule,
+    PilotModule,
     ReleaseVerificationModule,
     RuntimePressureModule,
     SecurityCenterModule
