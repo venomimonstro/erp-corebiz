@@ -2687,20 +2687,24 @@ export class DanceStudioService {
     context:TenantContext,
     lesson:any
   ):Promise<Record<string,unknown>|null>{
-    const candidate=await client.query<{id:string}>(
+    const candidates=await client.query<{id:string}>(
       `SELECT id
        FROM dance_lesson_participant
        WHERE tenant_id=$1 AND lesson_id=$2 AND status='WAITLIST'
        ORDER BY created_at,id
-       LIMIT 1
+       LIMIT 50
        FOR UPDATE SKIP LOCKED`,
       [context.tenantId,lesson.id]
     );
-    const row=candidate.rows[0];
-    if(!row) return null;
-    return this.promoteSpecificWaitlistParticipantTx(
-      client,context,lesson,row.id
-    );
+
+    for(const candidate of candidates.rows){
+      const promoted=await this.promoteSpecificWaitlistParticipantTx(
+        client,context,lesson,candidate.id
+      );
+      if(promoted) return promoted;
+    }
+
+    return null;
   }
 
   private async defaultPayer(
