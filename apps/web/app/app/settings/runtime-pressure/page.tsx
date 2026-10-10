@@ -21,6 +21,13 @@ type Pressure = {
     workflow: QueueBucket;
     outbox: QueueBucket;
   };
+  activeLeaseCount: number;
+  activeLeases: Array<{
+    operation: string;
+    scope: string;
+    active: number;
+    nearest_expiry: string;
+  }>;
   deniedLast24h: number;
   recentEvents: Array<{
     id: string;
@@ -126,6 +133,12 @@ export default function RuntimePressurePage() {
               </article>
 
               <article className="owner-kpi">
+                <span>Активные тяжёлые операции</span>
+                <strong>{data.activeLeaseCount}</strong>
+                <small>Поиск, аналитика и другие защищённые операции</small>
+              </article>
+
+              <article className="owner-kpi">
                 <span>Фоновые очереди</span>
                 <strong>
                   {Object.values(data.queue).reduce(
@@ -192,6 +205,48 @@ export default function RuntimePressurePage() {
                     </article>
                   );
                 })}
+              </div>
+            </section>
+
+            <section className="section-block">
+              <div className="section-heading">
+                <div>
+                  <p className="muted">Concurrency leases</p>
+                  <h2>Сейчас выполняется</h2>
+                </div>
+              </div>
+
+              <div className="runtime-pressure-grid">
+                {data.activeLeases.map((lease) => (
+                  <article
+                    className="settings-card"
+                    key={lease.operation + ":" + lease.scope}
+                  >
+                    <div className="growth-site-heading">
+                      <h3>{lease.operation}</h3>
+                      <span className="status-pill">{lease.scope}</span>
+                    </div>
+                    <dl className="growth-site-meta">
+                      <div>
+                        <dt>Активно</dt>
+                        <dd>{lease.active}</dd>
+                      </div>
+                      <div>
+                        <dt>Lease до</dt>
+                        <dd>
+                          {new Date(lease.nearest_expiry).toLocaleTimeString("ru-RU")}
+                        </dd>
+                      </div>
+                    </dl>
+                  </article>
+                ))}
+
+                {!data.activeLeases.length ? (
+                  <div className="table-empty">
+                    <strong>Тяжёлых операций нет</strong>
+                    <span>Concurrency budget сейчас свободен.</span>
+                  </div>
+                ) : null}
               </div>
             </section>
 
