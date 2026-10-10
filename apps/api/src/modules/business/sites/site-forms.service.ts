@@ -493,6 +493,7 @@ export class SiteFormsService {
         const student=await this.dance.createStudent(context,{
           partyId:child.id,
           birthDate:childBirthDate,
+          status:"TRIAL",
           payerPartyId:parent.id,
           payerRelation:"PARENT"
         });
