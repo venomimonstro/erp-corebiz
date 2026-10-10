@@ -52,8 +52,24 @@ type Contract = {
   slot_minor: string;
   minimum_billable_minutes: number;
   cancellation_charge_bps: number;
+  payment_term_days: number;
   valid_from: string;
   valid_to: string | null;
+};
+
+type RoomStatement = {
+  id: string;
+  contract_id: string;
+  room_name: string;
+  counterparty_name: string | null;
+  pricing_type: string;
+  period_from: string;
+  period_to: string;
+  amount_minor: string;
+  lesson_count: number;
+  status: string;
+  obligation_id: string | null;
+  finalized_at: string | null;
 };
 
 type LegalEntity = { id: string; name: string };
@@ -85,6 +101,7 @@ export default function DanceTeamPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [accruals, setAccruals] = useState<Accrual[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
+  const [roomStatements, setRoomStatements] = useState<RoomStatement[]>([]);
   const [entities, setEntities] = useState<LegalEntity[]>([]);
   const [payroll, setPayroll] = useState<PayrollBatch[]>([]);
   const [error, setError] = useState("");
@@ -94,8 +111,15 @@ export default function DanceTeamPage() {
     setError("");
     const range = monthRange();
     try {
-      const [resourceRows, planRows, accrualRows, contractRows, organization] =
-        await Promise.all([
+      const currentMonth = new Date().toISOString().slice(0, 7);
+      const [
+        resourceRows,
+        planRows,
+        accrualRows,
+        contractRows,
+        statementRows,
+        organization
+      ] = await Promise.all([
           apiRequest<Resource[]>("/service/resources"),
           apiRequest<Plan[]>("/dance/compensation-plans"),
           apiRequest<Accrual[]>(
@@ -105,12 +129,16 @@ export default function DanceTeamPage() {
               encodeURIComponent(range.to)
           ),
           apiRequest<Contract[]>("/dance/room-contracts"),
+          apiRequest<RoomStatement[]>(
+            "/dance/room-statements?month=" + encodeURIComponent(currentMonth)
+          ),
           apiRequest<Organization>("/organization")
         ]);
       setResources(resourceRows);
       setPlans(planRows);
       setAccruals(accrualRows);
       setContracts(contractRows);
+      setRoomStatements(statementRows);
       setEntities(organization.legalEntities);
 
       if (organization.legalEntities[0]) {
@@ -252,6 +280,9 @@ export default function DanceTeamPage() {
     const cancelPercent = Number(
       (window.prompt("Штраф при отмене, %", "0") ?? "0").replace(",", ".")
     );
+    const paymentTermDays = Number(
+      window.prompt("Срок оплаты аренды после конца месяца, дней", "5") ?? "5"
+    );
 
     try {
       await apiRequest("/dance/room-contracts", {
@@ -263,12 +294,67 @@ export default function DanceTeamPage() {
           monthlyMinor: pricingType === "FIXED_MONTHLY" ? String(Math.round(amountRub * 100)) : "0",
           slotMinor: pricingType === "FIXED_SLOT" ? String(Math.round(amountRub * 100)) : "0",
           minimumBillableMinutes: minimum,
-          cancellationChargeBps: Math.round(cancelPercent * 100)
+          cancellationChargeBps: Math.round(cancelPercent * 100),
+          paymentTermDays
         })
       });
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать договор аренды");
+    }
+  }
+
+  async function finalizeRoomMonth() {
+    const month = new Date().toISOString().slice(0, 7);
+    if (
+      !window.confirm(
+        "Закрыть аренду залов за " +
+          month +
+          "? После финализации будут созданы кредиторские обязательства."
+      )
+    ) {
+      return;
+    }
+
+    setPending(true);
+    try {
+      const result = await apiRequest<{
+        month: string;
+        statements: Array<{
+          amountMinor?: string;
+          amount_minor?: string;
+          obligationId?: string | null;
+          obligation_id?: string | null;
+        }>;
+      }>("/dance/room-statements/finalize", {
+        method: "POST",
+        body: JSON.stringify({ month })
+      });
+      const total = result.statements.reduce(
+        (sum, item) =>
+          sum +
+          BigInt(
+            item.amountMinor ??
+              item.amount_minor ??
+              "0"
+          ),
+        0n
+      );
+      window.alert(
+        "Аренда закрыта: " +
+          result.statements.length +
+          " договоров, " +
+          money(total.toString())
+      );
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось закрыть аренду месяца"
+      );
+    } finally {
+      setPending(false);
     }
   }
 
@@ -343,6 +429,7 @@ export default function DanceTeamPage() {
           <div className="header-actions">
             <button className="secondary-button" onClick={() => void createPlan()} type="button">+ Правило зарплаты</button>
             <button className="secondary-button" onClick={() => void createRoomContract()} type="button">+ Аренда зала</button>
+            <button className="secondary-button" disabled={pending} onClick={() => void finalizeRoomMonth()} type="button">Закрыть аренду месяца</button>
             <button disabled={pending} onClick={() => void approveMonth()} type="button">Утвердить месяц</button>
             <button disabled={pending} onClick={() => void exportPayroll()} type="button">В payroll</button>
           </div>
@@ -419,7 +506,7 @@ export default function DanceTeamPage() {
           <div className="section-heading"><div><p className="muted">Залы</p><h2>Договоры и себестоимость</h2></div></div>
           <div className="data-table-wrap">
             <table className="data-table">
-              <thead><tr><th>Зал</th><th>Тип</th><th>Ставка</th><th>Минимум</th><th>Отмена</th><th>Период</th></tr></thead>
+              <thead><tr><th>Зал</th><th>Тип</th><th>Ставка</th><th>Минимум</th><th>Отмена</th><th>Оплата</th><th>Период</th></tr></thead>
               <tbody>
                 {contracts.map((item) => (
                   <tr key={item.id}>
@@ -430,9 +517,58 @@ export default function DanceTeamPage() {
                     </td>
                     <td>{item.minimum_billable_minutes} мин</td>
                     <td>{item.cancellation_charge_bps / 100}%</td>
+                    <td>{item.payment_term_days} дн.</td>
                     <td>{item.valid_from}{item.valid_to ? " — " + item.valid_to : " — ∞"}</td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="section-block">
+          <div className="section-heading">
+            <div>
+              <p className="muted">Finance</p>
+              <h2>Аренда текущего месяца</h2>
+            </div>
+          </div>
+          <div className="data-table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Зал</th>
+                  <th>Тип</th>
+                  <th>Уроков</th>
+                  <th>Сумма</th>
+                  <th>Статус</th>
+                  <th>Кредиторка</th>
+                </tr>
+              </thead>
+              <tbody>
+                {roomStatements.map((item) => (
+                  <tr key={item.id}>
+                    <td>
+                      <strong>{item.room_name}</strong>
+                      <small>{item.counterparty_name ?? "Внутренняя себестоимость"}</small>
+                    </td>
+                    <td>{item.pricing_type}</td>
+                    <td>{item.lesson_count}</td>
+                    <td><strong>{money(item.amount_minor)}</strong></td>
+                    <td><span className="status-pill">{item.status}</span></td>
+                    <td>{item.obligation_id ? "Создана" : "—"}</td>
+                  </tr>
+                ))}
+                {!roomStatements.length ? (
+                  <tr>
+                    <td colSpan={6}>
+                      <div className="table-empty">
+                        <strong>Месяц ещё не закрыт</strong>
+                        <span>После закрытия здесь появятся statements и кредиторка арендодателю.</span>
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
