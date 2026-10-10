@@ -345,15 +345,28 @@ export default function DanceStudentsPage() {
     const endsOn = window.prompt("Конец заморозки YYYY-MM-DD", startsOn);
     if (!endsOn) return;
 
+    const cancelFutureReservations = window.confirm(
+      "Снять записи на занятия внутри периода заморозки? OK = снять и вернуть посещения, Отмена = оставить существующие записи."
+    );
+
     try {
-      await apiRequest(`/dance/packages/${pack.id}/freeze`, {
+      const result = await apiRequest<{
+        cancelledReservations: number;
+        promotedFromWaitlist: number;
+      }>(`/dance/packages/${pack.id}/freeze`, {
         method: "POST",
         body: JSON.stringify({
           startsOn,
           endsOn,
-          reason: window.prompt("Причина", "Отпуск / болезнь") || undefined
+          reason: window.prompt("Причина", "Отпуск / болезнь") || undefined,
+          cancelFutureReservations
         })
       });
+      if (cancelFutureReservations) {
+        window.alert(
+          `Снято будущих записей: ${result.cancelledReservations}. Мест передано из waitlist: ${result.promotedFromWaitlist}.`
+        );
+      }
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось заморозить абонемент");
