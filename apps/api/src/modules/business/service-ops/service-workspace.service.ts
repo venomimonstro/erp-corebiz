@@ -1,11 +1,14 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import type { PoolClient } from "pg";
+import { AuthorizationService } from "../../platform/authorization/authorization.service";
 import { DomainEventService } from "../../platform/events/domain-event.service";
 import { InventoryService } from "../inventory/inventory.service";
 
@@ -14,7 +17,8 @@ export class ServiceWorkspaceService {
   constructor(
     private readonly database: DatabaseService,
     private readonly inventory: InventoryService,
-    private readonly events: DomainEventService
+    private readonly events: DomainEventService,
+    private readonly authorization: AuthorizationService
   ) {}
 
   async today(
@@ -37,6 +41,7 @@ export class ServiceWorkspaceService {
     const start = new Date(base);
     start.setHours(0, 0, 0, 0);
     const end = new Date(start.getTime() + 86400000);
+    const scopedMembershipIds = await this.serviceScope(context, "service.read");
 
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
@@ -52,8 +57,13 @@ export class ServiceWorkspaceService {
         "LEFT JOIN service_booking_resource br ON br.tenant_id=b.tenant_id AND br.booking_id=b.id " +
         "LEFT JOIN service_resource r ON r.tenant_id=br.tenant_id AND r.id=br.resource_id " +
         "WHERE b.tenant_id=$1 AND b.starts_at >= $2 AND b.starts_at < $3 " +
+        "AND ($4::uuid[] IS NULL OR EXISTS (" +
+        "SELECT 1 FROM service_booking_resource scope_br " +
+        "JOIN service_resource scope_r ON scope_r.tenant_id=scope_br.tenant_id AND scope_r.id=scope_br.resource_id " +
+        "WHERE scope_br.tenant_id=b.tenant_id AND scope_br.booking_id=b.id " +
+        "AND scope_r.membership_id = ANY($4::uuid[]))) " +
         "GROUP BY b.id,p.display_name,s.name ORDER BY b.starts_at",
-        [context.tenantId, start, end]
+        [context.tenantId, start, end, scopedMembershipIds]
       );
 
       let completed = 0;
@@ -97,8 +107,15 @@ export class ServiceWorkspaceService {
     if (quantity <= 0n) {
       throw new BadRequestException("Количество должно быть больше нуля");
     }
+    const scopedMembershipIds = await this.serviceScope(context, "service.write");
 
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertBookingAccess(
+        client,
+        context.tenantId,
+        bookingId,
+        scopedMembershipIds
+      );
       const booking = await client.query<{ status: string }>(
         "SELECT status FROM service_booking WHERE tenant_id=$1 AND id=$2",
         [context.tenantId, bookingId]
@@ -147,7 +164,14 @@ export class ServiceWorkspaceService {
     context: TenantContext,
     bookingId: string
   ): Promise<Array<Record<string, unknown>>> {
+    const scopedMembershipIds = await this.serviceScope(context, "service.read");
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertBookingAccess(
+        client,
+        context.tenantId,
+        bookingId,
+        scopedMembershipIds
+      );
       const result = await client.query(
         "SELECT m.id,m.warehouse_id,w.name AS warehouse_name," +
         "m.sku_id,s.code AS sku,p.name AS product_name," +
@@ -185,6 +209,7 @@ export class ServiceWorkspaceService {
     if (!input.idempotencyKey?.trim()) {
       throw new BadRequestException("Требуется ключ идемпотентности");
     }
+    const scopedMembershipIds = await this.serviceScope(context, "service.write");
 
     return this.database.withTenantTransaction(context, async (client) => {
       const lineResult = await client.query<{
@@ -207,6 +232,12 @@ export class ServiceWorkspaceService {
 
       const line = lineResult.rows[0];
       if (!line) throw new NotFoundException("Строка материала не найдена");
+      await this.assertBookingAccess(
+        client,
+        context.tenantId,
+        line.booking_id,
+        scopedMembershipIds
+      );
       if (["CANCELLED", "NO_SHOW"].includes(line.booking_status)) {
         throw new BadRequestException("По отменённой записи расход невозможен");
       }
@@ -267,10 +298,28 @@ export class ServiceWorkspaceService {
     bookings: Array<Record<string, unknown>>;
     completedRevenueMinor: string;
   }> {
+    const scopedMembershipIds = await this.serviceScope(context, "service.read");
     return this.database.withTenantTransaction(context, async (client) => {
       const party = await client.query<{ id: string; display_name: string }>(
-        "SELECT id,display_name FROM party WHERE tenant_id=$1 AND id=$2",
-        [context.tenantId, partyId]
+        `SELECT p.id,p.display_name
+         FROM party p
+         WHERE p.tenant_id=$1 AND p.id=$2
+           AND (
+             $3::uuid[] IS NULL
+             OR p.responsible_membership_id = ANY($3::uuid[])
+             OR EXISTS (
+               SELECT 1
+               FROM service_booking b
+               JOIN service_booking_resource br
+                 ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
+               JOIN service_resource r
+                 ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+               WHERE b.tenant_id=p.tenant_id
+                 AND b.party_id=p.id
+                 AND r.membership_id = ANY($3::uuid[])
+             )
+           )`,
+        [context.tenantId, partyId, scopedMembershipIds]
       );
 
       const customer = party.rows[0];
@@ -282,8 +331,13 @@ export class ServiceWorkspaceService {
         "FROM service_booking b " +
         "JOIN service_catalog_item s ON s.tenant_id=b.tenant_id AND s.id=b.service_id " +
         "WHERE b.tenant_id=$1 AND b.party_id=$2 " +
+        "AND ($3::uuid[] IS NULL OR EXISTS (" +
+        "SELECT 1 FROM service_booking_resource br " +
+        "JOIN service_resource r ON r.tenant_id=br.tenant_id AND r.id=br.resource_id " +
+        "WHERE br.tenant_id=b.tenant_id AND br.booking_id=b.id " +
+        "AND r.membership_id = ANY($3::uuid[]))) " +
         "ORDER BY b.starts_at DESC LIMIT 100",
-        [context.tenantId, partyId]
+        [context.tenantId, partyId, scopedMembershipIds]
       );
 
       const revenue = bookings.rows.reduce(
@@ -325,6 +379,7 @@ export class ServiceWorkspaceService {
     ) {
       throw new BadRequestException("Некорректный период аналитики");
     }
+    const scopedMembershipIds = await this.serviceScope(context, "service.read");
 
     return this.database.withTenantTransaction(context, async (client) => {
       const services = await client.query(
@@ -335,8 +390,13 @@ export class ServiceWorkspaceService {
         "FROM service_catalog_item s " +
         "LEFT JOIN service_booking b ON b.tenant_id=s.tenant_id AND b.service_id=s.id " +
         "AND b.starts_at >= $2 AND b.starts_at < $3 " +
+        "AND ($4::uuid[] IS NULL OR EXISTS (" +
+        "SELECT 1 FROM service_booking_resource sbr " +
+        "JOIN service_resource sr ON sr.tenant_id=sbr.tenant_id AND sr.id=sbr.resource_id " +
+        "WHERE sbr.tenant_id=b.tenant_id AND sbr.booking_id=b.id " +
+        "AND sr.membership_id = ANY($4::uuid[]))) " +
         "WHERE s.tenant_id=$1 GROUP BY s.id ORDER BY revenue_minor::bigint DESC,s.name",
-        [context.tenantId, from, to]
+        [context.tenantId, from, to, scopedMembershipIds]
       );
 
       const resources = await client.query(
@@ -349,8 +409,9 @@ export class ServiceWorkspaceService {
         "LEFT JOIN service_booking b ON b.tenant_id=br.tenant_id AND b.id=br.booking_id " +
         "AND b.starts_at >= $2 AND b.starts_at < $3 " +
         "WHERE r.tenant_id=$1 AND r.status='ACTIVE' " +
+        "AND ($4::uuid[] IS NULL OR r.membership_id = ANY($4::uuid[])) " +
         "GROUP BY r.id ORDER BY booked_minutes DESC,r.name",
-        [context.tenantId, from, to]
+        [context.tenantId, from, to, scopedMembershipIds]
       );
 
       return {
@@ -358,5 +419,40 @@ export class ServiceWorkspaceService {
         resources: resources.rows
       };
     });
+  }
+
+  private async serviceScope(
+    context: TenantContext,
+    permission: "service.read" | "service.write"
+  ): Promise<string[] | null> {
+    const scope = await this.authorization.resolveScope(context, permission);
+    if (!scope) throw new ForbiddenException("Недостаточно прав");
+    return this.authorization.membershipIdsForScope(context, scope);
+  }
+
+  private async assertBookingAccess(
+    client: PoolClient,
+    tenantId: string,
+    bookingId: string,
+    scopedMembershipIds: string[] | null
+  ): Promise<void> {
+    if (scopedMembershipIds === null) return;
+
+    const result = await client.query(
+      `SELECT 1
+       FROM service_booking b
+       WHERE b.tenant_id=$1 AND b.id=$2
+         AND EXISTS (
+           SELECT 1
+           FROM service_booking_resource br
+           JOIN service_resource r
+             ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+           WHERE br.tenant_id=b.tenant_id
+             AND br.booking_id=b.id
+             AND r.membership_id = ANY($3::uuid[])
+         )`,
+      [tenantId, bookingId, scopedMembershipIds]
+    );
+    if (!result.rowCount) throw new NotFoundException("Запись не найдена");
   }
 }
