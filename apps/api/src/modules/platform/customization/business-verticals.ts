@@ -123,18 +123,16 @@ export const BUSINESS_VERTICALS: Record<
   AUTO_SERVICE: {
     code: "AUTO_SERVICE",
     title: "Автосервис",
-    summary: "CRM, запись, автомобиль в заказе, работы, запчасти, склад и прибыль.",
+    summary: "CRM, карточки автомобилей, история обслуживания, работы, запчасти, склад и прибыль.",
     profileCode: "SERVICE",
-    version: 2,
+    version: 3,
     enabledCapabilities: [
       "crm","tasks","catalog","sales","procurement","inventory","finance",
       "service","sites","growth","workflow","support"
     ],
     customFields: [
-      { entityType: "DEAL", fieldKey: "vehicle_plate", label: "Госномер", dataType: "TEXT" },
-      { entityType: "DEAL", fieldKey: "vehicle_vin", label: "VIN", dataType: "TEXT" },
-      { entityType: "DEAL", fieldKey: "vehicle_model", label: "Автомобиль", dataType: "TEXT" },
-      { entityType: "DEAL", fieldKey: "vehicle_mileage", label: "Пробег", dataType: "NUMBER" }
+      { entityType: "DEAL", fieldKey: "customer_complaint", label: "Жалоба / запрос клиента", dataType: "TEXT" },
+      { entityType: "DEAL", fieldKey: "authorization_limit", label: "Лимит согласования", dataType: "NUMBER" }
     ],
     ownerQuestions: [
       "Какие посты и механики загружены?",
@@ -143,7 +141,7 @@ export const BUSINESS_VERTICALS: Record<
     ],
     primaryWorkspaces: ["service", "crm", "inventory", "procurement", "finance"],
     operatingFlows: [
-      "Обращение → диагностика → согласование → работы → выдача",
+      "Клиент → автомобиль → история → диагностика → согласование → работы → выдача",
       "Потребность в запчастях → резерв → закупка → расход",
       "Работы + запчасти → фактическая маржа заказ-наряда"
     ],
