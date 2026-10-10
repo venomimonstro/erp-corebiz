@@ -15,7 +15,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** R8 / Sprint 47 — 3PL SLA / Claims / Client Requests.  
+**Активная разработка:** Sprint 70 — Production stabilization review.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -734,22 +734,54 @@
 - compact sidebar center with unread badge;
 - no sensitive source payload copied into notification-state storage.
 
-## Активно — Sprint 67: Data Export / Offboarding Readiness
+### Sprint 67 — Data Export / Offboarding Readiness
+- tenant self-service export request;
+- separate data.export permission;
+- JSON_GZIP / CSV_GZIP business packages;
+- explicit business allowlist + recursive secret redaction;
+- async worker with lease/retry;
+- entity-count manifest and schema version;
+- SHA-256 checksum / expiry / download audit;
+- offboarding blocker/warning review;
+- no one-click tenant deletion.
+
+### Sprint 68 — Audit Explorer / Security Session Center
+- tenant-scoped audit explorer;
+- sensitive before/after data redaction;
+- action/resource/date filters;
+- current-user session inventory;
+- current / active / revoked states;
+- revoke one session;
+- revoke all other sessions;
+- audit.read permission.
+
+### Sprint 69 — Support Knowledge / Self-Service Telemetry
+- tracked knowledge searches with context URL;
+- selected-article telemetry;
+- helpful / not-helpful feedback;
+- ticket linked to preceding knowledge search;
+- no-result and ticket-after-search metrics;
+- self-service resolution rate;
+- owner/admin gap dashboard;
+- support entry preserves source screen.
+
+## Активно — Sprint 70: Production stabilization review
 
 Scope:
-- tenant self-service export request;
-- export permission separate from ordinary read;
-- manifest with entity counts and schema version;
-- JSON/CSV business data packages;
-- no secrets/session/API credentials in export;
-- asynchronous export job state;
-- checksum and expiry metadata;
-- offboarding readiness checklist;
-- safe account deletion remains separate and never one-click;
-- audit export request/download lifecycle.
+- deterministic source stability preflight;
+- no controller→DatabaseService coupling;
+- no browser-exposed secrets / unsafe localStorage credentials;
+- no arbitrary dangerouslySetInnerHTML;
+- direct Inventory/Accounting ledger write boundaries;
+- AppModule duplicate-module guard;
+- explicit review of public mutating endpoints;
+- no GitHub Actions workflows by project policy;
+- CORE/STABILITY becomes mandatory immutable release evidence;
+- release:check runs stability guard before typecheck/test/build;
+- production stays NO-GO until disposable DB, RLS/runtime-role, smoke, restore and reconciliation gates actually pass.
 
 ## Следом
 
-Sprint 68 — Audit explorer / security session center.  
-Sprint 69 — Support knowledge / self-service telemetry.  
-Sprint 70 — Production stabilization review.
+Sprint 71 — Golden business journey simulation / pilot matrix.  
+Sprint 72 — Performance budgets / noisy-neighbor controls.  
+Sprint 73 — Production release candidate hardening.
