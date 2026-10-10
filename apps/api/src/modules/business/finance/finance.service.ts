@@ -1494,6 +1494,190 @@ export class FinanceService {
     });
   }
 
+  async cashForecast(
+    context: TenantContext,
+    input: { days?: number }
+  ): Promise<Record<string, unknown>> {
+    const days = Math.floor(input.days ?? 30);
+    if (days < 1 || days > 180) {
+      throw new BadRequestException("Горизонт прогноза: от 1 до 180 дней");
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const openingResult = await client.query<{ balance_minor: string }>(
+        `SELECT (
+           COALESCE((
+             SELECT sum(opening_balance_minor)
+             FROM cash_account
+             WHERE tenant_id=$1
+               AND status='ACTIVE'
+               AND currency='RUB'
+           ),0)
+           +
+           COALESCE((
+             SELECT sum(
+               CASE
+                 WHEN direction='IN' THEN amount_minor
+                 ELSE -amount_minor
+               END
+             )
+             FROM payment
+             WHERE tenant_id=$1
+               AND status='POSTED'
+               AND currency='RUB'
+           ),0)
+         )::text AS balance_minor`,
+        [context.tenantId]
+      );
+
+      const obligationResult = await client.query<{
+        id: string;
+        direction: "RECEIVABLE" | "PAYABLE";
+        remaining_minor: string;
+        due_at: Date | null;
+        source_type: string;
+        source_id: string;
+        party_name: string | null;
+      }>(
+        `SELECT
+           o.id,
+           o.direction,
+           (o.amount_minor-o.settled_minor)::text AS remaining_minor,
+           o.due_at,
+           o.source_type,
+           o.source_id,
+           p.display_name AS party_name
+         FROM financial_obligation o
+         LEFT JOIN party p
+           ON p.tenant_id=o.tenant_id AND p.id=o.party_id
+         WHERE o.tenant_id=$1
+           AND o.status IN ('OPEN','PARTIALLY_SETTLED')
+           AND o.currency='RUB'
+         ORDER BY o.due_at NULLS LAST,o.created_at`,
+        [context.tenantId]
+      );
+
+      const today = new Date();
+      const start = new Date(Date.UTC(
+        today.getUTCFullYear(),
+        today.getUTCMonth(),
+        today.getUTCDate()
+      ));
+
+      const buckets = Array.from({ length: days + 1 }, (_, offset) => ({
+        date: new Date(start.getTime() + offset * 86400000)
+          .toISOString()
+          .slice(0,10),
+        inflowMinor: 0n,
+        outflowMinor: 0n,
+        items: 0
+      }));
+
+      let undatedReceivable = 0n;
+      let undatedPayable = 0n;
+      let overdueReceivable = 0n;
+      let overduePayable = 0n;
+      const obligations: Array<Record<string, unknown>> = [];
+
+      for (const row of obligationResult.rows) {
+        const amount = BigInt(row.remaining_minor);
+        if (amount <= 0n) continue;
+
+        let bucketIndex: number | null = null;
+        let overdue = false;
+
+        if (row.due_at) {
+          const due = new Date(Date.UTC(
+            row.due_at.getUTCFullYear(),
+            row.due_at.getUTCMonth(),
+            row.due_at.getUTCDate()
+          ));
+          const diff = Math.floor(
+            (due.getTime() - start.getTime()) / 86400000
+          );
+          overdue = diff < 0;
+          bucketIndex = Math.max(0, Math.min(days, diff));
+        }
+
+        if (row.direction === "RECEIVABLE") {
+          if (row.due_at === null) undatedReceivable += amount;
+          else {
+            buckets[bucketIndex!]!.inflowMinor += amount;
+            buckets[bucketIndex!]!.items += 1;
+            if (overdue) overdueReceivable += amount;
+          }
+        } else {
+          if (row.due_at === null) undatedPayable += amount;
+          else {
+            buckets[bucketIndex!]!.outflowMinor += amount;
+            buckets[bucketIndex!]!.items += 1;
+            if (overdue) overduePayable += amount;
+          }
+        }
+
+        obligations.push({
+          id: row.id,
+          direction: row.direction,
+          remainingMinor: amount.toString(),
+          dueAt: row.due_at?.toISOString() ?? null,
+          overdue,
+          sourceType: row.source_type,
+          sourceId: row.source_id,
+          partyName: row.party_name
+        });
+      }
+
+      let projected = BigInt(
+        openingResult.rows[0]?.balance_minor ?? "0"
+      );
+      let minimumBalance = projected;
+      let minimumDate = buckets[0]!.date;
+      let firstGapDate: string | null = projected < 0n
+        ? buckets[0]!.date
+        : null;
+
+      const calendar = buckets.map((bucket) => {
+        projected += bucket.inflowMinor - bucket.outflowMinor;
+
+        if (projected < minimumBalance) {
+          minimumBalance = projected;
+          minimumDate = bucket.date;
+        }
+        if (firstGapDate === null && projected < 0n) {
+          firstGapDate = bucket.date;
+        }
+
+        return {
+          date: bucket.date,
+          inflowMinor: bucket.inflowMinor.toString(),
+          outflowMinor: bucket.outflowMinor.toString(),
+          netMinor: (bucket.inflowMinor - bucket.outflowMinor).toString(),
+          projectedBalanceMinor: projected.toString(),
+          items: bucket.items,
+          cashGap: projected < 0n
+        };
+      });
+
+      return {
+        currency: "RUB",
+        horizonDays: days,
+        generatedAt: new Date().toISOString(),
+        openingBalanceMinor:
+          openingResult.rows[0]?.balance_minor ?? "0",
+        endingBalanceMinor: projected.toString(),
+        minimumBalanceMinor: minimumBalance.toString(),
+        minimumBalanceDate: minimumDate,
+        firstCashGapDate: firstGapDate,
+        overdueReceivableMinor: overdueReceivable.toString(),
+        overduePayableMinor: overduePayable.toString(),
+        undatedReceivableMinor: undatedReceivable.toString(),
+        undatedPayableMinor: undatedPayable.toString(),
+        calendar,
+        obligations
+      };
+    });
+  }
+
   private parsePositiveAmount(value: string): bigint {
     if (!/^\d+$/.test(value)) {
       throw new BadRequestException("Некорректная сумма");
