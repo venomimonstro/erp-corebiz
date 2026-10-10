@@ -7,12 +7,14 @@ import type { TenantContext } from "@corebiz/contracts";
 import { randomBytes } from "node:crypto";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { IntegrationCryptoService } from "./integration-crypto.service";
+import { RuntimePressureService } from "../../platform/runtime-pressure/runtime-pressure.service";
 
 @Injectable()
 export class MarketingService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly crypto: IntegrationCryptoService
+    private readonly crypto: IntegrationCryptoService,
+    private readonly runtime: RuntimePressureService
   ) {}
 
   async connections(
@@ -140,6 +142,45 @@ export class MarketingService {
       if (!row) throw new NotFoundException("Подключение не найдено");
       if (row.status === "DISABLED") {
         throw new BadRequestException("Подключение отключено");
+      }
+
+      const depth = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+         FROM marketing_sync_job
+         WHERE tenant_id=$1
+           AND status IN ('PENDING','RUNNING','FAILED')`,
+        [context.tenantId]
+      );
+      const queueDepth = Number(depth.rows[0]?.count ?? "0");
+      if (queueDepth >= 8) {
+        await this.runtime.deny(context, {
+          operation: "marketing_sync",
+          reason: "tenant marketing sync queue is full",
+          currentValue: queueDepth,
+          limitValue: 8,
+          retryAfterSeconds: 120
+        });
+      }
+
+      const perConnectionDepth = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+         FROM marketing_sync_job
+         WHERE tenant_id=$1
+           AND connection_id=$2
+           AND status IN ('PENDING','RUNNING','FAILED')`,
+        [context.tenantId, connectionId]
+      );
+      const perConnection = Number(
+        perConnectionDepth.rows[0]?.count ?? "0"
+      );
+      if (perConnection >= 2) {
+        await this.runtime.deny(context, {
+          operation: "marketing_sync_connection",
+          reason: "connection already has queued sync jobs",
+          currentValue: perConnection,
+          limitValue: 2,
+          retryAfterSeconds: 90
+        });
       }
 
       const reportName =
