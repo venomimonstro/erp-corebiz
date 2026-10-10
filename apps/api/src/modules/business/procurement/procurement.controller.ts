@@ -115,6 +115,7 @@ export class ProcurementController {
     @Param("id") id: string,
     @Body() body: {
       inboundAsnId?: string;
+      idempotencyKey: string;
       lines: Array<{
         purchaseOrderLineId: string;
         quantityMilli: string;
@@ -127,7 +128,10 @@ export class ProcurementController {
         this.context(request),
         id,
         body.lines,
-        { inboundAsnId: body.inboundAsnId }
+        {
+          inboundAsnId: body.inboundAsnId,
+          idempotencyKey: body.idempotencyKey
+        }
       )
     };
   }
