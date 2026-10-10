@@ -1,12 +1,14 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { AuthorizationService } from "../../platform/authorization/authorization.service";
 
 type ProjectStatus =
   | "PLANNED"
@@ -17,10 +19,25 @@ type ProjectStatus =
 
 @Injectable()
 export class ProjectsService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly authorization: AuthorizationService
+  ) {}
 
   async list(context: TenantContext): Promise<Array<Record<string, unknown>>> {
+    const scopedMembershipIds = await this.membershipIdsForScope(
+      context,
+      "projects.read"
+    );
+
     return this.database.withTenantTransaction(context, async (client) => {
+      const values: unknown[] = [context.tenantId];
+      let scopeSql = "";
+      if (scopedMembershipIds) {
+        values.push(scopedMembershipIds);
+        scopeSql = "AND p.responsible_membership_id = ANY($2::uuid[])";
+      }
+
       const result = await client.query(
         `SELECT
            p.id,p.business_number,p.name,p.code,p.status,p.billing_mode,
@@ -72,6 +89,7 @@ export class ProjectsService {
              AND t.state NOT IN ('DONE','CANCELLED')
          ) tasks ON true
          WHERE p.tenant_id=$1
+           ${scopeSql}
          ORDER BY
            CASE p.status
              WHEN 'ACTIVE' THEN 0
@@ -81,7 +99,7 @@ export class ProjectsService {
            END,
            p.due_on NULLS LAST,p.updated_at DESC
          LIMIT 500`,
-        [context.tenantId]
+        values
       );
       return result.rows;
     });
@@ -91,7 +109,19 @@ export class ProjectsService {
     context: TenantContext,
     projectId: string
   ): Promise<Record<string, unknown>> {
+    const scopedMembershipIds = await this.membershipIdsForScope(
+      context,
+      "projects.read"
+    );
+
     return this.database.withTenantTransaction(context, async (client) => {
+      const values: unknown[] = [context.tenantId, projectId];
+      let scopeSql = "";
+      if (scopedMembershipIds) {
+        values.push(scopedMembershipIds);
+        scopeSql = "AND p.responsible_membership_id = ANY($3::uuid[])";
+      }
+
       const project = await client.query(
         `SELECT
            p.*,p.budget_minor::text AS budget_minor,
@@ -102,8 +132,9 @@ export class ProjectsService {
            ON party.tenant_id=p.tenant_id AND party.id=p.party_id
          LEFT JOIN crm_deal d
            ON d.tenant_id=p.tenant_id AND d.id=p.source_deal_id
-         WHERE p.tenant_id=$1 AND p.id=$2`,
-        [context.tenantId, projectId]
+         WHERE p.tenant_id=$1 AND p.id=$2
+           ${scopeSql}`,
+        values
       );
       if (!project.rows[0]) throw new NotFoundException("Проект не найден");
 
@@ -193,6 +224,10 @@ export class ProjectsService {
       notes?: string;
     }
   ): Promise<{ id: string; number: string; version: number }> {
+    const scopedMembershipIds = await this.membershipIdsForScope(
+      context,
+      "projects.write"
+    );
     const name = input.name?.trim();
     if (!name || name.length > 220) {
       throw new BadRequestException("Некорректное название проекта");
@@ -251,6 +286,13 @@ export class ProjectsService {
           input.responsibleMembershipId ??
           dealRow.responsible_membership_id ??
           context.membershipId;
+      }
+
+      if (
+        scopedMembershipIds &&
+        !scopedMembershipIds.includes(responsibleMembershipId)
+      ) {
+        throw new NotFoundException("Ответственный сотрудник недоступен");
       }
 
       if (partyId) {
