@@ -4,6 +4,7 @@ import {
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { RuntimePressureService } from "../../platform/runtime-pressure/runtime-pressure.service";
 
 type SearchItem = {
   type: "PARTY" | "DEAL" | "SALES_ORDER" | "SKU" | "PURCHASE_ORDER";
@@ -15,7 +16,10 @@ type SearchItem = {
 
 @Injectable()
 export class GlobalSearchService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly runtime: RuntimePressureService
+  ) {}
 
   async search(
     context: TenantContext,
@@ -37,7 +41,16 @@ export class GlobalSearchService {
       throw new BadRequestException("Слишком длинный поисковый запрос");
     }
 
-    return this.database.withTenantTransaction(context, async (client) => {
+    const lease = await this.runtime.acquire(context, {
+      operation: "global_search",
+      scope: "MEMBERSHIP",
+      limit: 2,
+      ttlSeconds: 15,
+      retryAfterSeconds: 3
+    });
+
+    try {
+      return await this.database.withTenantTransaction(context, async (client) => {
       const permissionRows = await client.query<{
         permission_code: string;
       }>(
@@ -283,6 +296,9 @@ export class GlobalSearchService {
         items: items.slice(0, 25),
         quickActions
       };
-    });
+      });
+    } finally {
+      await this.runtime.release(context, lease.leaseKey);
+    }
   }
 }
