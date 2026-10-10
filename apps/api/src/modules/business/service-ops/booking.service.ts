@@ -854,10 +854,23 @@ export class BookingService {
          FROM service_booking b
          JOIN service_catalog_item s
            ON s.tenant_id=b.tenant_id AND s.id=b.service_id
-         WHERE b.tenant_id=$1 AND b.asset_id=$2
+         WHERE b.tenant_id=$1
+           AND b.asset_id=$2
+           AND (
+             $3::uuid[] IS NULL
+             OR EXISTS (
+               SELECT 1
+               FROM service_booking_resource br
+               JOIN service_resource r
+                 ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+               WHERE br.tenant_id=b.tenant_id
+                 AND br.booking_id=b.id
+                 AND r.membership_id = ANY($3::uuid[])
+             )
+           )
          ORDER BY b.starts_at DESC
          LIMIT 500`,
-        [context.tenantId, assetId]
+        [context.tenantId, assetId, scopedMembershipIds]
       );
 
       return {
