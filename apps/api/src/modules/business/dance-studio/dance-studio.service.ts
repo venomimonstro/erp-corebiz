@@ -1141,8 +1141,11 @@ export class DanceStudioService {
           student_id:string;
           party_id:string;
           member_status:string;
+          discount_bps:number;
         }>(
-          `SELECT gm.student_id,s.party_id,gm.status AS member_status
+          `SELECT
+             gm.student_id,s.party_id,gm.status AS member_status,
+             gm.discount_bps
            FROM dance_group_member gm
            JOIN dance_student s
              ON s.tenant_id=gm.tenant_id AND s.id=gm.student_id
@@ -1210,9 +1213,12 @@ export class DanceStudioService {
       }
 
       if(!added){
+        const base=BigInt(source.priceMinor);
+        const discount=BigInt(Math.max(0,Math.min(10000,member.discount_bps)));
+        const discounted=(base*(10000n-discount)+9999n)/10000n;
         added=await this.addParticipant(context,lessonId,{
           studentId:member.student_id,
-          chargeMinor:source.priceMinor,
+          chargeMinor:discounted.toString(),
           allowWaitlist:true
         });
       }
