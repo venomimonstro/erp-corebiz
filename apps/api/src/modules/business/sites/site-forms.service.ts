@@ -11,6 +11,7 @@ import { RedisService } from "../../../infrastructure/cache/redis.service";
 import { CrmService } from "../crm/crm.service";
 import { PartyService } from "../party/party.service";
 import { BookingService } from "../service-ops/booking.service";
+import { DanceStudioService } from "../dance-studio/dance-studio.service";
 
 @Injectable()
 export class SiteFormsService {
@@ -19,7 +20,8 @@ export class SiteFormsService {
     private readonly redis: RedisService,
     private readonly crm: CrmService,
     private readonly parties: PartyService,
-    private readonly bookings: BookingService
+    private readonly bookings: BookingService,
+    private readonly dance: DanceStudioService
   ) {}
 
   async bindings(
@@ -43,17 +45,18 @@ export class SiteFormsService {
     siteId: string,
     input: {
       name: string;
-      action: "CRM_LEAD" | "BOOKING";
+      action: "CRM_LEAD" | "BOOKING" | "DANCE_BOOKING";
       responsibleMembershipId?: string;
       pipelineId?: string;
       stageId?: string;
       serviceId?: string;
       resourceIds?: string[];
+      danceGroupId?: string;
     }
   ): Promise<{ id: string; publicKey: string }> {
     if (!input || typeof input !== "object" || Array.isArray(input) ||
         typeof input.name !== "string" ||
-        (input.action !== "CRM_LEAD" && input.action !== "BOOKING") ||
+        !["CRM_LEAD","BOOKING","DANCE_BOOKING"].includes(input.action) ||
         (input.responsibleMembershipId !== undefined && typeof input.responsibleMembershipId !== "string") ||
         (input.pipelineId !== undefined && typeof input.pipelineId !== "string") ||
         (input.stageId !== undefined && typeof input.stageId !== "string") ||
@@ -62,7 +65,8 @@ export class SiteFormsService {
           !Array.isArray(input.resourceIds) ||
           input.resourceIds.length > 10 ||
           input.resourceIds.some(id => typeof id !== "string")
-        ))) {
+        )) ||
+        (input.danceGroupId !== undefined && typeof input.danceGroupId !== "string")) {
       throw new BadRequestException("Некорректная конфигурация формы");
     }
     const name=input.name.trim();
@@ -78,7 +82,7 @@ export class SiteFormsService {
     if(input.action==="CRM_LEAD"){
       if(input.pipelineId) config.pipelineId=input.pipelineId;
       if(input.stageId) config.stageId=input.stageId;
-    }else{
+    }else if(input.action==="BOOKING"){
       if(!input.serviceId) throw new BadRequestException("Для BOOKING требуется serviceId");
       config.serviceId=input.serviceId;
       const resourceIds=Array.from(new Set(input.resourceIds??[])).slice(0,10);
@@ -89,6 +93,11 @@ export class SiteFormsService {
         throw new BadRequestException("Некорректный resourceId");
       }
       config.resourceIds=resourceIds;
+    }else{
+      if(!input.danceGroupId || !/^[0-9a-f-]{36}$/i.test(input.danceGroupId)){
+        throw new BadRequestException("Для DANCE_BOOKING требуется danceGroupId");
+      }
+      config.danceGroupId=input.danceGroupId;
     }
 
     const publicKey="form_"+randomBytes(24).toString("base64url");
@@ -125,6 +134,16 @@ export class SiteFormsService {
         }
       }
 
+      if (input.action==="DANCE_BOOKING") {
+        const group=await client.query(
+          `SELECT 1
+           FROM dance_group
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,input.danceGroupId]
+        );
+        if(!group.rowCount) throw new NotFoundException("Группа студии недоступна");
+      }
+
       const result=await client.query<{id:string}>(
         `INSERT INTO site_form_binding(
            tenant_id,site_id,name,public_key,action,config,created_by_membership_id
@@ -146,7 +165,14 @@ export class SiteFormsService {
     to:string,
     clientIdentity="unknown"
   ):Promise<Array<{
-    resourceId:string;resourceName:string;startsAt:string;endsAt:string;
+    resourceId:string;
+    resourceName:string;
+    startsAt:string;
+    endsAt:string;
+    lessonId?:string;
+    groupName?:string;
+    spotsLeft?:number;
+    waitlist?:number;
   }>> {
     if (!publicKey || publicKey.length > 160) throw new BadRequestException("Invalid booking link");
     const start=new Date(from), end=new Date(to);
@@ -158,7 +184,9 @@ export class SiteFormsService {
       binding_id:string;tenant_id:string;action:string;config:Record<string,unknown>;
     }>("SELECT * FROM corebiz_resolve_site_form_binding($1)",[publicKey]);
     const binding=result.rows[0];
-    if (!binding || binding.action!=="BOOKING") throw new NotFoundException("Booking form not found");
+    if (!binding || !["BOOKING","DANCE_BOOKING"].includes(binding.action)) {
+      throw new NotFoundException("Booking form not found");
+    }
     const clientKey=this.clientKey(clientIdentity);
     const [clientHits,totalHits]=await Promise.all([
       this.redis.incrementWindow(
@@ -173,6 +201,62 @@ export class SiteFormsService {
     if(clientHits>60 || totalHits>3000){
       throw new BadRequestException("Too many availability requests");
     }
+    if(binding.action==="DANCE_BOOKING"){
+      const groupId=typeof binding.config.danceGroupId==="string"
+        ? binding.config.danceGroupId
+        : "";
+      if(!groupId) return [];
+
+      return this.database.withTenantTransaction(
+        {
+          tenantId:binding.tenant_id,
+          userId:"00000000-0000-0000-0000-000000000000",
+          membershipId:"00000000-0000-0000-0000-000000000000"
+        },
+        async client=>{
+          const lessons=await client.query<{
+            id:string;group_name:string;starts_at:Date;ends_at:Date;
+            trainer_id:string|null;trainer_name:string|null;capacity:number;
+            booked_count:number;waitlist:number;
+          }>(
+            `SELECT
+               l.id,g.name AS group_name,l.starts_at,l.ends_at,
+               l.trainer_resource_id AS trainer_id,tr.name AS trainer_name,
+               l.capacity,
+               count(lp.id) FILTER (
+                 WHERE lp.status NOT IN ('WAITLIST','CANCELLED_IN_TIME')
+               )::integer AS booked_count,
+               count(lp.id) FILTER (WHERE lp.status='WAITLIST')::integer AS waitlist
+             FROM dance_lesson l
+             JOIN dance_group g
+               ON g.tenant_id=l.tenant_id AND g.id=l.group_id
+             LEFT JOIN service_resource tr
+               ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
+             LEFT JOIN dance_lesson_participant lp
+               ON lp.tenant_id=l.tenant_id AND lp.lesson_id=l.id
+             WHERE l.tenant_id=$1 AND l.group_id=$2
+               AND l.status='OPEN_FOR_BOOKING'
+               AND l.starts_at >= $3 AND l.starts_at < $4
+               AND l.starts_at > now()
+             GROUP BY l.id,g.name,tr.name
+             ORDER BY l.starts_at
+             LIMIT 100`,
+            [binding.tenant_id,groupId,start,end]
+          );
+          return lessons.rows.map(row=>({
+            resourceId:row.trainer_id??"",
+            resourceName:row.trainer_name??"Тренер",
+            startsAt:row.starts_at.toISOString(),
+            endsAt:row.ends_at.toISOString(),
+            lessonId:row.id,
+            groupName:row.group_name,
+            spotsLeft:Math.max(0,row.capacity-row.booked_count),
+            waitlist:row.waitlist
+          }));
+        }
+      );
+    }
+
     const serviceId=typeof binding.config.serviceId==="string"?binding.config.serviceId:"";
     const allowed=Array.isArray(binding.config.resourceIds)?binding.config.resourceIds.filter(
       (id):id is string=>typeof id==="string"
@@ -198,6 +282,9 @@ export class SiteFormsService {
       message?:string;
       startsAt?:string;
       resourceId?:string;
+      childName?:string;
+      childBirthDate?:string;
+      lessonId?:string;
       honeypot?:string;
     },
     clientIdentity="unknown"
@@ -218,7 +305,7 @@ export class SiteFormsService {
       binding_id:string;
       tenant_id:string;
       site_id:string;
-      action:"CRM_LEAD"|"BOOKING";
+      action:"CRM_LEAD"|"BOOKING"|"DANCE_BOOKING";
       config:Record<string,unknown>;
     }>(
       "SELECT * FROM corebiz_resolve_site_form_binding($1)",
@@ -362,6 +449,78 @@ export class SiteFormsService {
         return {accepted:true,submissionId:existing.id,resultType:"CRM_DEAL",resultId:deal.id};
       }
 
+      if(row.action==="DANCE_BOOKING"){
+        const childName=payload.childName?.trim()??"";
+        const childBirthDate=payload.childBirthDate?.trim()??"";
+        const lessonId=payload.lessonId?.trim()??"";
+        const groupId=String(row.config.danceGroupId??"");
+        if(childName.length<2||childName.length>200){
+          throw new BadRequestException("Укажите имя ребёнка");
+        }
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(childBirthDate)){
+          throw new BadRequestException("Укажите дату рождения ребёнка");
+        }
+        if(!/^[0-9a-f-]{36}$/i.test(lessonId)){
+          throw new BadRequestException("Выберите занятие");
+        }
+
+        const allowedLesson=await this.database.withTenantTransaction(
+          context,
+          async client=>{
+            const result=await client.query(
+              `SELECT 1 FROM dance_lesson
+               WHERE tenant_id=$1 AND id=$2 AND group_id=$3
+                 AND status='OPEN_FOR_BOOKING' AND starts_at>now()`,
+              [row.tenant_id,lessonId,groupId]
+            );
+            return Boolean(result.rowCount);
+          }
+        );
+        if(!allowedLesson) throw new NotFoundException("Занятие уже недоступно");
+
+        const parent=await this.parties.create(context,{
+          displayName:payload.name,
+          phone:payload.phone??undefined,
+          email:payload.email??undefined,
+          responsibleMembershipId:responsible,
+          idempotencyKey:"dance-public-parent:"+existing.id
+        });
+        const child=await this.parties.create(context,{
+          displayName:childName,
+          responsibleMembershipId:responsible,
+          idempotencyKey:"dance-public-child:"+existing.id
+        });
+        const student=await this.dance.createStudent(context,{
+          partyId:child.id,
+          birthDate:childBirthDate,
+          payerPartyId:parent.id,
+          payerRelation:"PARENT"
+        });
+        const participant=await this.dance.addParticipant(
+          context,
+          lessonId,
+          {
+            studentId:student.id,
+            chargeMinor:"0",
+            allowWaitlist:true
+          }
+        );
+
+        await this.complete(
+          row.tenant_id,
+          existing.id,
+          "DANCE_LESSON_PARTICIPANT",
+          String((participant as any).id)
+        );
+        return {
+          accepted:true,
+          submissionId:existing.id,
+          resultType:"DANCE_LESSON_PARTICIPANT",
+          resultId:(participant as any).id,
+          status:(participant as any).status
+        };
+      }
+
       const startsAt=new Date(payload.startsAt??"");
       if(Number.isNaN(startsAt.getTime())){
         throw new BadRequestException("Для записи требуется startsAt");
@@ -431,9 +590,13 @@ export class SiteFormsService {
   }
 
   private validatePayload(input:any):{
-    name:string;phone?:string;email?:string;message?:string;startsAt?:string;resourceId?:string
+    name:string;phone?:string;email?:string;message?:string;startsAt?:string;
+    resourceId?:string;childName?:string;childBirthDate?:string;lessonId?:string
   }{
-    for (const field of ["name","phone","email","message","startsAt","resourceId"] as const) {
+    for (const field of [
+      "name","phone","email","message","startsAt","resourceId",
+      "childName","childBirthDate","lessonId"
+    ] as const) {
       if (input[field] !== undefined && input[field] !== null &&
           typeof input[field] !== "string") {
         throw new BadRequestException("Некорректное поле: " + field);
@@ -454,13 +617,25 @@ export class SiteFormsService {
     const resourceId=String(input.resourceId??"").trim();
     if(resourceId && !/^[0-9a-f-]{36}$/i.test(resourceId)) throw new BadRequestException("Некорректный ресурс");
 
+    const childName=String(input.childName??"").trim();
+    const childBirthDate=String(input.childBirthDate??"").trim();
+    const lessonId=String(input.lessonId??"").trim();
+    if(childName.length>200) throw new BadRequestException("Некорректное имя ребёнка");
+    if(childBirthDate && !/^\d{4}-\d{2}-\d{2}$/.test(childBirthDate))
+      throw new BadRequestException("Некорректная дата рождения");
+    if(lessonId && !/^[0-9a-f-]{36}$/i.test(lessonId))
+      throw new BadRequestException("Некорректный урок");
+
     return {
       name,
       ...(phone?{phone}:{}),
       ...(email?{email}:{}),
       ...(message?{message}:{}),
       ...(startsAt?{startsAt}:{}),
-      ...(resourceId?{resourceId}:{})
+      ...(resourceId?{resourceId}:{}),
+      ...(childName?{childName}:{}),
+      ...(childBirthDate?{childBirthDate}:{}),
+      ...(lessonId?{lessonId}:{})
     };
   }
 
