@@ -285,6 +285,7 @@ export class TasksService {
       PURCHASE_ORDER: { table: "purchase_order", notFoundMessage: "Заказ закупки не найден" },
       SERVICE_BOOKING: { table: "service_booking", notFoundMessage: "Запись клиента не найдена" },
       SERVICE_ASSET: { table: "service_asset", notFoundMessage: "Объект обслуживания не найден" },
+      SERVICE_PACKAGE: { table: "service_package", notFoundMessage: "Абонемент клиента не найден" },
       PRODUCT: { table: "product", notFoundMessage: "Товар не найден" },
       FINANCIAL_OBLIGATION: {
         table: "financial_obligation",
