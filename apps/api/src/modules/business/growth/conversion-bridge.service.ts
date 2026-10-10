@@ -14,13 +14,15 @@ import {
 } from "node:crypto";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { getEnv } from "../../../infrastructure/config/env";
+import { RuntimePressureService } from "../../platform/runtime-pressure/runtime-pressure.service";
 import { IntegrationCryptoService } from "./integration-crypto.service";
 
 @Injectable()
 export class ConversionBridgeService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly crypto: IntegrationCryptoService
+    private readonly crypto: IntegrationCryptoService,
+    private readonly runtime: RuntimePressureService
   ) {}
 
   async callConnections(
@@ -382,6 +384,28 @@ export class ConversionBridgeService {
         throw new BadRequestException("Подключение отключено");
       }
 
+      const pressure = await client.query<{ queued: string }>(
+        `SELECT count(*)::text AS queued
+         FROM offline_conversion_job
+         WHERE tenant_id=$1
+           AND status IN ('PENDING','FAILED','UPLOADED')`,
+        [context.tenantId]
+      );
+      const queuedNow = Number(pressure.rows[0]?.queued ?? "0");
+      const hardLimit = 20_000;
+
+      if (queuedNow >= hardLimit) {
+        await this.runtime.deny(context, {
+          operation: "offline_conversion_queue",
+          reason: "tenant offline conversion queue is full",
+          currentValue: queuedNow,
+          limitValue: hardLimit,
+          retryAfterSeconds: 300
+        });
+      }
+
+      const batchLimit = Math.min(5_000, hardLimit - queuedNow);
+
       const conversions = await client.query<{
         conversion_type: string;
         conversion_id: string;
@@ -403,8 +427,22 @@ export class ConversionBridgeService {
         "AND o.tenant_id=a.tenant_id AND o.id=a.conversion_id " +
         "LEFT JOIN service_booking b ON a.conversion_type='SERVICE_BOOKING' " +
         "AND b.tenant_id=a.tenant_id AND b.id=a.conversion_id " +
-        "WHERE a.tenant_id=$1 AND a.model=$2 AND a.conversion_at <= now()",
-        [context.tenantId, model]
+        "WHERE a.tenant_id=$1 AND a.model=$2 AND a.conversion_at <= now() " +
+        "AND NOT EXISTS (" +
+        "SELECT 1 FROM offline_conversion_job j " +
+        "WHERE j.tenant_id=a.tenant_id AND j.connection_id=$3 " +
+        "AND j.conversion_type=a.conversion_type AND j.conversion_id=a.conversion_id " +
+        "AND j.target=$4" +
+        ") " +
+        "ORDER BY (t.yclid IS NOT NULL) DESC,a.conversion_at,a.conversion_id " +
+        "LIMIT $5",
+        [
+          context.tenantId,
+          model,
+          connectionId,
+          conn.target,
+          batchLimit
+        ]
       );
 
       let queued = 0;
