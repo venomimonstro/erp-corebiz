@@ -8,6 +8,7 @@ import { RedisModule } from "./infrastructure/cache/redis.module";
 import { ApiRateLimitGuard } from "./infrastructure/http/api-rate-limit.guard";
 import { DatabaseModule } from "./infrastructure/database/database.module";
 import { AccountingModule } from "./modules/business/accounting/accounting.module";
+import { OwnerAssistantModule } from "./modules/business/assistant/owner-assistant.module";
 import { CatalogModule } from "./modules/business/catalog/catalog.module";
 import { ChannelsModule } from "./modules/business/channels/channels.module";
 import { CrmModule } from "./modules/business/crm/crm.module";
@@ -49,6 +50,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     TenantsModule,
     OrganizationModule,
     AccountingModule,
+    OwnerAssistantModule,
     PartyModule,
     CrmModule,
     DashboardModule,
