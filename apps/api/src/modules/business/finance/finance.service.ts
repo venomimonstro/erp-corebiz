@@ -1494,6 +1494,511 @@ export class FinanceService {
     });
   }
 
+  async budgets(
+    context: TenantContext
+  ): Promise<Array<Record<string, unknown>>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `SELECT
+           b.id,b.name,b.currency,b.period_from,b.period_to,b.active_version_id,
+           published.version_no AS published_version_no,
+           published.published_at,
+           draft.id AS draft_version_id,
+           draft.version_no AS draft_version_no,
+           b.updated_at
+         FROM finance_budget b
+         LEFT JOIN finance_budget_version published
+           ON published.tenant_id=b.tenant_id
+          AND published.id=b.active_version_id
+         LEFT JOIN finance_budget_version draft
+           ON draft.tenant_id=b.tenant_id
+          AND draft.budget_id=b.id
+          AND draft.status='DRAFT'
+         WHERE b.tenant_id=$1
+         ORDER BY b.period_from DESC,b.name`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async createBudget(
+    context: TenantContext,
+    input: {
+      name: string;
+      periodFrom: string;
+      periodTo: string;
+      currency?: string;
+    }
+  ): Promise<{ id: string; draftVersionId: string }> {
+    const name = String(input.name ?? "").trim();
+    if (name.length < 2 || name.length > 160) {
+      throw new BadRequestException("Некорректное название бюджета");
+    }
+
+    const date = /^\d{4}-\d{2}-\d{2}$/;
+    if (!date.test(input.periodFrom) || !date.test(input.periodTo)) {
+      throw new BadRequestException("Период бюджета: YYYY-MM-DD");
+    }
+
+    const from = new Date(input.periodFrom + "T00:00:00Z");
+    const to = new Date(input.periodTo + "T00:00:00Z");
+    if (
+      Number.isNaN(from.getTime()) ||
+      Number.isNaN(to.getTime()) ||
+      to < from ||
+      to.getTime() - from.getTime() > 732 * 86400000
+    ) {
+      throw new BadRequestException("Некорректный период бюджета");
+    }
+
+    const currency = String(input.currency ?? "RUB").toUpperCase();
+    if (!/^[A-Z]{3}$/.test(currency)) {
+      throw new BadRequestException("Некорректная валюта бюджета");
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      try {
+        const budget = await client.query<{ id: string }>(
+          `INSERT INTO finance_budget(
+             tenant_id,name,currency,period_from,period_to,
+             created_by_membership_id
+           ) VALUES ($1,$2,$3,$4,$5,$6)
+           RETURNING id`,
+          [
+            context.tenantId,
+            name,
+            currency,
+            input.periodFrom,
+            input.periodTo,
+            context.membershipId
+          ]
+        );
+
+        const budgetId = budget.rows[0]!.id;
+        const version = await client.query<{ id: string }>(
+          `INSERT INTO finance_budget_version(
+             tenant_id,budget_id,version_no,status,created_by_membership_id
+           ) VALUES ($1,$2,1,'DRAFT',$3)
+           RETURNING id`,
+          [context.tenantId, budgetId, context.membershipId]
+        );
+
+        return {
+          id: budgetId,
+          draftVersionId: version.rows[0]!.id
+        };
+      } catch (error) {
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "23505"
+        ) {
+          throw new ConflictException(
+            "Бюджет с таким названием и периодом уже существует"
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  async budgetCategories(
+    context: TenantContext
+  ): Promise<Array<Record<string, unknown>>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `SELECT id,name,direction,code
+         FROM cash_flow_category
+         WHERE tenant_id=$1
+           AND status='ACTIVE'
+           AND direction IN ('IN','OUT')
+         ORDER BY direction,name`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async setBudgetLine(
+    context: TenantContext,
+    budgetId: string,
+    input: {
+      month: string;
+      categoryId: string;
+      plannedMinor: string;
+      note?: string;
+    }
+  ): Promise<{ id: string }> {
+    if (!/^\d+$/.test(input.plannedMinor)) {
+      throw new BadRequestException("Некорректная плановая сумма");
+    }
+    if (!/^\d{4}-\d{2}-01$/.test(input.month)) {
+      throw new BadRequestException("Месяц должен быть первым числом YYYY-MM-01");
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const budget = await client.query<{
+        period_from: string;
+        period_to: string;
+        draft_version_id: string;
+      }>(
+        `SELECT
+           b.period_from::text,
+           b.period_to::text,
+           v.id AS draft_version_id
+         FROM finance_budget b
+         JOIN finance_budget_version v
+           ON v.tenant_id=b.tenant_id
+          AND v.budget_id=b.id
+          AND v.status='DRAFT'
+         WHERE b.tenant_id=$1 AND b.id=$2
+         FOR UPDATE OF b,v`,
+        [context.tenantId, budgetId]
+      );
+
+      const row = budget.rows[0];
+      if (!row) {
+        throw new NotFoundException("Бюджет или его DRAFT не найден");
+      }
+
+      const periodFromMonth = row.period_from.slice(0, 7) + "-01";
+      const periodToMonth = row.period_to.slice(0, 7) + "-01";
+      if (input.month < periodFromMonth || input.month > periodToMonth) {
+        throw new BadRequestException("Месяц вне периода бюджета");
+      }
+
+      const category = await client.query(
+        `SELECT 1 FROM cash_flow_category
+         WHERE tenant_id=$1
+           AND id=$2
+           AND status='ACTIVE'
+           AND direction IN ('IN','OUT')`,
+        [context.tenantId, input.categoryId]
+      );
+      if (!category.rowCount) {
+        throw new NotFoundException("Категория денежного потока не найдена");
+      }
+
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO finance_budget_line(
+           tenant_id,version_id,month,category_id,planned_minor,note
+         ) VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (version_id,month,category_id)
+         DO UPDATE SET
+           planned_minor=EXCLUDED.planned_minor,
+           note=EXCLUDED.note,
+           updated_at=now()
+         RETURNING id`,
+        [
+          context.tenantId,
+          row.draft_version_id,
+          input.month,
+          input.categoryId,
+          input.plannedMinor,
+          input.note?.trim().slice(0, 1000) || null
+        ]
+      );
+
+      return result.rows[0]!;
+    });
+  }
+
+  async publishBudget(
+    context: TenantContext,
+    budgetId: string
+  ): Promise<{
+    publishedVersionId: string;
+    publishedVersionNo: number;
+    nextDraftVersionId: string;
+  }> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const budget = await client.query<{
+        active_version_id: string | null;
+        draft_id: string;
+        draft_no: number;
+      }>(
+        `SELECT
+           b.active_version_id,
+           v.id AS draft_id,
+           v.version_no AS draft_no
+         FROM finance_budget b
+         JOIN finance_budget_version v
+           ON v.tenant_id=b.tenant_id
+          AND v.budget_id=b.id
+          AND v.status='DRAFT'
+         WHERE b.tenant_id=$1 AND b.id=$2
+         FOR UPDATE OF b,v`,
+        [context.tenantId, budgetId]
+      );
+
+      const row = budget.rows[0];
+      if (!row) throw new NotFoundException("DRAFT бюджета не найден");
+
+      const lines = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+         FROM finance_budget_line
+         WHERE tenant_id=$1 AND version_id=$2`,
+        [context.tenantId, row.draft_id]
+      );
+      if (Number(lines.rows[0]?.count ?? "0") === 0) {
+        throw new BadRequestException("Нельзя опубликовать пустой бюджет");
+      }
+
+      if (row.active_version_id) {
+        await client.query(
+          `UPDATE finance_budget_version
+           SET status='SUPERSEDED',updated_at=now()
+           WHERE tenant_id=$1
+             AND id=$2
+             AND status='PUBLISHED'`,
+          [context.tenantId, row.active_version_id]
+        );
+      }
+
+      await client.query(
+        `UPDATE finance_budget_version
+         SET status='PUBLISHED',
+             published_by_membership_id=$3,
+             published_at=now(),
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='DRAFT'`,
+        [context.tenantId, row.draft_id, context.membershipId]
+      );
+
+      await client.query(
+        `UPDATE finance_budget
+         SET active_version_id=$3,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId, budgetId, row.draft_id]
+      );
+
+      const nextVersionNo = row.draft_no + 1;
+      const next = await client.query<{ id: string }>(
+        `INSERT INTO finance_budget_version(
+           tenant_id,budget_id,version_no,status,created_by_membership_id
+         ) VALUES ($1,$2,$3,'DRAFT',$4)
+         RETURNING id`,
+        [
+          context.tenantId,
+          budgetId,
+          nextVersionNo,
+          context.membershipId
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO finance_budget_line(
+           tenant_id,version_id,month,category_id,planned_minor,note
+         )
+         SELECT tenant_id,$3,month,category_id,planned_minor,note
+         FROM finance_budget_line
+         WHERE tenant_id=$1 AND version_id=$2
+         ORDER BY month,category_id`,
+        [context.tenantId, row.draft_id, next.rows[0]!.id]
+      );
+
+      return {
+        publishedVersionId: row.draft_id,
+        publishedVersionNo: row.draft_no,
+        nextDraftVersionId: next.rows[0]!.id
+      };
+    });
+  }
+
+  async budgetComparison(
+    context: TenantContext,
+    budgetId: string
+  ): Promise<Record<string, unknown>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const budget = await client.query<{
+        id: string;
+        name: string;
+        currency: string;
+        period_from: string;
+        period_to: string;
+        version_id: string;
+        version_no: number;
+        version_status: string;
+      }>(
+        `SELECT
+           b.id,b.name,b.currency,b.period_from::text,b.period_to::text,
+           COALESCE(b.active_version_id,d.id) AS version_id,
+           COALESCE(p.version_no,d.version_no) AS version_no,
+           COALESCE(p.status,d.status) AS version_status
+         FROM finance_budget b
+         LEFT JOIN finance_budget_version p
+           ON p.tenant_id=b.tenant_id
+          AND p.id=b.active_version_id
+         LEFT JOIN finance_budget_version d
+           ON d.tenant_id=b.tenant_id
+          AND d.budget_id=b.id
+          AND d.status='DRAFT'
+         WHERE b.tenant_id=$1 AND b.id=$2`,
+        [context.tenantId, budgetId]
+      );
+
+      const head = budget.rows[0];
+      if (!head?.version_id) {
+        throw new NotFoundException("Бюджет не найден");
+      }
+
+      const planned = await client.query<{
+        month: string;
+        category_id: string;
+        category_name: string;
+        direction: string;
+        planned_minor: string;
+      }>(
+        `SELECT
+           l.month::text,l.category_id,c.name AS category_name,
+           c.direction,l.planned_minor::text
+         FROM finance_budget_line l
+         JOIN cash_flow_category c
+           ON c.tenant_id=l.tenant_id AND c.id=l.category_id
+         WHERE l.tenant_id=$1 AND l.version_id=$2
+         ORDER BY l.month,c.direction,c.name`,
+        [context.tenantId, head.version_id]
+      );
+
+      const actual = await client.query<{
+        month: string;
+        category_id: string;
+        category_name: string;
+        direction: string;
+        actual_minor: string;
+      }>(
+        `SELECT
+           date_trunc('month',p.posted_at)::date::text AS month,
+           p.category_id,
+           c.name AS category_name,
+           p.direction,
+           COALESCE(sum(p.amount_minor),0)::text AS actual_minor
+         FROM payment p
+         JOIN cash_flow_category c
+           ON c.tenant_id=p.tenant_id AND c.id=p.category_id
+         WHERE p.tenant_id=$1
+           AND p.status='POSTED'
+           AND p.currency=$2
+           AND p.posted_at >= $3::date
+           AND p.posted_at < ($4::date + 1)
+         GROUP BY date_trunc('month',p.posted_at)::date,p.category_id,c.name,p.direction
+         ORDER BY month,p.direction,c.name`,
+        [
+          context.tenantId,
+          head.currency,
+          head.period_from,
+          head.period_to
+        ]
+      );
+
+      const map = new Map<string, {
+        month: string;
+        categoryId: string;
+        categoryName: string;
+        direction: string;
+        plannedMinor: bigint;
+        actualMinor: bigint;
+      }>();
+
+      for (const row of planned.rows) {
+        map.set(row.month + ":" + row.category_id, {
+          month: row.month,
+          categoryId: row.category_id,
+          categoryName: row.category_name,
+          direction: row.direction,
+          plannedMinor: BigInt(row.planned_minor),
+          actualMinor: 0n
+        });
+      }
+
+      for (const row of actual.rows) {
+        const key = row.month + ":" + row.category_id;
+        const existing = map.get(key);
+        if (existing) {
+          existing.actualMinor = BigInt(row.actual_minor);
+        } else {
+          map.set(key, {
+            month: row.month,
+            categoryId: row.category_id,
+            categoryName: row.category_name,
+            direction: row.direction,
+            plannedMinor: 0n,
+            actualMinor: BigInt(row.actual_minor)
+          });
+        }
+      }
+
+      const rows = Array.from(map.values())
+        .sort((a,b) =>
+          a.month.localeCompare(b.month) ||
+          a.direction.localeCompare(b.direction) ||
+          a.categoryName.localeCompare(b.categoryName)
+        )
+        .map((row) => ({
+          month: row.month,
+          categoryId: row.categoryId,
+          categoryName: row.categoryName,
+          direction: row.direction,
+          plannedMinor: row.plannedMinor.toString(),
+          actualMinor: row.actualMinor.toString(),
+          varianceMinor:
+            row.direction === "OUT"
+              ? (row.plannedMinor - row.actualMinor).toString()
+              : (row.actualMinor - row.plannedMinor).toString()
+        }));
+
+      const monthly = new Map<string, {
+        plannedIn: bigint;
+        actualIn: bigint;
+        plannedOut: bigint;
+        actualOut: bigint;
+      }>();
+
+      for (const row of rows) {
+        const bucket = monthly.get(row.month) ?? {
+          plannedIn: 0n,
+          actualIn: 0n,
+          plannedOut: 0n,
+          actualOut: 0n
+        };
+        if (row.direction === "IN") {
+          bucket.plannedIn += BigInt(row.plannedMinor);
+          bucket.actualIn += BigInt(row.actualMinor);
+        } else {
+          bucket.plannedOut += BigInt(row.plannedMinor);
+          bucket.actualOut += BigInt(row.actualMinor);
+        }
+        monthly.set(row.month, bucket);
+      }
+
+      return {
+        budget: {
+          id: head.id,
+          name: head.name,
+          currency: head.currency,
+          periodFrom: head.period_from,
+          periodTo: head.period_to,
+          versionNo: head.version_no,
+          versionStatus: head.version_status
+        },
+        rows,
+        monthly: Array.from(monthly.entries())
+          .sort(([a],[b]) => a.localeCompare(b))
+          .map(([month,row]) => ({
+            month,
+            plannedInMinor: row.plannedIn.toString(),
+            actualInMinor: row.actualIn.toString(),
+            plannedOutMinor: row.plannedOut.toString(),
+            actualOutMinor: row.actualOut.toString(),
+            plannedNetMinor: (row.plannedIn-row.plannedOut).toString(),
+            actualNetMinor: (row.actualIn-row.actualOut).toString()
+          }))
+      };
+    });
+  }
+
   async cashForecast(
     context: TenantContext,
     input: { days?: number }
