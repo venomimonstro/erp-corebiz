@@ -140,7 +140,7 @@ async function stockProduct(prefix, quantityMilli = "10000") {
   await request("POST", "/inventory/adjustments", {
     warehouseId: warehouse.id,
     skuId: product.skuId,
-    quantityDeltaMilli,
+    quantityDeltaMilli: quantityMilli,
     reason: "Golden disposable initial stock",
     idempotencyKey: "golden-stock-" + randomUUID()
   });
