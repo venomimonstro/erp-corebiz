@@ -543,6 +543,73 @@ export class BookingService {
     });
   }
 
+  async attachParty(
+    context: TenantContext,
+    bookingId: string,
+    partyId: string
+  ): Promise<void> {
+    await this.database.withTenantTransaction(context, async (client) => {
+      const booking = await client.query<{
+        party_id: string | null;
+        service_id: string;
+        starts_at: Date;
+        currency: string;
+      }>(
+        `SELECT party_id,service_id,starts_at,currency
+         FROM service_booking
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId, bookingId]
+      );
+
+      const row = booking.rows[0];
+      if (!row) throw new NotFoundException("Запись не найдена");
+
+      const party = await client.query(
+        `SELECT 1 FROM party
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+        [context.tenantId, partyId]
+      );
+      if (!party.rowCount) throw new NotFoundException("Клиент не найден");
+
+      if (row.party_id && row.party_id !== partyId) {
+        throw new ConflictException(
+          "К записи уже привязан другой клиент"
+        );
+      }
+
+      if (!row.party_id) {
+        await client.query(
+          `UPDATE service_booking
+           SET party_id=$3,version=version+1,updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND party_id IS NULL`,
+          [context.tenantId, bookingId, partyId]
+        );
+      }
+
+      await this.attribution.recordConversion(client, context, {
+        partyId,
+        sourceType: "SERVICE_BOOKING",
+        sourceId: bookingId,
+        conversionType: "BOOKING",
+        revenueMinor: 0n,
+        currency: row.currency,
+        occurredAt: row.starts_at,
+        metadata: {
+          serviceId: row.service_id,
+          startsAt: row.starts_at.toISOString()
+        }
+      });
+
+      await this.events.enqueue(client, context, {
+        eventName: "service.booking_party_attached",
+        entityType: "SERVICE_BOOKING",
+        entityId: bookingId,
+        payload: { bookingId, partyId }
+      });
+    });
+  }
+
   async reschedule(
     context: TenantContext,
     bookingId: string,
