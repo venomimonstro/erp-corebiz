@@ -1,5 +1,6 @@
 import { processMarketingSyncOnce } from "./marketing-sync.js";
 import { processMarketplaceSyncOnce } from "./marketplace-sync.js";
+import { processTenantExportOnce } from "./tenant-export.js";
 import { createDecipheriv, createHash } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 
@@ -995,6 +996,10 @@ async function workOnce(): Promise<boolean> {
   }
 
   if (await processMarketplaceSyncOnce(pool)) {
+    return true;
+  }
+
+  if (await processTenantExportOnce(pool)) {
     return true;
   }
 
