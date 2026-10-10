@@ -128,7 +128,7 @@ async function createStock(prefix, quantityMilli) {
   await request("POST", "/inventory/adjustments", {
     warehouseId: warehouse.id,
     skuId: product.skuId,
-    quantityDeltaMilli,
+    quantityDeltaMilli: quantityMilli,
     reason: "100-user disposable simulation initial stock",
     idempotencyKey: "sim100-stock-" + randomUUID()
   });
