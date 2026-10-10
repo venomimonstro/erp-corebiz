@@ -15,7 +15,8 @@
     "bootstrap:local": "pnpm infra:up && pnpm db:migrate",
     "backup:db": "bash scripts/backup-postgres.sh",
     "restore:db": "bash scripts/restore-postgres.sh",
-    "release:check": "bash scripts/release-check.sh"
+    "release:check": "bash scripts/release-check.sh",
+    "release:gate": "bash scripts/production-gate.sh"
   },
   "engines": {
     "node": ">=22.0.0"
