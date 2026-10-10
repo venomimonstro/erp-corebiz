@@ -186,6 +186,24 @@ WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     )
   )
 UNION ALL
+SELECT 'DANCE_CANCELLED_LESSON_ACTIVE_PARTICIPANT',count(*)::bigint
+FROM dance_lesson_participant lp
+JOIN dance_lesson l
+  ON l.tenant_id=lp.tenant_id AND l.id=lp.lesson_id
+WHERE lp.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND l.status IN ('CANCELLED_BY_STUDIO','CANCELLED_BY_TRAINER')
+  AND lp.status NOT IN ('CANCELLED_IN_TIME','ATTENDED','LATE')
+UNION ALL
+SELECT 'DANCE_CANCELLED_LESSON_OPEN_CHARGE',count(*)::bigint
+FROM dance_student_charge c
+JOIN dance_lesson l
+  ON l.tenant_id=c.tenant_id
+ AND l.id=c.source_id
+ AND c.source_type='LESSON'
+WHERE c.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND l.status IN ('CANCELLED_BY_STUDIO','CANCELLED_BY_TRAINER')
+  AND c.status IN ('OPEN','PARTIALLY_PAID')
+UNION ALL
 SELECT 'DANCE_TRAINER_RULE_OVERLAP',count(*)::bigint
 FROM trainer_compensation_plan a
 JOIN trainer_compensation_plan b
