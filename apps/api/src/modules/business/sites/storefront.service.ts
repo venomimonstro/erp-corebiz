@@ -303,6 +303,13 @@ export class StorefrontService {
       );
     }
 
+    // Once a Party or SalesOrder may exist, reopening the cart after an error
+    // would allow its lines to diverge from the idempotently created SalesOrder.
+    // Failed post-side-effect attempts retain the lease for controlled retry.
+    let domainSideEffectsStarted = Boolean(
+      claimed.checkout_party_id || claimed.sales_order_id
+    );
+
     try {
       const config = await this.database.withTenantTransaction(
         this.systemContext(cart.tenant_id),
@@ -353,6 +360,9 @@ export class StorefrontService {
 
       let customerId = claimed.checkout_party_id;
       if (!customerId) {
+        // A crash between Party.create and cart checkpoint cannot be treated
+        // as a side-effect-free error. Never re-open editable cart state here.
+        domainSideEffectsStarted = true;
         const customer = await this.parties.create(context, {
           displayName: name,
           ...(phone ? { phone } : {}),
@@ -433,23 +443,28 @@ export class StorefrontService {
         orderStatus: "CONFIRMED"
       };
     } catch (error) {
-      // Do not unlock an attempt that has already been taken over.
-      await this.database.withTenantTransaction(
-        this.systemContext(cart.tenant_id),
-        async (client) => {
-          await client.query(
-            `UPDATE storefront_cart
-             SET status='OPEN',
-                 checkout_started_at=NULL,
-                 checkout_attempt_token=NULL,
-                 updated_at=now()
-             WHERE tenant_id=$1 AND id=$2
-               AND status='PROCESSING'
-               AND checkout_attempt_token=$3`,
-            [cart.tenant_id,cart.cart_id,attemptToken]
-          );
-        }
-      );
+      // Do not unlock an attempt already taken over. If any external domain
+      // operation has begun, keep PROCESSING: the lease can be reclaimed
+      // after its timeout using the same cart-scoped Sales idempotency key.
+      // Reopening would permit line edits after a real order may already exist.
+      if (!domainSideEffectsStarted) {
+        await this.database.withTenantTransaction(
+          this.systemContext(cart.tenant_id),
+          async (client) => {
+            await client.query(
+              `UPDATE storefront_cart
+               SET status='OPEN',
+                   checkout_started_at=NULL,
+                   checkout_attempt_token=NULL,
+                   updated_at=now()
+               WHERE tenant_id=$1 AND id=$2
+                 AND status='PROCESSING'
+                 AND checkout_attempt_token=$3`,
+              [cart.tenant_id,cart.cart_id,attemptToken]
+            );
+          }
+        );
+      }
       throw error;
     }
   }
