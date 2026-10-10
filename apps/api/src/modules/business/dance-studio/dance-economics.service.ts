@@ -955,6 +955,10 @@ export class DanceEconomicsService {
         );
       }
 
+      await this.cancelDirectLessonChargesTx(
+        client,context,lessonId
+      );
+
       await client.query(
         `UPDATE dance_makeup_credit mc
          SET status='AVAILABLE',reserved_participant_id=NULL,updated_at=now()
@@ -970,10 +974,10 @@ export class DanceEconomicsService {
 
       await client.query(
         `UPDATE dance_lesson_participant
-         SET status=CASE WHEN status='WAITLIST' THEN status ELSE 'CANCELLED_IN_TIME' END,
+         SET status='CANCELLED_IN_TIME',
              version=version+1,updated_at=now()
          WHERE tenant_id=$1 AND lesson_id=$2
-           AND status NOT IN ('ATTENDED','LATE')`,
+           AND status NOT IN ('ATTENDED','LATE','CANCELLED_IN_TIME')`,
         [context.tenantId,lessonId]
       );
 
@@ -1250,6 +1254,81 @@ export class DanceEconomicsService {
       invoice_number:number,
       status:"OPEN"
     };
+  }
+
+  private async cancelDirectLessonChargesTx(
+    client:PoolClient,
+    context:TenantContext,
+    lessonId:string
+  ):Promise<void>{
+    const charges=await client.query<{
+      id:string;
+      payer_party_id:string;
+      currency:string;
+      obligation_id:string|null;
+      settled_minor:string;
+    }>(
+      `SELECT
+         c.id,c.payer_party_id,c.currency,c.obligation_id,
+         coalesce(o.settled_minor,0)::text AS settled_minor
+       FROM dance_student_charge c
+       LEFT JOIN financial_obligation o
+         ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
+       WHERE c.tenant_id=$1
+         AND c.source_type='LESSON'
+         AND c.source_id=$2
+         AND c.status<>'CANCELLED'
+       ORDER BY c.id
+       FOR UPDATE OF c`,
+      [context.tenantId,lessonId]
+    );
+
+    for(const charge of charges.rows){
+      let settled=BigInt(charge.settled_minor);
+
+      if(charge.obligation_id){
+        const obligation=await client.query<{settled_minor:string}>(
+          `SELECT settled_minor::text
+           FROM financial_obligation
+           WHERE tenant_id=$1 AND id=$2
+           FOR UPDATE`,
+          [context.tenantId,charge.obligation_id]
+        );
+        settled=BigInt(obligation.rows[0]?.settled_minor??"0");
+
+        await client.query(
+          `UPDATE financial_obligation
+           SET status='CANCELLED',updated_at=now()
+           WHERE tenant_id=$1 AND id=$2
+             AND status<>'CANCELLED'`,
+          [context.tenantId,charge.obligation_id]
+        );
+      }else{
+        await client.query(
+          `UPDATE dance_student_charge
+           SET status='CANCELLED',updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,charge.id]
+        );
+      }
+
+      if(settled<=0n) continue;
+
+      await client.query(
+        `INSERT INTO financial_obligation(
+           tenant_id,direction,party_id,source_type,source_id,
+           currency,amount_minor,due_at
+         ) VALUES(
+           $1,'PAYABLE',$2,'DANCE_LESSON_REFUND',$3,$4,$5,now()
+         )
+         ON CONFLICT(tenant_id,direction,source_type,source_id)
+         DO NOTHING`,
+        [
+          context.tenantId,charge.payer_party_id,charge.id,
+          charge.currency,settled.toString()
+        ]
+      );
+    }
   }
 
   private async calculateTrainerCost(
