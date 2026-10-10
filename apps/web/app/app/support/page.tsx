@@ -54,6 +54,15 @@ export default function SupportPage() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [selected, setSelected] = useState<TicketDetails | null>(null);
   const [articles, setArticles] = useState<Article[]>([]);
+  const [knowledgeSearchId, setKnowledgeSearchId] = useState("");
+  const [openedArticleId, setOpenedArticleId] = useState("");
+  const [telemetry, setTelemetry] = useState<{
+    searches: number;
+    noResult: number;
+    ticketsAfterSearch: number;
+    selfServiceRatePercent: number | null;
+    gaps: Array<{ query: string; searches: number; tickets: number }>;
+  } | null>(null);
   const [query, setQuery] = useState("");
   const [reply, setReply] = useState("");
   const [error, setError] = useState("");
@@ -70,11 +79,23 @@ export default function SupportPage() {
 
   const searchKnowledge = useCallback(async (value = "") => {
     try {
-      const path = value.trim()
-        ? "/support/knowledge?q=" + encodeURIComponent(value.trim())
-        : "/support/knowledge";
-      setArticles(await apiRequest<Article[]>(path));
+      const result = await apiRequest<{
+        searchId: string;
+        articles: Article[];
+      }>("/support/knowledge/search", {
+        method: "POST",
+        body: JSON.stringify({
+          query: value.trim(),
+          contextUrl:
+            typeof window !== "undefined" ? window.location.href : undefined
+        })
+      });
+      setKnowledgeSearchId(result.searchId);
+      setOpenedArticleId("");
+      setArticles(result.articles);
     } catch {
+      setKnowledgeSearchId("");
+      setOpenedArticleId("");
       setArticles([]);
     }
   }, []);
@@ -82,6 +103,16 @@ export default function SupportPage() {
   useEffect(() => {
     void loadTickets();
     void searchKnowledge();
+
+    void apiRequest<{
+      searches: number;
+      noResult: number;
+      ticketsAfterSearch: number;
+      selfServiceRatePercent: number | null;
+      gaps: Array<{ query: string; searches: number; tickets: number }>;
+    }>("/support/knowledge/telemetry")
+      .then(setTelemetry)
+      .catch(() => setTelemetry(null));
   }, [loadTickets, searchKnowledge]);
 
   async function openTicket(id: string) {
@@ -115,7 +146,8 @@ export default function SupportPage() {
           body: JSON.stringify({
             subject: subject.trim(),
             body: body.trim(),
-            contextUrl
+            contextUrl,
+            knowledgeSearchId: knowledgeSearchId || undefined
           })
         }
       );
@@ -166,6 +198,46 @@ export default function SupportPage() {
       await openTicket(selected.ticket.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось закрыть тикет");
+    }
+  }
+
+  async function openArticle(articleId: string) {
+    setOpenedArticleId(articleId);
+    if (!knowledgeSearchId) return;
+
+    try {
+      await apiRequest(
+        "/support/knowledge/search/" +
+          knowledgeSearchId +
+          "/select",
+        {
+          method: "POST",
+          body: JSON.stringify({ articleId })
+        }
+      );
+    } catch {
+      // Telemetry must never block self-service content.
+    }
+  }
+
+  async function feedback(helpful: boolean) {
+    if (!knowledgeSearchId) return;
+
+    try {
+      await apiRequest(
+        "/support/knowledge/search/" +
+          knowledgeSearchId +
+          "/feedback",
+        {
+          method: "POST",
+          body: JSON.stringify({ helpful })
+        }
+      );
+      if (helpful) {
+        window.alert("Спасибо. Отметили, что ответ помог.");
+      }
+    } catch {
+      // Feedback is best-effort and must not block support.
     }
   }
 
@@ -347,11 +419,59 @@ export default function SupportPage() {
               {articles.map((article) => (
                 <article key={article.id}>
                   <span>{article.category ?? "Помощь"}</span>
-                  <strong>{article.title}</strong>
-                  <p>{article.bodyMarkdown.replace(/#/g, "").slice(0, 180)}</p>
+                  <button
+                    className="knowledge-article-open"
+                    onClick={() => void openArticle(article.id)}
+                    type="button"
+                  >
+                    <strong>{article.title}</strong>
+                  </button>
+                  <p>
+                    {openedArticleId === article.id
+                      ? article.bodyMarkdown.replace(/#/g, "")
+                      : article.bodyMarkdown.replace(/#/g, "").slice(0, 180)}
+                  </p>
                 </article>
               ))}
             </div>
+
+            {knowledgeSearchId ? (
+              <div className="knowledge-feedback">
+                <span>Нашли ответ?</span>
+                <button
+                  className="secondary-button"
+                  onClick={() => void feedback(true)}
+                  type="button"
+                >
+                  Да
+                </button>
+                <button
+                  className="secondary-button"
+                  onClick={() => void feedback(false)}
+                  type="button"
+                >
+                  Нет
+                </button>
+              </div>
+            ) : null}
+
+            {telemetry ? (
+              <div className="knowledge-telemetry">
+                <strong>Самообслуживание · 30 дней</strong>
+                <span>
+                  {telemetry.searches} поисков · без ответа {telemetry.noResult}
+                </span>
+                <span>
+                  тикетов после поиска {telemetry.ticketsAfterSearch}
+                </span>
+                <span>
+                  self-service{" "}
+                  {telemetry.selfServiceRatePercent === null
+                    ? "—"
+                    : telemetry.selfServiceRatePercent + "%"}
+                </span>
+              </div>
+            ) : null}
           </aside>
         </div>
       </section>
