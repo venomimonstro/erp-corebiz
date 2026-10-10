@@ -301,6 +301,7 @@ export class BookingService {
            p.management_visit_value_minor::text,
            p.freeze_days_allowed,p.makeup_days_valid,p.allow_makeup,
            p.family_eligible,p.activation_policy,p.allowed_debt_minor::text,
+           p.grace_period_days,
            p.no_show_policy,p.status,p.metadata,p.created_at,p.updated_at
          FROM service_package_plan p
          LEFT JOIN service_catalog_item s
@@ -333,6 +334,15 @@ export class BookingService {
       familyEligible?: boolean;
       activationPolicy?: "FULL_PAYMENT" | "IMMEDIATE" | "PROPORTIONAL" | "GRACE_PERIOD";
       allowedDebtMinor?: string | number;
+      gracePeriodDays?: number;
+      entitlements?: Array<{
+        lessonType?: "GROUP" | "INDIVIDUAL" | "TRIAL" | "MASTER_CLASS" | "OPEN_CLASS" | "REHEARSAL" | "RENTAL_EVENT";
+        danceProgramId?: string;
+        danceGroupId?: string;
+        visitLimit?: number | null;
+        managementVisitValueMinor?: string | number;
+        priority?: number;
+      }>;
       currency?: string;
       noShowPolicy?: "RELEASE" | "CONSUME";
       metadata?: Record<string, unknown>;
@@ -387,6 +397,41 @@ export class BookingService {
     ) {
       throw new BadRequestException("Некорректные правила заморозки/отработки");
     }
+    const gracePeriodDays = Math.floor(input.gracePeriodDays ?? 0);
+    if (gracePeriodDays < 0 || gracePeriodDays > 3650) {
+      throw new BadRequestException("Некорректный grace period");
+    }
+    if ((input.entitlements?.length ?? 0) > 30) {
+      throw new BadRequestException("Слишком много правил доступа в абонементе");
+    }
+    const normalizedEntitlements = (input.entitlements ?? []).map(
+      (entitlement, index) => {
+        const visitLimit =
+          entitlement.visitLimit === null || entitlement.visitLimit === undefined
+            ? null
+            : Math.floor(entitlement.visitLimit);
+        if (visitLimit !== null && (visitLimit < 1 || visitLimit > 10000)) {
+          throw new BadRequestException("Некорректная квота абонемента");
+        }
+        const visitValue = String(entitlement.managementVisitValueMinor ?? "0");
+        if (!/^\d+$/.test(visitValue)) {
+          throw new BadRequestException("Некорректная стоимость посещения квоты");
+        }
+        const priority = Math.floor(entitlement.priority ?? (100 + index));
+        if (priority < 1 || priority > 100000) {
+          throw new BadRequestException("Некорректный приоритет квоты");
+        }
+        return {
+          lessonType: entitlement.lessonType ?? null,
+          danceProgramId: entitlement.danceProgramId ?? null,
+          danceGroupId: entitlement.danceGroupId ?? null,
+          visitLimit,
+          managementVisitValueMinor: visitValue,
+          priority
+        };
+      }
+    );
+
     const activationPolicy = input.activationPolicy ?? "FULL_PAYMENT";
     if (!["FULL_PAYMENT","IMMEDIATE","PROPORTIONAL","GRACE_PERIOD"].includes(
       activationPolicy
@@ -446,10 +491,11 @@ export class BookingService {
              package_kind,dance_program_id,dance_group_id,
              visit_limit,duration_days,price_minor,management_visit_value_minor,
              freeze_days_allowed,makeup_days_valid,allow_makeup,family_eligible,
-             activation_policy,allowed_debt_minor,currency,no_show_policy,metadata
+             activation_policy,allowed_debt_minor,grace_period_days,
+             currency,no_show_policy,metadata
            ) VALUES (
              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
-             $17,$18,$19,$20,$21
+             $17,$18,$19,$20,$21,$22
            )
            RETURNING id`,
           [
@@ -471,6 +517,7 @@ export class BookingService {
             Boolean(input.familyEligible),
             activationPolicy,
             allowedDebtMinor,
+            gracePeriodDays,
             currency,
             noShowPolicy,
             JSON.stringify(input.metadata ?? {})
@@ -478,6 +525,40 @@ export class BookingService {
         );
         const row = result.rows[0];
         if (!row) throw new Error("SERVICE_PACKAGE_PLAN_CREATE_FAILED");
+
+        for (const entitlement of normalizedEntitlements) {
+          if (entitlement.danceProgramId) {
+            const program = await client.query(
+              "SELECT 1 FROM dance_program WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
+              [context.tenantId,entitlement.danceProgramId]
+            );
+            if (!program.rowCount) {
+              throw new NotFoundException("Направление квоты не найдено");
+            }
+          }
+          if (entitlement.danceGroupId) {
+            const group = await client.query(
+              "SELECT 1 FROM dance_group WHERE tenant_id=$1 AND id=$2 AND status<>'ARCHIVED'",
+              [context.tenantId,entitlement.danceGroupId]
+            );
+            if (!group.rowCount) {
+              throw new NotFoundException("Группа квоты не найдена");
+            }
+          }
+          await client.query(
+            `INSERT INTO service_package_plan_entitlement(
+               tenant_id,plan_id,lesson_type,dance_program_id,dance_group_id,
+               visit_limit,management_visit_value_minor,priority
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [
+              context.tenantId,row.id,entitlement.lessonType,
+              entitlement.danceProgramId,entitlement.danceGroupId,
+              entitlement.visitLimit,entitlement.managementVisitValueMinor,
+              entitlement.priority
+            ]
+          );
+        }
+
         return row;
       } catch (error) {
         if (this.isUniqueViolation(error)) {
@@ -572,12 +653,18 @@ export class BookingService {
         dance_program_id: string | null;
         dance_group_id: string | null;
         freeze_days_allowed: number;
+        activation_policy: "FULL_PAYMENT" | "IMMEDIATE" | "PROPORTIONAL" | "GRACE_PERIOD";
+        allowed_debt_minor: string;
+        grace_period_days: number;
+        family_eligible: boolean;
         price_minor: string;
         currency: string;
       }>(
         `SELECT
            id,visit_limit,duration_days,price_minor::text,currency,
-           package_kind,dance_program_id,dance_group_id,freeze_days_allowed
+           package_kind,dance_program_id,dance_group_id,freeze_days_allowed,
+           activation_policy,allowed_debt_minor::text,grace_period_days,
+           family_eligible
          FROM service_package_plan
          WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
         [context.tenantId, input.planId]
@@ -622,6 +709,38 @@ export class BookingService {
         }
       }
 
+      const danceStudent = await client.query<{ id: string }>(
+        `SELECT id FROM dance_student
+         WHERE tenant_id=$1 AND party_id=$2 AND status<>'ARCHIVED'`,
+        [context.tenantId,input.partyId]
+      );
+      const danceStudentId=danceStudent.rows[0]?.id??null;
+
+      if (
+        danceStudentId &&
+        input.payerPartyId &&
+        input.payerPartyId !== input.partyId
+      ) {
+        const relation=await client.query(
+          `SELECT 1 FROM party_relationship
+           WHERE tenant_id=$1 AND from_party_id=$2 AND to_party_id=$3
+             AND relation_type IN ('PAYER','PARENT','GUARDIAN')
+             AND (ends_on IS NULL OR ends_on>=current_date)`,
+          [context.tenantId,input.partyId,input.payerPartyId]
+        );
+        if(!relation.rowCount) {
+          throw new ConflictException("Плательщик не связан с учеником");
+        }
+      }
+
+      const initialStatus =
+        danceStudentId &&
+        BigInt(planRow.price_minor) > 0n &&
+        !input.salesOrderId &&
+        planRow.activation_policy === "FULL_PAYMENT"
+          ? "PENDING_PAYMENT"
+          : "ACTIVE";
+
       const expiresAt = new Date(
         startsAt.getTime() + planRow.duration_days * 86400000
       );
@@ -631,8 +750,12 @@ export class BookingService {
            starts_at,expires_at,visit_limit_snapshot,
            price_minor_snapshot,currency,package_kind_snapshot,
            dance_program_id_snapshot,dance_group_id_snapshot,
-           freeze_days_total_snapshot,created_by_membership_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+           freeze_days_total_snapshot,activation_policy_snapshot,
+           allowed_debt_minor_snapshot,grace_period_days_snapshot,
+           status,created_by_membership_id
+         ) VALUES (
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
+         )
          RETURNING id`,
         [
           context.tenantId,
@@ -649,11 +772,122 @@ export class BookingService {
           planRow.dance_program_id,
           planRow.dance_group_id,
           planRow.freeze_days_allowed,
+          planRow.activation_policy,
+          planRow.allowed_debt_minor,
+          planRow.grace_period_days,
+          initialStatus,
           context.membershipId
         ]
       );
       const row = result.rows[0];
       if (!row) throw new Error("SERVICE_PACKAGE_ISSUE_FAILED");
+
+      await client.query(
+        `INSERT INTO service_package_beneficiary(
+           tenant_id,package_id,party_id,status,created_by_membership_id
+         ) VALUES($1,$2,$3,'ACTIVE',$4)
+         ON CONFLICT(tenant_id,package_id,party_id)
+         DO UPDATE SET status='ACTIVE',updated_at=now()`,
+        [context.tenantId,row.id,input.partyId,context.membershipId]
+      );
+
+      await client.query(
+        `INSERT INTO service_package_entitlement(
+           tenant_id,package_id,source_plan_entitlement_id,
+           lesson_type,dance_program_id,dance_group_id,visit_limit_snapshot,
+           management_visit_value_minor_snapshot,priority
+         )
+         SELECT
+           tenant_id,$3,id,lesson_type,dance_program_id,dance_group_id,
+           visit_limit,management_visit_value_minor,priority
+         FROM service_package_plan_entitlement
+         WHERE tenant_id=$1 AND plan_id=$2
+         ORDER BY priority,id`,
+        [context.tenantId,planRow.id,row.id]
+      );
+
+      if (
+        danceStudentId &&
+        BigInt(planRow.price_minor) > 0n &&
+        !input.salesOrderId
+      ) {
+        const payerPartyId=input.payerPartyId ?? input.partyId;
+        const charge=await client.query<{id:string}>(
+          `INSERT INTO dance_student_charge(
+             tenant_id,student_id,payer_party_id,source_type,source_id,
+             currency,amount_minor,due_at,created_by_membership_id
+           ) VALUES(
+             $1,$2,$3,'PACKAGE',$4,$5,$6,$7,$8
+           )
+           ON CONFLICT DO NOTHING
+           RETURNING id`,
+          [
+            context.tenantId,danceStudentId,payerPartyId,row.id,
+            planRow.currency,planRow.price_minor,
+            new Date(
+              startsAt.getTime()+planRow.grace_period_days*86400000
+            ),
+            context.membershipId
+          ]
+        );
+        let chargeId=charge.rows[0]?.id;
+        if(!chargeId){
+          const existingCharge=await client.query<{id:string}>(
+            `SELECT id FROM dance_student_charge
+             WHERE tenant_id=$1 AND student_id=$2
+               AND source_type='PACKAGE' AND source_id=$3
+               AND status<>'CANCELLED'`,
+            [context.tenantId,danceStudentId,row.id]
+          );
+          chargeId=existingCharge.rows[0]?.id;
+        }
+        if(!chargeId) throw new Error("DANCE_PACKAGE_CHARGE_CREATE_FAILED");
+
+        const obligation=await client.query<{id:string}>(
+          `INSERT INTO financial_obligation(
+             tenant_id,direction,party_id,source_type,source_id,
+             currency,amount_minor,due_at
+           ) VALUES(
+             $1,'RECEIVABLE',$2,'DANCE_STUDENT_CHARGE',$3,$4,$5,$6
+           )
+           RETURNING id`,
+          [
+            context.tenantId,payerPartyId,chargeId,planRow.currency,
+            planRow.price_minor,
+            new Date(startsAt.getTime()+planRow.grace_period_days*86400000)
+          ]
+        );
+        const obligationId=obligation.rows[0]?.id;
+        if(!obligationId) throw new Error("DANCE_PACKAGE_OBLIGATION_CREATE_FAILED");
+
+        const invoiceNumber=await this.nextNumber(
+          client,context.tenantId,"finance_invoice","INV"
+        );
+        const invoice=await client.query<{id:string}>(
+          `INSERT INTO finance_invoice(
+             tenant_id,business_number,party_id,source_type,source_id,
+             obligation_id,currency,amount_minor,due_at,
+             created_by_membership_id
+           ) VALUES(
+             $1,$2,$3,'DANCE_STUDENT_CHARGE',$4,$5,$6,$7,$8,$9
+           )
+           RETURNING id`,
+          [
+            context.tenantId,invoiceNumber,payerPartyId,chargeId,
+            obligationId,planRow.currency,planRow.price_minor,
+            new Date(startsAt.getTime()+planRow.grace_period_days*86400000),
+            context.membershipId
+          ]
+        );
+        const invoiceId=invoice.rows[0]?.id;
+        if(!invoiceId) throw new Error("DANCE_PACKAGE_INVOICE_CREATE_FAILED");
+        await client.query(
+          `UPDATE dance_student_charge
+           SET obligation_id=$3,invoice_id=$4,updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,chargeId,obligationId,invoiceId]
+        );
+      }
 
       await client.query(
         `INSERT INTO audit_event(
