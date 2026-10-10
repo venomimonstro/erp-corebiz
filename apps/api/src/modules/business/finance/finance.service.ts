@@ -5,6 +5,7 @@ import {
   NotFoundException
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
+import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { DomainEventService } from "../../platform/events/domain-event.service";
@@ -19,6 +20,8 @@ type ExistingPayment = {
   direction: string;
   kind: string;
   cash_account_id: string;
+  party_id: string | null;
+  allocation_fingerprint: string | null;
 };
 
 @Injectable()
@@ -814,6 +817,266 @@ export class FinanceService {
         paymentId: payment.id,
         number: payment.business_number,
         invoiceStatus: state.rows[0]?.status ?? "PARTIALLY_PAID"
+      };
+    });
+  }
+
+  async receiveAllocatedPayment(
+    context: TenantContext,
+    input: {
+      partyId: string;
+      allocations: Array<{
+        obligationId: string;
+        amountMinor: string;
+      }>;
+      cashAccountId?: string;
+      idempotencyKey: string;
+      note?: string;
+    }
+  ): Promise<{
+    paymentId: string;
+    number: string;
+    amountMinor: string;
+    allocations: Array<{ obligationId: string; amountMinor: string }>;
+  }> {
+    if (!input.partyId) {
+      throw new BadRequestException("Не указан плательщик");
+    }
+    if (!Array.isArray(input.allocations) || input.allocations.length < 1 ||
+        input.allocations.length > 50) {
+      throw new BadRequestException("Укажите от 1 до 50 распределений платежа");
+    }
+
+    const seen = new Set<string>();
+    const normalized = input.allocations.map((item) => {
+      if (!item?.obligationId || seen.has(item.obligationId) ||
+          !/^\d+$/.test(item.amountMinor)) {
+        throw new BadRequestException("Некорректное распределение платежа");
+      }
+      const amount = BigInt(item.amountMinor);
+      if (amount <= 0n) {
+        throw new BadRequestException("Сумма распределения должна быть больше нуля");
+      }
+      seen.add(item.obligationId);
+      return {
+        obligationId: item.obligationId,
+        amountMinor: amount.toString()
+      };
+    }).sort((a,b)=>a.obligationId.localeCompare(b.obligationId));
+
+    const total = normalized.reduce(
+      (sum,item)=>sum+BigInt(item.amountMinor),
+      0n
+    );
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify({
+        version:1,
+        partyId:input.partyId,
+        allocations:normalized
+      }))
+      .digest("hex");
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      await this.lockPaymentIdempotencyKey(
+        client,
+        context.tenantId,
+        input.idempotencyKey
+      );
+
+      const existing = await this.findPaymentByKey(
+        client,
+        context.tenantId,
+        input.idempotencyKey
+      );
+      if (existing) {
+        this.assertPaymentRetryMatches(existing, {
+          sourceType: "ALLOCATED_RECEIVABLES",
+          sourceId: input.partyId,
+          amountMinor: total.toString(),
+          direction: "IN",
+          kind: "PAYMENT",
+          cashAccountId: input.cashAccountId
+        });
+        if (
+          existing.party_id !== input.partyId ||
+          existing.allocation_fingerprint !== fingerprint
+        ) {
+          throw new ConflictException(
+            "Ключ идемпотентности уже использован с другим распределением"
+          );
+        }
+        const rows = await client.query<{
+          obligation_id:string;
+          amount_minor:string;
+        }>(
+          `SELECT obligation_id,amount_minor::text
+           FROM payment_allocation
+           WHERE tenant_id=$1 AND payment_id=$2
+           ORDER BY obligation_id`,
+          [context.tenantId,existing.id]
+        );
+        return {
+          paymentId:existing.id,
+          number:existing.business_number,
+          amountMinor:total.toString(),
+          allocations:rows.rows.map((row)=>({
+            obligationId:row.obligation_id,
+            amountMinor:row.amount_minor
+          }))
+        };
+      }
+
+      const ids = normalized.map((item)=>item.obligationId);
+      const obligations = await client.query<{
+        id:string;
+        party_id:string|null;
+        currency:string;
+        amount_minor:string;
+        settled_minor:string;
+        status:string;
+      }>(
+        `SELECT id,party_id,currency,amount_minor::text,
+                settled_minor::text,status
+         FROM financial_obligation
+         WHERE tenant_id=$1 AND id=ANY($2::uuid[])
+         ORDER BY id
+         FOR UPDATE`,
+        [context.tenantId,ids]
+      );
+      if (obligations.rowCount !== ids.length) {
+        throw new NotFoundException("Одно из обязательств не найдено");
+      }
+
+      const byId = new Map(obligations.rows.map((row)=>[row.id,row]));
+      let currency: string | null = null;
+      for (const allocation of normalized) {
+        const obligation = byId.get(allocation.obligationId)!;
+        if (obligation.party_id !== input.partyId) {
+          throw new ConflictException(
+            "Все обязательства должны принадлежать одному плательщику"
+          );
+        }
+        if (obligation.status === "CANCELLED" || obligation.status === "SETTLED") {
+          throw new ConflictException("Обязательство уже закрыто");
+        }
+        currency = currency ?? obligation.currency;
+        if (currency !== obligation.currency) {
+          throw new ConflictException(
+            "Нельзя распределить один платёж между разными валютами"
+          );
+        }
+        const remaining =
+          BigInt(obligation.amount_minor)-BigInt(obligation.settled_minor);
+        if (BigInt(allocation.amountMinor) > remaining) {
+          throw new ConflictException(
+            "Распределение превышает остаток задолженности"
+          );
+        }
+      }
+
+      const accountId =
+        input.cashAccountId ??
+        (await this.getDefaultCashAccountId(
+          client,
+          context.tenantId,
+          currency ?? "RUB"
+        ));
+      const categoryId = await this.getCategoryId(
+        client,
+        context.tenantId,
+        "CUSTOMER_PAYMENT"
+      );
+
+      const payment = await this.insertPayment(client,context,{
+        cashAccountId:accountId,
+        categoryId,
+        partyId:input.partyId,
+        obligationId:null,
+        direction:"IN",
+        kind:"PAYMENT",
+        amountMinor:total,
+        currency:currency ?? "RUB",
+        sourceType:"ALLOCATED_RECEIVABLES",
+        sourceId:input.partyId,
+        idempotencyKey:input.idempotencyKey,
+        allocationFingerprint:fingerprint,
+        note:input.note
+      });
+
+      for (const allocation of normalized) {
+        const obligation = byId.get(allocation.obligationId)!;
+        await client.query(
+          `INSERT INTO payment_allocation(
+             tenant_id,payment_id,obligation_id,amount_minor
+           ) VALUES($1,$2,$3,$4)`,
+          [
+            context.tenantId,
+            payment.id,
+            allocation.obligationId,
+            allocation.amountMinor
+          ]
+        );
+        const settled =
+          BigInt(obligation.settled_minor)+BigInt(allocation.amountMinor);
+        const nextStatus =
+          settled===BigInt(obligation.amount_minor)
+            ? "SETTLED"
+            : "PARTIALLY_SETTLED";
+        await client.query(
+          `UPDATE financial_obligation
+           SET settled_minor=$3,status=$4,updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [
+            context.tenantId,
+            allocation.obligationId,
+            settled.toString(),
+            nextStatus
+          ]
+        );
+      }
+
+      await this.audit(
+        client,
+        context,
+        "finance.allocated_payment_posted",
+        "payment",
+        payment.id,
+        {
+          partyId:input.partyId,
+          amountMinor:total.toString(),
+          allocationCount:normalized.length
+        }
+      );
+
+      await this.attribution.recordConversion(client, context, {
+        partyId: input.partyId,
+        sourceType: "PAYMENT",
+        sourceId: payment.id,
+        conversionType: "PAYMENT",
+        revenueMinor: total,
+        currency: currency ?? "RUB",
+        metadata: {
+          allocationCount: normalized.length
+        }
+      });
+
+      await this.events.enqueue(client,context,{
+        eventName:"finance.allocated_payment_posted",
+        entityType:"PAYMENT",
+        entityId:payment.id,
+        payload:{
+          paymentId:payment.id,
+          partyId:input.partyId,
+          amountMinor:total.toString(),
+          allocations:normalized
+        }
+      });
+
+      return {
+        paymentId:payment.id,
+        number:payment.business_number,
+        amountMinor:total.toString(),
+        allocations:normalized
       };
     });
   }
@@ -2213,6 +2476,7 @@ export class FinanceService {
       sourceId: string;
       idempotencyKey: string;
       note?: string;
+      allocationFingerprint?: string;
     }
   ): Promise<{ id: string; business_number: string }> {
     const account = await client.query<{ currency: string }>(
@@ -2243,8 +2507,8 @@ export class FinanceService {
          tenant_id, business_number, cash_account_id, category_id,
          party_id, obligation_id, direction, kind,
          amount_minor, currency, source_type, source_id,
-         idempotency_key, note, posted_by_membership_id
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         idempotency_key, allocation_fingerprint, note, posted_by_membership_id
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        RETURNING id, business_number`,
       [
         context.tenantId,
@@ -2260,6 +2524,7 @@ export class FinanceService {
         input.sourceType,
         input.sourceId,
         input.idempotencyKey.trim(),
+        input.allocationFingerprint ?? null,
         input.note?.trim() || null,
         context.membershipId
       ]
@@ -2351,7 +2616,8 @@ export class FinanceService {
   ): Promise<ExistingPayment | null> {
     const result = await client.query<ExistingPayment>(
       `SELECT id, business_number, source_type, source_id,
-              amount_minor::text, direction, kind, cash_account_id
+              amount_minor::text, direction, kind, cash_account_id,
+              party_id,allocation_fingerprint
        FROM payment
        WHERE tenant_id = $1 AND idempotency_key = $2`,
       [tenantId, key.trim()]
