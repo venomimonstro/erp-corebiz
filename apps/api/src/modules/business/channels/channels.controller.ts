@@ -9,6 +9,7 @@ import {
   Req
 } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
+import { ApiCost } from "../../../infrastructure/http/api-cost.decorator";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { Public } from "../../platform/auth/public.decorator";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
@@ -91,6 +92,7 @@ export class ChannelsController {
   }
 
   @Post("connections/:id/sync")
+  @ApiCost("EXPENSIVE")
   @RequirePermission("channels.manage")
   async sync(
     @Req() request: AuthenticatedRequest,
@@ -124,6 +126,7 @@ export class ChannelsController {
 
   @Public()
   @Post("webhook/:connectionId/:secret/orders")
+  @ApiCost("WEBHOOK")
   async webhookOrder(
     @Param("connectionId") connectionId: string,
     @Param("secret") secret: string,
@@ -185,6 +188,7 @@ export class ChannelsController {
   }
 
   @Post("inbox/:id/import")
+  @ApiCost("HEAVY")
   @RequirePermission("channels.manage")
   async importOrder(
     @Req() request: AuthenticatedRequest,
