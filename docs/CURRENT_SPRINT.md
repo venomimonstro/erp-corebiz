@@ -705,23 +705,35 @@
 - create intent removed before opening form to avoid duplicate Strict Mode execution;
 - backend authorization remains authoritative.
 
-## Активно — Sprint 65: Go-Live Center / Tenant Readiness Gate
+### Sprint 65 — Go-Live Center / Tenant Readiness Gate
+- deterministic GO / NO-GO readiness;
+- first-value gate;
+- migration reconciliation gate;
+- channel health gate;
+- fresh SECURITY / RESTORE / Finance reconciliation evidence;
+- WMS/Accounting reconciliation required only when capability is enabled;
+- profile-specific TRADE / ECOMMERCE / SERVICE / WMS business-flow checks;
+- operational warnings are visible but do not automatically block GO;
+- immutable go-live review history;
+- first GO moves tenant into HYPERCARE;
+- HYPERCARE → LIVE only after blockers are rechecked;
+- Go-Live Center never deploys or changes infrastructure.
+
+## Активно — Sprint 66: Notification Center / Action Queue Unification
 
 Scope:
-- deterministic tenant GO / NO-GO readiness;
-- activation / first-value gate;
-- migration reconciliation gate;
-- critical integration health gate;
-- release SECURITY / RESTORE / RECONCILIATION evidence;
-- business-profile-specific readiness;
-- immutable go-live review history;
-- PREPARING / HYPERCARE / LIVE launch stage;
-- hypercare window after first GO;
-- owner workspace with blockers and remediation links;
-- no deployment action from Go-Live Center.
+- one personal action queue across domains;
+- tasks / operational issues / WMS failures / marketing alerts / go-live blockers;
+- source entity remains source of truth;
+- READ / SNOOZED state is personal, never mutates business object;
+- permission-aware source collection;
+- severity ordering;
+- compact sidebar notification center;
+- deep links to remediation workspace;
+- bounded queue with no sensitive payload persistence.
 
 ## Следом
 
-Sprint 66 — Notification Center / Action Queue unification.  
 Sprint 67 — Data export / offboarding readiness.  
-Sprint 68 — Audit explorer / security session center.
+Sprint 68 — Audit explorer / security session center.  
+Sprint 69 — Support knowledge / self-service telemetry.
