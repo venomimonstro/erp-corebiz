@@ -693,21 +693,35 @@
 - navigation filtered by capabilities and effective permissions;
 - hidden UI is never treated as authorization; backend guards stay authoritative.
 
-## Активно — Sprint 64: Search / Command Palette / Universal Create
+### Sprint 64 — Search / Command Palette / Universal Create
+- Ctrl/Cmd+K global command palette;
+- tenant-safe bounded global search;
+- search only executes in domains allowed by effective permissions;
+- Party / Deal / SalesOrder / SKU / PurchaseOrder results;
+- keyboard Up/Down/Enter/Escape navigation;
+- no search queries persisted locally;
+- permission-aware quick-create actions;
+- universal create intent wired to Deal / Task / Order / Product / Purchase / Booking;
+- create intent removed before opening form to avoid duplicate Strict Mode execution;
+- backend authorization remains authoritative.
+
+## Активно — Sprint 65: Go-Live Center / Tenant Readiness Gate
 
 Scope:
-- Ctrl/Cmd+K global command palette;
-- permission-aware quick actions;
-- tenant-safe global search;
-- Party / Deal / SalesOrder / SKU / PurchaseOrder results;
-- keyboard navigation;
-- recent commands locally, no sensitive data persisted;
-- Universal Create commands for allowed domains;
-- search result links use existing domain pages;
-- bounded result counts and minimum query length.
+- deterministic tenant GO / NO-GO readiness;
+- activation / first-value gate;
+- migration reconciliation gate;
+- critical integration health gate;
+- release SECURITY / RESTORE / RECONCILIATION evidence;
+- business-profile-specific readiness;
+- immutable go-live review history;
+- PREPARING / HYPERCARE / LIVE launch stage;
+- hypercare window after first GO;
+- owner workspace with blockers and remediation links;
+- no deployment action from Go-Live Center.
 
 ## Следом
 
-Sprint 65 — Go-Live Center / tenant readiness gate.  
 Sprint 66 — Notification Center / Action Queue unification.  
-Sprint 67 — Data export / offboarding readiness.
+Sprint 67 — Data export / offboarding readiness.  
+Sprint 68 — Audit explorer / security session center.
