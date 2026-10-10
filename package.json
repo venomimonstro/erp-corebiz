@@ -18,7 +18,8 @@
     "release:check": "bash scripts/release-check.sh",
     "release:gate": "bash scripts/production-gate.sh",
     "stability:check": "node scripts/stability-source-preflight.mjs",
-    "golden:journeys": "node scripts/golden-business-journeys.mjs"
+    "golden:journeys": "node scripts/golden-business-journeys.mjs",
+    "simulate:100-users": "node scripts/simulate-100-users.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
