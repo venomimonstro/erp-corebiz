@@ -189,6 +189,77 @@ function inspectBusinessBoundaries(file, source) {
   }
 }
 
+async function inspectRequiredHardening(root) {
+  const required = [
+    {
+      path: "apps/api/src/modules/business/party/party.service.ts",
+      patterns: [
+        /party_create_idempotency/,
+        /pg_advisory_xact_lock/,
+        /idempotencyKey/
+      ],
+      message: "Party crash-safe idempotency is not fully wired"
+    },
+    {
+      path: "apps/api/src/modules/business/sites/storefront.service.ts",
+      patterns: [/storefront-party:/],
+      message: "Storefront checkout does not use idempotent Party creation"
+    },
+    {
+      path: "apps/api/src/modules/business/sites/site-forms.service.ts",
+      patterns: [/site-submission-party:/],
+      message: "Public site submissions do not use idempotent Party creation"
+    },
+    {
+      path: "apps/api/src/modules/business/search/global-search.service.ts",
+      patterns: [/runtime\.acquire/, /global_search/, /runtime\.release/],
+      message: "Global search runtime concurrency budget is not enforced"
+    },
+    {
+      path: "apps/api/src/modules/business/assistant/owner-assistant.service.ts",
+      patterns: [/runtime\.acquire/, /owner_assistant_brief/, /runtime\.release/],
+      message: "Owner assistant runtime concurrency budget is not enforced"
+    },
+    {
+      path: "apps/api/src/modules/platform/data-management/data-management.service.ts",
+      patterns: [/runtime\.deny/, /tenant_export/],
+      message: "Tenant export runtime budget is not enforced"
+    }
+  ];
+
+  for (const item of required) {
+    const file = resolve(root,item.path);
+    let source;
+    try {
+      source = await readFile(file,"utf8");
+    } catch {
+      add("BLOCK",file,"required hardening source is missing: " + item.path);
+      continue;
+    }
+
+    if (item.patterns.some((pattern) => !pattern.test(source))) {
+      add("BLOCK",file,item.message);
+    }
+  }
+
+  const requiredMigrations = [
+    "136_party_create_idempotency.sql",
+    "137_runtime_pressure_leases.sql"
+  ];
+
+  for (const name of requiredMigrations) {
+    const file = resolve(root,"infrastructure/postgres",name);
+    try {
+      const source = await readFile(file,"utf8");
+      if (!/BEGIN;[\s\S]*COMMIT;/.test(source)) {
+        add("BLOCK",file,"hardening migration is not transaction wrapped");
+      }
+    } catch {
+      add("BLOCK",file,"required hardening migration is missing: " + name);
+    }
+  }
+}
+
 export async function inspectSource(root = ROOT) {
   findings.length = 0;
 
@@ -203,6 +274,7 @@ export async function inspectSource(root = ROOT) {
   ]);
 
   inspectAppModule(appModule, appSource);
+  await inspectRequiredHardening(root);
 
   for (const file of apiFiles) {
     if (!/\.(ts|tsx)$/.test(file)) continue;
