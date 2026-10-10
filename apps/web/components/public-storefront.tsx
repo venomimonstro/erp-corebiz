@@ -165,6 +165,9 @@ export function PublicStorefront({
         accepted: boolean;
         number?: string;
         salesOrderId: string;
+        fulfillmentStatus?: string;
+        allocationState?: string;
+        backorderMilli?: string;
       }>(
         "/storefront/carts/" +
           encodeURIComponent(cart.cartKey) +
@@ -180,11 +183,28 @@ export function PublicStorefront({
         }
       );
 
-      setSuccess(
-        result.number
-          ? "Заказ " + result.number + " принят."
-          : "Заказ принят."
-      );
+      const prefix = result.number
+        ? "Заказ " + result.number + " принят."
+        : "Заказ принят.";
+
+      const backorder = BigInt(result.backorderMilli ?? "0");
+      if (
+        result.allocationState === "BACKORDER" ||
+        result.allocationState === "PARTIALLY_ALLOCATED" ||
+        backorder > 0n
+      ) {
+        setSuccess(
+          prefix +
+            " Часть позиции сейчас не зарезервирована на складе. Компания увидит заказ как ожидающий поступления и свяжется с вами по срокам."
+        );
+      } else {
+        setSuccess(
+          prefix +
+            (result.fulfillmentStatus === "RESERVED"
+              ? " Товар зарезервирован."
+              : "")
+        );
+      }
       setCheckoutOpen(false);
       window.localStorage.removeItem(storageKey);
       setCart(null);
