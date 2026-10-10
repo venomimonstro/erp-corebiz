@@ -438,7 +438,18 @@ export class ProjectsService {
       throw new BadRequestException("Некорректный статус или версия проекта");
     }
 
+    const scopedMembershipIds = await this.membershipIdsForScope(
+      context,
+      "projects.write"
+    );
+
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertWritableProject(
+        client,
+        context.tenantId,
+        projectId,
+        scopedMembershipIds
+      );
       const current = await client.query<{
         status: ProjectStatus;
         version: number;
@@ -545,8 +556,18 @@ export class ProjectsService {
       throw new BadRequestException("Некорректный срок этапа");
     }
 
+    const scopedMembershipIds = await this.membershipIdsForScope(
+      context,
+      "projects.write"
+    );
+
     return this.database.withTenantTransaction(context, async (client) => {
-      await this.assertWritableProject(client, context.tenantId, projectId);
+      await this.assertWritableProject(
+        client,
+        context.tenantId,
+        projectId,
+        scopedMembershipIds
+      );
       const result = await client.query<{ id: string }>(
         `INSERT INTO work_project_milestone(
            tenant_id,project_id,name,position,due_at,amount_minor
@@ -568,8 +589,18 @@ export class ProjectsService {
       throw new BadRequestException("Некорректный статус этапа");
     }
 
+    const scopedMembershipIds = await this.membershipIdsForScope(
+      context,
+      "projects.write"
+    );
+
     return this.database.withTenantTransaction(context, async (client) => {
-      await this.assertWritableProject(client, context.tenantId, projectId);
+      await this.assertWritableProject(
+        client,
+        context.tenantId,
+        projectId,
+        scopedMembershipIds
+      );
       const result = await client.query<{ status: string }>(
         `UPDATE work_project_milestone
          SET status=$4,
@@ -609,6 +640,10 @@ export class ProjectsService {
       throw new BadRequestException("Время должно быть от 1 до 1440 минут");
     }
     this.validateDate(input.workDate, "дата работы");
+    const scopedMembershipIds = await this.membershipIdsForScope(
+      context,
+      "projects.write"
+    );
 
     return this.database.withTenantTransaction(context, async (client) => {
       if (input.idempotencyKey) {
@@ -627,8 +662,9 @@ export class ProjectsService {
         `SELECT status,hourly_rate_minor::text
          FROM work_project
          WHERE tenant_id=$1 AND id=$2
+           AND ($3::uuid[] IS NULL OR responsible_membership_id = ANY($3::uuid[]))
          FOR UPDATE`,
-        [context.tenantId, projectId]
+        [context.tenantId, projectId, scopedMembershipIds]
       );
       const projectRow = project.rows[0];
       if (!projectRow) throw new NotFoundException("Проект не найден");
@@ -697,16 +733,27 @@ export class ProjectsService {
     });
   }
 
+  private async membershipIdsForScope(
+    context: TenantContext,
+    permission: "projects.read" | "projects.write"
+  ): Promise<string[] | null> {
+    const scope = await this.authorization.resolveScope(context, permission);
+    if (!scope) throw new ForbiddenException("Недостаточно прав");
+    return this.authorization.membershipIdsForScope(context, scope);
+  }
+
   private async assertWritableProject(
     client: PoolClient,
     tenantId: string,
-    projectId: string
+    projectId: string,
+    scopedMembershipIds: string[] | null
   ): Promise<void> {
     const result = await client.query<{ status: ProjectStatus }>(
       `SELECT status FROM work_project
        WHERE tenant_id=$1 AND id=$2
+         AND ($3::uuid[] IS NULL OR responsible_membership_id = ANY($3::uuid[]))
        FOR UPDATE`,
-      [tenantId, projectId]
+      [tenantId, projectId, scopedMembershipIds]
     );
     const row = result.rows[0];
     if (!row) throw new NotFoundException("Проект не найден");
