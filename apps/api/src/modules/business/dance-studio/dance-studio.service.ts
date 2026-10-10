@@ -1301,6 +1301,55 @@ export class DanceStudioService {
         throw new BadRequestException("Некорректная вместимость");
       }
 
+      const invalidPackage=await client.query(
+        `SELECT 1
+         FROM dance_lesson_participant lp
+         JOIN service_package sp
+           ON sp.tenant_id=lp.tenant_id AND sp.id=lp.package_id
+         WHERE lp.tenant_id=$1 AND lp.lesson_id=$2
+           AND lp.status NOT IN ('WAITLIST','CANCELLED_IN_TIME')
+           AND lp.package_id IS NOT NULL
+           AND (
+             $3::timestamptz < sp.starts_at
+             OR $3::timestamptz >= sp.expires_at
+             OR EXISTS (
+               SELECT 1
+               FROM service_package_freeze f
+               WHERE f.tenant_id=sp.tenant_id
+                 AND f.package_id=sp.id
+                 AND f.status='APPLIED'
+                 AND ($3::timestamptz AT TIME ZONE 'UTC')::date
+                     BETWEEN f.starts_on AND f.ends_on
+             )
+           )
+         LIMIT 1`,
+        [context.tenantId,lessonId,startsAt]
+      );
+      if(invalidPackage.rowCount){
+        throw new ConflictException(
+          "Новая дата выходит за срок действия или попадает в заморозку уже используемого абонемента"
+        );
+      }
+
+      const invalidMakeup=await client.query(
+        `SELECT 1
+         FROM dance_lesson_participant lp
+         JOIN dance_makeup_credit mc
+           ON mc.tenant_id=lp.tenant_id
+          AND mc.id=lp.makeup_credit_id
+         WHERE lp.tenant_id=$1 AND lp.lesson_id=$2
+           AND lp.status NOT IN ('WAITLIST','CANCELLED_IN_TIME')
+           AND lp.makeup_credit_id IS NOT NULL
+           AND $3::timestamptz > mc.expires_at
+         LIMIT 1`,
+        [context.tenantId,lessonId,startsAt]
+      );
+      if(invalidMakeup.rowCount){
+        throw new ConflictException(
+          "Новая дата позже срока действия уже зарезервированной отработки"
+        );
+      }
+
       const occupied=await client.query<{count:number}>(
         `SELECT count(*)::integer AS count
          FROM dance_lesson_participant
@@ -1400,6 +1449,19 @@ export class DanceStudioService {
           [context.tenantId,lesson.host_booking_id,resourceId]
         );
       }
+
+      await client.query(
+        `UPDATE financial_obligation o
+         SET due_at=$3,updated_at=now()
+         FROM dance_student_charge c
+         WHERE c.tenant_id=$1
+           AND c.source_type='LESSON'
+           AND c.source_id=$2
+           AND c.obligation_id=o.id
+           AND o.tenant_id=c.tenant_id
+           AND o.status IN ('OPEN','PARTIALLY_SETTLED')`,
+        [context.tenantId,lessonId,startsAt]
+      );
 
       await client.query(
         `UPDATE service_booking
