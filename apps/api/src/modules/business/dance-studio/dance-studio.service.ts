@@ -698,6 +698,13 @@ export class DanceStudioService {
         "UPDATE dance_student SET status='ACTIVE',joined_at=coalesce(joined_at,now()),updated_at=now() WHERE tenant_id=$1 AND id=$2",
         [context.tenantId,input.studentId]
       );
+      await client.query(
+        `UPDATE dance_group_waitlist
+         SET status='ACCEPTED',updated_at=now()
+         WHERE tenant_id=$1 AND group_id=$2 AND student_id=$3
+           AND status IN ('WAITING','OFFERED')`,
+        [context.tenantId,groupId,input.studentId]
+      );
       return {waitlisted:false,...member.rows[0]};
     });
   }
