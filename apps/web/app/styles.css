@@ -1055,3 +1055,29 @@ button, .primary, .secondary { font: inherit; }
 .command-empty strong { color:#33373b; font-size:12px; }
 .command-empty span { font-size:10px; }
 .command-footer { display:flex; gap:14px; padding:8px 13px; border-top:1px solid #eceef0; color:#92979d; font-size:9px; }
+
+
+/* Unified action queue */
+.action-center-wrap { position:relative; margin-bottom:8px; }
+.sidebar-action-trigger { width:100%; border:1px solid #e0e3e6; background:#fff; color:#444a50; border-radius:10px; padding:8px 9px; display:flex; justify-content:space-between; align-items:center; gap:10px; cursor:pointer; font-size:10px; }
+.sidebar-action-trigger b { min-width:22px; height:22px; padding:0 6px; display:grid; place-items:center; border-radius:999px; background:#25282c; color:#fff; font-size:9px; }
+.action-center-panel { position:fixed; left:230px; top:70px; z-index:900; width:min(430px,calc(100vw - 250px)); max-height:76vh; display:grid; grid-template-rows:auto minmax(0,1fr); background:#fff; border:1px solid #dfe2e5; border-radius:16px; box-shadow:0 22px 70px rgba(0,0,0,.17); overflow:hidden; }
+.action-center-panel > header { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:12px 13px; border-bottom:1px solid #eceef0; }
+.action-center-panel > header > div { display:grid; gap:2px; }
+.action-center-panel > header small { color:#90959b; font-size:9px; }
+.action-center-panel > header strong { font-size:13px; }
+.action-center-list { overflow:auto; padding:7px; }
+.action-center-item { border:1px solid #e7e9eb; border-radius:11px; margin-bottom:7px; background:#fff; overflow:hidden; }
+.action-center-item.read { opacity:.65; }
+.action-center-main { width:100%; border:0; background:transparent; color:inherit; text-align:left; padding:10px; display:grid; grid-template-columns:auto minmax(0,1fr); gap:9px; cursor:pointer; }
+.action-center-main > div { display:grid; gap:2px; }
+.action-center-main small { color:#969ba1; font-size:8px; }
+.action-center-main strong { font-size:11px; }
+.action-center-main p { margin:0; color:#71777e; font-size:9px; line-height:1.4; }
+.action-center-actions { display:flex; gap:5px; padding:0 10px 9px 35px; }
+.action-center-actions button { border:0; background:#f1f2f3; color:#666c73; border-radius:7px; padding:5px 7px; font-size:8px; cursor:pointer; }
+.action-center-error { margin:7px; padding:7px 9px; border-radius:8px; background:#fff0ef; color:#8d2d28; font-size:9px; }
+
+@media (max-width:760px) {
+  .action-center-panel { left:14px; top:76px; width:calc(100vw - 28px); }
+}
