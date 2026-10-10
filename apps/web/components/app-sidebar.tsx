@@ -19,7 +19,7 @@ type WorkspaceContext = {
 const permissionByKey: Record<string,string> = {
   deals: "crm.read",
   tasks: "tasks.read",
-  projects: "tasks.read",
+  projects: "projects.read",
   orders: "sales.read",
   products: "catalog.read",
   purchases: "procurement.read",
