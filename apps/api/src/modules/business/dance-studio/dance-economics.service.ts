@@ -228,6 +228,36 @@ export class DanceEconomicsService {
     });
   }
 
+  async roomStatements(
+    context:TenantContext,
+    month?:string
+  ){
+    await this.scopeIds(context,"dance.read");
+    const target=this.normalizeMonth(month);
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           s.id,s.contract_id,c.room_resource_id,r.name AS room_name,
+           c.counterparty_party_id,p.display_name AS counterparty_name,
+           c.pricing_type,s.period_from,s.period_to,s.currency,
+           s.amount_minor::text,s.lesson_count,s.status,s.obligation_id,
+           s.finalized_at,s.calculation_snapshot
+         FROM room_rental_statement s
+         JOIN room_rental_contract c
+           ON c.tenant_id=s.tenant_id AND c.id=s.contract_id
+         JOIN service_resource r
+           ON r.tenant_id=c.tenant_id AND r.id=c.room_resource_id
+         LEFT JOIN party p
+           ON p.tenant_id=c.tenant_id AND p.id=c.counterparty_party_id
+         WHERE s.tenant_id=$1
+           AND s.period_from=$2::date
+         ORDER BY r.name,c.id`,
+        [context.tenantId,target.from]
+      );
+      return result.rows;
+    });
+  }
+
   async createRoomContract(
     context:TenantContext,
     input:{
