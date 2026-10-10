@@ -972,3 +972,21 @@ button, .primary, .secondary { font: inherit; }
 @media (max-width:800px) {
   .budget-layout { grid-template-columns:1fr; }
 }
+
+
+/* Owner assistant */
+.assistant-headline { border-radius:18px; padding:22px; margin-bottom:18px; border:1px solid #e1e4e7; background:#fff; }
+.assistant-headline small { color:#858a91; font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
+.assistant-headline h2 { margin:5px 0 8px; font-size:28px; letter-spacing:-.04em; }
+.assistant-headline p { margin:0 0 13px; color:#666c73; line-height:1.55; max-width:850px; }
+.assistant-headline a { color:inherit; font-weight:650; text-decoration:none; font-size:12px; }
+.assistant-critical { background:#fff4f2; border-color:#f0d4cf; }
+.assistant-warning { background:#fff9ec; border-color:#efe1b8; }
+.assistant-info { background:#f4f8f5; border-color:#dce9df; }
+.assistant-insights { display:grid; gap:8px; }
+.assistant-insight { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:10px; align-items:start; border:1px solid #e4e6e8; border-radius:13px; padding:12px; text-decoration:none; color:inherit; background:#fff; }
+.assistant-insight > div { display:grid; gap:3px; }
+.assistant-insight small { color:#92979d; font-size:9px; }
+.assistant-insight strong { font-size:12px; }
+.assistant-insight p { margin:0; color:#70767d; font-size:10px; line-height:1.45; }
+.assistant-insight b { font-size:10px; white-space:nowrap; }
