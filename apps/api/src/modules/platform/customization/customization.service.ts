@@ -8,6 +8,11 @@ import type { TenantContext } from "@corebiz/contracts";
 import { randomBytes } from "node:crypto";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import {
+  BUSINESS_VERTICAL_LIST,
+  BUSINESS_VERTICALS,
+  type BusinessVerticalCode
+} from "./business-verticals";
 
 type EntityType = "DEAL" | "PARTY" | "PRODUCT" | "SALES_ORDER" | "PURCHASE_ORDER";
 type FieldType = "TEXT" | "NUMBER" | "DATE" | "BOOLEAN" | "SELECT" | "MULTISELECT";
@@ -378,10 +383,118 @@ export class CustomizationService {
     });
   }
 
+  businessVerticals(): Array<Record<string, unknown>> {
+    return BUSINESS_VERTICAL_LIST.map((template) => ({
+      code: template.code,
+      title: template.title,
+      summary: template.summary,
+      profileCode: template.profileCode,
+      version: template.version,
+      ownerQuestions: template.ownerQuestions,
+      primaryWorkspaces: template.primaryWorkspaces
+    }));
+  }
+
+  async applyBusinessVertical(
+    context: TenantContext,
+    verticalInput: string
+  ): Promise<{
+    verticalCode: string;
+    verticalTitle: string;
+    profileCode: string;
+    templateVersion: number;
+    createdFields: number;
+  }> {
+    const verticalCode = verticalInput.trim().toUpperCase() as BusinessVerticalCode;
+    const template = BUSINESS_VERTICALS[verticalCode];
+    if (!template) {
+      throw new BadRequestException("Неизвестный тип бизнеса");
+    }
+
+    // Capabilities are still owned by the coarse technical profile.
+    // The vertical layer adds defaults, never a fork of Core.
+    await this.applyBusinessProfile(context, template.profileCode);
+
+    let createdFields = 0;
+
+    await this.database.withTenantTransaction(context, async (client) => {
+      for (const field of template.customFields) {
+        const result = await client.query(
+          `INSERT INTO custom_field_definition(
+             tenant_id,entity_type,field_key,label,data_type,options,is_required
+           ) VALUES ($1,$2,$3,$4,$5,$6,false)
+           ON CONFLICT (tenant_id,entity_type,field_key) DO NOTHING
+           RETURNING id`,
+          [
+            context.tenantId,
+            field.entityType,
+            field.fieldKey,
+            field.label,
+            field.dataType,
+            JSON.stringify(field.options ?? [])
+          ]
+        );
+        createdFields += result.rowCount ?? 0;
+      }
+
+      await client.query(
+        `INSERT INTO tenant_business_vertical(
+           tenant_id,vertical_code,template_version,configuration,
+           applied_at,updated_by_membership_id,updated_at
+         ) VALUES ($1,$2,$3,$4,now(),$5,now())
+         ON CONFLICT (tenant_id)
+         DO UPDATE SET
+           vertical_code=EXCLUDED.vertical_code,
+           template_version=EXCLUDED.template_version,
+           configuration=EXCLUDED.configuration,
+           applied_at=now(),
+           updated_by_membership_id=EXCLUDED.updated_by_membership_id,
+           updated_at=now()`,
+        [
+          context.tenantId,
+          template.code,
+          template.version,
+          JSON.stringify({
+            title: template.title,
+            profileCode: template.profileCode,
+            ownerQuestions: template.ownerQuestions,
+            primaryWorkspaces: template.primaryWorkspaces
+          }),
+          context.membershipId
+        ]
+      );
+
+      await this.audit(
+        client,
+        context,
+        "customization.business_vertical_applied",
+        "tenant_business_vertical",
+        context.tenantId,
+        {
+          verticalCode: template.code,
+          templateVersion: template.version,
+          profileCode: template.profileCode,
+          createdFields
+        }
+      );
+    });
+
+    return {
+      verticalCode: template.code,
+      verticalTitle: template.title,
+      profileCode: template.profileCode,
+      templateVersion: template.version,
+      createdFields
+    };
+  }
+
   async businessProfile(
     context: TenantContext
   ): Promise<{
     profileCode: "GENERAL" | "TRADE" | "ECOMMERCE" | "SERVICE" | "WAREHOUSE_3PL";
+    verticalCode: string | null;
+    verticalTitle: string | null;
+    verticalVersion: number | null;
     capabilities: Array<{ key: string; enabled: boolean }>;
     appliedAt: string;
   }> {
@@ -407,9 +520,30 @@ export class CustomizationService {
         [context.tenantId]
       );
 
+      const vertical = await client.query<{
+        vertical_code: string;
+        template_version: number;
+      }>(
+        `SELECT vertical_code,template_version
+         FROM tenant_business_vertical
+         WHERE tenant_id=$1`,
+        [context.tenantId]
+      );
+
       const row = profile.rows[0];
+      const verticalRow = vertical.rows[0] ?? null;
+      const verticalTemplate = verticalRow
+        ? BUSINESS_VERTICALS[
+            verticalRow.vertical_code as BusinessVerticalCode
+          ] ?? null
+        : null;
       return {
         profileCode: row?.profile_code ?? "GENERAL",
+        verticalCode: verticalRow?.vertical_code ?? null,
+        verticalTitle:
+          verticalTemplate?.title ??
+          (verticalRow?.vertical_code ?? null),
+        verticalVersion: verticalRow?.template_version ?? null,
         appliedAt: (row?.applied_at ?? new Date()).toISOString(),
         capabilities: capabilities.rows.map((item) => ({
           key: item.capability_key,
