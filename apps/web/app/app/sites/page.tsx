@@ -34,7 +34,7 @@ type Binding = {
   id: string;
   name: string;
   public_key: string;
-  action: "CRM_LEAD" | "BOOKING";
+  action: "CRM_LEAD" | "BOOKING" | "DANCE_BOOKING";
   status: string;
 };
 
@@ -311,6 +311,63 @@ export default function SitesPage() {
         cause instanceof Error
           ? cause.message
           : "Не удалось создать форму онлайн-записи"
+      );
+    }
+  }
+
+  async function createDanceBookingBinding() {
+    if (!siteId) return;
+
+    try {
+      const groups = await apiRequest<Array<{
+        id: string;
+        name: string;
+        program_name: string;
+        members: number;
+        capacity: number;
+      }>>("/dance/groups");
+
+      if (!groups.length) {
+        setError("Сначала создайте группу в разделе «Студия → Группы и уроки».");
+        return;
+      }
+
+      const list = groups
+        .map(
+          (group, index) =>
+            (index + 1) + ". " + group.name + " · " +
+            group.program_name + " · " + group.members + "/" + group.capacity
+        )
+        .join("\n");
+      const group = groups[
+        Number(window.prompt("Группа для публичной записи:\n" + list, "1")) - 1
+      ];
+      if (!group) return;
+
+      const name = window.prompt(
+        "Название формы",
+        "Пробное занятие: " + group.name
+      );
+      if (!name?.trim()) return;
+
+      await apiRequest("/site-forms/site/" + siteId, {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          action: "DANCE_BOOKING",
+          danceGroupId: group.id
+        })
+      });
+      setBindings(await apiRequest<Binding[]>("/site-forms/site/" + siteId));
+      setError("");
+      window.alert(
+        "Форма создана. Добавьте блок «Онлайн-запись» и выберите эту связку."
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось создать форму записи в группу"
       );
     }
   }
@@ -686,6 +743,14 @@ export default function SitesPage() {
                 </button>
                 <button
                   className="site-store-enable"
+                  onClick={() => void createDanceBookingBinding()}
+                  type="button"
+                >
+                  + Запись в танцевальную группу
+                  <small>Родитель + ребёнок + пробное + waitlist</small>
+                </button>
+                <button
+                  className="site-store-enable"
                   onClick={() => void addDomain()}
                   type="button"
                 >
@@ -1007,8 +1072,11 @@ function BlockFields({
   }
 
   if (block.block_type === "FORM" || block.block_type === "BOOKING") {
-    const action = block.block_type === "FORM" ? "CRM_LEAD" : "BOOKING";
-    const available = bindings.filter((binding) => binding.action === action);
+    const available = bindings.filter((binding) =>
+      block.block_type === "FORM"
+        ? binding.action === "CRM_LEAD"
+        : binding.action === "BOOKING" || binding.action === "DANCE_BOOKING"
+    );
 
     return (
       <div className="builder-field-grid">
@@ -1021,7 +1089,13 @@ function BlockFields({
           <span>Связка формы</span>
           <select
             value={c.bindingId ?? ""}
-            onChange={(event) => set("bindingId", event.target.value)}
+            onChange={(event) => {
+              const binding = bindings.find(
+                (item) => item.public_key === event.target.value
+              );
+              set("bindingId", event.target.value);
+              set("danceBooking", binding?.action === "DANCE_BOOKING");
+            }}
           >
             <option value="">Выберите связку</option>
             {available.map((binding) => (
