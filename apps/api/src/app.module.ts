@@ -35,6 +35,7 @@ import { CustomizationModule } from "./modules/platform/customization/customizat
 import { SessionContextMiddleware } from "./modules/platform/auth/session-context.middleware";
 import { AuthorizationModule } from "./modules/platform/authorization/authorization.module";
 import { HealthModule } from "./modules/platform/health/health.module";
+import { GoLiveModule } from "./modules/platform/go-live/go-live.module";
 import { ReleaseVerificationModule } from "./modules/platform/release/release-verification.module";
 import { TenantContextModule } from "./modules/platform/tenant-context/tenant-context.module";
 import { TenantsModule } from "./modules/platform/tenants/tenants.module";
@@ -72,6 +73,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     WorkflowModule,
     WmsModule,
     HealthModule,
+    GoLiveModule,
     ReleaseVerificationModule
   ],
   providers: [
