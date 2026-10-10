@@ -662,14 +662,23 @@ export class DashboardService {
     return this.database.withTenantTransaction(context, async (client) => {
       const profileResult = await client.query<{
         profile_code: "GENERAL" | "TRADE" | "ECOMMERCE" | "SERVICE" | "WAREHOUSE_3PL";
+        vertical_code: string | null;
       }>(
-        `SELECT profile_code
-         FROM tenant_business_profile
-         WHERE tenant_id=$1`,
+        `SELECT
+           COALESCE(
+             (SELECT profile_code
+              FROM tenant_business_profile
+              WHERE tenant_id=$1),
+             'GENERAL'
+           ) AS profile_code,
+           (SELECT vertical_code
+            FROM tenant_business_vertical
+            WHERE tenant_id=$1) AS vertical_code`,
         [context.tenantId]
       );
 
       const profile = profileResult.rows[0]?.profile_code ?? "GENERAL";
+      const verticalCode = profileResult.rows[0]?.vertical_code ?? null;
 
       const counts = await Promise.all([
         client.query<{ count: string }>(
@@ -739,6 +748,13 @@ export class DashboardService {
            WHERE tenant_id=$1
              AND status IN ('IMPORTED','RECONCILED')`,
           [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM task
+           WHERE tenant_id=$1
+             AND state IN ('OPEN','IN_PROGRESS','WAITING','DONE')`,
+          [context.tenantId]
         )
       ]);
 
@@ -752,7 +768,8 @@ export class DashboardService {
         service: Number(counts[6].rows[0]?.count ?? "0"),
         channel: Number(counts[7].rows[0]?.count ?? "0"),
         wmsTask: Number(counts[8].rows[0]?.count ?? "0"),
-        migration: Number(counts[9].rows[0]?.count ?? "0")
+        migration: Number(counts[9].rows[0]?.count ?? "0"),
+        task: Number(counts[10].rows[0]?.count ?? "0")
       };
 
       const definitions: Record<string, Array<{
@@ -885,6 +902,87 @@ export class DashboardService {
         ]
       };
 
+      if (profile === "SERVICE" && verticalCode === "PROFESSIONAL_SERVICES") {
+        definitions.SERVICE = [
+          {
+            key: "party",
+            title: "Добавьте первого клиента",
+            detail: "Карточка клиента объединит сделки, задачи и расчёты.",
+            href: "/app/crm/deals",
+            done: values.party > 0
+          },
+          {
+            key: "deal",
+            title: "Создайте первую клиентскую работу",
+            detail: "Для агентства, IT и консалтинга первый рабочий объект — сделка/проект, а не запись в календарь.",
+            href: "/app/crm/deals",
+            done: values.deal > 0
+          },
+          {
+            key: "next-action",
+            title: "Зафиксируйте следующее действие",
+            detail: "У клиентской работы должен быть ответственный и конкретная задача.",
+            href: "/app/tasks",
+            done: values.deal > 0 && values.task > 0,
+            firstValue: true
+          }
+        ];
+      }
+
+      if (profile === "ECOMMERCE" && verticalCode === "ECOMMERCE_STORE") {
+        definitions.ECOMMERCE = [
+          {
+            key: "product",
+            title: "Подготовьте каталог",
+            detail: "Товары, цены и SKU используются витриной, заказами и складом.",
+            href: "/app/catalog/products",
+            done: values.product > 0
+          },
+          {
+            key: "site",
+            title: "Опубликуйте интернет-магазин",
+            detail: "Для собственного e-commerce первым каналом должна быть опубликованная витрина.",
+            href: "/app/sites",
+            done: values.site > 0
+          },
+          {
+            key: "order",
+            title: "Получите и подтвердите первый заказ",
+            detail: "После заказа включается сквозной OMS/склад/финансовый сценарий.",
+            href: "/app/sales/orders",
+            done: values.order > 0,
+            firstValue: true
+          }
+        ];
+      }
+
+      if (profile === "ECOMMERCE" && verticalCode === "MARKETPLACE_SELLER") {
+        definitions.ECOMMERCE = [
+          {
+            key: "product",
+            title: "Подготовьте единый каталог SKU",
+            detail: "Внутренний SKU нужен для сопоставления Ozon/Wildberries и остатков.",
+            href: "/app/catalog/products",
+            done: values.product > 0
+          },
+          {
+            key: "channel",
+            title: "Подключите маркетплейс",
+            detail: "Для этого профиля сайт не заменяет рабочее подключение канала.",
+            href: "/app/channels",
+            done: values.channel > 0
+          },
+          {
+            key: "order",
+            title: "Получите первый заказ из канала",
+            detail: "Заказ подтверждает работу цепочки channel inbox → OMS → ERP.",
+            href: "/app/sales/orders",
+            done: values.order > 0,
+            firstValue: true
+          }
+        ];
+      }
+
       const milestones = definitions[profile] ?? definitions.GENERAL;
       const firstValueDone = milestones.some(
         (item) => item.firstValue && item.done
@@ -953,6 +1051,7 @@ export class DashboardService {
 
       return {
         profile,
+        verticalCode,
         dismissed: Boolean(state.dismissed_at),
         completed,
         progressPercent:
