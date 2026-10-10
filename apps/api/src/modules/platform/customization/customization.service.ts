@@ -656,19 +656,19 @@ export class CustomizationService {
     const presets: Record<string, Set<string>> = {
       GENERAL: new Set(controlled),
       TRADE: new Set([
-        "crm","tasks","catalog","sales","procurement","inventory","finance",
+        "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
         "growth","workflow","support"
       ]),
       ECOMMERCE: new Set([
-        "crm","tasks","catalog","sales","procurement","inventory","finance",
+        "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
         "channels","oms","sites","growth","workflow","support"
       ]),
       SERVICE: new Set([
-        "crm","tasks","catalog","sales","procurement","inventory","finance",
-        "service","sites","growth","workflow","support"
+        "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
+        "service","projects","sites","growth","workflow","support"
       ]),
       WAREHOUSE_3PL: new Set([
-        "tasks","catalog","sales","procurement","inventory","finance",
+        "tasks","catalog","sales","procurement","inventory","finance","accounting",
         "oms","wms","workflow","support"
       ])
     };
