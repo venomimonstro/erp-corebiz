@@ -12,7 +12,7 @@ const COMPONENTS = new Set([
 
 const KINDS = new Set([
   "MIGRATIONS","TYPECHECK","TESTS","BUILD","SECURITY",
-  "STABILITY","INTEGRATION","BROWSER_SMOKE","RESTORE","RECONCILIATION"
+  "STABILITY","PERFORMANCE","INTEGRATION","BROWSER_SMOKE","RESTORE","RECONCILIATION"
 ]);
 
 const OUTCOMES = new Set(["PASS","FAIL","BLOCKED"]);
@@ -25,71 +25,6 @@ export class ReleaseVerificationService {
     context: TenantContext
   ): Promise<Record<string, unknown>> {
     return this.database.withTenantTransaction(context, async (client) => {
-      const latest = await client.query<{
-        component_code: string;
-        verification_kind: string;
-        target_version: string;
-        outcome: string;
-        evidence_reference: string;
-        executed_at: Date;
-        executed_by_membership_id: string;
-      }>(
-        `SELECT DISTINCT ON (component_code,verification_kind)
-           component_code,verification_kind,target_version,outcome,
-           evidence_reference,executed_at,executed_by_membership_id
-         FROM release_verification_record
-         WHERE tenant_id=$1
-         ORDER BY component_code,verification_kind,executed_at DESC`,
-        [context.tenantId]
-      );
-
-      const rows = latest.rows.map((row) => ({
-        component: row.component_code,
-        kind: row.verification_kind,
-        targetVersion: row.target_version,
-        outcome: row.outcome,
-        evidenceReference: row.evidence_reference,
-        executedAt: row.executed_at.toISOString(),
-        executedByMembershipId: row.executed_by_membership_id
-      }));
-
-      const failCount = rows.filter(
-        (row) => row.outcome === "FAIL" || row.outcome === "BLOCKED"
-      ).length;
-
-      const coreMandatory = [
-        ["CORE","MIGRATIONS"],
-        ["CORE","TYPECHECK"],
-        ["CORE","TESTS"],
-        ["CORE","BUILD"],
-        ["CORE","SECURITY"],
-        ["CORE","STABILITY"],
-        ["CORE","PERFORMANCE"],
-        ["API","INTEGRATION"],
-        ["API","BROWSER_SMOKE"],
-        ["CORE","RESTORE"],
-        ["FINANCE","RECONCILIATION"],
-        ["ACCOUNTING","RECONCILIATION"],
-        ["WMS","RECONCILIATION"]
-      ];
-
-      const map = new Map(
-        rows.map((row) => [row.component + ":" + row.kind, row])
-      );
-
-      const missing = coreMandatory
-        .filter(([component, kind]) => !map.has(component + ":" + kind))
-        .map(([component, kind]) => ({ component, kind }));
-
-      const staleBefore = Date.now() - 30 * 86400000;
-      const stale = rows
-        .filter((row) => new Date(row.executedAt).getTime() < staleBefore)
-        .map((row) => ({
-          component: row.component,
-          kind: row.kind,
-          executedAt: row.executedAt
-        }));
-
       const approvedCandidate = await client.query<{
         id: string;
         target_version: string;
@@ -108,17 +43,125 @@ export class ReleaseVerificationService {
         [context.tenantId]
       );
 
+      const latestCandidate = await client.query<{
+        id: string;
+        target_version: string;
+        status: string;
+        verdict_snapshot: {
+          readyForApproval?: boolean;
+          evaluatedAt?: string;
+        };
+        created_at: Date;
+      }>(
+        `SELECT id,target_version,status,verdict_snapshot,created_at
+         FROM release_candidate
+         WHERE tenant_id=$1
+           AND status <> 'SUPERSEDED'
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [context.tenantId]
+      );
+
       const approved = approvedCandidate.rows[0] ?? null;
+      const active = latestCandidate.rows[0] ?? approved;
+      const targetVersion = active?.target_version ?? null;
+
+      const latest = targetVersion
+        ? await client.query<{
+            component_code: string;
+            verification_kind: string;
+            target_version: string;
+            outcome: string;
+            evidence_reference: string;
+            executed_at: Date;
+            executed_by_membership_id: string;
+          }>(
+            `SELECT DISTINCT ON (component_code,verification_kind)
+               component_code,verification_kind,target_version,outcome,
+               evidence_reference,executed_at,executed_by_membership_id
+             FROM release_verification_record
+             WHERE tenant_id=$1
+               AND target_version=$2
+             ORDER BY component_code,verification_kind,executed_at DESC`,
+            [context.tenantId, targetVersion]
+          )
+        : { rows: [] as Array<{
+            component_code: string;
+            verification_kind: string;
+            target_version: string;
+            outcome: string;
+            evidence_reference: string;
+            executed_at: Date;
+            executed_by_membership_id: string;
+          }> };
+
+      const rows = latest.rows.map((row) => ({
+        component: row.component_code,
+        kind: row.verification_kind,
+        targetVersion: row.target_version,
+        outcome: row.outcome,
+        evidenceReference: row.evidence_reference,
+        executedAt: row.executed_at.toISOString(),
+        executedByMembershipId: row.executed_by_membership_id
+      }));
+
+      const mandatory = this.mandatoryMatrix();
+      const map = new Map(
+        rows.map((row) => [row.component + ":" + row.kind, row])
+      );
+
+      const missing = mandatory
+        .filter(([component, kind]) => !map.has(component + ":" + kind))
+        .map(([component, kind]) => ({ component, kind }));
+
+      const staleBefore = Date.now() - 7 * 86400000;
+      const stale = mandatory
+        .map(([component, kind]) => map.get(component + ":" + kind))
+        .filter((row): row is NonNullable<typeof row> => Boolean(row))
+        .filter(
+          (row) => new Date(row.executedAt).getTime() < staleBefore
+        )
+        .map((row) => ({
+          component: row.component,
+          kind: row.kind,
+          executedAt: row.executedAt
+        }));
+
+      const failing = mandatory
+        .map(([component, kind]) => map.get(component + ":" + kind))
+        .filter((row): row is NonNullable<typeof row> => Boolean(row))
+        .filter((row) => row.outcome !== "PASS")
+        .map((row) => ({
+          component: row.component,
+          kind: row.kind,
+          outcome: row.outcome,
+          evidenceReference: row.evidenceReference
+        }));
+
       const evidenceHealthy =
-        failCount === 0 &&
+        Boolean(targetVersion) &&
         missing.length === 0 &&
-        stale.length === 0;
+        stale.length === 0 &&
+        failing.length === 0;
+
+      const approvedMatchesTarget =
+        Boolean(approved) &&
+        approved?.target_version === targetVersion &&
+        approved?.verdict_snapshot?.readyForApproval === true;
 
       return {
-        ready:
-          Boolean(approved) &&
-          approved?.verdict_snapshot?.readyForApproval === true,
+        ready: evidenceHealthy && approvedMatchesTarget,
         evidenceHealthy,
+        targetVersion,
+        activeCandidate: active
+          ? {
+              id: active.id,
+              targetVersion: active.target_version,
+              status: "status" in active ? active.status : "APPROVED",
+              evaluatedAt:
+                active.verdict_snapshot?.evaluatedAt ?? null
+            }
+          : null,
         approvedCandidate: approved
           ? {
               id: approved.id,
@@ -130,12 +173,13 @@ export class ReleaseVerificationService {
           : null,
         summary: {
           evidence: rows.length,
-          failing: failCount,
+          failing: failing.length,
           missing: missing.length,
           stale: stale.length
         },
         mandatoryMissing: missing,
         stale,
+        failing,
         latest: rows
       };
     });
