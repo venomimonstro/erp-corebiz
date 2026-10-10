@@ -49,6 +49,7 @@ const permissionByKey: Record<string,string> = {
   operations: "dashboard.owner.read",
   customization: "customization.manage",
   "release-readiness": "release.read",
+  "go-live": "go_live.read",
   support: "support.read"
 };
 
@@ -141,6 +142,7 @@ const sections: Section[] = [
     ["/app/workflows", "Автоматизации", "workflows"],
     ["/app/settings/billing", "Тариф и оплата", "billing"],
     ["/app/settings/release", "Готовность релиза", "release-readiness"],
+    ["/app/settings/go-live", "Go-Live Center", "go-live"],
     ["/app/support", "Поддержка", "support"]
   ] }
 ];
