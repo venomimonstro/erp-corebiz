@@ -26,6 +26,7 @@ const permissionByKey: Record<string,string> = {
   finance: "finance.read",
   "finance-forecast": "finance.read",
   "finance-budget": "finance.read",
+  accounting: "accounting.read",
   "service-home": "service.read",
   bookings: "service.read",
   resources: "service.read",
@@ -67,6 +68,7 @@ const capabilityByKey: Record<string,string> = {
   finance: "finance",
   "finance-forecast": "finance",
   "finance-budget": "finance",
+  accounting: "accounting",
   "service-home": "service",
   bookings: "service",
   resources: "service",
@@ -109,7 +111,8 @@ const sections: Section[] = [
     ["/app/inventory/stock", "Остатки", "stock"],
     ["/app/finance", "Деньги", "finance"],
     ["/app/finance/forecast", "Платёжный календарь", "finance-forecast"],
-    ["/app/finance/budget", "Бюджет план / факт", "finance-budget"]
+    ["/app/finance/budget", "Бюджет план / факт", "finance-budget"],
+    ["/app/accounting", "Бухгалтерия РФ", "accounting"]
   ] },
   { title: "Запись и услуги", items: [
     ["/app/service", "Сегодня", "service-home"],
