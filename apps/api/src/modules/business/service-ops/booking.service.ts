@@ -296,7 +296,11 @@ export class BookingService {
         `SELECT
            p.id,p.name,p.code,p.description,p.applicable_service_id,
            s.name AS applicable_service_name,
+           p.package_kind,p.dance_program_id,p.dance_group_id,
            p.visit_limit,p.duration_days,p.price_minor::text,p.currency,
+           p.management_visit_value_minor::text,
+           p.freeze_days_allowed,p.makeup_days_valid,p.allow_makeup,
+           p.family_eligible,p.activation_policy,p.allowed_debt_minor::text,
            p.no_show_policy,p.status,p.metadata,p.created_at,p.updated_at
          FROM service_package_plan p
          LEFT JOIN service_catalog_item s
@@ -322,6 +326,13 @@ export class BookingService {
       visitLimit?: number;
       durationDays: number;
       priceMinor?: string | number;
+      managementVisitValueMinor?: string | number;
+      freezeDaysAllowed?: number;
+      makeupDaysValid?: number;
+      allowMakeup?: boolean;
+      familyEligible?: boolean;
+      activationPolicy?: "FULL_PAYMENT" | "IMMEDIATE" | "PROPORTIONAL" | "GRACE_PERIOD";
+      allowedDebtMinor?: string | number;
       currency?: string;
       noShowPolicy?: "RELEASE" | "CONSUME";
       metadata?: Record<string, unknown>;
@@ -360,6 +371,29 @@ export class BookingService {
     if (!/^\d+$/.test(priceMinor)) {
       throw new BadRequestException("Некорректная цена абонемента");
     }
+    const managementVisitValueMinor = String(
+      input.managementVisitValueMinor ?? "0"
+    );
+    const allowedDebtMinor = String(input.allowedDebtMinor ?? "0");
+    if (!/^\d+$/.test(managementVisitValueMinor) ||
+        !/^\d+$/.test(allowedDebtMinor)) {
+      throw new BadRequestException("Некорректные финансовые параметры абонемента");
+    }
+    const freezeDaysAllowed = Math.floor(input.freezeDaysAllowed ?? 0);
+    const makeupDaysValid = Math.floor(input.makeupDaysValid ?? 0);
+    if (
+      freezeDaysAllowed < 0 || freezeDaysAllowed > 3650 ||
+      makeupDaysValid < 0 || makeupDaysValid > 3650
+    ) {
+      throw new BadRequestException("Некорректные правила заморозки/отработки");
+    }
+    const activationPolicy = input.activationPolicy ?? "FULL_PAYMENT";
+    if (!["FULL_PAYMENT","IMMEDIATE","PROPORTIONAL","GRACE_PERIOD"].includes(
+      activationPolicy
+    )) {
+      throw new BadRequestException("Некорректная политика активации");
+    }
+
     const currency = input.currency?.trim().toUpperCase() || "RUB";
     if (!/^[A-Z]{3}$/.test(currency)) {
       throw new BadRequestException("Некорректная валюта");
@@ -377,15 +411,46 @@ export class BookingService {
           input.applicableServiceId
         );
       }
+      if (input.danceProgramId) {
+        const program = await client.query(
+          `SELECT 1 FROM dance_program
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,input.danceProgramId]
+        );
+        if (!program.rowCount) {
+          throw new NotFoundException("Направление студии не найдено");
+        }
+      }
+      if (input.danceGroupId) {
+        const group = await client.query(
+          `SELECT program_id FROM dance_group
+           WHERE tenant_id=$1 AND id=$2 AND status<>'ARCHIVED'`,
+          [context.tenantId,input.danceGroupId]
+        );
+        const groupRow=group.rows[0];
+        if (!groupRow) throw new NotFoundException("Группа студии не найдена");
+        if (
+          input.danceProgramId &&
+          groupRow.program_id !== input.danceProgramId
+        ) {
+          throw new ConflictException(
+            "Группа относится к другому направлению"
+          );
+        }
+      }
 
       try {
         const result = await client.query<{ id: string }>(
           `INSERT INTO service_package_plan(
              tenant_id,name,code,description,applicable_service_id,
              package_kind,dance_program_id,dance_group_id,
-             visit_limit,duration_days,price_minor,currency,
-             no_show_policy,metadata
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+             visit_limit,duration_days,price_minor,management_visit_value_minor,
+             freeze_days_allowed,makeup_days_valid,allow_makeup,family_eligible,
+             activation_policy,allowed_debt_minor,currency,no_show_policy,metadata
+           ) VALUES (
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+             $17,$18,$19,$20,$21,$22
+           )
            RETURNING id`,
           [
             context.tenantId,
@@ -399,6 +464,13 @@ export class BookingService {
             visitLimit,
             durationDays,
             priceMinor,
+            managementVisitValueMinor,
+            freezeDaysAllowed,
+            makeupDaysValid,
+            Boolean(input.allowMakeup),
+            Boolean(input.familyEligible),
+            activationPolicy,
+            allowedDebtMinor,
             currency,
             noShowPolicy,
             JSON.stringify(input.metadata ?? {})
