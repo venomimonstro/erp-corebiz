@@ -41,6 +41,7 @@ export class DanceStudioController {
       partyId:string;
       birthDate?:string;
       trainingLevel?:"BEGINNER"|"INTERMEDIATE"|"ADVANCED";
+      status?:"LEAD"|"TRIAL"|"ACTIVE"|"PAUSED";
       preferredBranchId?:string;
       payerPartyId?:string;
       payerRelation?:"PARENT"|"GUARDIAN"|"PAYER";
