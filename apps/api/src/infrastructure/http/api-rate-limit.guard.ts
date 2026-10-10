@@ -5,148 +5,141 @@ import {
   HttpStatus,
   Injectable
 } from "@nestjs/common";
-import { Reflector } from "@nestjs/core";
 import { createHash } from "node:crypto";
-import type { Request, Response } from "express";
+import type { Request } from "express";
 import { RedisService } from "../cache/redis.service";
 import type { AuthenticatedRequest } from "../../modules/platform/auth/auth.types";
-import {
-  API_COST_CLASS,
-  type ApiCostClass
-} from "./api-cost.decorator";
 
-type Policy = {
+type Budget = {
+  userLimit: number;
+  tenantLimit: number | null;
   windowSeconds: number;
-  routeLimit: number;
-  identityLimit: number;
-  tenantLimit: number;
-};
-
-const POLICIES: Record<ApiCostClass, Policy> = {
-  NORMAL: {
-    windowSeconds: 60,
-    routeLimit: 300,
-    identityLimit: 900,
-    tenantLimit: 6000
-  },
-  SEARCH: {
-    windowSeconds: 60,
-    routeLimit: 120,
-    identityLimit: 180,
-    tenantLimit: 1200
-  },
-  HEAVY: {
-    windowSeconds: 60,
-    routeLimit: 30,
-    identityLimit: 60,
-    tenantLimit: 240
-  },
-  EXPENSIVE: {
-    windowSeconds: 60,
-    routeLimit: 6,
-    identityLimit: 10,
-    tenantLimit: 30
-  },
-  WEBHOOK: {
-    windowSeconds: 60,
-    routeLimit: 120,
-    identityLimit: 180,
-    tenantLimit: 1200
-  }
+  costClass: "LIGHT" | "NORMAL" | "HEAVY";
 };
 
 @Injectable()
 export class ApiRateLimitGuard implements CanActivate {
-  constructor(
-    private readonly redis: RedisService,
-    private readonly reflector: Reflector
-  ) {}
+  constructor(private readonly redis: RedisService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const http = context.switchToHttp();
     const request =
-      http.getRequest<AuthenticatedRequest & Request>();
-    const response = http.getResponse<Response>();
+      context.switchToHttp().getRequest<AuthenticatedRequest & Request>();
 
     if (request.method === "OPTIONS") return true;
 
-    const configured =
-      this.reflector.getAllAndOverride<ApiCostClass>(
-        API_COST_CLASS,
-        [context.getHandler(), context.getClass()]
-      ) ?? "NORMAL";
-
-    const mutation =
-      !["GET", "HEAD"].includes(request.method.toUpperCase());
-
-    const policy = this.policy(configured, mutation);
     const identity = request.auth?.userId ?? request.ip ?? "unknown";
     const tenant = request.auth?.tenantId ?? "public";
     const route = this.routeBucket(request);
-    const identityHash = this.digest(identity);
-    const tenantHash = this.digest(tenant);
-    const routeHash = this.digest(
-      identity + "|" + tenant + "|" + route
+    const budget = this.budget(request);
+
+    const userDigest = createHash("sha256")
+      .update(identity + "|" + tenant + "|" + route)
+      .digest("hex");
+
+    const userCount = await this.redis.incrementWindow(
+      "api-rate:user:" + userDigest,
+      budget.windowSeconds
     );
 
-    const prefix = "api-budget:" + configured.toLowerCase() + ":";
-    const [routeCount, identityCount, tenantCount] =
-      await Promise.all([
-        this.redis.incrementWindow(
-          prefix + "route:" + routeHash,
-          policy.windowSeconds
-        ),
-        this.redis.incrementWindow(
-          prefix + "identity:" + identityHash,
-          policy.windowSeconds
-        ),
-        this.redis.incrementWindow(
-          prefix + "tenant:" + tenantHash,
-          policy.windowSeconds
-        )
-      ]);
+    if (userCount > budget.userLimit) {
+      this.reject(
+        budget,
+        "USER_RATE_LIMIT",
+        budget.userLimit
+      );
+    }
 
-    if (
-      routeCount > policy.routeLimit ||
-      identityCount > policy.identityLimit ||
-      tenantCount > policy.tenantLimit
-    ) {
-      response.setHeader(
-        "Retry-After",
-        String(policy.windowSeconds)
+    if (tenant !== "public" && budget.tenantLimit !== null) {
+      const tenantDigest = createHash("sha256")
+        .update(tenant + "|" + route)
+        .digest("hex");
+
+      const tenantCount = await this.redis.incrementWindow(
+        "api-rate:tenant:" + tenantDigest,
+        budget.windowSeconds
       );
 
-      throw new HttpException(
-        {
-          code: "API_BUDGET_EXCEEDED",
-          message:
-            "Лимит нагрузки временно исчерпан. Повторите запрос позже.",
-          retryAfterSeconds: policy.windowSeconds,
-          costClass: configured
-        },
-        HttpStatus.TOO_MANY_REQUESTS
-      );
+      if (tenantCount > budget.tenantLimit) {
+        this.reject(
+          budget,
+          "TENANT_RATE_LIMIT",
+          budget.tenantLimit
+        );
+      }
     }
 
     return true;
   }
 
-  private policy(
-    costClass: ApiCostClass,
-    mutation: boolean
-  ): Policy {
-    const base = POLICIES[costClass];
+  private budget(request: Request): Budget {
+    const method = request.method.toUpperCase();
+    const path = request.path || request.url || "/";
 
-    if (costClass !== "NORMAL") return base;
+    const heavy =
+      (
+        method !== "GET" &&
+        (
+          /\/data-management\/exports(?:\/|$)/.test(path) ||
+          /\/connections\/[^/]+\/sync(?:\/|$)/.test(path) ||
+          /\/analytics\/.*(?:sync|evaluate)(?:\/|$)/.test(path) ||
+          /\/assistant(?:\/|$)/.test(path) ||
+          /\/migration\/.+(?:run|import|apply)(?:\/|$)/.test(path)
+        )
+      ) ||
+      (
+        method === "GET" &&
+        (
+          /\/data-management\/exports\/.+\/download(?:\/|$)/.test(path) ||
+          /\/reports?(?:\/|$)/.test(path)
+        )
+      );
 
+    if (heavy) {
+      return {
+        userLimit: 12,
+        tenantLimit: 40,
+        windowSeconds: 60,
+        costClass: "HEAVY"
+      };
+    }
+
+    if (
+      method === "GET" &&
+      /\/(?:search|global-search)(?:\/|\?|$)/.test(path)
+    ) {
+      return {
+        userLimit: 30,
+        tenantLimit: 120,
+        windowSeconds: 60,
+        costClass: "NORMAL"
+      };
+    }
+
+    const mutation = !["GET", "HEAD"].includes(method);
     return {
-      ...base,
-      routeLimit: mutation ? 120 : base.routeLimit
+      userLimit: mutation ? 120 : 300,
+      tenantLimit: mutation ? 600 : 1500,
+      windowSeconds: 60,
+      costClass: "LIGHT"
     };
   }
 
-  private digest(value: string): string {
-    return createHash("sha256").update(value).digest("hex");
+  private reject(
+    budget: Budget,
+    code: string,
+    limit: number
+  ): never {
+    throw new HttpException(
+      {
+        message:
+          "Слишком много операций. Повторите через несколько секунд.",
+        code,
+        costClass: budget.costClass,
+        limit,
+        retryAfterSeconds: budget.windowSeconds
+      },
+      HttpStatus.TOO_MANY_REQUESTS
+    );
   }
 
   private routeBucket(request: Request): string {
@@ -154,11 +147,6 @@ export class ApiRateLimitGuard implements CanActivate {
     const normalized = path
       .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, ":id")
       .replace(/\/\d+(?=\/|$)/g, "/:id");
-
-    return (
-      request.method.toUpperCase() +
-      ":" +
-      normalized.slice(0, 180)
-    );
+    return request.method.toUpperCase() + ":" + normalized.slice(0, 180);
   }
 }
