@@ -9,6 +9,7 @@ required=(
   COREBIZ_RESTORE_DATABASE_URL
   COREBIZ_SMOKE_BASE_URL
   COREBIZ_SMOKE_WEB_URL
+  REDIS_URL
 )
 for name in "${required[@]}"; do
   if [[ -z "${!name:-}" ]]; then
@@ -79,12 +80,18 @@ write_manifest() {
   "passedSteps": [$joined],
   "requiredEvidenceKinds": [
     "CORE:MIGRATIONS",
+    "CORE:TYPECHECK",
+    "CORE:TESTS",
+    "CORE:BUILD",
+    "CORE:SECURITY",
+    "CORE:STABILITY",
+    "CORE:PERFORMANCE",
+    "CORE:RESTORE",
+    "CORE:NOISY_NEIGHBOR",
     "AUTH:RUNTIME_RLS",
     "API:INTEGRATION",
     "API:BUSINESS_JOURNEYS",
     "API:BROWSER_SMOKE",
-    "CORE:RESTORE",
-    "CORE:NOISY_NEIGHBOR",
     "FINANCE:RECONCILIATION",
     "ACCOUNTING:RECONCILIATION",
     "WMS:RECONCILIATION"
@@ -98,6 +105,10 @@ trap 'write_manifest "FAIL"; cleanup' ERR
 echo "[production-gate] 1/12 source + disposable migration release check"
 bash scripts/release-check.sh
 pass_step "CORE:MIGRATIONS"
+pass_step "CORE:TYPECHECK"
+pass_step "CORE:TESTS"
+pass_step "CORE:BUILD"
+pass_step "CORE:STABILITY"
 
 echo "[production-gate] 2/12 tenant RLS / runtime-role ownership gate"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
