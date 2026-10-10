@@ -21,10 +21,20 @@ export class GoLiveService {
   async readiness(context: TenantContext): Promise<Record<string, unknown>> {
     return this.database.withTenantTransaction(context, async (client) => {
       const [profileResult, launchResult, activationResult] = await Promise.all([
-        client.query<{ profile_code: string }>(
-          `SELECT profile_code
-           FROM tenant_business_profile
-           WHERE tenant_id=$1`,
+        client.query<{
+          profile_code: string;
+          vertical_code: string | null;
+        }>(
+          `SELECT
+             COALESCE(
+               (SELECT profile_code
+                FROM tenant_business_profile
+                WHERE tenant_id=$1),
+               'GENERAL'
+             ) AS profile_code,
+             (SELECT vertical_code
+              FROM tenant_business_vertical
+              WHERE tenant_id=$1) AS vertical_code`,
           [context.tenantId]
         ),
         client.query<{
@@ -50,6 +60,7 @@ export class GoLiveService {
       ]);
 
       const profile = profileResult.rows[0]?.profile_code ?? "GENERAL";
+      const verticalCode = profileResult.rows[0]?.vertical_code ?? null;
       const launch = launchResult.rows[0] ?? {
         stage: "PREPARING",
         go_live_at: null,
@@ -264,19 +275,28 @@ export class GoLiveService {
           [context.tenantId]
         );
         const row = flow.rows[0]!;
+        const channelReady =
+          profile !== "ECOMMERCE"
+            ? true
+            : verticalCode === "ECOMMERCE_STORE"
+              ? Number(row.published_sites) > 0
+              : verticalCode === "MARKETPLACE_SELLER"
+                ? Number(row.channels) > 0
+                : Number(row.published_sites) + Number(row.channels) > 0;
         checks.push({
           code: "TRADE_FLOW",
           title:
-            profile === "ECOMMERCE"
-              ? "E-commerce business flow"
-              : "Торговый business flow",
+            verticalCode === "MARKETPLACE_SELLER"
+              ? "Marketplace business flow"
+              : verticalCode === "ECOMMERCE_STORE"
+                ? "Интернет-магазин business flow"
+                : profile === "ECOMMERCE"
+                  ? "E-commerce business flow"
+                  : "Торговый business flow",
           ok:
             Number(row.products) > 0 &&
             Number(row.orders) > 0 &&
-            (
-              profile !== "ECOMMERCE" ||
-              Number(row.published_sites) + Number(row.channels) > 0
-            ),
+            channelReady,
           blocking: true,
           detail:
             "Товаров " + row.products +
@@ -284,18 +304,57 @@ export class GoLiveService {
             " · сайтов " + row.published_sites +
             " · каналов " + row.channels,
           href:
-            profile === "ECOMMERCE"
-              ? "/app/channels"
-              : "/app/sales/orders"
+            verticalCode === "ECOMMERCE_STORE"
+              ? "/app/sites"
+              : profile === "ECOMMERCE"
+                ? "/app/channels"
+                : "/app/sales/orders"
+        });
+      } else if (
+        profile === "SERVICE" &&
+        verticalCode === "PROFESSIONAL_SERVICES"
+      ) {
+        const flow = await client.query<{
+          parties: string;
+          deals: string;
+          tasks: string;
+        }>(
+          `SELECT
+             (SELECT count(*) FROM party
+               WHERE tenant_id=$1 AND status='ACTIVE')::text AS parties,
+             (SELECT count(*) FROM crm_deal
+               WHERE tenant_id=$1)::text AS deals,
+             (SELECT count(*) FROM task
+               WHERE tenant_id=$1
+                 AND state IN ('OPEN','IN_PROGRESS','WAITING','DONE'))::text AS tasks`,
+          [context.tenantId]
+        );
+        const row = flow.rows[0]!;
+        checks.push({
+          code: "PROFESSIONAL_SERVICES_FLOW",
+          title: "Проектно-сервисный business flow",
+          ok:
+            Number(row.parties) > 0 &&
+            Number(row.deals) > 0 &&
+            Number(row.tasks) > 0,
+          blocking: true,
+          detail:
+            "Клиентов " + row.parties +
+            " · клиентских работ " + row.deals +
+            " · задач " + row.tasks,
+          href: "/app/crm/deals"
         });
       } else if (profile === "SERVICE") {
         const flow = await client.query<{
           services: string;
+          resources: string;
           bookings: string;
         }>(
           `SELECT
              (SELECT count(*) FROM service_catalog_item
                WHERE tenant_id=$1 AND status='ACTIVE')::text AS services,
+             (SELECT count(*) FROM service_resource
+               WHERE tenant_id=$1 AND status='ACTIVE')::text AS resources,
              (SELECT count(*) FROM service_booking
                WHERE tenant_id=$1
                  AND status NOT IN ('DRAFT','CANCELLED'))::text AS bookings`,
@@ -305,10 +364,15 @@ export class GoLiveService {
         checks.push({
           code: "SERVICE_FLOW",
           title: "Сервисный business flow",
-          ok: Number(row.services) > 0 && Number(row.bookings) > 0,
+          ok:
+            Number(row.services) > 0 &&
+            Number(row.resources) > 0 &&
+            Number(row.bookings) > 0,
           blocking: true,
           detail:
-            "Услуг " + row.services + " · рабочих записей " + row.bookings,
+            "Услуг " + row.services +
+            " · ресурсов " + row.resources +
+            " · рабочих записей " + row.bookings,
           href: "/app/service/bookings"
         });
       } else if (profile === "WAREHOUSE_3PL") {
@@ -386,6 +450,7 @@ export class GoLiveService {
 
       return {
         profile,
+        verticalCode,
         ready: blockers.length === 0,
         stage: launch.stage,
         goLiveAt: launch.go_live_at?.toISOString() ?? null,
