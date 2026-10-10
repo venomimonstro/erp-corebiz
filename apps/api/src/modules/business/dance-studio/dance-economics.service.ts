@@ -328,7 +328,11 @@ export class DanceEconomicsService {
 
       let earnedRevenue=0n;
       let attendedCount=0;
+      let bookedCount=0;
       for(const participant of participants.rows){
+        if(!["WAITLIST","CANCELLED_IN_TIME"].includes(participant.status)) {
+          bookedCount++;
+        }
         if(["ATTENDED","LATE"].includes(participant.status)) attendedCount++;
         if(!participant.package_id){
           if(["ATTENDED","LATE","NO_SHOW","CANCELLED_LATE"].includes(participant.status)){
@@ -454,7 +458,7 @@ export class DanceEconomicsService {
          ON CONFLICT(tenant_id,lesson_id) DO NOTHING
          RETURNING *`,
         [
-          context.tenantId,lessonId,participants.rowCount,attendedCount,
+          context.tenantId,lessonId,bookedCount,attendedCount,
           earnedRevenue.toString(),trainer.amount.toString(),
           room.amount.toString(),margin.toString(),lesson.currency,
           JSON.stringify({
@@ -530,6 +534,20 @@ export class DanceEconomicsService {
         throw new ConflictException("Завершённый урок нельзя отменить");
       if(["CANCELLED_BY_STUDIO","CANCELLED_BY_TRAINER"].includes(lesson.status))
         return {status:lesson.status,changed:false};
+
+      const completedAttendance=await client.query(
+        `SELECT 1
+         FROM dance_lesson_participant
+         WHERE tenant_id=$1 AND lesson_id=$2
+           AND status IN ('ATTENDED','LATE')
+         LIMIT 1`,
+        [context.tenantId,lessonId]
+      );
+      if(completedAttendance.rowCount) {
+        throw new ConflictException(
+          "Нельзя отменить урок после фиксации посещения; используйте корректирующую операцию"
+        );
+      }
 
       const redemptions=await client.query<{
         id:string;package_id:string;
@@ -658,11 +676,10 @@ export class DanceEconomicsService {
       if(missing.rowCount)
         throw new ConflictException("У одного из тренеров не привязан сотрудник tenant membership");
 
-      const totals=await client.query<{
-        membership_id:string;gross_minor:string;
+      const accruals=await client.query<{
+        id:string;membership_id:string;amount_minor:string;
       }>(
-        `SELECT r.membership_id,
-                sum(a.amount_minor)::text AS gross_minor
+        `SELECT a.id,r.membership_id,a.amount_minor::text
          FROM trainer_compensation_accrual a
          JOIN dance_lesson l
            ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
@@ -670,38 +687,44 @@ export class DanceEconomicsService {
            ON r.tenant_id=a.tenant_id AND r.id=a.trainer_resource_id
          WHERE a.tenant_id=$1 AND a.status='APPROVED'
            AND l.starts_at>=$2 AND l.starts_at<$3
-         GROUP BY r.membership_id
-         ORDER BY r.membership_id
+         ORDER BY a.id
          FOR UPDATE OF a`,
         [context.tenantId,from,to]
       );
 
-      for(const total of totals.rows){
+      const totals=new Map<string,bigint>();
+      for(const accrual of accruals.rows){
+        totals.set(
+          accrual.membership_id,
+          (totals.get(accrual.membership_id)??0n)+BigInt(accrual.amount_minor)
+        );
+      }
+
+      for(const [membershipId,grossMinor] of totals){
         await client.query(
           `INSERT INTO payroll_accrual_line(
              tenant_id,batch_id,employee_ref,gross_minor,deduction_minor
            ) VALUES($1,$2,$3,$4,0)
            ON CONFLICT(tenant_id,batch_id,employee_ref)
-           DO UPDATE SET
-             gross_minor=payroll_accrual_line.gross_minor+EXCLUDED.gross_minor`,
-          [
-            context.tenantId,input.batchId,total.membership_id,total.gross_minor
-          ]
+           DO UPDATE SET gross_minor=
+             payroll_accrual_line.gross_minor+EXCLUDED.gross_minor`,
+          [context.tenantId,input.batchId,membershipId,grossMinor.toString()]
         );
       }
 
-      const updated=await client.query(
-        `UPDATE trainer_compensation_accrual a
-         SET status='EXPORTED',payroll_batch_id=$4
-         FROM dance_lesson l
-         WHERE a.tenant_id=$1
-           AND l.tenant_id=a.tenant_id AND l.id=a.lesson_id
-           AND a.status='APPROVED'
-           AND l.starts_at>=$2 AND l.starts_at<$3
-         RETURNING a.id`,
-        [context.tenantId,from,to,input.batchId]
-      );
-      return {trainers:totals.rowCount,accruals:updated.rowCount};
+      const ids=accruals.rows.map((row)=>row.id);
+      let exported=0;
+      if(ids.length){
+        const updated=await client.query(
+          `UPDATE trainer_compensation_accrual
+           SET status='EXPORTED',payroll_batch_id=$3
+           WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND status='APPROVED'
+           RETURNING id`,
+          [context.tenantId,ids,input.batchId]
+        );
+        exported=updated.rowCount;
+      }
+      return {trainers:totals.size,accruals:exported};
     });
   }
 
@@ -1055,9 +1078,20 @@ export class DanceEconomicsService {
       [tenantId,lesson.id]
     );
 
+    const directEarnedResult=await client.query<{amount:string}>(
+      `SELECT coalesce(sum(lp.charge_minor),0)::text AS amount
+       FROM dance_lesson_participant lp
+       WHERE lp.tenant_id=$1 AND lp.lesson_id=$2
+         AND lp.package_id IS NULL
+         AND lp.status IN ('ATTENDED','LATE','NO_SHOW','CANCELLED_LATE')`,
+      [tenantId,lesson.id]
+    );
+    const directEarned=BigInt(directEarnedResult.rows[0]?.amount??"0");
+    const packageEarned=earned>directEarned ? earned-directEarned : 0n;
+
     return {
       earned,
-      billed:BigInt(billed.rows[0]?.amount??"0")+earned,
+      billed:BigInt(billed.rows[0]?.amount??"0")+packageEarned,
       paid:BigInt(paidDirect.rows[0]?.amount??"0")+
         BigInt(packagePaid.rows[0]?.amount??"0"),
       list
