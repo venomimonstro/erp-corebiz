@@ -671,9 +671,20 @@ export class ProjectsService {
     return this.database.withTenantTransaction(context, async (client) => {
       if (input.idempotencyKey) {
         const existing = await client.query<{ id: string }>(
-          `SELECT id FROM work_project_time_entry
-           WHERE tenant_id=$1 AND idempotency_key=$2`,
-          [context.tenantId, input.idempotencyKey]
+          `SELECT e.id
+           FROM work_project_time_entry e
+           JOIN work_project p
+             ON p.tenant_id=e.tenant_id AND p.id=e.project_id
+           WHERE e.tenant_id=$1
+             AND e.idempotency_key=$2
+             AND e.project_id=$3
+             AND ($4::uuid[] IS NULL OR p.responsible_membership_id = ANY($4::uuid[]))`,
+          [
+            context.tenantId,
+            input.idempotencyKey,
+            projectId,
+            scopedMembershipIds
+          ]
         );
         if (existing.rows[0]) return existing.rows[0];
       }
@@ -745,9 +756,20 @@ export class ProjectsService {
       } catch (error) {
         if (input.idempotencyKey && this.isUniqueViolation(error)) {
           const existing = await client.query<{ id: string }>(
-            `SELECT id FROM work_project_time_entry
-             WHERE tenant_id=$1 AND idempotency_key=$2`,
-            [context.tenantId, input.idempotencyKey]
+            `SELECT e.id
+             FROM work_project_time_entry e
+             JOIN work_project p
+               ON p.tenant_id=e.tenant_id AND p.id=e.project_id
+             WHERE e.tenant_id=$1
+               AND e.idempotency_key=$2
+               AND e.project_id=$3
+               AND ($4::uuid[] IS NULL OR p.responsible_membership_id = ANY($4::uuid[]))`,
+            [
+              context.tenantId,
+              input.idempotencyKey,
+              projectId,
+              scopedMembershipIds
+            ]
           );
           if (existing.rows[0]) return existing.rows[0];
         }
