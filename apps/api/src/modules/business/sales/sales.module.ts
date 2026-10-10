@@ -5,11 +5,12 @@ import { InventoryModule } from "../inventory/inventory.module";
 import { FinanceModule } from "../finance/finance.module";
 import { GrowthModule } from "../growth/growth.module";
 import { SalesController } from "./sales.controller";
+import { SalesCommercialController } from "./sales-commercial.controller";
 import { SalesService } from "./sales.service";
 
 @Module({
   imports: [AuthorizationModule, DomainEventModule, InventoryModule, FinanceModule, GrowthModule],
-  controllers: [SalesController],
+  controllers: [SalesController, SalesCommercialController],
   providers: [SalesService],
   exports: [SalesService]
 })
