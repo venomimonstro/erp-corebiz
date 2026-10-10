@@ -102,7 +102,7 @@ JSON
 
 trap 'write_manifest "FAIL"; cleanup' ERR
 
-echo "[production-gate] 1/12 source + disposable migration release check"
+echo "[production-gate] 1/13 source + disposable migration release check"
 bash scripts/release-check.sh
 pass_step "CORE:MIGRATIONS"
 pass_step "CORE:TYPECHECK"
@@ -110,29 +110,32 @@ pass_step "CORE:TESTS"
 pass_step "CORE:BUILD"
 pass_step "CORE:STABILITY"
 
-echo "[production-gate] 2/12 tenant RLS / runtime-role ownership gate"
+echo "[production-gate] 2/13 tenant RLS / runtime-role ownership gate"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/security_tenant_rls_gate.sql
 pass_step "AUTH:RUNTIME_RLS"
 
-echo "[production-gate] 3/12 SECURITY DEFINER grant gate"
+echo "[production-gate] 3/13 SECURITY DEFINER grant gate"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/security_runtime_function_gate.sql
 pass_step "CORE:SECURITY"
 
-echo "[production-gate] 4/12 API business journey"
+echo "[production-gate] 4/13 API business journey"
 node scripts/smoke-user-journey.mjs
 pass_step "API:INTEGRATION"
 
-echo "[production-gate] 5/12 golden vertical business journeys"
+echo "[production-gate] 5/13 golden vertical business journeys"
 node scripts/golden-business-journeys.mjs
+
+echo "[production-gate] 6/13 100-user business contention simulation"
+node scripts/simulate-100-users.mjs
 pass_step "API:BUSINESS_JOURNEYS"
 
-echo "[production-gate] 6/12 public commerce / booking diagnostics"
+echo "[production-gate] 7/13 public commerce / booking diagnostics"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/public_commerce_booking_diagnostics.sql
 
-echo "[production-gate] 7/12 Finance / bank / Accounting reconciliation"
+echo "[production-gate] 8/13 Finance / bank / Accounting reconciliation"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/finance_bank_reconciliation_diagnostic.sql
 pass_step "FINANCE:RECONCILIATION"
@@ -140,18 +143,18 @@ psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/accounting_period_audit_reconcile.sql
 pass_step "ACCOUNTING:RECONCILIATION"
 
-echo "[production-gate] 8/12 WMS / 3PL reconciliation"
+echo "[production-gate] 9/13 WMS / 3PL reconciliation"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/wms_3pl_reconcile.sql
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/finance_3pl_reconcile.sql
 pass_step "WMS:RECONCILIATION"
 
-echo "[production-gate] 9/12 browser journey"
+echo "[production-gate] 10/13 browser journey"
 node scripts/smoke-browser-journey.mjs
 pass_step "API:BROWSER_SMOKE"
 
-echo "[production-gate] 10/12 backup -> restore drill"
+echo "[production-gate] 11/13 backup -> restore drill"
 DATABASE_URL="${COREBIZ_DISPOSABLE_DATABASE_URL}" \
   BACKUP_DIR="$BACKUP_DIR" \
   bash scripts/backup-postgres.sh
@@ -178,12 +181,12 @@ psql "${COREBIZ_RESTORE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -c "SELECT count(*) FROM tenant;" >/dev/null
 pass_step "CORE:RESTORE"
 
-echo "[production-gate] 11/12 noisy-neighbor / runtime pressure gate"
+echo "[production-gate] 12/13 noisy-neighbor / runtime pressure gate"
 pnpm --filter @corebiz/api exec tsx src/scripts/noisy-neighbor-gate.ts
 pass_step "CORE:NOISY_NEIGHBOR"
 pass_step "CORE:PERFORMANCE"
 
-echo "[production-gate] 12/12 release-readiness structural diagnostics"
+echo "[production-gate] 13/13 release-readiness structural diagnostics"
 echo "[production-gate] NOTE: tenant-specific readiness diagnostics must be run with app.tenant_id set for each pilot tenant."
 
 write_manifest "PASS"
