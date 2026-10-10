@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
@@ -8,6 +9,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import { randomBytes } from "node:crypto";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { AuthorizationService } from "../authorization/authorization.service";
 import {
   BUSINESS_CAPABILITIES,
   BUSINESS_VERTICAL_LIST,
@@ -21,7 +23,10 @@ type PermissionScope = "own" | "team" | "branch" | "all";
 
 @Injectable()
 export class CustomizationService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly authorization: AuthorizationService
+  ) {}
 
   async fields(
     context: TenantContext,
@@ -123,8 +128,20 @@ export class CustomizationService {
     entityType: EntityType,
     entityId: string
   ): Promise<Record<string, unknown>> {
+    const scopedMembershipIds = await this.entityScopeMembershipIds(
+      context,
+      entityType,
+      "read"
+    );
+
     return this.database.withTenantTransaction(context, async (client) => {
-      await this.assertEntity(client, context.tenantId, entityType, entityId);
+      await this.assertEntity(
+        client,
+        context.tenantId,
+        entityType,
+        entityId,
+        scopedMembershipIds
+      );
 
       const result = await client.query<{
         field_key: string;
@@ -155,8 +172,20 @@ export class CustomizationService {
     entityId: string,
     values: Record<string, unknown>
   ): Promise<void> {
+    const scopedMembershipIds = await this.entityScopeMembershipIds(
+      context,
+      entityType,
+      "write"
+    );
+
     await this.database.withTenantTransaction(context, async (client) => {
-      await this.assertEntity(client, context.tenantId, entityType, entityId);
+      await this.assertEntity(
+        client,
+        context.tenantId,
+        entityType,
+        entityId,
+        scopedMembershipIds
+      );
 
       const definitions = await client.query<{
         id: string;
@@ -947,21 +976,64 @@ export class CustomizationService {
     return selected;
   }
 
+  private async entityScopeMembershipIds(
+    context: TenantContext,
+    type: EntityType,
+    mode: "read" | "write"
+  ): Promise<string[] | null> {
+    const permissions: Record<EntityType, { read: string; write: string }> = {
+      DEAL: { read: "crm.read", write: "crm.write" },
+      PARTY: { read: "crm.read", write: "crm.write" },
+      PRODUCT: { read: "catalog.read", write: "catalog.write" },
+      SALES_ORDER: { read: "sales.read", write: "sales.write" },
+      PURCHASE_ORDER: {
+        read: "procurement.read",
+        write: "procurement.write"
+      }
+    };
+
+    const scope = await this.authorization.resolveScope(
+      context,
+      permissions[type][mode]
+    );
+    if (!scope) throw new ForbiddenException("Недостаточно прав");
+
+    // Product currently has no responsible/owner dimension. A granted catalog
+    // permission therefore applies to the tenant catalog as a whole.
+    if (type === "PRODUCT") return null;
+
+    return this.authorization.membershipIdsForScope(context, scope);
+  }
+
   private async assertEntity(
     client: PoolClient,
     tenantId: string,
     type: EntityType,
-    entityId: string
+    entityId: string,
+    scopedMembershipIds: string[] | null
   ): Promise<void> {
     const queries: Record<EntityType, string> = {
-      DEAL: "SELECT 1 FROM crm_deal WHERE tenant_id = $1 AND id = $2",
-      PARTY: "SELECT 1 FROM party WHERE tenant_id = $1 AND id = $2",
-      PRODUCT: "SELECT 1 FROM product WHERE tenant_id = $1 AND id = $2",
-      SALES_ORDER: "SELECT 1 FROM sales_order WHERE tenant_id = $1 AND id = $2",
-      PURCHASE_ORDER: "SELECT 1 FROM purchase_order WHERE tenant_id = $1 AND id = $2"
+      DEAL:
+        "SELECT 1 FROM crm_deal WHERE tenant_id=$1 AND id=$2 " +
+        "AND ($3::uuid[] IS NULL OR responsible_membership_id = ANY($3::uuid[]))",
+      PARTY:
+        "SELECT 1 FROM party WHERE tenant_id=$1 AND id=$2 " +
+        "AND ($3::uuid[] IS NULL OR responsible_membership_id = ANY($3::uuid[]))",
+      PRODUCT:
+        "SELECT 1 FROM product WHERE tenant_id=$1 AND id=$2 " +
+        "AND ($3::uuid[] IS NULL OR true)",
+      SALES_ORDER:
+        "SELECT 1 FROM sales_order WHERE tenant_id=$1 AND id=$2 " +
+        "AND ($3::uuid[] IS NULL OR responsible_membership_id = ANY($3::uuid[]))",
+      PURCHASE_ORDER:
+        "SELECT 1 FROM purchase_order WHERE tenant_id=$1 AND id=$2 " +
+        "AND ($3::uuid[] IS NULL OR responsible_membership_id = ANY($3::uuid[]))"
     };
 
-    const result = await client.query(queries[type], [tenantId, entityId]);
+    const result = await client.query(
+      queries[type],
+      [tenantId, entityId, scopedMembershipIds]
+    );
     if (!result.rowCount) {
       throw new NotFoundException("Объект для custom-полей не найден");
     }
