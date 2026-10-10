@@ -262,10 +262,40 @@ export default function DanceGroupsPage() {
     if (!name) return;
     const capacity = Number(window.prompt("Вместимость", "14") ?? "14");
     const breakEven = Number(window.prompt("Точка безубыточности, учеников", "5") ?? "5");
-    const weekday = Number(window.prompt("День недели: 1=Пн ... 7=Вс", "1") ?? "1");
-    const time = window.prompt("Время HH:MM", "18:00") ?? "18:00";
-    const [hours, minutes] = time.split(":").map(Number);
-    const startMinute = hours * 60 + minutes;
+    const scheduleRaw =
+      window.prompt(
+        "Расписание через запятую: день=HH:MM. 1=Пн ... 7=Вс",
+        "1=18:00,3=18:00"
+      ) ?? "";
+    const schedule = scheduleRaw
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        const [weekdayRaw, timeRaw] = item.split("=");
+        const weekday = Number(weekdayRaw);
+        const [hours, minutes] = String(timeRaw ?? "").split(":").map(Number);
+        return {
+          weekday,
+          startMinute: hours * 60 + minutes,
+          durationMinutes: program.default_duration_minutes
+        };
+      });
+    if (
+      !schedule.length ||
+      schedule.some(
+        (slot) =>
+          !Number.isInteger(slot.weekday) ||
+          slot.weekday < 1 ||
+          slot.weekday > 7 ||
+          !Number.isFinite(slot.startMinute) ||
+          slot.startMinute < 0 ||
+          slot.startMinute > 1439
+      )
+    ) {
+      setError("Некорректное недельное расписание");
+      return;
+    }
 
     try {
       await apiRequest("/dance/groups", {
@@ -277,16 +307,104 @@ export default function DanceGroupsPage() {
           roomResourceId: room?.id,
           capacity,
           breakEvenMembers: breakEven,
-          schedule: [{
-            weekday,
-            startMinute,
-            durationMinutes: program.default_duration_minutes
-          }]
+          schedule
         })
       });
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать группу");
+    }
+  }
+
+  async function createGroupPackage() {
+    if (!selectedGroup) return;
+    const name =
+      window.prompt(
+        "Название тарифа",
+        "Абонемент · " + selectedGroup.name
+      )?.trim();
+    if (!name) return;
+
+    const scope = (
+      window.prompt(
+        "Ограничение: GROUP = только эта группа, PROGRAM = всё направление",
+        "GROUP"
+      ) ?? "GROUP"
+    ).trim().toUpperCase();
+    if (!["GROUP", "PROGRAM"].includes(scope)) {
+      setError("Неизвестное ограничение тарифа");
+      return;
+    }
+
+    const kind = (
+      window.prompt("Тип: VISITS, PERIOD или UNLIMITED", "VISITS") ?? "VISITS"
+    ).trim().toUpperCase();
+    if (!["VISITS", "PERIOD", "UNLIMITED"].includes(kind)) {
+      setError("Неизвестный тип тарифа");
+      return;
+    }
+
+    const visits =
+      kind === "UNLIMITED"
+        ? undefined
+        : Number(window.prompt("Количество занятий", "8") ?? "8");
+    const days = Number(window.prompt("Срок, дней", "30") ?? "30");
+    const priceRub = Number(
+      (window.prompt("Цена, ₽", "6000") ?? "0").replace(",", ".")
+    );
+    const visitValueRub = Number(
+      (
+        window.prompt(
+          "Управленческая реализация одного посещения, ₽",
+          kind === "UNLIMITED"
+            ? "700"
+            : String(priceRub / Math.max(visits ?? 1, 1))
+        ) ?? "0"
+      ).replace(",", ".")
+    );
+
+    if (
+      (kind !== "UNLIMITED" &&
+        (!Number.isSafeInteger(visits) || Number(visits) < 1)) ||
+      !Number.isSafeInteger(days) ||
+      days < 1 ||
+      !Number.isFinite(priceRub) ||
+      priceRub < 0 ||
+      !Number.isFinite(visitValueRub) ||
+      visitValueRub < 0
+    ) {
+      setError("Некорректные параметры тарифа");
+      return;
+    }
+
+    try {
+      await apiRequest("/service/package-plans", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          packageKind: kind,
+          visitLimit: visits,
+          durationDays: days,
+          priceMinor: String(Math.round(priceRub * 100)),
+          managementVisitValueMinor: String(
+            Math.round(visitValueRub * 100)
+          ),
+          applicableServiceId: selectedGroup.service_id,
+          danceProgramId: selectedGroup.program_id,
+          danceGroupId:
+            scope === "GROUP" ? selectedGroup.id : undefined,
+          noShowPolicy: "CONSUME",
+          activationPolicy: "FULL_PAYMENT",
+          freezeDaysAllowed: 7,
+          makeupDaysValid: 14,
+          allowMakeup: true
+        })
+      });
+      window.alert("Тариф создан");
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Не удалось создать тариф"
+      );
     }
   }
 
@@ -618,6 +736,7 @@ export default function DanceGroupsPage() {
               <div><p className="muted">Состав группы</p><h2>{selectedGroup.name}</h2></div>
               <div className="header-actions">
                 <button className="secondary-button" onClick={() => void addMember()} type="button">+ Ученик</button>
+                <button className="secondary-button" onClick={() => void createGroupPackage()} type="button">+ Тариф группы</button>
                 <button className="secondary-button" disabled={pending} onClick={() => void syncRoster()} type="button">Синхронизировать состав</button>
                 <button disabled={pending} onClick={() => void generateLessons()} type="button">Создать занятия</button>
               </div>
