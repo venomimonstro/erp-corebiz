@@ -763,6 +763,93 @@ export default function DanceGroupsPage() {
     }
   }
 
+  async function editLesson() {
+    if (!selectedLesson) return;
+
+    const currentStart = new Date(selectedLesson.starts_at)
+      .toISOString()
+      .slice(0, 16);
+    const startsAtRaw = window.prompt(
+      "Новое начало YYYY-MM-DDTHH:MM",
+      currentStart
+    );
+    if (!startsAtRaw) return;
+
+    const trainer = trainers[
+      Number(
+        window.prompt(
+          "Тренер:\n" +
+            trainers.map((item, i) => `${i + 1}. ${item.name}`).join("\n"),
+          String(
+            Math.max(
+              1,
+              trainers.findIndex((item) => item.name === selectedLesson.trainer_name) + 1
+            )
+          )
+        )
+      ) - 1
+    ];
+    if (!trainer) return;
+
+    let roomId: string | null | undefined;
+    if (rooms.length) {
+      const roomChoice = window.prompt(
+        "Зал (0 = без зала):\n0. Без зала\n" +
+          rooms.map((item, i) => `${i + 1}. ${item.name}`).join("\n"),
+        String(
+          Math.max(
+            0,
+            rooms.findIndex((item) => item.name === selectedLesson.room_name) + 1
+          )
+        )
+      );
+      if (roomChoice === null) return;
+      const roomIndex = Number(roomChoice);
+      roomId = roomIndex === 0 ? null : rooms[roomIndex - 1]?.id;
+    }
+
+    const capacity = Number(
+      window.prompt("Вместимость", String(selectedLesson.capacity)) ??
+        String(selectedLesson.capacity)
+    );
+    const durationMinutes = Math.max(
+      5,
+      Math.round(
+        (new Date(selectedLesson.ends_at).getTime() -
+          new Date(selectedLesson.starts_at).getTime()) /
+          60000
+      )
+    );
+
+    try {
+      const updated = await apiRequest<{ version: number }>(
+        `/dance/lessons/${selectedLesson.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            startsAt: new Date(startsAtRaw).toISOString(),
+            durationMinutes,
+            trainerResourceId: trainer.id,
+            roomResourceId: roomId,
+            capacity,
+            version: selectedLesson.version
+          })
+        }
+      );
+      await load();
+      setSelectedLessonId(selectedLesson.id);
+      if (updated.version) {
+        await loadParticipants(selectedLesson.id);
+      }
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось изменить занятие"
+      );
+    }
+  }
+
   async function completeLesson() {
     if (!selectedLesson) return;
     try {
@@ -909,6 +996,7 @@ export default function DanceGroupsPage() {
                 <button className="secondary-button" onClick={() => void addParticipant()} type="button">+ Ученик</button>
                 {!["COMPLETED","CANCELLED_BY_STUDIO","CANCELLED_BY_TRAINER"].includes(selectedLesson.status) ? (
                   <>
+                    <button className="secondary-button" onClick={() => void editLesson()} type="button">Перенести / заменить</button>
                     <button className="secondary-button" onClick={() => void cancelLesson()} type="button">Отменить</button>
                     <button onClick={() => void completeLesson()} type="button">Закрыть урок</button>
                   </>
