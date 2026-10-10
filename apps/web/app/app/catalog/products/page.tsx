@@ -49,6 +49,20 @@ export default function ProductsPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("create") !== "1") return;
+
+    params.delete("create");
+    const next = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      window.location.pathname + (next ? "?" + next : "")
+    );
+    void quickCreate();
+  }, []);
+
   async function quickCreate() {
     const name = window.prompt("Название товара");
     if (!name?.trim()) return;
