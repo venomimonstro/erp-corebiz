@@ -20,7 +20,7 @@ const cart = {
 describe("public commerce safeguards", () => {
   it("rejects malformed public cart input before querying the database", async () => {
     const database = { withTenantTransaction: jest.fn(), query: jest.fn() };
-    const service = new StorefrontService(database as any, {} as any, {} as any);
+    const service = new StorefrontService(database as any, {} as any, {} as any, {} as any);
     await expect(service.setLine("key", null as any))
       .rejects.toBeInstanceOf(BadRequestException);
     await expect(service.setLine("key", { skuId: {}, quantityMilli: 1000 } as any))
@@ -65,6 +65,7 @@ describe("public commerce safeguards", () => {
     };
     const service = new StorefrontService(
       database as any,
+      {} as any,
       {} as any,
       {} as any
     );
@@ -156,7 +157,7 @@ describe("public commerce safeguards", () => {
       confirm: jest.fn()
     };
     const service = new StorefrontService(
-      database as any, parties as any, sales as any
+      database as any, parties as any, sales as any, {} as any
     );
     jest.spyOn(service as any, "resolveCart").mockResolvedValue(cart);
 
