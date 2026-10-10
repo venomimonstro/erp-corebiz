@@ -164,4 +164,38 @@ WHERE sp.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
       AND c.source_type='PACKAGE'
       AND c.source_id=sp.id
       AND c.status<>'CANCELLED'
+  )
+UNION ALL
+SELECT 'DANCE_RENT_STATEMENT_PAYABLE_MISSING',count(*)::bigint
+FROM room_rental_statement s
+JOIN room_rental_contract c
+  ON c.tenant_id=s.tenant_id AND c.id=s.contract_id
+WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND s.status='FINALIZED'
+  AND s.amount_minor>0
+  AND c.counterparty_party_id IS NOT NULL
+  AND (
+    s.obligation_id IS NULL
+    OR NOT EXISTS(
+      SELECT 1 FROM financial_obligation o
+      WHERE o.tenant_id=s.tenant_id
+        AND o.id=s.obligation_id
+        AND o.direction='PAYABLE'
+        AND o.source_type='DANCE_ROOM_RENT_STATEMENT'
+        AND o.source_id=s.id
+    )
+  )
+UNION ALL
+SELECT 'DANCE_RENT_STATEMENT_AMOUNT_MISMATCH',count(*)::bigint
+FROM room_rental_statement s
+JOIN financial_obligation o
+  ON o.tenant_id=s.tenant_id AND o.id=s.obligation_id
+WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND s.status='FINALIZED'
+  AND (
+    o.direction<>'PAYABLE'
+    OR o.source_type<>'DANCE_ROOM_RENT_STATEMENT'
+    OR o.source_id<>s.id
+    OR o.currency<>s.currency
+    OR o.amount_minor<>s.amount_minor
   );
