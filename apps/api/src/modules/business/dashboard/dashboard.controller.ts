@@ -8,6 +8,16 @@ import { DashboardService } from "./dashboard.service";
 export class DashboardController {
   constructor(private readonly dashboard: DashboardService) {}
 
+  @Get("workspace")
+  async workspace(
+    @Req() request: AuthenticatedRequest
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.dashboard.memberWorkspace(this.context(request))
+    };
+  }
+
   @Get("activation")
   @RequirePermission("dashboard.owner.read")
   async activation(
