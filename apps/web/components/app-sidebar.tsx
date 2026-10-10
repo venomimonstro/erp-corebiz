@@ -57,6 +57,7 @@ const sections: Section[] = [
     ["/app/settings/customization", "Адаптация системы", "customization"],
     ["/app/workflows", "Автоматизации", "workflows"],
     ["/app/settings/billing", "Тариф и оплата", "billing"],
+    ["/app/settings/release", "Готовность релиза", "release-readiness"],
     ["/app/support", "Поддержка", "support"]
   ] }
 ];
