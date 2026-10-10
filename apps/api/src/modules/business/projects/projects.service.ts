@@ -271,8 +271,13 @@ export class ProjectsService {
         }>(
           `SELECT party_id,responsible_membership_id
            FROM crm_deal
-           WHERE tenant_id=$1 AND id=$2`,
-          [context.tenantId, input.sourceDealId]
+           WHERE tenant_id=$1
+             AND id=$2
+             AND (
+               $3::uuid[] IS NULL
+               OR responsible_membership_id = ANY($3::uuid[])
+             )`,
+          [context.tenantId, input.sourceDealId, scopedMembershipIds]
         );
         const dealRow = deal.rows[0];
         if (!dealRow) throw new NotFoundException("Сделка не найдена");
@@ -376,8 +381,13 @@ export class ProjectsService {
           }>(
             `SELECT id,business_number,version
              FROM work_project
-             WHERE tenant_id=$1 AND source_deal_id=$2`,
-            [context.tenantId, input.sourceDealId]
+             WHERE tenant_id=$1
+               AND source_deal_id=$2
+               AND (
+                 $3::uuid[] IS NULL
+                 OR responsible_membership_id = ANY($3::uuid[])
+               )`,
+            [context.tenantId, input.sourceDealId, scopedMembershipIds]
           );
           row = existing.rows[0];
           if (row) {
@@ -414,6 +424,10 @@ export class ProjectsService {
     context: TenantContext,
     dealId: string
   ): Promise<{ id: string; number: string; version: number }> {
+    const scopedMembershipIds = await this.membershipIdsForScope(
+      context,
+      "projects.write"
+    );
     const deal = await this.database.withTenantTransaction(
       context,
       async (client) => {
@@ -426,8 +440,13 @@ export class ProjectsService {
           `SELECT
              title,amount_minor::text,party_id,responsible_membership_id
            FROM crm_deal
-           WHERE tenant_id=$1 AND id=$2`,
-          [context.tenantId, dealId]
+           WHERE tenant_id=$1
+             AND id=$2
+             AND (
+               $3::uuid[] IS NULL
+               OR responsible_membership_id = ANY($3::uuid[])
+             )`,
+          [context.tenantId, dealId, scopedMembershipIds]
         );
         const row = result.rows[0];
         if (!row) throw new NotFoundException("Сделка не найдена");
