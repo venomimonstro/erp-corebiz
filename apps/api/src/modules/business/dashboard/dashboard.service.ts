@@ -286,6 +286,323 @@ export class DashboardService {
     });
   }
 
+  async activation(
+    context: TenantContext
+  ): Promise<Record<string, unknown>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const profileResult = await client.query<{
+        profile_code: "GENERAL" | "TRADE" | "ECOMMERCE" | "SERVICE" | "WAREHOUSE_3PL";
+      }>(
+        `SELECT profile_code
+         FROM tenant_business_profile
+         WHERE tenant_id=$1`,
+        [context.tenantId]
+      );
+
+      const profile = profileResult.rows[0]?.profile_code ?? "GENERAL";
+
+      const counts = await Promise.all([
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM party
+           WHERE tenant_id=$1 AND status='ACTIVE'`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM product
+           WHERE tenant_id=$1 AND status='ACTIVE'`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM crm_deal
+           WHERE tenant_id=$1`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM sales_order
+           WHERE tenant_id=$1
+             AND order_status IN ('CONFIRMED','COMPLETED')`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM service_booking
+           WHERE tenant_id=$1
+             AND status NOT IN ('DRAFT','CANCELLED')`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM site_page_version v
+           JOIN site_page p
+             ON p.tenant_id=v.tenant_id AND p.id=v.page_id
+           WHERE v.tenant_id=$1
+             AND v.status='PUBLISHED'
+             AND p.status='ACTIVE'`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM wms_task
+           WHERE tenant_id=$1
+             AND status IN ('READY','ASSIGNED','IN_PROGRESS','DONE')`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM migration_batch
+           WHERE tenant_id=$1
+             AND status IN ('IMPORTED','RECONCILED','COMPLETED')`,
+          [context.tenantId]
+        )
+      ]);
+
+      const values = {
+        party: Number(counts[0].rows[0]?.count ?? "0"),
+        product: Number(counts[1].rows[0]?.count ?? "0"),
+        deal: Number(counts[2].rows[0]?.count ?? "0"),
+        order: Number(counts[3].rows[0]?.count ?? "0"),
+        booking: Number(counts[4].rows[0]?.count ?? "0"),
+        site: Number(counts[5].rows[0]?.count ?? "0"),
+        wmsTask: Number(counts[6].rows[0]?.count ?? "0"),
+        migration: Number(counts[7].rows[0]?.count ?? "0")
+      };
+
+      const definitions: Record<string, Array<{
+        key: string;
+        title: string;
+        detail: string;
+        href: string;
+        done: boolean;
+        firstValue?: boolean;
+      }>> = {
+        GENERAL: [
+          {
+            key: "party",
+            title: "Добавьте клиента или контрагента",
+            detail: "Единая карточка станет основой CRM, заказов и финансов.",
+            href: "/app/crm/deals",
+            done: values.party > 0
+          },
+          {
+            key: "product",
+            title: "Добавьте товар или услугу",
+            detail: "Каталог нужен для заказов, себестоимости и аналитики.",
+            href: "/app/catalog/products",
+            done: values.product > 0
+          },
+          {
+            key: "first-operation",
+            title: "Проведите первую реальную операцию",
+            detail: "Подтвердите заказ, создайте запись клиента или начните сделку.",
+            href: "/app",
+            done: values.order > 0 || values.booking > 0 || values.deal > 0,
+            firstValue: true
+          }
+        ],
+        TRADE: [
+          {
+            key: "product",
+            title: "Загрузите или добавьте ассортимент",
+            detail: "Начните с реальных SKU, цен и себестоимости.",
+            href: "/app/catalog/products",
+            done: values.product > 0
+          },
+          {
+            key: "party",
+            title: "Добавьте первого клиента",
+            detail: "Клиент будет связан с заказами и оплатами.",
+            href: "/app/crm/deals",
+            done: values.party > 0
+          },
+          {
+            key: "order",
+            title: "Подтвердите первый заказ",
+            detail: "Система начнёт показывать продажи, деньги и обязательства.",
+            href: "/app/sales/orders",
+            done: values.order > 0,
+            firstValue: true
+          }
+        ],
+        ECOMMERCE: [
+          {
+            key: "product",
+            title: "Подготовьте каталог",
+            detail: "Товары, цены и SKU используются сайтом и маркетплейсами.",
+            href: "/app/catalog/products",
+            done: values.product > 0
+          },
+          {
+            key: "site-channel",
+            title: "Подключите канал продаж или опубликуйте сайт",
+            detail: "Можно начать с собственного магазина, Ozon или Wildberries.",
+            href: values.site > 0 ? "/app/channels" : "/app/sites",
+            done: values.site > 0
+          },
+          {
+            key: "order",
+            title: "Получите и подтвердите первый заказ",
+            detail: "После этого включаются OMS, прибыльность и платёжный контур.",
+            href: "/app/sales/orders",
+            done: values.order > 0,
+            firstValue: true
+          }
+        ],
+        SERVICE: [
+          {
+            key: "service",
+            title: "Добавьте услугу",
+            detail: "Укажите длительность и цену, чтобы открыть расписание.",
+            href: "/app/catalog/products",
+            done: values.product > 0
+          },
+          {
+            key: "party",
+            title: "Добавьте первого клиента",
+            detail: "История записей и продаж будет храниться в одной карточке.",
+            href: "/app/service/bookings",
+            done: values.party > 0
+          },
+          {
+            key: "booking",
+            title: "Создайте первую запись клиента",
+            detail: "Это первая ценность сервисного рабочего места.",
+            href: "/app/service/bookings",
+            done: values.booking > 0,
+            firstValue: true
+          }
+        ],
+        WAREHOUSE_3PL: [
+          {
+            key: "product",
+            title: "Загрузите SKU",
+            detail: "Складские задания всегда работают с единым каталогом.",
+            href: "/app/catalog/products",
+            done: values.product > 0
+          },
+          {
+            key: "migration",
+            title: "Загрузите остатки или начальные данные",
+            detail: "Используйте Migration Center или фактическую приёмку.",
+            href: "/app/inventory/stock",
+            done: values.migration > 0 || values.wmsTask > 0
+          },
+          {
+            key: "wms-task",
+            title: "Запустите первое складское задание",
+            detail: "После этого склад работает через task-driven контур.",
+            href: "/app/wms",
+            done: values.wmsTask > 0,
+            firstValue: true
+          }
+        ]
+      };
+
+      const milestones = definitions[profile] ?? definitions.GENERAL;
+      const firstValueDone = milestones.some(
+        (item) => item.firstValue && item.done
+      );
+      const completed = milestones.every((item) => item.done);
+
+      const stateResult = await client.query<{
+        first_seen_at: Date;
+        first_value_at: Date | null;
+        completed_at: Date | null;
+        dismissed_at: Date | null;
+      }>(
+        `SELECT first_seen_at,first_value_at,completed_at,dismissed_at
+         FROM tenant_activation_state
+         WHERE tenant_id=$1
+         FOR UPDATE`,
+        [context.tenantId]
+      );
+
+      if (!stateResult.rows[0]) {
+        await client.query(
+          `INSERT INTO tenant_activation_state(tenant_id)
+           VALUES ($1)
+           ON CONFLICT DO NOTHING`,
+          [context.tenantId]
+        );
+      }
+
+      const state = stateResult.rows[0] ?? {
+        first_seen_at: new Date(),
+        first_value_at: null,
+        completed_at: null,
+        dismissed_at: null
+      };
+
+      const firstValueAt =
+        state.first_value_at ??
+        (firstValueDone ? new Date() : null);
+      const completedAt =
+        state.completed_at ??
+        (completed && firstValueAt ? new Date() : null);
+
+      if (
+        firstValueAt !== state.first_value_at ||
+        completedAt !== state.completed_at
+      ) {
+        await client.query(
+          `UPDATE tenant_activation_state
+           SET first_value_at=COALESCE(first_value_at,$2),
+               completed_at=COALESCE(completed_at,$3),
+               updated_at=now()
+           WHERE tenant_id=$1`,
+          [context.tenantId, firstValueAt, completedAt]
+        );
+      }
+
+      const doneCount = milestones.filter((item) => item.done).length;
+      const ttfvMinutes = firstValueAt
+        ? Math.max(
+            0,
+            Math.round(
+              (firstValueAt.getTime() - state.first_seen_at.getTime()) / 60000
+            )
+          )
+        : null;
+
+      return {
+        profile,
+        dismissed: Boolean(state.dismissed_at),
+        completed,
+        progressPercent:
+          milestones.length === 0
+            ? 100
+            : Math.round((doneCount / milestones.length) * 100),
+        doneCount,
+        total: milestones.length,
+        firstSeenAt: state.first_seen_at.toISOString(),
+        firstValueAt: firstValueAt?.toISOString() ?? null,
+        timeToFirstValueMinutes: ttfvMinutes,
+        milestones
+      };
+    });
+  }
+
+  async dismissActivation(
+    context: TenantContext,
+    dismissed: boolean
+  ): Promise<void> {
+    await this.database.withTenantTransaction(context, async (client) => {
+      await client.query(
+        `INSERT INTO tenant_activation_state(
+           tenant_id,dismissed_at,updated_at
+         ) VALUES ($1,CASE WHEN $2 THEN now() ELSE NULL END,now())
+         ON CONFLICT (tenant_id)
+         DO UPDATE SET
+           dismissed_at=CASE WHEN $2 THEN now() ELSE NULL END,
+           updated_at=now()`,
+        [context.tenantId, dismissed]
+      );
+    });
+  }
+
   async operational(
     context: TenantContext
   ): Promise<Record<string, unknown>> {
