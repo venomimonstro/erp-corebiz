@@ -270,6 +270,7 @@ export class DanceStudioService {
       partyId: string;
       birthDate?: string;
       trainingLevel?: "BEGINNER" | "INTERMEDIATE" | "ADVANCED";
+      status?: "LEAD" | "TRIAL" | "ACTIVE" | "PAUSED";
       preferredBranchId?: string;
       payerPartyId?: string;
       payerRelation?: "PARENT" | "GUARDIAN" | "PAYER";
@@ -306,12 +307,17 @@ export class DanceStudioService {
 
       const row = await client.query(
         `INSERT INTO dance_student(
-           tenant_id,party_id,birth_date,training_level,preferred_branch_id
-         ) VALUES($1,$2,$3,$4,$5)
+           tenant_id,party_id,birth_date,training_level,status,preferred_branch_id
+         ) VALUES($1,$2,$3,$4,$5,$6)
          ON CONFLICT(tenant_id,party_id)
          DO UPDATE SET
            birth_date=coalesce(EXCLUDED.birth_date,dance_student.birth_date),
            training_level=coalesce(EXCLUDED.training_level,dance_student.training_level),
+           status=CASE
+             WHEN dance_student.status IN ('LEAD','TRIAL')
+               THEN EXCLUDED.status
+             ELSE dance_student.status
+           END,
            preferred_branch_id=coalesce(EXCLUDED.preferred_branch_id,dance_student.preferred_branch_id),
            updated_at=now()
          RETURNING id,party_id,status`,
@@ -320,6 +326,7 @@ export class DanceStudioService {
           input.partyId,
           input.birthDate ?? null,
           input.trainingLevel ?? null,
+          input.status ?? "LEAD",
           input.preferredBranchId ?? null
         ]
       );
