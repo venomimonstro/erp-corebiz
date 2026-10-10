@@ -4,6 +4,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
 import { apiRequest } from "../../../../lib/api";
 
+type Customer = {
+  id: string;
+  displayName: string;
+};
+
 type Resource = {
   id: string;
   name: string;
@@ -97,6 +102,7 @@ function monthRange() {
 }
 
 export default function DanceTeamPage() {
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [accruals, setAccruals] = useState<Accrual[]>([]);
@@ -113,6 +119,7 @@ export default function DanceTeamPage() {
     try {
       const currentMonth = new Date().toISOString().slice(0, 7);
       const [
+        customerRows,
         resourceRows,
         planRows,
         accrualRows,
@@ -134,6 +141,7 @@ export default function DanceTeamPage() {
           ),
           apiRequest<Organization>("/organization")
         ]);
+      setCustomers(customerRows);
       setResources(resourceRows);
       setPlans(planRows);
       setAccruals(accrualRows);
@@ -265,6 +273,28 @@ export default function DanceTeamPage() {
       )) - 1
     ];
     if (!room) return;
+
+    let counterpartyPartyId: string | undefined;
+    if (
+      customers.length &&
+      window.confirm(
+        "Указать арендодателя? Если да, по итогам месяца будет создана кредиторка."
+      )
+    ) {
+      const landlord = customers[
+        Number(
+          window.prompt(
+            "Арендодатель:\n" +
+              customers
+                .slice(0, 80)
+                .map((item, i) => `${i + 1}. ${item.displayName}`)
+                .join("\n"),
+            "1"
+          )
+        ) - 1
+      ];
+      counterpartyPartyId = landlord?.id;
+    }
     const pricingType = (
       window.prompt("Тип аренды: HOURLY, FIXED_MONTHLY или FIXED_SLOT", "HOURLY") ?? "HOURLY"
     ).trim().toUpperCase();
@@ -289,6 +319,7 @@ export default function DanceTeamPage() {
         method: "POST",
         body: JSON.stringify({
           roomResourceId: room.id,
+          counterpartyPartyId,
           pricingType,
           hourlyRateMinor: pricingType === "HOURLY" ? String(Math.round(amountRub * 100)) : "0",
           monthlyMinor: pricingType === "FIXED_MONTHLY" ? String(Math.round(amountRub * 100)) : "0",
