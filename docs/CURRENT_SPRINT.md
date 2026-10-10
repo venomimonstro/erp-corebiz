@@ -15,7 +15,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** Sprint 74 — Pilot rollout / hypercare telemetry.  
+**Активная разработка:** Sprint 75 — Pilot stabilization backlog / exit evidence.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -821,21 +821,35 @@
 - machine-readable release-gate manifest;
 - production remains NO-GO until these gates are actually executed and recorded.
 
-## Активно — Sprint 74: Pilot rollout / hypercare telemetry
+### Sprint 74 — Pilot rollout / hypercare telemetry
+- explicit pilot enrollment per tenant;
+- cohort and business-profile snapshot;
+- PLANNED / READY / RUNNING / PAUSED / COMPLETED / STOPPED state machine;
+- approved RC prerequisite;
+- tenant readiness prerequisite;
+- formal GO / HYPERCARE prerequisite before RUNNING;
+- immutable pilot status history;
+- daily hypercare snapshots linked to enrollment;
+- pilot incident register;
+- P0 incident automatically pauses RUNNING pilot;
+- resume blocked while P0 remains open;
+- fresh GREEN snapshot required for completion;
+- immutable pilot exit review;
+- COMPLETED requires fresh PASS exit review after latest snapshot;
+- owner workspace for pilot, snapshots, incidents and exit gate.
+
+## Активно — Sprint 75: Pilot stabilization backlog / exit evidence
 
 Scope:
-- explicit pilot enrollment per tenant;
-- pilot cohort/profile snapshot;
-- PLANNED / READY / RUNNING / PAUSED / COMPLETED / STOPPED;
-- approved RC prerequisite before pilot RUNNING;
-- formal tenant GO prerequisite;
-- pilot owner and dates;
-- immutable status history;
-- hypercare health snapshots linked to pilot;
-- pilot stop conditions for P0 incidents;
-- daily operational scorecard;
-- exit gate before commercial rollout.
+- classify pilot feedback as BUG / UX / SPEC_GAP / FEATURE;
+- separate P0/P1 release blockers from product ideas;
+- link feedback to incident/support ticket/screen;
+- root-cause and remediation owner;
+- verify-fixed lifecycle;
+- require new RC evidence when a release-blocking code fix is shipped;
+- prohibit direct Core customization from one tenant request;
+- stabilization dashboard and exit backlog gate.
 
 ## Следом
 
-Sprint 75 — Pilot exit gate / stabilization backlog.
+Sprint 76 — Commercial rollout gate / cohort expansion.
