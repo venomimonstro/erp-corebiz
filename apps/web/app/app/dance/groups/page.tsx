@@ -102,6 +102,16 @@ type Roster = {
   }>;
 };
 
+type MakeupCredit = {
+  id: string;
+  student_id: string;
+  student_name: string;
+  expires_at: string;
+  program_name: string | null;
+  group_name: string | null;
+  status: string;
+};
+
 type Pack = {
   id: string;
   party_id: string;
@@ -132,6 +142,7 @@ export default function DanceGroupsPage() {
   const [resources, setResources] = useState<Resource[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [packages, setPackages] = useState<Pack[]>([]);
+  const [makeupCredits, setMakeupCredits] = useState<MakeupCredit[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState("");
   const [selectedLessonId, setSelectedLessonId] = useState("");
   const [roster, setRoster] = useState<Roster | null>(null);
@@ -144,7 +155,7 @@ export default function DanceGroupsPage() {
     const from = new Date(Date.now() - 7 * 86400000).toISOString();
     const to = new Date(Date.now() + 45 * 86400000).toISOString();
     try {
-      const [programRows, groupRows, lessonRows, studentRows, resourceRows, serviceRows, packageRows] =
+      const [programRows, groupRows, lessonRows, studentRows, resourceRows, serviceRows, packageRows, makeupRows] =
         await Promise.all([
           apiRequest<Program[]>("/dance/programs"),
           apiRequest<Group[]>("/dance/groups"),
@@ -154,7 +165,8 @@ export default function DanceGroupsPage() {
           apiRequest<Student[]>("/dance/students"),
           apiRequest<Resource[]>("/service/resources"),
           apiRequest<Service[]>("/service/catalog"),
-          apiRequest<Pack[]>("/service/packages")
+          apiRequest<Pack[]>("/service/packages"),
+          apiRequest<MakeupCredit[]>("/dance/makeup-credits")
         ]);
       setPrograms(programRows);
       setGroups(groupRows);
@@ -163,6 +175,7 @@ export default function DanceGroupsPage() {
       setResources(resourceRows);
       setServices(serviceRows);
       setPackages(packageRows);
+      setMakeupCredits(makeupRows);
       setSelectedGroupId((current) =>
         groupRows.some((item) => item.id === current) ? current : groupRows[0]?.id ?? ""
       );
@@ -571,8 +584,41 @@ export default function DanceGroupsPage() {
       const studentPackages = packages.filter(
         (pack) => pack.party_id === student.party_id && pack.status === "ACTIVE"
       );
+      const studentMakeups = makeupCredits.filter(
+        (credit) =>
+          credit.student_id === student.id &&
+          credit.status === "AVAILABLE" &&
+          new Date(credit.expires_at).getTime() >=
+            new Date(startsAt).getTime()
+      );
+      let makeupCreditId: string | undefined;
+      if (
+        studentMakeups.length &&
+        window.confirm("Использовать доступную отработку?")
+      ) {
+        const credit = studentMakeups[
+          Number(
+            window.prompt(
+              "Отработка:\n" +
+                studentMakeups
+                  .map(
+                    (item, i) =>
+                      `${i + 1}. до ${new Date(item.expires_at).toLocaleDateString("ru-RU")} · ${item.program_name ?? "любое направление"}`
+                  )
+                  .join("\n"),
+              "1"
+            )
+          ) - 1
+        ];
+        makeupCreditId = credit?.id;
+      }
+
       let packageId: string | undefined;
-      if (studentPackages.length && window.confirm("Использовать абонемент ученика?")) {
+      if (
+        !makeupCreditId &&
+        studentPackages.length &&
+        window.confirm("Использовать абонемент ученика?")
+      ) {
         const pack = studentPackages[
           Number(window.prompt(
             "Абонемент:\n" + studentPackages.map((item, i) =>
@@ -588,7 +634,11 @@ export default function DanceGroupsPage() {
         body: JSON.stringify({
           studentId: student.id,
           packageId,
-          chargeMinor: packageId ? "0" : String(Math.round(chargeRub * 100))
+          makeupCreditId,
+          chargeMinor:
+            packageId || makeupCreditId
+              ? "0"
+              : String(Math.round(chargeRub * 100))
         })
       });
       await load();
@@ -608,11 +658,44 @@ export default function DanceGroupsPage() {
     ];
     if (!student) return;
 
+    const studentMakeups = makeupCredits.filter(
+      (credit) =>
+        credit.student_id === student.id &&
+        credit.status === "AVAILABLE" &&
+        new Date(credit.expires_at).getTime() >=
+          new Date(selectedLesson.starts_at).getTime()
+    );
+    let makeupCreditId: string | undefined;
+    if (
+      studentMakeups.length &&
+      window.confirm("Использовать отработку?")
+    ) {
+      const credit = studentMakeups[
+        Number(
+          window.prompt(
+            "Отработка:\n" +
+              studentMakeups
+                .map(
+                  (item, i) =>
+                    `${i + 1}. до ${new Date(item.expires_at).toLocaleDateString("ru-RU")} · ${item.program_name ?? "любое направление"}`
+                )
+                .join("\n"),
+            "1"
+          )
+        ) - 1
+      ];
+      makeupCreditId = credit?.id;
+    }
+
     const studentPackages = packages.filter(
       (pack) => pack.party_id === student.party_id && pack.status === "ACTIVE"
     );
     let packageId: string | undefined;
-    if (studentPackages.length && window.confirm("Списать занятие из абонемента?")) {
+    if (
+      !makeupCreditId &&
+      studentPackages.length &&
+      window.confirm("Списать занятие из абонемента?")
+    ) {
       const pack = studentPackages[
         Number(window.prompt(
           "Абонемент:\n" + studentPackages.map((item, i) =>
@@ -623,7 +706,7 @@ export default function DanceGroupsPage() {
       ];
       packageId = pack?.id;
     }
-    const chargeRub = packageId
+    const chargeRub = packageId || makeupCreditId
       ? 0
       : Number((window.prompt("Стоимость разового занятия, ₽", "0") ?? "0").replace(",", "."));
 
@@ -633,6 +716,7 @@ export default function DanceGroupsPage() {
         body: JSON.stringify({
           studentId: student.id,
           packageId,
+          makeupCreditId,
           chargeMinor: String(Math.round(chargeRub * 100)),
           allowWaitlist: true
         })
