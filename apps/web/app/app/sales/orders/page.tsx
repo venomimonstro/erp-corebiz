@@ -85,6 +85,20 @@ export default function OrdersPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("create") !== "1") return;
+
+    params.delete("create");
+    const next = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      window.location.pathname + (next ? "?" + next : "")
+    );
+    void quickCreate();
+  }, []);
+
   async function confirmOrder(order: Order) {
     try {
       await apiRequest(`/sales/orders/${order.id}/confirm`, {
