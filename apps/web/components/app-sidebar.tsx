@@ -53,6 +53,7 @@ const sections: Section[] = [
     ["/app/wms/portal", "Портал 3PL", "wms-portal"]
   ] },
   { title: "Управление", items: [
+    ["/app/operations", "Что требует внимания", "operations"],
     ["/app/settings", "Настройки", "settings"],
     ["/app/settings/customization", "Адаптация системы", "customization"],
     ["/app/workflows", "Автоматизации", "workflows"],
