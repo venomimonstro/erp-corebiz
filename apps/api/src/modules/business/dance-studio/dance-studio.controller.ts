@@ -457,6 +457,32 @@ export class DanceStudioController {
     };
   }
 
+  @Get("room-statements")
+  @RequirePermission("dance.read")
+  async roomStatements(
+    @Req() req:AuthenticatedRequest,
+    @Query("month") month?:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.economics.roomStatements(this.ctx(req),month)
+    };
+  }
+
+  @Post("room-statements/finalize")
+  @RequirePermission("dance.write")
+  async finalizeRoomStatements(
+    @Req() req:AuthenticatedRequest,
+    @Body() body:{month:string}
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.economics.finalizeRoomStatements(
+        this.ctx(req),body
+      )
+    };
+  }
+
   @Get("room-contracts")
   @RequirePermission("dance.read")
   async roomContracts(
