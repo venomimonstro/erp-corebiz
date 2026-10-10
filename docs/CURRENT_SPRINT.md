@@ -719,21 +719,37 @@
 - HYPERCARE → LIVE only after blockers are rechecked;
 - Go-Live Center never deploys or changes infrastructure.
 
-## Активно — Sprint 66: Notification Center / Action Queue Unification
+### Sprint 66 — Notification Center / Action Queue Unification
+- one personal cross-domain action queue;
+- source entities remain source of truth;
+- personal UNREAD / READ / SNOOZED state only;
+- snooze automatically expires back to UNREAD;
+- task deadlines and urgency;
+- operational finance/accounting issues;
+- assigned WMS tasks and failures;
+- marketing alerts;
+- Go-Live blockers;
+- permission-aware source collection;
+- severity ordering and deep remediation links;
+- compact sidebar center with unread badge;
+- no sensitive source payload copied into notification-state storage.
+
+## Активно — Sprint 67: Data Export / Offboarding Readiness
 
 Scope:
-- one personal action queue across domains;
-- tasks / operational issues / WMS failures / marketing alerts / go-live blockers;
-- source entity remains source of truth;
-- READ / SNOOZED state is personal, never mutates business object;
-- permission-aware source collection;
-- severity ordering;
-- compact sidebar notification center;
-- deep links to remediation workspace;
-- bounded queue with no sensitive payload persistence.
+- tenant self-service export request;
+- export permission separate from ordinary read;
+- manifest with entity counts and schema version;
+- JSON/CSV business data packages;
+- no secrets/session/API credentials in export;
+- asynchronous export job state;
+- checksum and expiry metadata;
+- offboarding readiness checklist;
+- safe account deletion remains separate and never one-click;
+- audit export request/download lifecycle.
 
 ## Следом
 
-Sprint 67 — Data export / offboarding readiness.  
 Sprint 68 — Audit explorer / security session center.  
-Sprint 69 — Support knowledge / self-service telemetry.
+Sprint 69 — Support knowledge / self-service telemetry.  
+Sprint 70 — Production stabilization review.
