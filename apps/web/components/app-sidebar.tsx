@@ -53,7 +53,8 @@ const permissionByKey: Record<string,string> = {
   "go-live": "go_live.read",
   support: "support.read",
   "data-management": "data.export",
-  "security-center": "audit.read"
+  "security-center": "audit.read",
+  "runtime-pressure": "runtime.pressure.read"
 };
 
 const capabilityByKey: Record<string,string> = {
@@ -148,6 +149,7 @@ const sections: Section[] = [
     ["/app/settings/go-live", "Go-Live Center", "go-live"],
     ["/app/settings/data", "Экспорт данных", "data-management"],
     ["/app/settings/security", "Безопасность и аудит", "security-center"],
+    ["/app/settings/runtime-pressure", "Нагрузка системы", "runtime-pressure"],
     ["/app/support", "Поддержка", "support"]
   ] }
 ];
