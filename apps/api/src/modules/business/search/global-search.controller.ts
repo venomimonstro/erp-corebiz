@@ -5,6 +5,7 @@ import {
   Req
 } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
+import { ApiCost } from "../../../infrastructure/http/api-cost.decorator";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { GlobalSearchService } from "./global-search.service";
 
@@ -13,6 +14,7 @@ export class GlobalSearchController {
   constructor(private readonly searchService: GlobalSearchService) {}
 
   @Get()
+  @ApiCost("SEARCH")
   async search(
     @Req() request: AuthenticatedRequest,
     @Query("q") query: string
