@@ -379,23 +379,44 @@ export class SiteFormsService {
       if(!requestedResource && resourceIds.length!==1)
         throw new BadRequestException("Выберите специалиста или ресурс");
 
-      const customer=await this.parties.create(context,{
-        displayName:payload.name,
-        phone:payload.phone??undefined,
-        email:payload.email??undefined,
-        responsibleMembershipId:responsible,
-        idempotencyKey:"site-submission-party:"+existing.id
-      });
-
+      // Reserve the scarce slot before creating CRM data. Under a concurrent
+      // public race only the winner creates a Party; losers receive a clean
+      // conflict instead of leaving orphan customer cards.
       const booking=await this.bookings.createBooking(context,{
         serviceId,
         resourceIds:requestedResource?[requestedResource]:resourceIds,
         startsAt:startsAt.toISOString(),
-        partyId:customer.id,
         source:"PUBLIC_SITE",
         notes:payload.message??undefined,
         idempotencyKey:"site-submission:"+existing.id
       });
+
+      try {
+        const customer=await this.parties.create(context,{
+          displayName:payload.name,
+          phone:payload.phone??undefined,
+          email:payload.email??undefined,
+          responsibleMembershipId:responsible,
+          idempotencyKey:"site-submission-party:"+existing.id
+        });
+
+        await this.bookings.attachParty(context,booking.id,customer.id);
+      } catch (error) {
+        // Do not keep a ghost slot when CRM/customer linking failed after the
+        // atomic booking reservation. Cancellation also makes capacity free.
+        try {
+          await this.bookings.setStatus(
+            context,
+            booking.id,
+            "CANCELLED",
+            booking.version
+          );
+        } catch {
+          // Preserve the original failure. Release diagnostics will surface
+          // any impossible cancellation separately.
+        }
+        throw error;
+      }
 
       await this.complete(row.tenant_id,existing.id,"SERVICE_BOOKING",booking.id);
       return {accepted:true,submissionId:existing.id,resultType:"SERVICE_BOOKING",resultId:booking.id};
