@@ -367,7 +367,8 @@ export class StorefrontService {
           displayName: name,
           ...(phone ? { phone } : {}),
           ...(email ? { email } : {}),
-          responsibleMembershipId: config.responsible_membership_id
+          responsibleMembershipId: config.responsible_membership_id,
+          idempotencyKey: "storefront-party:" + cart.cart_id
         });
         customerId = customer.id;
         await this.database.withTenantTransaction(context, async (client) => {
