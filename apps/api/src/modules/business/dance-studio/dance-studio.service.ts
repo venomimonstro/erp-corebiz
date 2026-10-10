@@ -992,6 +992,72 @@ export class DanceStudioService {
     });
   }
 
+  async addPackageBeneficiary(
+    context:TenantContext,
+    packageId:string,
+    input:{studentId:string}
+  ){
+    const scopeIds=await this.scopeIds(context,"dance.write");
+    return this.database.withTenantTransaction(context,async client=>{
+      const pack=await client.query<{
+        payer_party_id:string|null;
+        party_id:string;
+        package_kind_snapshot:string;
+        family_eligible:boolean;
+      }>(
+        `SELECT
+           sp.payer_party_id,sp.party_id,sp.package_kind_snapshot,
+           plan.family_eligible
+         FROM service_package sp
+         JOIN service_package_plan plan
+           ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
+         JOIN party owner
+           ON owner.tenant_id=sp.tenant_id AND owner.id=sp.party_id
+         WHERE sp.tenant_id=$1 AND sp.id=$2
+           AND sp.status IN ('PENDING_PAYMENT','ACTIVE')
+           AND (
+             $3::uuid[] IS NULL
+             OR owner.responsible_membership_id = ANY($3::uuid[])
+           )
+         FOR UPDATE OF sp`,
+        [context.tenantId,packageId,scopeIds]
+      );
+      const row=pack.rows[0];
+      if(!row) throw new NotFoundException("Абонемент не найден");
+      if(row.package_kind_snapshot!=="FAMILY"&&!row.family_eligible)
+        throw new ConflictException("Тариф не разрешает семейных бенефициаров");
+
+      const student=await this.assertStudentAccess(
+        client,context.tenantId,input.studentId,scopeIds
+      );
+      const payer=row.payer_party_id??row.party_id;
+      if(student.party_id!==row.party_id){
+        const relation=await client.query(
+          `SELECT 1 FROM party_relationship
+           WHERE tenant_id=$1 AND from_party_id=$2 AND to_party_id=$3
+             AND relation_type IN ('PAYER','PARENT','GUARDIAN','FAMILY_MEMBER')
+             AND (ends_on IS NULL OR ends_on>=current_date)`,
+          [context.tenantId,student.party_id,payer]
+        );
+        if(!relation.rowCount)
+          throw new ConflictException(
+            "Ученик не связан с плательщиком семейного абонемента"
+          );
+      }
+
+      const result=await client.query(
+        `INSERT INTO service_package_beneficiary(
+           tenant_id,package_id,party_id,status,created_by_membership_id
+         ) VALUES($1,$2,$3,'ACTIVE',$4)
+         ON CONFLICT(tenant_id,package_id,party_id)
+         DO UPDATE SET status='ACTIVE',updated_at=now()
+         RETURNING id,party_id,status`,
+        [context.tenantId,packageId,student.party_id,context.membershipId]
+      );
+      return result.rows[0];
+    });
+  }
+
   async freezePackage(
     context:TenantContext,
     packageId:string,
@@ -1363,11 +1429,16 @@ export class DanceStudioService {
       dance_program_id_snapshot:string|null;
       dance_group_id_snapshot:string|null;
       applicable_service_id:string|null;
+      activation_policy_snapshot:"FULL_PAYMENT"|"IMMEDIATE"|"PROPORTIONAL"|"GRACE_PERIOD";
+      allowed_debt_minor_snapshot:string;
+      price_minor_snapshot:string;
     }>(
       `SELECT
          sp.party_id,sp.starts_at,sp.expires_at,sp.visit_limit_snapshot,
          sp.reserved_visits,sp.used_visits,sp.dance_program_id_snapshot,
-         sp.dance_group_id_snapshot,plan.applicable_service_id
+         sp.dance_group_id_snapshot,plan.applicable_service_id,
+         sp.activation_policy_snapshot,sp.allowed_debt_minor_snapshot::text,
+         sp.price_minor_snapshot::text
        FROM service_package sp
        JOIN service_package_plan plan
          ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
@@ -1377,10 +1448,21 @@ export class DanceStudioService {
     );
     const row=result.rows[0];
     if(!row) throw new NotFoundException("Активный абонемент не найден");
-    if(row.party_id!==studentPartyId)
-      throw new ConflictException("Абонемент принадлежит другому ученику");
+
+    if(row.party_id!==studentPartyId){
+      const beneficiary=await client.query(
+        `SELECT 1 FROM service_package_beneficiary
+         WHERE tenant_id=$1 AND package_id=$2 AND party_id=$3
+           AND status='ACTIVE'`,
+        [tenantId,packageId,studentPartyId]
+      );
+      if(!beneficiary.rowCount)
+        throw new ConflictException("Ученик не является бенефициаром абонемента");
+    }
+
     if(lesson.starts_at<row.starts_at||lesson.starts_at>=row.expires_at)
       throw new ConflictException("Урок вне срока действия абонемента");
+
     const frozen=await client.query(
       `SELECT 1 FROM service_package_freeze
        WHERE tenant_id=$1 AND package_id=$2 AND status='APPLIED'
@@ -1388,15 +1470,122 @@ export class DanceStudioService {
       [tenantId,packageId,lesson.starts_at]
     );
     if(frozen.rowCount) throw new ConflictException("Абонемент заморожен на дату урока");
+
     if(row.dance_program_id_snapshot&&row.dance_program_id_snapshot!==lesson.program_id)
       throw new ConflictException("Абонемент не действует на это направление");
     if(row.dance_group_id_snapshot&&row.dance_group_id_snapshot!==lesson.group_id)
       throw new ConflictException("Абонемент не действует на эту группу");
     if(row.applicable_service_id&&row.applicable_service_id!==lesson.service_id)
       throw new ConflictException("Абонемент не действует на эту услугу");
+
+    const charge=await client.query<{
+      amount_minor:string;
+      settled_minor:string;
+      due_at:Date|null;
+    }>(
+      `SELECT c.amount_minor::text,
+              coalesce(o.settled_minor,0)::text AS settled_minor,
+              o.due_at
+       FROM dance_student_charge c
+       JOIN financial_obligation o
+         ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
+       WHERE c.tenant_id=$1
+         AND c.source_type='PACKAGE'
+         AND c.source_id=$2
+         AND c.status<>'CANCELLED'
+       LIMIT 1
+       FOR UPDATE OF o`,
+      [tenantId,packageId]
+    );
+    const chargeRow=charge.rows[0];
+    if(chargeRow){
+      const total=BigInt(chargeRow.amount_minor);
+      const settled=BigInt(chargeRow.settled_minor);
+      const remaining=total-settled;
+
+      if(
+        row.activation_policy_snapshot==="PROPORTIONAL" &&
+        row.visit_limit_snapshot!==null &&
+        total>0n
+      ){
+        const allowedVisits=Number(
+          BigInt(row.visit_limit_snapshot)*settled/total
+        );
+        if(row.reserved_visits+row.used_visits>=allowedVisits){
+          throw new ConflictException(
+            "Оплаченной части абонемента недостаточно для следующего посещения"
+          );
+        }
+      }
+
+      if(
+        row.activation_policy_snapshot==="GRACE_PERIOD" &&
+        chargeRow.due_at &&
+        new Date(chargeRow.due_at).getTime()<Date.now() &&
+        remaining>BigInt(row.allowed_debt_minor_snapshot)
+      ){
+        throw new ConflictException(
+          "Просроченная задолженность превышает разрешённый лимит"
+        );
+      }
+    }
+
     if(row.visit_limit_snapshot!==null&&
        row.reserved_visits+row.used_visits>=row.visit_limit_snapshot)
       throw new ConflictException("В абонементе закончились посещения");
+
+    const entitlementCount=await client.query<{count:number}>(
+      `SELECT count(*)::integer AS count
+       FROM service_package_entitlement
+       WHERE tenant_id=$1 AND package_id=$2`,
+      [tenantId,packageId]
+    );
+
+    let entitlementId:string|null=null;
+    if((entitlementCount.rows[0]?.count??0)>0){
+      const entitlement=await client.query<{
+        id:string;
+        visit_limit_snapshot:number|null;
+        reserved_visits:number;
+        used_visits:number;
+      }>(
+        `SELECT id,visit_limit_snapshot,reserved_visits,used_visits
+         FROM service_package_entitlement
+         WHERE tenant_id=$1 AND package_id=$2
+           AND (lesson_type IS NULL OR lesson_type=$3)
+           AND (dance_program_id IS NULL OR dance_program_id=$4)
+           AND (dance_group_id IS NULL OR dance_group_id=$5)
+         ORDER BY
+           (
+             CASE WHEN lesson_type IS NULL THEN 0 ELSE 1 END +
+             CASE WHEN dance_program_id IS NULL THEN 0 ELSE 2 END +
+             CASE WHEN dance_group_id IS NULL THEN 0 ELSE 4 END
+           ) DESC,
+           priority,id
+         LIMIT 1
+         FOR UPDATE`,
+        [
+          tenantId,packageId,lesson.lesson_type,
+          lesson.program_id??null,lesson.group_id??null
+        ]
+      );
+      const bucket=entitlement.rows[0];
+      if(!bucket)
+        throw new ConflictException("Абонемент не содержит подходящей квоты");
+      if(
+        bucket.visit_limit_snapshot!==null &&
+        bucket.reserved_visits+bucket.used_visits>=bucket.visit_limit_snapshot
+      ){
+        throw new ConflictException("Квота этого типа занятий исчерпана");
+      }
+      entitlementId=bucket.id;
+      await client.query(
+        `UPDATE service_package_entitlement
+         SET reserved_visits=reserved_visits+1
+         WHERE tenant_id=$1 AND id=$2`,
+        [tenantId,entitlementId]
+      );
+    }
 
     await client.query(
       "UPDATE service_package SET reserved_visits=reserved_visits+1,updated_at=now() WHERE tenant_id=$1 AND id=$2",
@@ -1404,9 +1593,9 @@ export class DanceStudioService {
     );
     await client.query(
       `INSERT INTO dance_package_redemption(
-         tenant_id,package_id,participant_id,state
-       ) VALUES($1,$2,$3,'RESERVED')`,
-      [tenantId,packageId,participantId]
+         tenant_id,package_id,participant_id,package_entitlement_id,state
+       ) VALUES($1,$2,$3,$4,'RESERVED')`,
+      [tenantId,packageId,participantId,entitlementId]
     );
   }
 
