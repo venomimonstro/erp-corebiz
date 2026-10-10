@@ -1,12 +1,14 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { AuthorizationService } from "../../platform/authorization/authorization.service";
 
 type ResourceType =
   | "EMPLOYEE"
@@ -20,9 +22,13 @@ type ResourceType =
 
 @Injectable()
 export class ResourcesService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly authorization: AuthorizationService
+  ) {}
 
   async list(context: TenantContext): Promise<Array<Record<string, unknown>>> {
+    const access = await this.serviceScope(context, "service.read");
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `SELECT
@@ -50,9 +56,14 @@ export class ResourcesService {
            ON s.tenant_id = rs.tenant_id AND s.id = rs.skill_id
          WHERE r.tenant_id = $1
            AND r.status = 'ACTIVE'
+           AND (
+             $2::uuid[] IS NULL
+             OR r.membership_id IS NULL
+             OR r.membership_id = ANY($2::uuid[])
+           )
          GROUP BY r.id, b.name
          ORDER BY r.type, r.name`,
-        [context.tenantId]
+        [context.tenantId, access.membershipIds]
       );
 
       return result.rows;
@@ -87,6 +98,16 @@ export class ResourcesService {
     const cost = input.costPerHourMinor ?? "0";
     if (!/^\d+$/.test(cost)) {
       throw new BadRequestException("Некорректная стоимость часа");
+    }
+
+    const access = await this.serviceScope(context, "service.write");
+    if (
+      access.membershipIds !== null &&
+      (!input.membershipId || !access.membershipIds.includes(input.membershipId))
+    ) {
+      throw new ForbiddenException(
+        "Можно создавать только собственный ресурс сотрудника"
+      );
     }
 
     return this.database.withTenantTransaction(context, async (client) => {
@@ -158,6 +179,12 @@ export class ResourcesService {
     context: TenantContext,
     input: { code: string; name: string }
   ): Promise<{ id: string }> {
+    const access = await this.serviceScope(context, "service.write");
+    if (access.scope !== "all") {
+      throw new ForbiddenException(
+        "Справочник навыков доступен только администратору сервиса"
+      );
+    }
     const code = input.code.trim().toUpperCase();
     const name = input.name.trim();
 
@@ -197,8 +224,15 @@ export class ResourcesService {
       throw new BadRequestException("Уровень навыка должен быть от 1 до 5");
     }
 
+    const access = await this.serviceScope(context, "service.write");
     await this.database.withTenantTransaction(context, async (client) => {
-      await this.assertResource(client, context.tenantId, resourceId);
+      await this.assertResource(
+        client,
+        context.tenantId,
+        resourceId,
+        access.membershipIds,
+        access.scope === "all"
+      );
       const skill = await client.query(
         `SELECT 1 FROM service_skill
          WHERE tenant_id = $1 AND id = $2 AND status = 'ACTIVE'`,
@@ -247,8 +281,15 @@ export class ResourcesService {
       }
     }
 
+    const access = await this.serviceScope(context, "service.write");
     await this.database.withTenantTransaction(context, async (client) => {
-      await this.assertResource(client, context.tenantId, resourceId);
+      await this.assertResource(
+        client,
+        context.tenantId,
+        resourceId,
+        access.membershipIds,
+        access.scope === "all"
+      );
 
       await client.query(
         `DELETE FROM service_resource_schedule
@@ -289,8 +330,15 @@ export class ResourcesService {
     context: TenantContext,
     resourceId: string
   ): Promise<Array<Record<string, unknown>>> {
+    const access = await this.serviceScope(context, "service.read");
     return this.database.withTenantTransaction(context, async (client) => {
-      await this.assertResource(client, context.tenantId, resourceId);
+      await this.assertResource(
+        client,
+        context.tenantId,
+        resourceId,
+        access.membershipIds,
+        true
+      );
       const result = await client.query(
         `SELECT id, weekday, start_minute, end_minute, valid_from, valid_to
          FROM service_resource_schedule
@@ -323,8 +371,15 @@ export class ResourcesService {
       throw new BadRequestException("Некорректный период недоступности");
     }
 
+    const access = await this.serviceScope(context, "service.write");
     return this.database.withTenantTransaction(context, async (client) => {
-      await this.assertResource(client, context.tenantId, resourceId);
+      await this.assertResource(
+        client,
+        context.tenantId,
+        resourceId,
+        access.membershipIds,
+        access.scope === "all"
+      );
 
       const result = await client.query<{ id: string }>(
         `INSERT INTO service_resource_block(
@@ -353,8 +408,15 @@ export class ResourcesService {
     from?: string,
     to?: string
   ): Promise<Array<Record<string, unknown>>> {
+    const access = await this.serviceScope(context, "service.read");
     return this.database.withTenantTransaction(context, async (client) => {
-      await this.assertResource(client, context.tenantId, resourceId);
+      await this.assertResource(
+        client,
+        context.tenantId,
+        resourceId,
+        access.membershipIds,
+        true
+      );
 
       const fromDate = from ? new Date(from) : new Date();
       const toDate = to
@@ -376,15 +438,43 @@ export class ResourcesService {
     });
   }
 
+  private async serviceScope(
+    context: TenantContext,
+    permission: "service.read" | "service.write"
+  ): Promise<{
+    scope: "own" | "team" | "branch" | "all";
+    membershipIds: string[] | null;
+  }> {
+    const scope = await this.authorization.resolveScope(context, permission);
+    if (!scope) throw new ForbiddenException("Недостаточно прав");
+    return {
+      scope,
+      membershipIds: await this.authorization.membershipIdsForScope(
+        context,
+        scope
+      )
+    };
+  }
+
   private async assertResource(
     client: PoolClient,
     tenantId: string,
-    resourceId: string
+    resourceId: string,
+    scopedMembershipIds: string[] | null,
+    allowShared: boolean
   ): Promise<void> {
     const result = await client.query(
-      `SELECT 1 FROM service_resource
-       WHERE tenant_id = $1 AND id = $2 AND status = 'ACTIVE'`,
-      [tenantId, resourceId]
+      `SELECT 1
+       FROM service_resource
+       WHERE tenant_id=$1
+         AND id=$2
+         AND status='ACTIVE'
+         AND (
+           $3::uuid[] IS NULL
+           OR membership_id = ANY($3::uuid[])
+           OR ($4::boolean AND membership_id IS NULL)
+         )`,
+      [tenantId, resourceId, scopedMembershipIds, allowShared]
     );
     if (!result.rowCount) throw new NotFoundException("Ресурс не найден");
   }
