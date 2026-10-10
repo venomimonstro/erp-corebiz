@@ -93,7 +93,8 @@ describe("public commerce safeguards", () => {
     const service = new StorefrontService(
       database as any,
       parties as any,
-      sales as any
+      sales as any,
+      {} as any
     );
     jest.spyOn(service as any, "resolveCart").mockResolvedValue(cart);
 
@@ -198,7 +199,7 @@ describe("public commerce safeguards", () => {
     const parties = { create: jest.fn() };
     const sales = { create: jest.fn(), confirm: jest.fn() };
     const service = new StorefrontService(
-      database as any, parties as any, sales as any
+      database as any, parties as any, sales as any, {} as any
     );
     jest.spyOn(service as any, "resolveCart").mockResolvedValue(cart);
 
