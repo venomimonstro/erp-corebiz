@@ -36,6 +36,7 @@ export class SupportController {
       priority?: "LOW" | "NORMAL" | "HIGH" | "URGENT";
       category?: string;
       contextUrl?: string;
+      knowledgeSearchId?: string;
     }
   ): Promise<ApiSuccess<unknown>> {
     return {
@@ -95,6 +96,64 @@ export class SupportController {
     return {
       ok: true,
       data: await this.support.registerAttachment(this.context(request), body)
+    };
+  }
+
+  @Post("knowledge/search")
+  @RequirePermission("support.read")
+  async trackedKnowledge(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: { query: string; contextUrl?: string }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.support.trackedKnowledgeSearch(
+        this.context(request),
+        body
+      )
+    };
+  }
+
+  @Post("knowledge/search/:id/select")
+  @RequirePermission("support.read")
+  async knowledgeSelect(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: { articleId: string }
+  ): Promise<ApiSuccess<{ updated: true }>> {
+    await this.support.markKnowledgeSelection(
+      this.context(request),
+      id,
+      body.articleId
+    );
+    return { ok: true, data: { updated: true } };
+  }
+
+  @Post("knowledge/search/:id/feedback")
+  @RequirePermission("support.read")
+  async knowledgeFeedback(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: { helpful: boolean }
+  ): Promise<ApiSuccess<{ updated: true }>> {
+    await this.support.knowledgeFeedback(
+      this.context(request),
+      id,
+      body.helpful === true
+    );
+    return { ok: true, data: { updated: true } };
+  }
+
+  @Get("knowledge/telemetry")
+  @RequirePermission("support.telemetry.read")
+  async knowledgeTelemetry(
+    @Req() request: AuthenticatedRequest
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.support.knowledgeTelemetry(
+        this.context(request)
+      )
     };
   }
 
