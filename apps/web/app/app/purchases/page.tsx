@@ -89,6 +89,21 @@ export default function PurchasesPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (loading) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("create") !== "1") return;
+
+    params.delete("create");
+    const next = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      window.location.pathname + (next ? "?" + next : "")
+    );
+    void createPurchase();
+  }, [loading]);
+
   async function createSupplier() {
     const name = window.prompt("Название поставщика");
     if (!name?.trim()) return;
