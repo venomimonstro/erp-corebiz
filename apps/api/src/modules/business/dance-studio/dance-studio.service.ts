@@ -340,12 +340,8 @@ export class DanceStudioService {
            s.id,s.party_id,p.display_name,s.birth_date,s.training_level,
            s.status,s.preferred_branch_id,s.joined_at,s.first_lesson_at,
            payer.id AS payer_party_id,payer.display_name AS payer_name,
-           coalesce(sum(c.amount_minor-coalesce(o.settled_minor,0)) FILTER (
-             WHERE c.status IN ('OPEN','PARTIALLY_PAID')
-           ),0)::text AS debt_minor,
-           count(distinct gm.group_id) FILTER (
-             WHERE gm.status IN ('TRIAL','ACTIVE','PAUSED')
-           )::integer AS active_groups
+           debt.debt_minor,
+           groups.active_groups
          FROM dance_student s
          JOIN party p
            ON p.tenant_id=s.tenant_id AND p.id=s.party_id
@@ -361,12 +357,29 @@ export class DanceStudioService {
            ORDER BY rel.is_primary DESC,rel.created_at
            LIMIT 1
          ) payer ON true
-         LEFT JOIN dance_student_charge c
-           ON c.tenant_id=s.tenant_id AND c.student_id=s.id
-         LEFT JOIN financial_obligation o
-           ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
-         LEFT JOIN dance_group_member gm
-           ON gm.tenant_id=s.tenant_id AND gm.student_id=s.id
+         LEFT JOIN LATERAL (
+           SELECT
+             coalesce(
+               sum(c.amount_minor-coalesce(o.settled_minor,0)) FILTER (
+                 WHERE c.status IN ('OPEN','PARTIALLY_PAID')
+               ),
+               0
+             )::text AS debt_minor
+           FROM dance_student_charge c
+           LEFT JOIN financial_obligation o
+             ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
+           WHERE c.tenant_id=s.tenant_id
+             AND c.student_id=s.id
+         ) debt ON true
+         LEFT JOIN LATERAL (
+           SELECT
+             count(DISTINCT gm.group_id) FILTER (
+               WHERE gm.status IN ('TRIAL','ACTIVE','PAUSED')
+             )::integer AS active_groups
+           FROM dance_group_member gm
+           WHERE gm.tenant_id=s.tenant_id
+             AND gm.student_id=s.id
+         ) groups ON true
          WHERE s.tenant_id=$1 AND s.status<>'ARCHIVED'
            AND (
              $2::uuid[] IS NULL
@@ -384,7 +397,6 @@ export class DanceStudioService {
                  AND tr2.membership_id = ANY($2::uuid[])
              )
            )
-         GROUP BY s.id,p.id,payer.id,payer.display_name
          ORDER BY p.display_name`,
         [context.tenantId, scopeIds]
       );
