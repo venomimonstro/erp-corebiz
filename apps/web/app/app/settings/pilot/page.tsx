@@ -65,6 +65,22 @@ type Overview = {
     warnings: unknown[];
     captured_at: string;
   }>;
+  feedback: Array<{
+    id: string;
+    category: "BUG" | "UX" | "SPEC_GAP" | "FEATURE";
+    priority: "P0" | "P1" | "P2" | "P3" | "P4";
+    disposition: "CORE" | "MODULE" | "CONFIG" | "EXTENSION" | "REJECT" | null;
+    status: string;
+    release_blocking: boolean;
+    title: string;
+    description: string | null;
+    screen_path: string | null;
+    root_cause: string | null;
+    remediation: string | null;
+    fix_version: string | null;
+    verification_reference: string | null;
+    created_at: string;
+  }>;
   exitReviews: Array<{
     id: string;
     decision: "PASS" | "BLOCKED";
@@ -198,6 +214,131 @@ export default function PilotPage() {
     }
   }
 
+  async function createFeedback() {
+    const category = (
+      window.prompt("Категория: BUG, UX, SPEC_GAP, FEATURE", "BUG") ?? ""
+    ).toUpperCase();
+    if (!["BUG","UX","SPEC_GAP","FEATURE"].includes(category)) return;
+
+    const priority = (
+      window.prompt("Приоритет: P0, P1, P2, P3, P4", "P2") ?? ""
+    ).toUpperCase();
+    if (!["P0","P1","P2","P3","P4"].includes(priority)) return;
+
+    const title = window.prompt("Кратко опишите проблему / запрос");
+    if (!title?.trim()) return;
+
+    const description = window.prompt("Детали, ожидаемое и фактическое поведение") ?? "";
+
+    setBusy("feedback");
+    try {
+      await apiRequest("/pilot/feedback", {
+        method: "POST",
+        body: JSON.stringify({
+          category,
+          priority,
+          title: title.trim(),
+          description: description.trim() || undefined,
+          screenPath: window.location.pathname
+        })
+      });
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Не удалось добавить feedback"
+      );
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function triageFeedback(item: Overview["feedback"][number]) {
+    const disposition = (
+      window.prompt(
+        "Решение: CORE, MODULE, CONFIG, EXTENSION, REJECT",
+        item.category === "BUG" ? "CORE" : "CONFIG"
+      ) ?? ""
+    ).toUpperCase();
+
+    if (!["CORE","MODULE","CONFIG","EXTENSION","REJECT"].includes(disposition)) {
+      return;
+    }
+
+    const rootCause = window.prompt("Root cause / почему возникло") ?? "";
+    const remediation = window.prompt("Что именно нужно сделать") ?? "";
+
+    setBusy("triage");
+    try {
+      await apiRequest("/pilot/feedback/" + item.id + "/triage", {
+        method: "POST",
+        body: JSON.stringify({
+          disposition,
+          rootCause: rootCause.trim() || undefined,
+          remediation: remediation.trim() || undefined
+        })
+      });
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Не удалось triage feedback"
+      );
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function advanceFeedback(item: Overview["feedback"][number]) {
+    const next =
+      item.status === "TRIAGED"
+        ? "IN_PROGRESS"
+        : item.status === "IN_PROGRESS"
+          ? "VERIFY"
+          : item.status === "VERIFY"
+            ? "DONE"
+            : null;
+
+    if (!next) return;
+
+    let fixVersion: string | undefined = item.fix_version ?? undefined;
+    let verificationReference: string | undefined;
+
+    if (next === "VERIFY" && item.release_blocking) {
+      fixVersion =
+        window.prompt(
+          "Версия / commit release candidate с исправлением",
+          fixVersion ?? ""
+        )?.trim() || undefined;
+      if (!fixVersion) return;
+    }
+
+    if (next === "DONE") {
+      verificationReference =
+        window.prompt(
+          "Verification evidence: тест, лог, ссылка или описание"
+        )?.trim() || undefined;
+      if (!verificationReference) return;
+    }
+
+    setBusy("advance");
+    try {
+      await apiRequest("/pilot/feedback/" + item.id + "/advance", {
+        method: "POST",
+        body: JSON.stringify({
+          status: next,
+          fixVersion,
+          verificationReference
+        })
+      });
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Переход feedback заблокирован"
+      );
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function openIncident() {
     const severity = (
       window.prompt("Severity: P0, P1, P2, P3", "P1") ?? ""
@@ -291,6 +432,13 @@ export default function PilotPage() {
                   Снять snapshot
                 </button>
                 <button
+                  className="secondary-button"
+                  disabled={busy !== ""}
+                  onClick={() => void createFeedback()}
+                >
+                  + Feedback
+                </button>
+                <button
                   disabled={busy !== ""}
                   onClick={() => void openIncident()}
                 >
@@ -373,6 +521,68 @@ export default function PilotPage() {
                     → {status}
                   </button>
                 ))}
+              </div>
+            </section>
+
+            <section className="section-block">
+              <div className="section-heading">
+                <div>
+                  <p className="muted">80 / 15 / 5 product discipline</p>
+                  <h2>Stabilization backlog</h2>
+                </div>
+              </div>
+              <div className="data-table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Приоритет</th>
+                      <th>Тип</th>
+                      <th>Проблема</th>
+                      <th>Решение</th>
+                      <th>Статус</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.feedback.map((item) => (
+                      <tr key={item.id}>
+                        <td>
+                          <strong>{item.priority}</strong>
+                          {item.release_blocking ? <small>release blocker</small> : null}
+                        </td>
+                        <td>{item.category}</td>
+                        <td>
+                          <strong>{item.title}</strong>
+                          {item.description ? <small>{item.description}</small> : null}
+                        </td>
+                        <td>
+                          {item.disposition ?? "Не классифицирован"}
+                          {item.fix_version ? <small>fix {item.fix_version}</small> : null}
+                        </td>
+                        <td><span className="status-pill">{item.status}</span></td>
+                        <td className="table-actions">
+                          {item.status === "NEW" ? (
+                            <button
+                              className="secondary-button"
+                              disabled={busy !== ""}
+                              onClick={() => void triageFeedback(item)}
+                            >
+                              Triage
+                            </button>
+                          ) : null}
+                          {["TRIAGED","IN_PROGRESS","VERIFY"].includes(item.status) ? (
+                            <button
+                              disabled={busy !== ""}
+                              onClick={() => void advanceFeedback(item)}
+                            >
+                              Далее
+                            </button>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </section>
 
