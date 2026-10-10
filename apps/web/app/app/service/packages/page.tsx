@@ -186,6 +186,72 @@ export default function ServicePackagesPage() {
       "Списывать посещение при no-show?"
     );
 
+    const activationPolicy = (
+      window.prompt(
+        "Активация: FULL_PAYMENT, IMMEDIATE, PROPORTIONAL или GRACE_PERIOD",
+        "FULL_PAYMENT"
+      ) ?? "FULL_PAYMENT"
+    ).trim().toUpperCase();
+    if (!["FULL_PAYMENT","IMMEDIATE","PROPORTIONAL","GRACE_PERIOD"].includes(
+      activationPolicy
+    )) {
+      setError("Неизвестная политика активации");
+      return;
+    }
+    const gracePeriodDays =
+      activationPolicy === "GRACE_PERIOD"
+        ? Number(window.prompt("Льготный период, дней", "7") ?? "7")
+        : 0;
+    const allowedDebtRub =
+      activationPolicy === "GRACE_PERIOD"
+        ? Number(
+            (window.prompt("Допустимый долг после grace period, ₽", "0") ?? "0")
+              .replace(",", ".")
+          )
+        : 0;
+
+    let entitlements:
+      | Array<{
+          lessonType: "GROUP" | "INDIVIDUAL";
+          visitLimit: number;
+          managementVisitValueMinor: string;
+          priority: number;
+        }>
+      | undefined;
+    let finalVisitLimit = visits;
+    if (packageKind === "COMBO") {
+      const groupVisits = Number(
+        window.prompt("Групповых занятий в пакете", "8") ?? "8"
+      );
+      const individualVisits = Number(
+        window.prompt("Индивидуальных занятий в пакете", "2") ?? "2"
+      );
+      if (
+        !Number.isSafeInteger(groupVisits) ||
+        groupVisits < 1 ||
+        !Number.isSafeInteger(individualVisits) ||
+        individualVisits < 1
+      ) {
+        setError("Некорректные квоты комбинированного пакета");
+        return;
+      }
+      finalVisitLimit = groupVisits + individualVisits;
+      entitlements = [
+        {
+          lessonType: "GROUP",
+          visitLimit: groupVisits,
+          managementVisitValueMinor: String(Math.round(visitValueRub * 100)),
+          priority: 10
+        },
+        {
+          lessonType: "INDIVIDUAL",
+          visitLimit: individualVisits,
+          managementVisitValueMinor: String(Math.round(visitValueRub * 100)),
+          priority: 20
+        }
+      ];
+    }
+
     setPending(true);
     try {
       await apiRequest("/service/package-plans", {
@@ -193,7 +259,7 @@ export default function ServicePackagesPage() {
         body: JSON.stringify({
           name: name.trim(),
           packageKind,
-          visitLimit: visits,
+          visitLimit: finalVisitLimit,
           durationDays: days,
           priceMinor: String(Math.round(priceRub * 100)),
           managementVisitValueMinor: String(Math.round(visitValueRub * 100)),
@@ -201,6 +267,10 @@ export default function ServicePackagesPage() {
           makeupDaysValid: makeupDays,
           allowMakeup: makeupDays > 0,
           familyEligible: packageKind === "FAMILY",
+          activationPolicy,
+          gracePeriodDays,
+          allowedDebtMinor: String(Math.round(allowedDebtRub * 100)),
+          entitlements,
           applicableServiceId: service?.id,
           noShowPolicy: consumeNoShow ? "CONSUME" : "RELEASE"
         })
