@@ -145,6 +145,14 @@ export class TasksService {
       }
     }
 
+    const linkedType = input.linkedType?.trim().toUpperCase() || null;
+    const linkedId = input.linkedId?.trim() || null;
+    if (Boolean(linkedType) !== Boolean(linkedId)) {
+      throw new BadRequestException(
+        "Связь задачи должна содержать и тип объекта, и его id"
+      );
+    }
+
     return this.database.withTenantTransaction(context, async (client) => {
       const membership = await client.query(
         `SELECT 1 FROM tenant_membership
@@ -158,12 +166,12 @@ export class TasksService {
         throw new BadRequestException("Ответственный сотрудник недоступен");
       }
 
-      if (input.linkedType && input.linkedId) {
+      if (linkedType && linkedId) {
         await this.validateLinkedEntity(
           client,
           context.tenantId,
-          input.linkedType,
-          input.linkedId
+          linkedType,
+          linkedId
         );
       }
 
@@ -181,8 +189,8 @@ export class TasksService {
           input.priority ?? "NORMAL",
           dueAt,
           responsible,
-          input.linkedType?.trim().toUpperCase() || null,
-          input.linkedId ?? null,
+          linkedType,
+          linkedId,
           input.description?.trim() || null,
           context.membershipId
         ]
@@ -267,25 +275,44 @@ export class TasksService {
     linkedId: string
   ): Promise<void> {
     const type = linkedType.trim().toUpperCase();
+    const targets: Record<
+      string,
+      { table: string; notFoundMessage: string }
+    > = {
+      DEAL: { table: "crm_deal", notFoundMessage: "Сделка не найдена" },
+      PARTY: { table: "party", notFoundMessage: "Клиент не найден" },
+      SALES_ORDER: { table: "sales_order", notFoundMessage: "Заказ продажи не найден" },
+      PURCHASE_ORDER: { table: "purchase_order", notFoundMessage: "Заказ закупки не найден" },
+      SERVICE_BOOKING: { table: "service_booking", notFoundMessage: "Запись клиента не найдена" },
+      PRODUCT: { table: "product", notFoundMessage: "Товар не найден" },
+      FINANCIAL_OBLIGATION: {
+        table: "financial_obligation",
+        notFoundMessage: "Финансовое обязательство не найдено"
+      },
+      WAREHOUSE_TASK: {
+        table: "warehouse_task",
+        notFoundMessage: "Складское задание не найдено"
+      },
+      CHANNEL_CONNECTION: {
+        table: "channel_connection",
+        notFoundMessage: "Канал продаж не найден"
+      },
+      SITE_PAGE: { table: "site_page", notFoundMessage: "Страница сайта не найдена" }
+    };
 
-    if (type === "DEAL") {
-      const result = await client.query(
-        "SELECT 1 FROM crm_deal WHERE tenant_id = $1 AND id = $2",
-        [tenantId, linkedId]
-      );
-      if (!result.rowCount) throw new NotFoundException("Сделка не найдена");
-      return;
+    const target = targets[type];
+    if (!target) {
+      throw new BadRequestException("Связь с этим типом объекта пока не поддерживается");
     }
 
-    if (type === "PARTY") {
-      const result = await client.query(
-        "SELECT 1 FROM party WHERE tenant_id = $1 AND id = $2",
-        [tenantId, linkedId]
-      );
-      if (!result.rowCount) throw new NotFoundException("Клиент не найден");
-      return;
-    }
+    // Table names come only from the closed server-side allowlist above.
+    const result = await client.query(
+      `SELECT 1 FROM ${target.table}
+       WHERE tenant_id = $1 AND id = $2`,
+      [tenantId, linkedId]
+    );
 
-    throw new BadRequestException("Связь с этим типом объекта пока не поддерживается");
-  }
-}
+    if (!result.rowCount) {
+      throw new NotFoundException(target.notFoundMessage);
+    }
+  }}
