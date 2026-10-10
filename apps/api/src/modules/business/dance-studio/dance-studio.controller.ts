@@ -319,7 +319,7 @@ export class DanceStudioController {
   async freeze(
     @Req() req:AuthenticatedRequest,
     @Param("packageId") packageId:string,
-    @Body() body:{startsOn:string;endsOn:string;reason?:string}
+    @Body() body:{startsOn:string;endsOn:string;reason?:string;cancelFutureReservations?:boolean}
   ):Promise<ApiSuccess<unknown>> {
     return {
       ok:true,
