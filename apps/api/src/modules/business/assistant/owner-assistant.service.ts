@@ -3,6 +3,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import { DashboardService } from "../dashboard/dashboard.service";
 import { FinanceService } from "../finance/finance.service";
 import { ProfitabilityService } from "../growth/profitability.service";
+import { RuntimePressureService } from "../../platform/runtime-pressure/runtime-pressure.service";
 
 type Insight = {
   severity: "INFO" | "WARNING" | "CRITICAL";
@@ -17,13 +18,23 @@ export class OwnerAssistantService {
   constructor(
     private readonly dashboard: DashboardService,
     private readonly finance: FinanceService,
-    private readonly profitability: ProfitabilityService
+    private readonly profitability: ProfitabilityService,
+    private readonly runtime: RuntimePressureService
   ) {}
 
   async brief(
     context: TenantContext
   ): Promise<Record<string, unknown>> {
-    const now = new Date();
+    const lease = await this.runtime.acquire(context, {
+      operation: "owner_assistant_brief",
+      scope: "TENANT",
+      limit: 2,
+      ttlSeconds: 45,
+      retryAfterSeconds: 5
+    });
+
+    try {
+      const now = new Date();
     const from = new Date(now.getTime() - 30 * 86400000);
 
     const [
@@ -199,6 +210,9 @@ export class OwnerAssistantService {
         operationalIssueCount: (ops.issues ?? []).length
       }
     };
+    } finally {
+      await this.runtime.release(context, lease.leaseKey);
+    }
   }
 
   private money(value: string): string {
