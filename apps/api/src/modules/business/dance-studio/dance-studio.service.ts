@@ -162,6 +162,75 @@ export class DanceStudioService {
         [context.tenantId, scopeIds]
       );
 
+      const retentionAlerts = await client.query(
+        `SELECT
+           s.id AS student_id,p.display_name AS student_name,
+           max(l.starts_at) FILTER (
+             WHERE lp.status IN ('ATTENDED','LATE')
+           ) AS last_attended_at,
+           floor(
+             extract(
+               epoch FROM (
+                 now()-coalesce(
+                   max(l.starts_at) FILTER (
+                     WHERE lp.status IN ('ATTENDED','LATE')
+                   ),
+                   s.joined_at,
+                   s.created_at
+                 )
+               )
+             )/86400
+           )::integer AS days_since_activity
+         FROM dance_student s
+         JOIN party p
+           ON p.tenant_id=s.tenant_id AND p.id=s.party_id
+         LEFT JOIN dance_lesson_participant lp
+           ON lp.tenant_id=s.tenant_id AND lp.student_id=s.id
+         LEFT JOIN dance_lesson l
+           ON l.tenant_id=lp.tenant_id AND l.id=lp.lesson_id
+         WHERE s.tenant_id=$1
+           AND s.status='ACTIVE'
+           AND (
+             $2::uuid[] IS NULL
+             OR p.responsible_membership_id = ANY($2::uuid[])
+             OR EXISTS (
+               SELECT 1
+               FROM dance_lesson_participant lp2
+               JOIN dance_lesson l2
+                 ON l2.tenant_id=lp2.tenant_id AND l2.id=lp2.lesson_id
+               JOIN service_resource tr2
+                 ON tr2.tenant_id=l2.tenant_id
+                AND tr2.id=l2.trainer_resource_id
+               WHERE lp2.tenant_id=s.tenant_id
+                 AND lp2.student_id=s.id
+                 AND tr2.membership_id = ANY($2::uuid[])
+             )
+           )
+         GROUP BY s.id,p.display_name
+         HAVING coalesce(
+                  max(l.starts_at) FILTER (
+                    WHERE lp.status IN ('ATTENDED','LATE')
+                  ),
+                  s.joined_at,
+                  s.created_at
+                ) < now()-interval '14 days'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM dance_lesson_participant future_lp
+              JOIN dance_lesson future_l
+                ON future_l.tenant_id=future_lp.tenant_id
+               AND future_l.id=future_lp.lesson_id
+              WHERE future_lp.tenant_id=s.tenant_id
+                AND future_lp.student_id=s.id
+                AND future_lp.status='BOOKED'
+                AND future_l.starts_at>now()
+                AND future_l.status IN ('PLANNED','OPEN_FOR_BOOKING')
+            )
+         ORDER BY days_since_activity DESC,p.display_name
+         LIMIT 50`,
+        [context.tenantId,scopeIds]
+      );
+
       const economics = await client.query(
         `SELECT
            coalesce(sum(p.earned_revenue_minor),0)::text AS revenue_minor,
@@ -304,6 +373,7 @@ export class DanceStudioService {
           expiring: 0,
           low_visits: 0
         },
+        retentionAlerts: retentionAlerts.rows,
         monthEconomics: (() => {
           const base=economics.rows[0] ?? {
             revenue_minor: "0",
