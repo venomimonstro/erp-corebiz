@@ -574,10 +574,9 @@ async function danceStudioJourney() {
   await request("POST", "/dance/compensation-plans", {
     trainerResourceId: trainer.id,
     lessonType: "GROUP",
-    calculationType: "ATTENDEE",
-    fixedMinor: "120000",
-    perAttendeeMinor: "10000",
-    revenueBasis: "EARNED"
+    calculationType: "PERCENT",
+    percentBps: 4000,
+    revenueBasis: "PAID"
   });
 
   await request("POST", "/dance/room-contracts", {
@@ -671,9 +670,10 @@ async function danceStudioJourney() {
     accruals.some(
       (item) =>
         item.lesson_id === lesson.id &&
+        BigInt(item.eligible_revenue_minor) > 0n &&
         BigInt(item.amount_minor) > 0n
     ),
-    "DANCE trainer accrual must be traceable"
+    "DANCE paid package revenue must feed trainer percentage accrual"
   );
 
   const month = startsAt.toISOString().slice(0, 7);
