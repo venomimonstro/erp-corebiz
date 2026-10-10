@@ -127,6 +127,7 @@ export default function DanceTeamPage() {
         statementRows,
         organization
       ] = await Promise.all([
+          apiRequest<Customer[]>("/crm/customers"),
           apiRequest<Resource[]>("/service/resources"),
           apiRequest<Plan[]>("/dance/compensation-plans"),
           apiRequest<Accrual[]>(
