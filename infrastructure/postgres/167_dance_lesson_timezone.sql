@@ -4,18 +4,24 @@ ALTER TABLE dance_lesson
   ADD COLUMN IF NOT EXISTS timezone text NOT NULL DEFAULT 'Europe/Moscow';
 
 UPDATE dance_lesson l
-SET timezone=coalesce(rr.timezone,tr.timezone,'Europe/Moscow')
-FROM service_resource tr
-LEFT JOIN service_resource rr
-  ON rr.tenant_id=tr.tenant_id
- AND rr.id=l.room_resource_id
-WHERE tr.tenant_id=l.tenant_id
-  AND tr.id=l.trainer_resource_id
-  AND (
-    l.timezone IS NULL
-    OR l.timezone=''
-    OR l.timezone='Europe/Moscow'
-  );
+SET timezone=coalesce(
+  (
+    SELECT rr.timezone
+    FROM service_resource rr
+    WHERE rr.tenant_id=l.tenant_id
+      AND rr.id=l.room_resource_id
+  ),
+  (
+    SELECT tr.timezone
+    FROM service_resource tr
+    WHERE tr.tenant_id=l.tenant_id
+      AND tr.id=l.trainer_resource_id
+  ),
+  'Europe/Moscow'
+)
+WHERE l.timezone IS NULL
+   OR l.timezone=''
+   OR l.timezone='Europe/Moscow';
 
 CREATE OR REPLACE FUNCTION corebiz_valid_timezone(value text)
 RETURNS boolean
