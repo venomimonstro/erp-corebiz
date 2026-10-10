@@ -15,7 +15,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** Sprint 73 — Production release candidate hardening.  
+**Активная разработка:** Sprint 74 — Pilot rollout / hypercare telemetry.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -804,16 +804,38 @@
 - owner/admin runtime pressure workspace;
 - unit regression coverage for metadata-aware concurrency protection.
 
-## Активно — Sprint 73: Production release candidate hardening
+### Sprint 73 — Production release candidate hardening
+- one 16-check mandatory RC evidence matrix;
+- target-version-only evidence;
+- 7-day freshness and PASS requirement;
+- runtime RLS / DB-role evidence;
+- Golden Business Journeys evidence;
+- restore evidence;
+- noisy-neighbor/performance evidence;
+- database trigger blocks APPROVED if evidence/verdict is invalid;
+- verdict cannot be older than 4 hours at approval;
+- new evidence after evaluate requires re-evaluation;
+- deterministic remediation links/commands;
+- production gate now performs real backup→restore drill;
+- production gate runs atomic Redis noisy-neighbor runtime test;
+- machine-readable release-gate manifest;
+- production remains NO-GO until these gates are actually executed and recorded.
+
+## Активно — Sprint 74: Pilot rollout / hypercare telemetry
 
 Scope:
-- reconcile source-level release controls into one deterministic RC verdict;
-- block RC when migration replay/runtime RLS/business journey/restore evidence is stale or missing;
-- include runtime-pressure/noisy-neighbor evidence in RC readiness;
-- surface exact blockers with remediation links;
-- ensure no feature sprint can be marked production-ready without immutable verification evidence;
-- refresh release documentation and pilot checklist.
+- explicit pilot enrollment per tenant;
+- pilot cohort/profile snapshot;
+- PLANNED / READY / RUNNING / PAUSED / COMPLETED / STOPPED;
+- approved RC prerequisite before pilot RUNNING;
+- formal tenant GO prerequisite;
+- pilot owner and dates;
+- immutable status history;
+- hypercare health snapshots linked to pilot;
+- pilot stop conditions for P0 incidents;
+- daily operational scorecard;
+- exit gate before commercial rollout.
 
 ## Следом
 
-Sprint 74 — Pilot rollout / hypercare telemetry.
+Sprint 75 — Pilot exit gate / stabilization backlog.
