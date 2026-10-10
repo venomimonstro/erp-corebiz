@@ -90,11 +90,25 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION corebiz_tenant_project_permission_bootstrap_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $
+BEGIN
+  PERFORM corebiz_seed_project_permissions(NEW.id);
+  RETURN NEW;
+END;
+$;
+
+REVOKE ALL ON FUNCTION corebiz_tenant_project_permission_bootstrap_trigger() FROM PUBLIC;
+
 DROP TRIGGER IF EXISTS zz_tenant_seed_project_permissions ON tenant;
 CREATE TRIGGER zz_tenant_seed_project_permissions
 AFTER INSERT ON tenant
 FOR EACH ROW
-EXECUTE FUNCTION corebiz_seed_project_permissions(NEW.id);
+EXECUTE FUNCTION corebiz_tenant_project_permission_bootstrap_trigger();
 
 CREATE UNIQUE INDEX IF NOT EXISTS work_project_source_deal_uq
   ON work_project(tenant_id, source_deal_id)
