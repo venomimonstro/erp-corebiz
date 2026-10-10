@@ -73,9 +73,10 @@ export class SitesService {
     const publicSlug = input.publicSlug?.trim()
       ? this.publicSlug(input.publicSlug)
       : this.publicSlug(
-          this.latinSlug(name) ||
-          "site-" + randomBytes(4).toString("hex")
-        ) + "-" + randomBytes(3).toString("hex");
+          (this.latinSlug(name) || "site") +
+          "-" +
+          randomBytes(4).toString("hex")
+        );
 
     return this.database.withTenantTransaction(context, async (client) => {
       try {
