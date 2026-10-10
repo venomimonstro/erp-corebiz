@@ -18,6 +18,7 @@ type WorkspaceContext = {
 
 const permissionByKey: Record<string,string> = {
   deals: "crm.read",
+  customers: "crm.read",
   tasks: "tasks.read",
   projects: "projects.read",
   orders: "sales.read",
@@ -64,6 +65,7 @@ const permissionByKey: Record<string,string> = {
 
 const capabilityByKey: Record<string,string> = {
   deals: "crm",
+  customers: "crm",
   tasks: "tasks",
   projects: "projects",
   orders: "sales",
@@ -109,6 +111,7 @@ const profileSections: Record<MenuProfile, readonly string[]> = {
 const sections: Section[] = [
   { title: "Клиенты и задачи", items: [
     ["/app/crm/deals", "Сделки", "deals"],
+    ["/app/crm/customers", "Клиенты", "customers"],
     ["/app/tasks", "Задачи", "tasks"],
     ["/app/projects", "Проекты", "projects"]
   ] },
