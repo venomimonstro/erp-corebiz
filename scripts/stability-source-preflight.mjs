@@ -340,7 +340,8 @@ async function inspectRequiredHardening(root) {
     "136_party_create_idempotency.sql",
     "137_runtime_pressure_leases.sql",
     "148_capability_project_hardening.sql",
-    "149_sales_order_idempotency_fingerprint.sql"    "150_goods_receipt_idempotency.sql",
+    "149_sales_order_idempotency_fingerprint.sql",
+    "150_goods_receipt_idempotency.sql",
     "151_dance_studio_core.sql",
     "152_dance_finance_allocations.sql",
     "153_service_package_entitlements.sql",
@@ -348,6 +349,9 @@ async function inspectRequiredHardening(root) {
     "155_package_management_revenue.sql",
     "156_package_family_combo_activation.sql",
     "157_public_dance_booking.sql",
+    "160_dance_makeup_revenue.sql",
+    "159_dance_makeup_booking.sql",
+    "158_dance_tenant_integrity.sql",
 
   ];
 
