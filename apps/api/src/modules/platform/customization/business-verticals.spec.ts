@@ -74,4 +74,30 @@ describe("business vertical operating models", () => {
     expect(capabilities.has("crm")).toBe(false);
     expect(capabilities.has("growth")).toBe(false);
   });
+  it("keeps regulated accounting available in every business vertical", () => {
+    for (const vertical of BUSINESS_VERTICAL_LIST) {
+      expect(vertical.enabledCapabilities).toContain("accounting");
+    }
+  });
+
+  it("enables project delivery only where it is an operating core", () => {
+    expect(
+      BUSINESS_VERTICALS.PROFESSIONAL_SERVICES.enabledCapabilities
+    ).toContain("projects");
+
+    for (const code of [
+      "BEAUTY_SALON",
+      "AUTO_SERVICE",
+      "DANCE_FITNESS",
+      "RETAIL_STORE",
+      "WHOLESALE_B2B",
+      "ECOMMERCE_STORE",
+      "MARKETPLACE_SELLER",
+      "WAREHOUSE_3PL"
+    ] as const) {
+      expect(BUSINESS_VERTICALS[code].enabledCapabilities).not.toContain(
+        "projects"
+      );
+    }
+  });
 });
