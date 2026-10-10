@@ -23,6 +23,7 @@ import { OrganizationModule } from "./modules/business/organization/organization
 import { OmsModule } from "./modules/business/oms/oms.module";
 import { PartyModule } from "./modules/business/party/party.module";
 import { ProcurementModule } from "./modules/business/procurement/procurement.module";
+import { ProjectsModule } from "./modules/business/projects/projects.module";
 import { SalesModule } from "./modules/business/sales/sales.module";
 import { ServiceOpsModule } from "./modules/business/service-ops/service-ops.module";
 import { SitesModule } from "./modules/business/sites/sites.module";
@@ -76,6 +77,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     MigrationModule,
     OmsModule,
     ProcurementModule,
+    ProjectsModule,
     SupportModule,
     WorkflowModule,
     WmsModule,
