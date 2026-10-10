@@ -212,7 +212,8 @@ export class DanceEconomicsService {
            c.counterparty_party_id,p.display_name AS counterparty_name,
            c.pricing_type,c.hourly_rate_minor::text,c.monthly_minor::text,
            c.slot_minor::text,c.minimum_billable_minutes,
-           c.cancellation_charge_bps,c.currency,c.valid_from,c.valid_to,
+           c.cancellation_charge_bps,c.payment_term_days,
+           c.currency,c.valid_from,c.valid_to,
            c.status,c.metadata
          FROM room_rental_contract c
          JOIN service_resource r
@@ -238,6 +239,7 @@ export class DanceEconomicsService {
       slotMinor?:string;
       minimumBillableMinutes?:number;
       cancellationChargeBps?:number;
+      paymentTermDays?:number;
       validFrom?:string;
       validTo?:string;
       metadata?:Record<string,unknown>;
@@ -253,8 +255,14 @@ export class DanceEconomicsService {
       throw new BadRequestException("Некорректная стоимость аренды");
     const minimum=Math.floor(input.minimumBillableMinutes??0);
     const cancelBps=Math.floor(input.cancellationChargeBps??0);
-    if(minimum<0||minimum>1440||cancelBps<0||cancelBps>10000)
+    const paymentTermDays=Math.floor(input.paymentTermDays??5);
+    if(
+      minimum<0||minimum>1440||
+      cancelBps<0||cancelBps>10000||
+      paymentTermDays<0||paymentTermDays>365
+    ) {
       throw new BadRequestException("Некорректные условия аренды");
+    }
     const from=input.validFrom??new Date().toISOString().slice(0,10);
 
     return this.database.withTenantTransaction(context,async client=>{
@@ -276,14 +284,14 @@ export class DanceEconomicsService {
         `INSERT INTO room_rental_contract(
            tenant_id,room_resource_id,counterparty_party_id,pricing_type,
            hourly_rate_minor,monthly_minor,slot_minor,minimum_billable_minutes,
-           cancellation_charge_bps,valid_from,valid_to,metadata
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+           cancellation_charge_bps,payment_term_days,valid_from,valid_to,metadata
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          RETURNING id,status`,
         [
           context.tenantId,input.roomResourceId,input.counterpartyPartyId??null,
           input.pricingType,input.hourlyRateMinor??"0",input.monthlyMinor??"0",
-          input.slotMinor??"0",minimum,cancelBps,from,input.validTo??null,
-          JSON.stringify(input.metadata??{})
+          input.slotMinor??"0",minimum,cancelBps,paymentTermDays,
+          from,input.validTo??null,JSON.stringify(input.metadata??{})
         ]
       );
       return row.rows[0];
