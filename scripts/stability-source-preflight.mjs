@@ -244,6 +244,21 @@ async function inspectRequiredHardening(root) {
       path: "apps/api/src/modules/business/sales/sales.service.ts",
       patterns: [/scopedMembershipIds/, /party_commercial_terms/, /responsible_membership_id = ANY/],
       message: "B2B commercial terms are not sales-scope guarded"
+    },
+    {
+      path: "apps/api/src/modules/business/service-ops/booking.service.ts",
+      patterns: [/serviceScope/, /assertBookingAccess/, /assertResourceScope/, /requireServiceAll/],
+      message: "Service booking/catalog scope enforcement is missing"
+    },
+    {
+      path: "apps/api/src/modules/business/service-ops/service-workspace.service.ts",
+      patterns: [/serviceScope/, /assertBookingAccess/, /membership_id = ANY/],
+      message: "Service workspace scope enforcement is missing"
+    },
+    {
+      path: "apps/api/src/modules/business/service-ops/resources.service.ts",
+      patterns: [/serviceScope/, /assertResource/, /membership_id = ANY/],
+      message: "Service resource scope enforcement is missing"
     }
   ];
 
@@ -274,6 +289,12 @@ async function inspectRequiredHardening(root) {
       const source = await readFile(file,"utf8");
       if (!/BEGIN;[\s\S]*COMMIT;/.test(source)) {
         add("BLOCK",file,"hardening migration is not transaction wrapped");
+      }
+      if (
+        name === "148_capability_project_hardening.sql" &&
+        !/corebiz_tenant_project_permission_bootstrap_trigger\(\)[\s\S]*AS \$\$[\s\S]*END;\s*\$\$;/.test(source)
+      ) {
+        add("BLOCK",file,"migration 148 trigger function dollar quoting is invalid");
       }
     } catch {
       add("BLOCK",file,"required hardening migration is missing: " + name);
