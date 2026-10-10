@@ -11,8 +11,21 @@ type Capability = {
 
 type BusinessProfile = {
   profileCode: "GENERAL" | "TRADE" | "ECOMMERCE" | "SERVICE" | "WAREHOUSE_3PL";
+  verticalCode?: string | null;
+  verticalTitle?: string | null;
+  verticalVersion?: number | null;
   appliedAt: string;
   capabilities: Capability[];
+};
+
+type BusinessVertical = {
+  code: string;
+  title: string;
+  summary: string;
+  profileCode: BusinessProfile["profileCode"];
+  version: number;
+  ownerQuestions: string[];
+  primaryWorkspaces: string[];
 };
 
 const PROFILE_CARDS = [
@@ -55,6 +68,7 @@ type Field = {
 export default function CustomizationPage() {
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
   const [profile, setProfile] = useState<BusinessProfile | null>(null);
+  const [verticals, setVerticals] = useState<BusinessVertical[]>([]);
   const [fields, setFields] = useState<Field[]>([]);
   const [entityType, setEntityType] = useState("DEAL");
   const [error, setError] = useState("");
@@ -66,11 +80,13 @@ export default function CustomizationPage() {
       const data = await Promise.all([
         apiRequest<Capability[]>("/customization/capabilities"),
         apiRequest<BusinessProfile>("/customization/business-profile"),
+        apiRequest<BusinessVertical[]>("/customization/business-verticals"),
         apiRequest<Field[]>("/customization/fields?entityType=" + encodeURIComponent(entityType))
       ]);
       setCapabilities(data[0]);
       setProfile(data[1]);
-      setFields(data[2]);
+      setVerticals(data[2]);
+      setFields(data[3]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить настройки");
     }
@@ -117,6 +133,42 @@ export default function CustomizationPage() {
         cause instanceof Error
           ? cause.message
           : "Не удалось применить профиль бизнеса"
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function applyVertical(verticalCode: string) {
+    if (
+      !window.confirm(
+        "Применить шаблон этого бизнеса? Существующие данные и ваши поля не удаляются. Будут включены подходящие модули и добавлены только отсутствующие типовые поля."
+      )
+    ) {
+      return;
+    }
+
+    setPending(true);
+    try {
+      const result = await apiRequest<{
+        verticalTitle: string;
+        createdFields: number;
+      }>("/customization/business-vertical", {
+        method: "PUT",
+        body: JSON.stringify({ verticalCode })
+      });
+      await load();
+      window.dispatchEvent(new Event("corebiz-capabilities-changed"));
+      window.alert(
+        result.verticalTitle +
+          ": шаблон применён. Добавлено типовых полей: " +
+          result.createdFields
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось применить шаблон бизнеса"
       );
     } finally {
       setPending(false);
@@ -295,6 +347,44 @@ export default function CustomizationPage() {
                 </span>
                 <strong>{item.title}</strong>
                 <p>{item.text}</p>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="settings-card">
+          <div className="section-heading">
+            <div>
+              <p className="muted">Отраслевой шаблон / без форка Core</p>
+              <h2>Какой у вас бизнес</h2>
+              <p className="workspace-summary">
+                Выберите ближайший сценарий. Система подстроит стартовую конфигурацию,
+                но останется единым продуктом и продолжит получать общие обновления.
+              </p>
+            </div>
+          </div>
+
+          <div className="profile-preset-grid">
+            {verticals.map((item) => (
+              <button
+                key={item.code}
+                className={
+                  profile?.verticalCode === item.code
+                    ? "profile-preset-card active"
+                    : "profile-preset-card"
+                }
+                disabled={pending}
+                onClick={() => void applyVertical(item.code)}
+                type="button"
+              >
+                <span className="status-pill">
+                  {profile?.verticalCode === item.code ? "Активен" : item.profileCode}
+                </span>
+                <strong>{item.title}</strong>
+                <p>{item.summary}</p>
+                <small>
+                  Главные зоны: {item.primaryWorkspaces.join(" · ")}
+                </small>
               </button>
             ))}
           </div>
