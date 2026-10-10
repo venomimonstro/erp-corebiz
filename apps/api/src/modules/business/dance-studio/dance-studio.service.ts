@@ -1557,7 +1557,7 @@ export class DanceStudioService {
   ):Promise<string[]>{
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query<{id:string}>(
-        `SELECT DISTINCT sp.id
+        `SELECT sp.id
          FROM service_package sp
          LEFT JOIN service_package_beneficiary b
            ON b.tenant_id=sp.tenant_id
@@ -1575,7 +1575,7 @@ export class DanceStudioService {
              SELECT starts_at FROM dance_lesson
              WHERE tenant_id=$1 AND id=$3
            )
-         ORDER BY min(sp.expires_at),sp.id
+         ORDER BY sp.expires_at,sp.id
          LIMIT 20`,
         [context.tenantId,studentPartyId,lessonId]
       );
@@ -1654,26 +1654,30 @@ export class DanceStudioService {
       currency:string;
       obligation_id:string|null;
       status:string;
-      settled_minor:string;
     }>(
-      `SELECT
-         c.id,c.payer_party_id,c.currency,c.obligation_id,c.status,
-         coalesce(o.settled_minor,0)::text AS settled_minor
-       FROM dance_student_charge c
-       LEFT JOIN financial_obligation o
-         ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
-       WHERE c.tenant_id=$1
-         AND c.student_id=$2
-         AND c.source_type='LESSON'
-         AND c.source_id=$3
-         AND c.status<>'CANCELLED'
-       FOR UPDATE OF c,o`,
+      `SELECT id,payer_party_id,currency,obligation_id,status
+       FROM dance_student_charge
+       WHERE tenant_id=$1
+         AND student_id=$2
+         AND source_type='LESSON'
+         AND source_id=$3
+         AND status<>'CANCELLED'
+       FOR UPDATE`,
       [context.tenantId,studentId,lessonId]
     );
     const charge=result.rows[0];
     if(!charge) return;
 
+    let settled=0n;
     if(charge.obligation_id){
+      const obligation=await client.query<{settled_minor:string}>(
+        `SELECT settled_minor::text
+         FROM financial_obligation
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,charge.obligation_id]
+      );
+      settled=BigInt(obligation.rows[0]?.settled_minor??"0");
       await client.query(
         `UPDATE financial_obligation
          SET status='CANCELLED',updated_at=now()
@@ -1689,7 +1693,6 @@ export class DanceStudioService {
       );
     }
 
-    const settled=BigInt(charge.settled_minor);
     if(settled>0n){
       const existing=await client.query(
         `SELECT 1 FROM financial_obligation
