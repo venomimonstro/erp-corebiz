@@ -316,7 +316,10 @@ export class BookingService {
       code?: string;
       description?: string;
       applicableServiceId?: string;
-      visitLimit: number;
+      packageKind?: "VISITS" | "PERIOD" | "UNLIMITED" | "FAMILY" | "INDIVIDUAL" | "COMBO" | "TRIAL" | "GIFT";
+      danceProgramId?: string;
+      danceGroupId?: string;
+      visitLimit?: number;
       durationDays: number;
       priceMinor?: string | number;
       currency?: string;
@@ -329,12 +332,20 @@ export class BookingService {
     if (!name || name.length > 180) {
       throw new BadRequestException("Некорректное название абонемента");
     }
-    const visitLimit = Number(input.visitLimit);
+    const packageKind = input.packageKind ?? "VISITS";
+    if (![
+      "VISITS","PERIOD","UNLIMITED","FAMILY","INDIVIDUAL","COMBO","TRIAL","GIFT"
+    ].includes(packageKind)) {
+      throw new BadRequestException("Некорректный тип абонемента");
+    }
+    const visitLimit =
+      packageKind === "UNLIMITED" ? null : Number(input.visitLimit);
     const durationDays = Number(input.durationDays);
     if (
-      !Number.isSafeInteger(visitLimit) ||
-      visitLimit < 1 ||
-      visitLimit > 10000
+      packageKind !== "UNLIMITED" &&
+      (!Number.isSafeInteger(visitLimit) ||
+        Number(visitLimit) < 1 ||
+        Number(visitLimit) > 10000)
     ) {
       throw new BadRequestException("Количество посещений должно быть от 1 до 10000");
     }
@@ -371,9 +382,10 @@ export class BookingService {
         const result = await client.query<{ id: string }>(
           `INSERT INTO service_package_plan(
              tenant_id,name,code,description,applicable_service_id,
+             package_kind,dance_program_id,dance_group_id,
              visit_limit,duration_days,price_minor,currency,
              no_show_policy,metadata
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
            RETURNING id`,
           [
             context.tenantId,
@@ -381,6 +393,9 @@ export class BookingService {
             input.code?.trim() || null,
             input.description?.trim() || null,
             input.applicableServiceId ?? null,
+            packageKind,
+            input.danceProgramId ?? null,
+            input.danceGroupId ?? null,
             visitLimit,
             durationDays,
             priceMinor,
@@ -419,8 +434,13 @@ export class BookingService {
            sp.id,sp.party_id,sp.plan_id,sp.sales_order_id,
            sp.starts_at,sp.expires_at,sp.visit_limit_snapshot,
            sp.reserved_visits,sp.used_visits,
-           (sp.visit_limit_snapshot-sp.reserved_visits-sp.used_visits) AS available_visits,
+           CASE
+             WHEN sp.visit_limit_snapshot IS NULL THEN NULL
+             ELSE sp.visit_limit_snapshot-sp.reserved_visits-sp.used_visits
+           END AS available_visits,
            sp.price_minor_snapshot::text,sp.currency,sp.status,
+           sp.package_kind_snapshot,sp.dance_program_id_snapshot,
+           sp.dance_group_id_snapshot,sp.payer_party_id,
            p.display_name AS party_name,plan.name AS plan_name,
            plan.no_show_policy,plan.applicable_service_id
          FROM service_package sp
@@ -462,6 +482,7 @@ export class BookingService {
       partyId: string;
       startsAt?: string;
       salesOrderId?: string;
+      payerPartyId?: string;
     }
   ): Promise<{ id: string; expiresAt: string }> {
     const startsAt = input.startsAt ? new Date(input.startsAt) : new Date();
@@ -473,13 +494,18 @@ export class BookingService {
     return this.database.withTenantTransaction(context, async (client) => {
       const plan = await client.query<{
         id: string;
-        visit_limit: number;
+        visit_limit: number | null;
         duration_days: number;
+        package_kind: string;
+        dance_program_id: string | null;
+        dance_group_id: string | null;
+        freeze_days_allowed: number;
         price_minor: string;
         currency: string;
       }>(
         `SELECT
-           id,visit_limit,duration_days,price_minor::text,currency
+           id,visit_limit,duration_days,price_minor::text,currency,
+           package_kind,dance_program_id,dance_group_id,freeze_days_allowed
          FROM service_package_plan
          WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
         [context.tenantId, input.planId]
@@ -499,6 +525,15 @@ export class BookingService {
         [context.tenantId, input.partyId, scopedMembershipIds]
       );
       if (!party.rowCount) throw new NotFoundException("Клиент не найден");
+
+      if (input.payerPartyId) {
+        const payer = await client.query(
+          `SELECT 1 FROM party
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,input.payerPartyId]
+        );
+        if (!payer.rowCount) throw new NotFoundException("Плательщик не найден");
+      }
 
       if (input.salesOrderId) {
         const order = await client.query(
@@ -520,21 +555,28 @@ export class BookingService {
       );
       const result = await client.query<{ id: string }>(
         `INSERT INTO service_package(
-           tenant_id,plan_id,party_id,sales_order_id,
+           tenant_id,plan_id,party_id,payer_party_id,sales_order_id,
            starts_at,expires_at,visit_limit_snapshot,
-           price_minor_snapshot,currency,created_by_membership_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           price_minor_snapshot,currency,package_kind_snapshot,
+           dance_program_id_snapshot,dance_group_id_snapshot,
+           freeze_days_total_snapshot,created_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          RETURNING id`,
         [
           context.tenantId,
           planRow.id,
           input.partyId,
+          input.payerPartyId ?? input.partyId,
           input.salesOrderId ?? null,
           startsAt,
           expiresAt,
           planRow.visit_limit,
           planRow.price_minor,
           planRow.currency,
+          planRow.package_kind,
+          planRow.dance_program_id,
+          planRow.dance_group_id,
+          planRow.freeze_days_allowed,
           context.membershipId
         ]
       );
@@ -1963,7 +2005,7 @@ export class BookingService {
       party_id: string;
       starts_at: Date;
       expires_at: Date;
-      visit_limit_snapshot: number;
+      visit_limit_snapshot: number | null;
       reserved_visits: number;
       used_visits: number;
       applicable_service_id: string | null;
@@ -1998,8 +2040,8 @@ export class BookingService {
       );
     }
     if (
-      row.reserved_visits + row.used_visits >=
-      row.visit_limit_snapshot
+      row.visit_limit_snapshot !== null &&
+      row.reserved_visits + row.used_visits >= row.visit_limit_snapshot
     ) {
       throw new ConflictException("В абонементе закончились посещения");
     }
@@ -2053,7 +2095,8 @@ export class BookingService {
          SET reserved_visits=reserved_visits-1,
              used_visits=used_visits+1,
              status=CASE
-               WHEN used_visits+1 >= visit_limit_snapshot THEN 'EXHAUSTED'
+               WHEN visit_limit_snapshot IS NOT NULL
+                AND used_visits+1 >= visit_limit_snapshot THEN 'EXHAUSTED'
                ELSE status
              END,
              updated_at=now()
