@@ -49,9 +49,20 @@ type Plan = {
   currency: string;
 };
 
+type MakeupCredit = {
+  id: string;
+  student_id: string;
+  student_name: string;
+  expires_at: string;
+  program_name: string | null;
+  group_name: string | null;
+  status: string;
+};
+
 type Pack = {
   id: string;
   party_id: string;
+  beneficiary_party_ids?: string[];
   plan_name: string;
   package_kind_snapshot: string;
   expires_at: string;
@@ -73,6 +84,7 @@ export default function DanceStudentsPage() {
   const [charges, setCharges] = useState<Charge[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [packages, setPackages] = useState<Pack[]>([]);
+  const [makeupCredits, setMakeupCredits] = useState<MakeupCredit[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -80,19 +92,27 @@ export default function DanceStudentsPage() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const [studentRows, customerRows, chargeRows, planRows, packageRows] =
-        await Promise.all([
+      const [
+        studentRows,
+        customerRows,
+        chargeRows,
+        planRows,
+        packageRows,
+        makeupRows
+      ] = await Promise.all([
           apiRequest<Student[]>("/dance/students"),
           apiRequest<Customer[]>("/crm/customers"),
           apiRequest<Charge[]>("/dance/charges"),
           apiRequest<Plan[]>("/service/package-plans"),
-          apiRequest<Pack[]>("/service/packages")
+          apiRequest<Pack[]>("/service/packages"),
+          apiRequest<MakeupCredit[]>("/dance/makeup-credits")
         ]);
       setStudents(studentRows);
       setCustomers(customerRows);
       setCharges(chargeRows);
       setPlans(planRows);
       setPackages(packageRows);
+      setMakeupCredits(makeupRows);
       setSelectedId((current) =>
         studentRows.some((item) => item.id === current)
           ? current
@@ -110,7 +130,15 @@ export default function DanceStudentsPage() {
   const selected = students.find((item) => item.id === selectedId) ?? null;
   const selectedCharges = charges.filter((item) => item.student_id === selectedId);
   const selectedPackages = packages.filter(
-    (item) => selected && item.party_id === selected.party_id
+    (item) =>
+      selected &&
+      (
+        item.party_id === selected.party_id ||
+        item.beneficiary_party_ids?.includes(selected.party_id)
+      )
+  );
+  const selectedMakeups = makeupCredits.filter(
+    (item) => item.student_id === selectedId
   );
 
   const payerOpenCharges = useMemo(() => {
@@ -466,6 +494,47 @@ export default function DanceStudentsPage() {
                     ))}
                     {!selectedCharges.length ? (
                       <tr><td colSpan={7}><div className="table-empty"><strong>Начислений нет</strong></div></td></tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section className="section-block">
+              <div className="section-heading">
+                <div>
+                  <p className="muted">Отработки</p>
+                  <h2>Компенсационные занятия</h2>
+                </div>
+              </div>
+              <div className="data-table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Статус</th>
+                      <th>Направление</th>
+                      <th>Группа</th>
+                      <th>Использовать до</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedMakeups.map((credit) => (
+                      <tr key={credit.id}>
+                        <td><span className="status-pill">{credit.status}</span></td>
+                        <td>{credit.program_name ?? "Любое направление"}</td>
+                        <td>{credit.group_name ?? "Любая подходящая группа"}</td>
+                        <td>{new Date(credit.expires_at).toLocaleDateString("ru-RU")}</td>
+                      </tr>
+                    ))}
+                    {!selectedMakeups.length ? (
+                      <tr>
+                        <td colSpan={4}>
+                          <div className="table-empty">
+                            <strong>Отработок нет</strong>
+                            <span>Они появятся после уважительного пропуска по тарифу с разрешённой отработкой.</span>
+                          </div>
+                        </td>
+                      </tr>
                     ) : null}
                   </tbody>
                 </table>
