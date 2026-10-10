@@ -70,6 +70,7 @@ export class SupportService {
       priority?: "LOW" | "NORMAL" | "HIGH" | "URGENT";
       category?: string;
       contextUrl?: string;
+      knowledgeSearchId?: string;
     }
   ): Promise<{ id: string; number: string }> {
     const subject = input.subject.trim();
@@ -117,13 +118,34 @@ export class SupportService {
         [context.tenantId, ticket.id, context.membershipId, body]
       );
 
+      if (input.knowledgeSearchId) {
+        await client.query(
+          `UPDATE support_knowledge_search
+           SET ticket_id=$4,ticket_created_at=now()
+           WHERE tenant_id=$1
+             AND membership_id=$2
+             AND id=$3
+             AND ticket_id IS NULL`,
+          [
+            context.tenantId,
+            context.membershipId,
+            input.knowledgeSearchId,
+            ticket.id
+          ]
+        );
+      }
+
       await this.audit(
         client,
         context,
         "support.ticket_created",
         "support_ticket",
         ticket.id,
-        { number, subject }
+        {
+          number,
+          subject,
+          knowledgeSearchId: input.knowledgeSearchId ?? null
+        }
       );
 
       return { id: ticket.id, number };
@@ -399,6 +421,200 @@ export class SupportService {
       bodyMarkdown: row.body_markdown
     }));
   }
+
+  async trackedKnowledgeSearch(
+    context: TenantContext,
+    input: {
+      query: string;
+      contextUrl?: string;
+    }
+  ): Promise<{
+    searchId: string;
+    articles: Array<{
+      id: string;
+      slug: string;
+      title: string;
+      category: string | null;
+      bodyMarkdown: string;
+    }>;
+  }> {
+    const query = this.sanitizeKnowledgeQuery(input.query);
+    const articles = await this.searchKnowledge(query);
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO support_knowledge_search(
+           tenant_id,membership_id,query_text,context_url,result_count
+         ) VALUES ($1,$2,$3,$4,$5)
+         RETURNING id`,
+        [
+          context.tenantId,
+          context.membershipId,
+          query,
+          input.contextUrl?.trim().slice(0, 1000) || null,
+          articles.length
+        ]
+      );
+
+      return {
+        searchId: result.rows[0]!.id,
+        articles
+      };
+    });
+  }
+
+  async markKnowledgeSelection(
+    context: TenantContext,
+    searchId: string,
+    articleId: string
+  ): Promise<void> {
+    await this.database.withTenantTransaction(context, async (client) => {
+      const article = await client.query(
+        `SELECT 1 FROM knowledge_article
+         WHERE id=$1 AND status='PUBLISHED'`,
+        [articleId]
+      );
+      if (!article.rowCount) {
+        throw new NotFoundException("Статья не найдена");
+      }
+
+      const result = await client.query(
+        `UPDATE support_knowledge_search
+         SET selected_article_id=$4,selected_at=now()
+         WHERE tenant_id=$1
+           AND membership_id=$2
+           AND id=$3
+         RETURNING id`,
+        [
+          context.tenantId,
+          context.membershipId,
+          searchId,
+          articleId
+        ]
+      );
+
+      if (!result.rowCount) {
+        throw new NotFoundException("Поиск базы знаний не найден");
+      }
+    });
+  }
+
+  async knowledgeFeedback(
+    context: TenantContext,
+    searchId: string,
+    helpful: boolean
+  ): Promise<void> {
+    await this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `UPDATE support_knowledge_search
+         SET helpful=$4,feedback_at=now()
+         WHERE tenant_id=$1
+           AND membership_id=$2
+           AND id=$3
+         RETURNING id`,
+        [
+          context.tenantId,
+          context.membershipId,
+          searchId,
+          helpful
+        ]
+      );
+
+      if (!result.rowCount) {
+        throw new NotFoundException("Поиск базы знаний не найден");
+      }
+    });
+  }
+
+  async knowledgeTelemetry(
+    context: TenantContext
+  ): Promise<Record<string, unknown>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const summary = await client.query<{
+        searches: string;
+        no_result: string;
+        helpful_yes: string;
+        helpful_no: string;
+        tickets_after_search: string;
+      }>(
+        `SELECT
+           count(*)::text AS searches,
+           count(*) FILTER (WHERE result_count=0)::text AS no_result,
+           count(*) FILTER (WHERE helpful=true)::text AS helpful_yes,
+           count(*) FILTER (WHERE helpful=false)::text AS helpful_no,
+           count(*) FILTER (WHERE ticket_id IS NOT NULL)::text AS tickets_after_search
+         FROM support_knowledge_search
+         WHERE tenant_id=$1
+           AND created_at >= now()-interval '30 days'`,
+        [context.tenantId]
+      );
+
+      const gaps = await client.query<{
+        query_text: string;
+        searches: string;
+        tickets: string;
+      }>(
+        `SELECT
+           query_text,
+           count(*)::text AS searches,
+           count(*) FILTER (WHERE ticket_id IS NOT NULL)::text AS tickets
+         FROM support_knowledge_search
+         WHERE tenant_id=$1
+           AND created_at >= now()-interval '30 days'
+           AND (result_count=0 OR helpful=false OR ticket_id IS NOT NULL)
+         GROUP BY query_text
+         ORDER BY
+           count(*) FILTER (WHERE ticket_id IS NOT NULL) DESC,
+           count(*) DESC
+         LIMIT 30`,
+        [context.tenantId]
+      );
+
+      const row = summary.rows[0] ?? {
+        searches: "0",
+        no_result: "0",
+        helpful_yes: "0",
+        helpful_no: "0",
+        tickets_after_search: "0"
+      };
+
+      const searches = Number(row.searches);
+      const tickets = Number(row.tickets_after_search);
+
+      return {
+        periodDays: 30,
+        searches,
+        noResult: Number(row.no_result),
+        helpfulYes: Number(row.helpful_yes),
+        helpfulNo: Number(row.helpful_no),
+        ticketsAfterSearch: tickets,
+        selfServiceRatePercent:
+          searches === 0
+            ? null
+            : Math.round(((searches - tickets) / searches) * 10000) / 100,
+        gaps: gaps.rows.map((item) => ({
+          query: item.query_text,
+          searches: Number(item.searches),
+          tickets: Number(item.tickets)
+        }))
+      };
+    });
+  }
+
+  private sanitizeKnowledgeQuery(value: string): string {
+    const query = String(value ?? "")
+      .trim()
+      .replace(
+        /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,
+        "[email]"
+      )
+      .replace(/\+?\d[\d\s()\-]{8,}\d/g, "[phone]")
+      .replace(/\s+/g, " ")
+      .slice(0, 300);
+
+    return query;
+  }
+
 
   async createTemporaryGrant(
     context: TenantContext,
