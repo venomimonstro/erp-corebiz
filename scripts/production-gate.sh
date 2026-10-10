@@ -31,33 +31,36 @@ if ! command -v psql >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "[production-gate] 1/9 source + disposable migration release check"
+echo "[production-gate] 1/10 source + disposable migration release check"
 bash scripts/release-check.sh
 
-echo "[production-gate] 2/9 tenant RLS / runtime-role ownership gate"
+echo "[production-gate] 2/10 tenant RLS / runtime-role ownership gate"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1   -f scripts/security_tenant_rls_gate.sql
 
-echo "[production-gate] 3/9 SECURITY DEFINER grant gate"
+echo "[production-gate] 3/10 SECURITY DEFINER grant gate"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1   -f scripts/security_runtime_function_gate.sql
 
-echo "[production-gate] 4/9 API business journey"
+echo "[production-gate] 4/10 API business journey"
 node scripts/smoke-user-journey.mjs
 
-echo "[production-gate] 5/9 public commerce / booking diagnostics"
+echo "[production-gate] 5/10 golden vertical business journeys"
+node scripts/golden-business-journeys.mjs
+
+echo "[production-gate] 6/10 public commerce / booking diagnostics"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1   -f scripts/public_commerce_booking_diagnostics.sql
 
-echo "[production-gate] 6/9 Finance / bank / Accounting reconciliation diagnostics"
+echo "[production-gate] 7/10 Finance / bank / Accounting reconciliation diagnostics"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1   -f scripts/finance_bank_reconciliation_diagnostic.sql
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1   -f scripts/accounting_period_audit_reconcile.sql
 
-echo "[production-gate] 7/9 WMS / 3PL reconciliation diagnostics"
+echo "[production-gate] 8/10 WMS / 3PL reconciliation diagnostics"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1   -f scripts/wms_3pl_reconcile.sql
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1   -f scripts/finance_3pl_reconcile.sql
 
-echo "[production-gate] 8/9 browser journey"
+echo "[production-gate] 9/10 browser journey"
 node scripts/smoke-browser-journey.mjs
 
-echo "[production-gate] 9/9 release-readiness structural diagnostics"
+echo "[production-gate] 10/10 release-readiness structural diagnostics"
 echo "[production-gate] NOTE: tenant-specific readiness diagnostics must be run with app.tenant_id set for each pilot tenant."
 echo "[production-gate] PASS: disposable migration, security, API, browser and reconciliation gates completed."
 echo "[production-gate] This command does not deploy. Production rollout still requires backup/restore evidence and operator approval."
