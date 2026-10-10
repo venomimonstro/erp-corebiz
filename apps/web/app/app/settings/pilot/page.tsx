@@ -65,6 +65,16 @@ type Overview = {
     warnings: unknown[];
     captured_at: string;
   }>;
+  exitReviews: Array<{
+    id: string;
+    decision: "PASS" | "BLOCKED";
+    verdict: {
+      blockers?: unknown[];
+      warnings?: unknown[];
+    };
+    note: string | null;
+    reviewed_at: string;
+  }>;
 };
 
 type PilotStatus = NonNullable<Overview["enrollment"]>["status"];
@@ -151,6 +161,37 @@ export default function PilotPage() {
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Не удалось снять snapshot"
+      );
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function evaluateExit() {
+    const note =
+      window.prompt(
+        "Комментарий к pilot exit review",
+        "Проверяем готовность завершить pilot."
+      ) ?? "";
+
+    setBusy("exit");
+    try {
+      const result = await apiRequest<{ decision: string }>(
+        "/pilot/exit-review",
+        {
+          method: "POST",
+          body: JSON.stringify({ note: note.trim() || undefined })
+        }
+      );
+      await load();
+      if (result.decision !== "PASS") {
+        setError(
+          "Exit review = BLOCKED. Закройте blockers и повторите проверку."
+        );
+      }
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Не удалось выполнить exit review"
       );
     } finally {
       setBusy("");
@@ -307,6 +348,16 @@ export default function PilotPage() {
                 <Prereq ok={data.prerequisites.openP0 === 0} text="Нет открытого P0" />
               </div>
               <div className="builder-actions">
+                {data.enrollment.status === "RUNNING" ? (
+                  <button
+                    className="secondary-button"
+                    disabled={busy !== ""}
+                    onClick={() => void evaluateExit()}
+                    type="button"
+                  >
+                    Проверить exit gate
+                  </button>
+                ) : null}
                 {nextActions.map((status) => (
                   <button
                     key={status}
@@ -398,6 +449,31 @@ export default function PilotPage() {
                         <td>{String(row.metrics.orders ?? 0)}</td>
                         <td>{String(row.metrics.bookings ?? 0)}</td>
                         <td>{String(row.metrics.postedPayments ?? 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section className="section-block">
+              <div className="section-heading">
+                <div>
+                  <p className="muted">Exit gate</p>
+                  <h2>Итоговые проверки pilot</h2>
+                </div>
+              </div>
+              <div className="data-table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Дата</th><th>Verdict</th><th>Комментарий</th></tr>
+                  </thead>
+                  <tbody>
+                    {data.exitReviews.map((row) => (
+                      <tr key={row.id}>
+                        <td>{new Date(row.reviewed_at).toLocaleString("ru-RU")}</td>
+                        <td><span className="status-pill">{row.decision}</span></td>
+                        <td>{row.note ?? "—"}</td>
                       </tr>
                     ))}
                   </tbody>
