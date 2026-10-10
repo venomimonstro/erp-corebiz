@@ -2048,7 +2048,7 @@ export class BookingService {
       (bookingStatus === "NO_SHOW" && row.no_show_policy === "CONSUME");
 
     if (consume) {
-      await client.query(
+      const packageUpdate = await client.query(
         `UPDATE service_package
          SET reserved_visits=reserved_visits-1,
              used_visits=used_visits+1,
@@ -2057,28 +2057,54 @@ export class BookingService {
                ELSE status
              END,
              updated_at=now()
-         WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0`,
+         WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0
+         RETURNING id`,
         [tenantId, row.package_id]
       );
-      await client.query(
+      if (!packageUpdate.rowCount) {
+        throw new ConflictException(
+          "Нарушена целостность абонемента: отсутствует зарезервированное посещение"
+        );
+      }
+
+      const redemptionUpdate = await client.query(
         `UPDATE service_package_redemption
          SET state='CONSUMED',settled_at=now()
-         WHERE tenant_id=$1 AND id=$2`,
+         WHERE tenant_id=$1 AND id=$2 AND state='RESERVED'
+         RETURNING id`,
         [tenantId, row.id]
       );
+      if (!redemptionUpdate.rowCount) {
+        throw new ConflictException(
+          "Посещение абонемента уже было обработано"
+        );
+      }
     } else {
-      await client.query(
+      const packageUpdate = await client.query(
         `UPDATE service_package
          SET reserved_visits=reserved_visits-1,updated_at=now()
-         WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0`,
+         WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0
+         RETURNING id`,
         [tenantId, row.package_id]
       );
-      await client.query(
+      if (!packageUpdate.rowCount) {
+        throw new ConflictException(
+          "Нарушена целостность абонемента: отсутствует зарезервированное посещение"
+        );
+      }
+
+      const redemptionUpdate = await client.query(
         `UPDATE service_package_redemption
          SET state='RELEASED',settled_at=now()
-         WHERE tenant_id=$1 AND id=$2`,
+         WHERE tenant_id=$1 AND id=$2 AND state='RESERVED'
+         RETURNING id`,
         [tenantId, row.id]
       );
+      if (!redemptionUpdate.rowCount) {
+        throw new ConflictException(
+          "Посещение абонемента уже было обработано"
+        );
+      }
     }
   }
 
