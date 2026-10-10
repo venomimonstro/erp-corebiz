@@ -276,6 +276,247 @@ export class BookingService {
     });
   }
 
+  async packagePlans(
+    context: TenantContext
+  ): Promise<Array<Record<string, unknown>>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `SELECT
+           p.id,p.name,p.code,p.description,p.applicable_service_id,
+           s.name AS applicable_service_name,
+           p.visit_limit,p.duration_days,p.price_minor::text,p.currency,
+           p.no_show_policy,p.status,p.metadata,p.created_at,p.updated_at
+         FROM service_package_plan p
+         LEFT JOIN service_catalog_item s
+           ON s.tenant_id=p.tenant_id AND s.id=p.applicable_service_id
+         WHERE p.tenant_id=$1 AND p.status='ACTIVE'
+         ORDER BY p.name`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async createPackagePlan(
+    context: TenantContext,
+    input: {
+      name: string;
+      code?: string;
+      description?: string;
+      applicableServiceId?: string;
+      visitLimit: number;
+      durationDays: number;
+      priceMinor?: string | number;
+      currency?: string;
+      noShowPolicy?: "RELEASE" | "CONSUME";
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<{ id: string }> {
+    const name = input.name?.trim();
+    if (!name || name.length > 180) {
+      throw new BadRequestException("Некорректное название абонемента");
+    }
+    const visitLimit = Math.floor(input.visitLimit);
+    const durationDays = Math.floor(input.durationDays);
+    if (visitLimit < 1 || visitLimit > 10000) {
+      throw new BadRequestException("Количество посещений должно быть от 1 до 10000");
+    }
+    if (durationDays < 1 || durationDays > 3650) {
+      throw new BadRequestException("Срок действия должен быть от 1 до 3650 дней");
+    }
+    const priceMinor = String(input.priceMinor ?? "0");
+    if (!/^\d+$/.test(priceMinor)) {
+      throw new BadRequestException("Некорректная цена абонемента");
+    }
+    const currency = input.currency?.trim().toUpperCase() || "RUB";
+    if (!/^[A-Z]{3}$/.test(currency)) {
+      throw new BadRequestException("Некорректная валюта");
+    }
+    const noShowPolicy = input.noShowPolicy ?? "RELEASE";
+    if (!["RELEASE","CONSUME"].includes(noShowPolicy)) {
+      throw new BadRequestException("Некорректная политика no-show");
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      if (input.applicableServiceId) {
+        await this.assertService(
+          client,
+          context.tenantId,
+          input.applicableServiceId
+        );
+      }
+
+      try {
+        const result = await client.query<{ id: string }>(
+          `INSERT INTO service_package_plan(
+             tenant_id,name,code,description,applicable_service_id,
+             visit_limit,duration_days,price_minor,currency,
+             no_show_policy,metadata
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           RETURNING id`,
+          [
+            context.tenantId,
+            name,
+            input.code?.trim() || null,
+            input.description?.trim() || null,
+            input.applicableServiceId ?? null,
+            visitLimit,
+            durationDays,
+            priceMinor,
+            currency,
+            noShowPolicy,
+            JSON.stringify(input.metadata ?? {})
+          ]
+        );
+        const row = result.rows[0];
+        if (!row) throw new Error("SERVICE_PACKAGE_PLAN_CREATE_FAILED");
+        return row;
+      } catch (error) {
+        if (this.isUniqueViolation(error)) {
+          throw new ConflictException("Абонемент с таким кодом уже существует");
+        }
+        throw error;
+      }
+    });
+  }
+
+  async packages(
+    context: TenantContext,
+    partyId?: string
+  ): Promise<Array<Record<string, unknown>>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      await client.query(
+        `UPDATE service_package
+         SET status='EXPIRED',updated_at=now()
+         WHERE tenant_id=$1 AND status='ACTIVE' AND expires_at<=now()`,
+        [context.tenantId]
+      );
+
+      const result = await client.query(
+        `SELECT
+           sp.id,sp.party_id,sp.plan_id,sp.sales_order_id,
+           sp.starts_at,sp.expires_at,sp.visit_limit_snapshot,
+           sp.reserved_visits,sp.used_visits,
+           (sp.visit_limit_snapshot-sp.reserved_visits-sp.used_visits) AS available_visits,
+           sp.price_minor_snapshot::text,sp.currency,sp.status,
+           p.display_name AS party_name,plan.name AS plan_name,
+           plan.no_show_policy,plan.applicable_service_id
+         FROM service_package sp
+         JOIN service_package_plan plan
+           ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
+         JOIN party p
+           ON p.tenant_id=sp.tenant_id AND p.id=sp.party_id
+         WHERE sp.tenant_id=$1
+           AND ($2::uuid IS NULL OR sp.party_id=$2)
+         ORDER BY
+           CASE sp.status WHEN 'ACTIVE' THEN 0 ELSE 1 END,
+           sp.expires_at,sp.created_at DESC
+         LIMIT 1000`,
+        [context.tenantId, partyId ?? null]
+      );
+      return result.rows;
+    });
+  }
+
+  async issuePackage(
+    context: TenantContext,
+    input: {
+      planId: string;
+      partyId: string;
+      startsAt?: string;
+      salesOrderId?: string;
+    }
+  ): Promise<{ id: string; expiresAt: string }> {
+    const startsAt = input.startsAt ? new Date(input.startsAt) : new Date();
+    if (Number.isNaN(startsAt.getTime())) {
+      throw new BadRequestException("Некорректная дата начала абонемента");
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const plan = await client.query<{
+        id: string;
+        visit_limit: number;
+        duration_days: number;
+        price_minor: string;
+        currency: string;
+      }>(
+        `SELECT
+           id,visit_limit,duration_days,price_minor::text,currency
+         FROM service_package_plan
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+        [context.tenantId, input.planId]
+      );
+      const planRow = plan.rows[0];
+      if (!planRow) throw new NotFoundException("Тариф абонемента не найден");
+
+      const party = await client.query(
+        `SELECT 1 FROM party
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+        [context.tenantId, input.partyId]
+      );
+      if (!party.rowCount) throw new NotFoundException("Клиент не найден");
+
+      if (input.salesOrderId) {
+        const order = await client.query(
+          `SELECT 1 FROM sales_order
+           WHERE tenant_id=$1 AND id=$2
+             AND order_status NOT IN ('CANCELLED')`,
+          [context.tenantId, input.salesOrderId]
+        );
+        if (!order.rowCount) {
+          throw new NotFoundException("Заказ продажи не найден");
+        }
+      }
+
+      const expiresAt = new Date(
+        startsAt.getTime() + planRow.duration_days * 86400000
+      );
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO service_package(
+           tenant_id,plan_id,party_id,sales_order_id,
+           starts_at,expires_at,visit_limit_snapshot,
+           price_minor_snapshot,currency,created_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         RETURNING id`,
+        [
+          context.tenantId,
+          planRow.id,
+          input.partyId,
+          input.salesOrderId ?? null,
+          startsAt,
+          expiresAt,
+          planRow.visit_limit,
+          planRow.price_minor,
+          planRow.currency,
+          context.membershipId
+        ]
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error("SERVICE_PACKAGE_ISSUE_FAILED");
+
+      await client.query(
+        `INSERT INTO audit_event(
+           tenant_id,actor_user_id,actor_membership_id,
+           action,resource_type,resource_id,after_data
+         ) VALUES ($1,$2,$3,'service.package_issued','service_package',$4,$5)`,
+        [
+          context.tenantId,
+          context.userId,
+          context.membershipId,
+          row.id,
+          JSON.stringify({
+            planId: planRow.id,
+            partyId: input.partyId,
+            visitLimit: planRow.visit_limit,
+            expiresAt: expiresAt.toISOString()
+          })
+        ]
+      );
+
+      return { id: row.id, expiresAt: expiresAt.toISOString() };
+    });
+  }
+
   async assets(
     context: TenantContext,
     partyId?: string
@@ -642,6 +883,7 @@ export class BookingService {
       startsAt: string;
       partyId?: string;
       assetId?: string;
+      packageId?: string;
       branchId?: string;
       notes?: string;
       source?: "MANUAL" | "PUBLIC_SITE" | "PHONE" | "API" | "IMPORT";
@@ -710,6 +952,30 @@ export class BookingService {
           );
         }
         effectivePartyId = effectivePartyId ?? assetRow.party_id;
+      }
+
+      if (input.packageId) {
+        const packageOwner = await client.query<{
+          party_id: string;
+        }>(
+          `SELECT party_id
+           FROM service_package
+           WHERE tenant_id=$1 AND id=$2
+             AND status='ACTIVE'
+             AND starts_at<=now()
+             AND expires_at>now()`,
+          [context.tenantId, input.packageId]
+        );
+        const packageRow = packageOwner.rows[0];
+        if (!packageRow) {
+          throw new NotFoundException("Активный абонемент не найден");
+        }
+        if (effectivePartyId && effectivePartyId !== packageRow.party_id) {
+          throw new ConflictException(
+            "Абонемент принадлежит другому клиенту"
+          );
+        }
+        effectivePartyId = effectivePartyId ?? packageRow.party_id;
       }
 
       if (effectivePartyId) {
@@ -801,6 +1067,18 @@ export class BookingService {
       const booking = result.rows[0];
       if (!booking) throw new Error("SERVICE_BOOKING_CREATE_FAILED");
 
+      if (input.packageId) {
+        await this.reservePackageForBooking(
+          client,
+          context.tenantId,
+          input.packageId,
+          booking.id,
+          effectivePartyId,
+          input.serviceId,
+          startsAt
+        );
+      }
+
       for (const resource of resources) {
         await client.query(
           `INSERT INTO service_booking_resource(
@@ -841,6 +1119,7 @@ export class BookingService {
           endsAt: endsAt.toISOString(),
           partyId: effectivePartyId,
           assetId: input.assetId ?? null,
+          packageId: input.packageId ?? null,
           resourceIds
         }
       });
@@ -1110,6 +1389,15 @@ export class BookingService {
       const row = result.rows[0];
       if (!row) {
         throw new ConflictException("Запись уже изменена или переход недоступен");
+      }
+
+      if (["COMPLETED","CANCELLED","NO_SHOW"].includes(row.status)) {
+        await this.settlePackageRedemption(
+          client,
+          context.tenantId,
+          bookingId,
+          row.status as "COMPLETED" | "CANCELLED" | "NO_SHOW"
+        );
       }
 
       if (row.status === "COMPLETED") {
@@ -1384,6 +1672,142 @@ export class BookingService {
     const sequence = BigInt(counter.rows[0]?.value ?? "0");
     const year = new Date().getUTCFullYear();
     return `${prefix}-${year}-${sequence.toString().padStart(6, "0")}`;
+  }
+
+  private async reservePackageForBooking(
+    client: PoolClient,
+    tenantId: string,
+    packageId: string,
+    bookingId: string,
+    partyId: string | null,
+    serviceId: string,
+    startsAt: Date
+  ): Promise<void> {
+    if (!partyId) {
+      throw new BadRequestException("Для абонемента необходимо выбрать клиента");
+    }
+
+    const result = await client.query<{
+      party_id: string;
+      starts_at: Date;
+      expires_at: Date;
+      visit_limit_snapshot: number;
+      reserved_visits: number;
+      used_visits: number;
+      applicable_service_id: string | null;
+    }>(
+      `SELECT
+         sp.party_id,sp.starts_at,sp.expires_at,
+         sp.visit_limit_snapshot,sp.reserved_visits,sp.used_visits,
+         plan.applicable_service_id
+       FROM service_package sp
+       JOIN service_package_plan plan
+         ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
+       WHERE sp.tenant_id=$1 AND sp.id=$2 AND sp.status='ACTIVE'
+       FOR UPDATE OF sp`,
+      [tenantId, packageId]
+    );
+    const row = result.rows[0];
+    if (!row) throw new NotFoundException("Активный абонемент не найден");
+    if (row.party_id !== partyId) {
+      throw new ConflictException("Абонемент принадлежит другому клиенту");
+    }
+    if (startsAt < row.starts_at || startsAt >= row.expires_at) {
+      throw new ConflictException(
+        "Дата записи находится вне срока действия абонемента"
+      );
+    }
+    if (
+      row.applicable_service_id &&
+      row.applicable_service_id !== serviceId
+    ) {
+      throw new ConflictException(
+        "Абонемент не действует на выбранную услугу"
+      );
+    }
+    if (
+      row.reserved_visits + row.used_visits >=
+      row.visit_limit_snapshot
+    ) {
+      throw new ConflictException("В абонементе закончились посещения");
+    }
+
+    await client.query(
+      `UPDATE service_package
+       SET reserved_visits=reserved_visits+1,updated_at=now()
+       WHERE tenant_id=$1 AND id=$2`,
+      [tenantId, packageId]
+    );
+    await client.query(
+      `INSERT INTO service_package_redemption(
+         tenant_id,package_id,booking_id,state
+       ) VALUES ($1,$2,$3,'RESERVED')`,
+      [tenantId, packageId, bookingId]
+    );
+  }
+
+  private async settlePackageRedemption(
+    client: PoolClient,
+    tenantId: string,
+    bookingId: string,
+    bookingStatus: "COMPLETED" | "CANCELLED" | "NO_SHOW"
+  ): Promise<void> {
+    const redemption = await client.query<{
+      id: string;
+      package_id: string;
+      state: string;
+      no_show_policy: "RELEASE" | "CONSUME";
+    }>(
+      `SELECT r.id,r.package_id,r.state,plan.no_show_policy
+       FROM service_package_redemption r
+       JOIN service_package sp
+         ON sp.tenant_id=r.tenant_id AND sp.id=r.package_id
+       JOIN service_package_plan plan
+         ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
+       WHERE r.tenant_id=$1 AND r.booking_id=$2
+       FOR UPDATE OF r,sp`,
+      [tenantId, bookingId]
+    );
+    const row = redemption.rows[0];
+    if (!row || row.state !== "RESERVED") return;
+
+    const consume =
+      bookingStatus === "COMPLETED" ||
+      (bookingStatus === "NO_SHOW" && row.no_show_policy === "CONSUME");
+
+    if (consume) {
+      await client.query(
+        `UPDATE service_package
+         SET reserved_visits=reserved_visits-1,
+             used_visits=used_visits+1,
+             status=CASE
+               WHEN used_visits+1 >= visit_limit_snapshot THEN 'EXHAUSTED'
+               ELSE status
+             END,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0`,
+        [tenantId, row.package_id]
+      );
+      await client.query(
+        `UPDATE service_package_redemption
+         SET state='CONSUMED',settled_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [tenantId, row.id]
+      );
+    } else {
+      await client.query(
+        `UPDATE service_package
+         SET reserved_visits=reserved_visits-1,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0`,
+        [tenantId, row.package_id]
+      );
+      await client.query(
+        `UPDATE service_package_redemption
+         SET state='RELEASED',settled_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [tenantId, row.id]
+      );
+    }
   }
 
   private normalizeAssetIdentifier(value?: string): string | null {
