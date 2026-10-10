@@ -483,20 +483,77 @@ export class SiteFormsService {
           phone:payload.phone??undefined,
           email:payload.email??undefined,
           responsibleMembershipId:responsible,
-          idempotencyKey:"dance-public-parent:"+existing.id
+          idempotencyKey:"dance-public-parent:"+existing.id,
+          deduplicateContacts:true
         });
-        const child=await this.parties.create(context,{
-          displayName:childName,
-          responsibleMembershipId:responsible,
-          idempotencyKey:"dance-public-child:"+existing.id
-        });
-        const student=await this.dance.createStudent(context,{
-          partyId:child.id,
-          birthDate:childBirthDate,
-          status:"TRIAL",
-          payerPartyId:parent.id,
-          payerRelation:"PARENT"
-        });
+
+        const student=await this.database.withTenantTransaction(
+          context,
+          async client=>{
+            const identity=
+              context.tenantId+"|dance-child|"+parent.id+"|"+
+              childName.toLowerCase()+"|"+childBirthDate;
+            await client.query(
+              "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+              [identity]
+            );
+
+            const found=await client.query<{
+              student_id:string;
+              party_id:string;
+            }>(
+              `SELECT s.id AS student_id,s.party_id
+               FROM dance_student s
+               JOIN party cp
+                 ON cp.tenant_id=s.tenant_id AND cp.id=s.party_id
+               JOIN party_relationship rel
+                 ON rel.tenant_id=s.tenant_id
+                AND rel.from_party_id=s.party_id
+                AND rel.to_party_id=$2
+                AND rel.relation_type IN ('PARENT','GUARDIAN','PAYER')
+                AND (rel.ends_on IS NULL OR rel.ends_on>=current_date)
+               WHERE s.tenant_id=$1
+                 AND lower(cp.display_name)=lower($3)
+                 AND s.birth_date=$4::date
+                 AND s.status<>'ARCHIVED'
+               ORDER BY s.created_at
+               LIMIT 2`,
+              [
+                context.tenantId,parent.id,childName,childBirthDate
+              ]
+            );
+
+            if(found.rowCount>1){
+              throw new ConflictException(
+                "Найдено несколько карточек ребёнка; требуется объединение дублей"
+              );
+            }
+
+            const current=found.rows[0];
+            if(current){
+              return this.dance.createStudent(context,{
+                partyId:current.party_id,
+                birthDate:childBirthDate,
+                status:"TRIAL",
+                payerPartyId:parent.id,
+                payerRelation:"PARENT"
+              });
+            }
+
+            const child=await this.parties.create(context,{
+              displayName:childName,
+              responsibleMembershipId:responsible,
+              idempotencyKey:"dance-public-child:"+existing.id
+            });
+            return this.dance.createStudent(context,{
+              partyId:child.id,
+              birthDate:childBirthDate,
+              status:"TRIAL",
+              payerPartyId:parent.id,
+              payerRelation:"PARENT"
+            });
+          }
+        );
         const participant=await this.dance.addParticipant(
           context,
           lessonId,
