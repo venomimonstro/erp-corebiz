@@ -182,6 +182,83 @@ export class DanceStudioService {
         [context.tenantId, scopeIds]
       );
 
+      const attention = await client.query(
+        `WITH scoped_lessons AS (
+           SELECT l.*
+           FROM dance_lesson l
+           LEFT JOIN service_resource tr
+             ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
+           WHERE l.tenant_id=$1
+             AND (
+               $2::uuid[] IS NULL
+               OR tr.membership_id = ANY($2::uuid[])
+             )
+         )
+         SELECT
+           (
+             SELECT count(*)::integer
+             FROM scoped_lessons l
+             WHERE l.ends_at < now()
+               AND l.status IN ('PLANNED','OPEN_FOR_BOOKING','STARTED')
+           ) AS unclosed_past_lessons,
+           (
+             SELECT count(*)::integer
+             FROM dance_lesson_participant lp
+             JOIN scoped_lessons l ON l.id=lp.lesson_id
+             WHERE lp.tenant_id=$1
+               AND lp.status IN ('ATTENDED','LATE')
+               AND lp.package_id IS NULL
+               AND lp.price_source='DIRECT'
+               AND lp.charge_minor=0
+           ) AS attended_without_payment_source,
+           (
+             SELECT count(*)::integer
+             FROM scoped_lessons l
+             WHERE l.status='COMPLETED'
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM dance_lesson_profitability p
+                 WHERE p.tenant_id=l.tenant_id AND p.lesson_id=l.id
+               )
+           ) AS completed_without_profitability,
+           (
+             SELECT count(*)::integer
+             FROM scoped_lessons l
+             WHERE l.status='COMPLETED'
+               AND l.trainer_resource_id IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM trainer_compensation_accrual a
+                 WHERE a.tenant_id=l.tenant_id AND a.lesson_id=l.id
+               )
+           ) AS completed_without_trainer_accrual,
+           (
+             SELECT count(*)::integer
+             FROM dance_lesson_participant lp
+             JOIN scoped_lessons l ON l.id=lp.lesson_id
+             WHERE lp.tenant_id=$1 AND lp.status='WAITLIST'
+               AND l.starts_at>now()
+           ) AS lesson_waitlist,
+           (
+             SELECT count(*)::integer
+             FROM (
+               SELECT l.id,l.capacity,
+                      count(lp.id) FILTER (
+                        WHERE lp.status NOT IN ('WAITLIST','CANCELLED_IN_TIME')
+                      ) AS occupied
+               FROM scoped_lessons l
+               LEFT JOIN dance_lesson_participant lp
+                 ON lp.tenant_id=l.tenant_id AND lp.lesson_id=l.id
+               WHERE l.status IN ('PLANNED','OPEN_FOR_BOOKING','STARTED')
+               GROUP BY l.id,l.capacity
+               HAVING count(lp.id) FILTER (
+                 WHERE lp.status NOT IN ('WAITLIST','CANCELLED_IN_TIME')
+               ) > l.capacity
+             ) q
+           ) AS over_capacity`,
+        [context.tenantId,scopeIds]
+      );
+
       return {
         todayLessons: today.rows,
         debt: debt.rows[0] ?? {
@@ -199,6 +276,14 @@ export class DanceStudioService {
           trainer_cost_minor: "0",
           room_cost_minor: "0",
           margin_minor: "0"
+        },
+        attention: attention.rows[0] ?? {
+          unclosed_past_lessons: 0,
+          attended_without_payment_source: 0,
+          completed_without_profitability: 0,
+          completed_without_trainer_accrual: 0,
+          lesson_waitlist: 0,
+          over_capacity: 0
         }
       };
     });
