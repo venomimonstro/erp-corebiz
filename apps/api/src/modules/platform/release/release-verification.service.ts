@@ -296,8 +296,8 @@ export class ReleaseVerificationService {
       "API:BUSINESS_JOURNEYS": {
         href: "/app/settings/release",
         action:
-          "Пройти Golden Business Journeys для TRADE, ECOMMERCE, SERVICE и WAREHOUSE_3PL.",
-        command: "node scripts/golden-business-journeys.mjs"
+          "Пройти Golden Business Journeys и 100-user contention simulation: торговля, e-commerce, сервис, 3PL, конкурентный склад/запись и tenant isolation.",
+        command: "pnpm golden:journeys && pnpm simulate:100-users"
       },
       "API:BROWSER_SMOKE": {
         href: "/app/settings/release",
