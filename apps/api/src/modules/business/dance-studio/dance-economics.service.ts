@@ -183,6 +183,29 @@ export class DanceEconomicsService {
         [context.tenantId,input.trainerResourceId]
       );
       if(!trainer.rowCount) throw new NotFoundException("Тренер не найден");
+
+      const overlap=await client.query(
+        `SELECT 1
+         FROM trainer_compensation_plan
+         WHERE tenant_id=$1
+           AND trainer_resource_id=$2
+           AND lesson_type IS NOT DISTINCT FROM $3::text
+           AND priority=$4
+           AND status='ACTIVE'
+           AND daterange(valid_from,valid_to,'[]')
+               && daterange($5::date,$6::date,'[]')
+         LIMIT 1`,
+        [
+          context.tenantId,input.trainerResourceId,input.lessonType??null,
+          priority,from,input.validTo??null
+        ]
+      );
+      if(overlap.rowCount){
+        throw new ConflictException(
+          "Для тренера уже есть активное правило с таким типом занятия и приоритетом на этот период"
+        );
+      }
+
       const row=await client.query(
         `INSERT INTO trainer_compensation_plan(
            tenant_id,trainer_resource_id,lesson_type,calculation_type,
