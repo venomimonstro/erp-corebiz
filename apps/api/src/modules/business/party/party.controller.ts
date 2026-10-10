@@ -1,12 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Req
-} from "@nestjs/common";
+import { Body, Controller, Get, Post, Req } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
@@ -21,50 +13,6 @@ export class PartyController {
   async list(@Req() request: AuthenticatedRequest): Promise<ApiSuccess<unknown>> {
     const context = this.context(request);
     return { ok: true, data: await this.parties.list(context) };
-  }
-
-  @Get(":partyId/assets")
-  @RequirePermission("crm.read")
-  async assets(
-    @Req() request: AuthenticatedRequest,
-    @Param("partyId") partyId: string
-  ): Promise<ApiSuccess<unknown>> {
-    return {
-      ok: true,
-      data: await this.parties.assets(this.context(request), partyId)
-    };
-  }
-
-  @Post(":partyId/assets")
-  @RequirePermission("crm.write")
-  async createAsset(
-    @Req() request: AuthenticatedRequest,
-    @Param("partyId") partyId: string,
-    @Body() body: any
-  ): Promise<ApiSuccess<unknown>> {
-    return {
-      ok: true,
-      data: await this.parties.createAsset(
-        this.context(request),
-        partyId,
-        body
-      )
-    };
-  }
-
-  @Patch("assets/:assetId")
-  @RequirePermission("crm.write")
-  async updateAsset(
-    @Req() request: AuthenticatedRequest,
-    @Param("assetId") assetId: string,
-    @Body() body: any
-  ): Promise<ApiSuccess<{ updated: true }>> {
-    await this.parties.updateAsset(
-      this.context(request),
-      assetId,
-      body
-    );
-    return { ok: true, data: { updated: true } };
   }
 
   @Post()
