@@ -317,6 +317,7 @@ export class GoLiveService {
         const flow = await client.query<{
           parties: string;
           deals: string;
+          projects: string;
           tasks: string;
         }>(
           `SELECT
@@ -324,8 +325,12 @@ export class GoLiveService {
                WHERE tenant_id=$1 AND status='ACTIVE')::text AS parties,
              (SELECT count(*) FROM crm_deal
                WHERE tenant_id=$1)::text AS deals,
+             (SELECT count(*) FROM work_project
+               WHERE tenant_id=$1
+                 AND status IN ('ACTIVE','ON_HOLD','COMPLETED'))::text AS projects,
              (SELECT count(*) FROM task
                WHERE tenant_id=$1
+                 AND linked_type='PROJECT'
                  AND state IN ('OPEN','IN_PROGRESS','WAITING','DONE'))::text AS tasks`,
           [context.tenantId]
         );
@@ -336,13 +341,15 @@ export class GoLiveService {
           ok:
             Number(row.parties) > 0 &&
             Number(row.deals) > 0 &&
+            Number(row.projects) > 0 &&
             Number(row.tasks) > 0,
           blocking: true,
           detail:
             "Клиентов " + row.parties +
-            " · клиентских работ " + row.deals +
-            " · задач " + row.tasks,
-          href: "/app/crm/deals"
+            " · сделок " + row.deals +
+            " · проектов " + row.projects +
+            " · проектных задач " + row.tasks,
+          href: "/app/projects"
         });
       } else if (profile === "SERVICE") {
         const flow = await client.query<{
