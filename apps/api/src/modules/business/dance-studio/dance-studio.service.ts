@@ -2999,13 +2999,14 @@ export class DanceStudioService {
       activation_policy_snapshot:"FULL_PAYMENT"|"IMMEDIATE"|"PROPORTIONAL"|"GRACE_PERIOD";
       allowed_debt_minor_snapshot:string;
       price_minor_snapshot:string;
+      sales_order_id:string|null;
     }>(
       `SELECT
          sp.party_id,sp.starts_at,sp.expires_at,sp.visit_limit_snapshot,
          sp.reserved_visits,sp.used_visits,sp.dance_program_id_snapshot,
          sp.dance_group_id_snapshot,plan.applicable_service_id,
          sp.activation_policy_snapshot,sp.allowed_debt_minor_snapshot::text,
-         sp.price_minor_snapshot::text
+         sp.price_minor_snapshot::text,sp.sales_order_id
        FROM service_package sp
        JOIN service_package_plan plan
          ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
@@ -3054,19 +3055,35 @@ export class DanceStudioService {
       settled_minor:string;
       due_at:Date|null;
     }>(
-      `SELECT c.amount_minor::text,
-              coalesce(o.settled_minor,0)::text AS settled_minor,
-              o.due_at
-       FROM dance_student_charge c
-       JOIN financial_obligation o
-         ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
-       WHERE c.tenant_id=$1
-         AND c.source_type='PACKAGE'
-         AND c.source_id=$2
-         AND c.status<>'CANCELLED'
+      `SELECT
+         o.amount_minor::text,
+         o.settled_minor::text,
+         o.due_at
+       FROM financial_obligation o
+       WHERE o.tenant_id=$1
+         AND o.direction='RECEIVABLE'
+         AND (
+           EXISTS (
+             SELECT 1
+             FROM dance_student_charge c
+             WHERE c.tenant_id=o.tenant_id
+               AND c.obligation_id=o.id
+               AND c.source_type='PACKAGE'
+               AND c.source_id=$2
+               AND c.status<>'CANCELLED'
+           )
+           OR (
+             $3::uuid IS NOT NULL
+             AND o.source_type='SALES_ORDER'
+             AND o.source_id=$3
+           )
+         )
+       ORDER BY
+         CASE WHEN o.source_type='DANCE_STUDENT_CHARGE' THEN 0 ELSE 1 END,
+         o.created_at
        LIMIT 1
-       FOR UPDATE OF o`,
-      [tenantId,packageId]
+       FOR UPDATE`,
+      [tenantId,packageId,row.sales_order_id]
     );
     const chargeRow=charge.rows[0];
     if(chargeRow){
