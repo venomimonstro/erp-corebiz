@@ -340,6 +340,7 @@ export class DanceStudioService {
              JOIN scoped_lessons l ON l.id=lp.lesson_id
              WHERE lp.tenant_id=$1 AND lp.status='WAITLIST'
                AND l.starts_at>now()
+               AND l.status IN ('PLANNED','OPEN_FOR_BOOKING','STARTED')
            ) AS lesson_waitlist,
            (
              SELECT count(*)::integer
