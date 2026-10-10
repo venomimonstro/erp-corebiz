@@ -224,6 +224,16 @@ async function inspectRequiredHardening(root) {
       path: "apps/api/src/modules/platform/data-management/data-management.service.ts",
       patterns: [/runtime\.deny/, /tenant_export/],
       message: "Tenant export runtime budget is not enforced"
+    },
+    {
+      path: "apps/api/src/modules/platform/authorization/capability.guard.ts",
+      patterns: [/capability_toggle/, /PERMISSION_CAPABILITY/, /enabled !== false/],
+      message: "Disabled business capabilities are not enforced on API routes"
+    },
+    {
+      path: "apps/api/src/modules/business/projects/projects.service.ts",
+      patterns: [/projects\.read/, /projects\.write/, /membershipIdsForScope/, /source_deal_id/],
+      message: "Project scope or deal-conversion hardening is missing"
     }
   ];
 
@@ -244,7 +254,8 @@ async function inspectRequiredHardening(root) {
 
   const requiredMigrations = [
     "136_party_create_idempotency.sql",
-    "137_runtime_pressure_leases.sql"
+    "137_runtime_pressure_leases.sql",
+    "148_capability_project_hardening.sql"
   ];
 
   for (const name of requiredMigrations) {
