@@ -165,6 +165,14 @@ WHERE sp.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
       AND c.source_id=sp.id
       AND c.status<>'CANCELLED'
   )
+  AND NOT EXISTS(
+    SELECT 1 FROM financial_obligation o
+    WHERE o.tenant_id=sp.tenant_id
+      AND o.direction='RECEIVABLE'
+      AND o.source_type='SALES_ORDER'
+      AND o.source_id=sp.sales_order_id
+      AND o.status<>'CANCELLED'
+  )
 UNION ALL
 SELECT 'DANCE_RENT_STATEMENT_PAYABLE_MISSING',count(*)::bigint
 FROM room_rental_statement s
