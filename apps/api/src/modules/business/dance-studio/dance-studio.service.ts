@@ -349,6 +349,58 @@ export class DanceStudioService {
     });
   }
 
+  async makeupCredits(
+    context:TenantContext,
+    studentId?:string
+  ){
+    const scopeIds=await this.scopeIds(context,"dance.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           mc.id,mc.student_id,p.display_name AS student_name,
+           mc.source_lesson_id,mc.expires_at,mc.dance_program_id,
+           dp.name AS program_name,mc.dance_group_id,dg.name AS group_name,
+           mc.status,mc.reserved_participant_id,mc.used_participant_id,
+           mc.created_at
+         FROM dance_makeup_credit mc
+         JOIN dance_student s
+           ON s.tenant_id=mc.tenant_id AND s.id=mc.student_id
+         JOIN party p
+           ON p.tenant_id=s.tenant_id AND p.id=s.party_id
+         LEFT JOIN dance_program dp
+           ON dp.tenant_id=mc.tenant_id AND dp.id=mc.dance_program_id
+         LEFT JOIN dance_group dg
+           ON dg.tenant_id=mc.tenant_id AND dg.id=mc.dance_group_id
+         WHERE mc.tenant_id=$1
+           AND ($2::uuid IS NULL OR mc.student_id=$2)
+           AND (
+             $3::uuid[] IS NULL
+             OR p.responsible_membership_id = ANY($3::uuid[])
+             OR EXISTS (
+               SELECT 1
+               FROM dance_lesson_participant lp
+               JOIN dance_lesson l
+                 ON l.tenant_id=lp.tenant_id AND l.id=lp.lesson_id
+               JOIN service_resource tr
+                 ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
+               WHERE lp.tenant_id=s.tenant_id
+                 AND lp.student_id=s.id
+                 AND tr.membership_id = ANY($3::uuid[])
+             )
+           )
+         ORDER BY
+           CASE mc.status
+             WHEN 'AVAILABLE' THEN 0
+             WHEN 'RESERVED' THEN 1
+             ELSE 2
+           END,
+           mc.expires_at,mc.created_at`,
+        [context.tenantId,studentId??null,scopeIds]
+      );
+      return result.rows;
+    });
+  }
+
   async createStudent(
     context: TenantContext,
     input: {
@@ -1206,6 +1258,7 @@ export class DanceStudioService {
     input:{
       studentId:string;
       packageId?:string;
+      makeupCreditId?:string;
       chargeMinor?:string;
       priceSource?:"DIRECT"|"TRIAL"|"FREE"|"MAKEUP";
       allowWaitlist?:boolean;
@@ -1216,8 +1269,22 @@ export class DanceStudioService {
     if(!/^\d+$/.test(charge)){
       throw new BadRequestException("Некорректная стоимость");
     }
+    if(input.packageId&&input.makeupCreditId){
+      throw new BadRequestException(
+        "Нельзя одновременно использовать абонемент и отработку"
+      );
+    }
     const priceSource:"PACKAGE"|"DIRECT"|"TRIAL"|"FREE"|"MAKEUP"=
-      input.packageId ? "PACKAGE" : (input.priceSource ?? "DIRECT");
+      input.packageId
+        ? "PACKAGE"
+        : input.makeupCreditId
+          ? "MAKEUP"
+          : (input.priceSource ?? "DIRECT");
+    if(input.makeupCreditId&&BigInt(charge)>0n){
+      throw new BadRequestException(
+        "Отработка не должна создавать дополнительное начисление"
+      );
+    }
 
     return this.database.withTenantTransaction(context,async client=>{
       const lesson=await this.assertLessonAccess(
@@ -1277,8 +1344,8 @@ export class DanceStudioService {
           }
           const wait=await client.query(
             `UPDATE dance_lesson_participant
-             SET package_id=$4,status='WAITLIST',price_source=$5,
-                 charge_minor=$6,currency=$7,
+             SET package_id=$4,makeup_credit_id=$5,status='WAITLIST',
+               price_source=$6,charge_minor=$7,currency=$8,
                  attendance_marked_by_membership_id=NULL,
                  attendance_marked_at=NULL,
                  version=version+1,updated_at=now()
@@ -1287,7 +1354,7 @@ export class DanceStudioService {
              RETURNING id,status,version`,
             [
               context.tenantId,lessonId,previous.id,input.packageId??null,
-              priceSource,charge,lesson.currency
+              input.makeupCreditId??null,priceSource,charge,lesson.currency
             ]
           );
           return wait.rows[0];
@@ -1295,8 +1362,8 @@ export class DanceStudioService {
 
         const rebooked=await client.query(
           `UPDATE dance_lesson_participant
-           SET package_id=$4,status='BOOKED',price_source=$5,
-               charge_minor=$6,currency=$7,
+           SET package_id=$4,makeup_credit_id=$5,status='BOOKED',
+               price_source=$6,charge_minor=$7,currency=$8,
                attendance_marked_by_membership_id=NULL,
                attendance_marked_at=NULL,
                version=version+1,updated_at=now()
@@ -1305,7 +1372,7 @@ export class DanceStudioService {
            RETURNING id,status,version`,
           [
             context.tenantId,lessonId,previous.id,input.packageId??null,
-            priceSource,charge,lesson.currency
+            input.makeupCreditId??null,priceSource,charge,lesson.currency
           ]
         );
         const participant=rebooked.rows[0];
@@ -1314,7 +1381,7 @@ export class DanceStudioService {
         }
         await this.attachParticipantPaymentTx(
           client,context,lesson,student.party_id,input.studentId,
-          participant.id,input.packageId,charge
+          participant.id,input.packageId,input.makeupCreditId,charge
         );
         return participant;
       }
@@ -1325,13 +1392,13 @@ export class DanceStudioService {
         }
         const wait=await client.query(
           `INSERT INTO dance_lesson_participant(
-             tenant_id,lesson_id,student_id,package_id,status,
+             tenant_id,lesson_id,student_id,package_id,makeup_credit_id,status,
              price_source,charge_minor,currency
-           ) VALUES($1,$2,$3,$4,'WAITLIST',$5,$6,$7)
+           ) VALUES($1,$2,$3,$4,$5,'WAITLIST',$6,$7,$8)
            RETURNING id,status,version`,
           [
             context.tenantId,lessonId,input.studentId,input.packageId??null,
-            priceSource,charge,lesson.currency
+            input.makeupCreditId??null,priceSource,charge,lesson.currency
           ]
         );
         return wait.rows[0];
@@ -1339,13 +1406,13 @@ export class DanceStudioService {
 
       const row=await client.query(
         `INSERT INTO dance_lesson_participant(
-           tenant_id,lesson_id,student_id,package_id,status,
+           tenant_id,lesson_id,student_id,package_id,makeup_credit_id,status,
            price_source,charge_minor,currency
-         ) VALUES($1,$2,$3,$4,'BOOKED',$5,$6,$7)
+         ) VALUES($1,$2,$3,$4,$5,'BOOKED',$6,$7,$8)
          RETURNING id,status,version`,
         [
           context.tenantId,lessonId,input.studentId,input.packageId??null,
-          priceSource,charge,lesson.currency
+          input.makeupCreditId??null,priceSource,charge,lesson.currency
         ]
       );
       const participant=row.rows[0];
@@ -1355,7 +1422,7 @@ export class DanceStudioService {
 
       await this.attachParticipantPaymentTx(
         client,context,lesson,student.party_id,input.studentId,
-        participant.id,input.packageId,charge
+        participant.id,input.packageId,input.makeupCreditId,charge
       );
       return participant;
     });
@@ -1383,13 +1450,14 @@ export class DanceStudioService {
         id:string;
         student_id:string;
         package_id:string|null;
+        makeup_credit_id:string|null;
         status:string;
         charge_minor:string;
         price_source:string;
         version:number;
       }>(
         `SELECT
-           id,student_id,package_id,status,charge_minor::text,
+           id,student_id,package_id,makeup_credit_id,status,charge_minor::text,
            price_source,version
          FROM dance_lesson_participant
          WHERE tenant_id=$1 AND lesson_id=$2 AND id=$3
@@ -1424,6 +1492,10 @@ export class DanceStudioService {
         if(current.package_id){
           await this.releaseDanceReservationTx(
             client,context.tenantId,current.id
+          );
+        }else if(current.makeup_credit_id){
+          await this.releaseMakeupCreditTx(
+            client,context.tenantId,current.makeup_credit_id,current.id
           );
         }else if(BigInt(current.charge_minor)>0n){
           await this.cancelDirectLessonChargeTx(
@@ -1891,12 +1963,20 @@ export class DanceStudioService {
     studentId:string,
     participantId:string,
     packageId:string|undefined,
+    makeupCreditId:string|undefined,
     chargeMinor:string
   ):Promise<void>{
     if(packageId){
       await this.reserveDancePackage(
         client,context.tenantId,packageId,participantId,
         studentPartyId,lesson
+      );
+      return;
+    }
+    if(makeupCreditId){
+      await this.reserveMakeupCreditTx(
+        client,context.tenantId,makeupCreditId,participantId,
+        studentId,lesson
       );
       return;
     }
@@ -1911,6 +1991,83 @@ export class DanceStudioService {
         amountMinor:chargeMinor,
         dueAt:new Date(lesson.starts_at)
       });
+    }
+  }
+
+  private async reserveMakeupCreditTx(
+    client:PoolClient,
+    tenantId:string,
+    creditId:string,
+    participantId:string,
+    studentId:string,
+    lesson:any
+  ):Promise<void>{
+    const result=await client.query<{
+      student_id:string;
+      expires_at:Date;
+      dance_program_id:string|null;
+      dance_group_id:string|null;
+      status:string;
+    }>(
+      `SELECT
+         student_id,expires_at,dance_program_id,dance_group_id,status
+       FROM dance_makeup_credit
+       WHERE tenant_id=$1 AND id=$2
+       FOR UPDATE`,
+      [tenantId,creditId]
+    );
+    const credit=result.rows[0];
+    if(!credit||credit.status!=="AVAILABLE"){
+      throw new ConflictException("Отработка уже недоступна");
+    }
+    if(credit.student_id!==studentId){
+      throw new ConflictException("Отработка принадлежит другому ученику");
+    }
+    if(new Date(credit.expires_at).getTime()<new Date(lesson.starts_at).getTime()){
+      throw new ConflictException("Срок отработки истёк");
+    }
+    if(
+      credit.dance_program_id &&
+      credit.dance_program_id!==lesson.program_id
+    ){
+      throw new ConflictException("Отработка не действует на это направление");
+    }
+    if(
+      credit.dance_group_id &&
+      credit.dance_group_id!==lesson.group_id
+    ){
+      throw new ConflictException("Отработка не действует на эту группу");
+    }
+
+    const updated=await client.query(
+      `UPDATE dance_makeup_credit
+       SET status='RESERVED',reserved_participant_id=$3,updated_at=now()
+       WHERE tenant_id=$1 AND id=$2 AND status='AVAILABLE'
+       RETURNING id`,
+      [tenantId,creditId,participantId]
+    );
+    if(!updated.rowCount){
+      throw new ConflictException("Отработка уже была зарезервирована");
+    }
+  }
+
+  private async releaseMakeupCreditTx(
+    client:PoolClient,
+    tenantId:string,
+    creditId:string,
+    participantId:string
+  ):Promise<void>{
+    const result=await client.query(
+      `UPDATE dance_makeup_credit
+       SET status='AVAILABLE',reserved_participant_id=NULL,updated_at=now()
+       WHERE tenant_id=$1 AND id=$2
+         AND status='RESERVED'
+         AND reserved_participant_id=$3
+       RETURNING id`,
+      [tenantId,creditId,participantId]
+    );
+    if(!result.rowCount){
+      throw new ConflictException("Резерв отработки уже изменён");
     }
   }
 
@@ -2124,7 +2281,8 @@ export class DanceStudioService {
     try{
       await this.attachParticipantPaymentTx(
         client,context,lesson,studentRow.party_id,candidate.student_id,
-        candidate.id,candidate.package_id??undefined,candidate.charge_minor
+        candidate.id,candidate.package_id??undefined,
+        candidate.makeup_credit_id??undefined,candidate.charge_minor
       );
     }catch(error){
       if(
