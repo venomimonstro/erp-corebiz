@@ -168,7 +168,7 @@ psql "${COREBIZ_RESTORE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
 pass_step "CORE:RESTORE"
 
 echo "[production-gate] 11/12 noisy-neighbor / runtime pressure gate"
-node scripts/noisy-neighbor-gate.mjs
+pnpm --filter @corebiz/api exec tsx src/scripts/noisy-neighbor-gate.ts
 pass_step "CORE:NOISY_NEIGHBOR"
 pass_step "CORE:PERFORMANCE"
 
