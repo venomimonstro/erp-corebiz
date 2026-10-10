@@ -12,8 +12,10 @@ export const BUSINESS_CAPABILITIES = [
   "sales",
   "procurement",
   "inventory",
-  "finance",
+  "finance","accounting",
+  "accounting",
   "service",
+  "projects",
   "channels",
   "oms",
   "sites",
@@ -68,7 +70,7 @@ export const BUSINESS_VERTICALS: Record<
     title: "Универсальный бизнес",
     summary: "Смешанные процессы без отраслевой преднастройки.",
     profileCode: "GENERAL",
-    version: 2,
+    version: 3,
     enabledCapabilities: [...BUSINESS_CAPABILITIES],
     customFields: [],
     ownerQuestions: [
@@ -93,9 +95,9 @@ export const BUSINESS_VERTICALS: Record<
     title: "Салон красоты / барбершоп",
     summary: "Онлайн-запись, мастера, услуги, материалы, повторные визиты и деньги.",
     profileCode: "SERVICE",
-    version: 2,
+    version: 3,
     enabledCapabilities: [
-      "crm","tasks","catalog","sales","procurement","inventory","finance",
+      "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
       "service","sites","growth","workflow","support"
     ],
     customFields: [
@@ -108,7 +110,7 @@ export const BUSINESS_VERTICALS: Record<
       "Какие услуги и мастера дают больше валовой прибыли?",
       "Кто из клиентов давно не возвращался?"
     ],
-    primaryWorkspaces: ["service", "crm", "finance", "growth"],
+    primaryWorkspaces: ["service", "crm", "finance","accounting", "growth"],
     operatingFlows: [
       "Клиент → запись → визит → услуга → оплата",
       "Расход материалов → себестоимость услуги",
@@ -125,9 +127,9 @@ export const BUSINESS_VERTICALS: Record<
     title: "Автосервис",
     summary: "CRM, карточки автомобилей, история обслуживания, работы, запчасти, склад и прибыль.",
     profileCode: "SERVICE",
-    version: 3,
+    version: 4,
     enabledCapabilities: [
-      "crm","tasks","catalog","sales","procurement","inventory","finance",
+      "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
       "service","sites","growth","workflow","support"
     ],
     customFields: [
@@ -156,9 +158,9 @@ export const BUSINESS_VERTICALS: Record<
     title: "Студия танцев / фитнес",
     summary: "Расписание, тренеры, залы, абонементы, посещения и финансовая загрузка.",
     profileCode: "SERVICE",
-    version: 3,
+    version: 4,
     enabledCapabilities: [
-      "crm","tasks","sales","finance","service","sites","growth","workflow","support"
+      "crm","tasks","sales","finance","accounting","service","sites","growth","workflow","support"
     ],
     customFields: [
       { entityType: "PARTY", fieldKey: "training_level", label: "Уровень подготовки", dataType: "SELECT", options: ["Новичок", "Средний", "Продвинутый"] },
@@ -169,7 +171,7 @@ export const BUSINESS_VERTICALS: Record<
       "Какова выручка на час зала?",
       "Кто перестал посещать занятия?"
     ],
-    primaryWorkspaces: ["service", "crm", "finance", "growth"],
+    primaryWorkspaces: ["service", "crm", "finance","accounting", "growth"],
     operatingFlows: [
       "Лид → пробное занятие → клиент → абонемент",
       "Абонемент → резерв посещения → занятие/no-show → списание или возврат",
@@ -188,9 +190,9 @@ export const BUSINESS_VERTICALS: Record<
     title: "Профессиональные услуги / IT / агентство",
     summary: "Лиды, сделки, проекты, этапы, трудозатраты, счета и дебиторка.",
     profileCode: "SERVICE",
-    version: 3,
+    version: 4,
     enabledCapabilities: [
-      "crm","tasks","sales","finance","service","sites","growth","workflow","support"
+      "crm","tasks","sales","finance","accounting","service","projects","sites","growth","workflow","support"
     ],
     customFields: [
       { entityType: "DEAL", fieldKey: "project_type", label: "Тип проекта", dataType: "TEXT" },
@@ -221,9 +223,9 @@ export const BUSINESS_VERTICALS: Record<
     title: "Розничная торговля",
     summary: "Товары, цены, остатки, закупки, продажи и деньги по точкам.",
     profileCode: "TRADE",
-    version: 2,
+    version: 3,
     enabledCapabilities: [
-      "crm","tasks","catalog","sales","procurement","inventory","finance",
+      "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
       "growth","workflow","support"
     ],
     customFields: [
@@ -252,9 +254,9 @@ export const BUSINESS_VERTICALS: Record<
     title: "Оптовая B2B торговля",
     summary: "CRM, договорные цены, кредитные лимиты, заказы, склад и дебиторка.",
     profileCode: "TRADE",
-    version: 3,
+    version: 4,
     enabledCapabilities: [
-      "crm","tasks","catalog","sales","procurement","inventory","finance",
+      "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
       "growth","workflow","support"
     ],
     customFields: [
@@ -286,9 +288,9 @@ export const BUSINESS_VERTICALS: Record<
     title: "Интернет-магазин",
     summary: "Каталог, сайт, корзина, заказы, OMS, склад, маркетинг и прибыль.",
     profileCode: "ECOMMERCE",
-    version: 2,
+    version: 3,
     enabledCapabilities: [
-      "crm","tasks","catalog","sales","procurement","inventory","finance",
+      "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
       "channels","oms","sites","growth","workflow","support"
     ],
     customFields: [
@@ -317,9 +319,9 @@ export const BUSINESS_VERTICALS: Record<
     title: "Продавец на маркетплейсах",
     summary: "Ozon/WB, единые SKU, заказы, остатки, закупки и прибыль по каналам.",
     profileCode: "ECOMMERCE",
-    version: 2,
+    version: 3,
     enabledCapabilities: [
-      "crm","tasks","catalog","sales","procurement","inventory","finance",
+      "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
       "channels","oms","growth","workflow","support"
     ],
     customFields: [
@@ -348,9 +350,9 @@ export const BUSINESS_VERTICALS: Record<
     title: "Склад / 3PL оператор",
     summary: "Приёмка, адресное хранение, задания, владельцы товара, SLA и биллинг.",
     profileCode: "WAREHOUSE_3PL",
-    version: 2,
+    version: 3,
     enabledCapabilities: [
-      "tasks","catalog","sales","procurement","inventory","finance",
+      "tasks","catalog","sales","procurement","inventory","finance","accounting",
       "oms","wms","workflow","support"
     ],
     customFields: [
@@ -361,7 +363,7 @@ export const BUSINESS_VERTICALS: Record<
       "Какие SLA под риском?",
       "Сколько заработано на каждом клиенте 3PL?"
     ],
-    primaryWorkspaces: ["wms", "inventory", "finance", "support"],
+    primaryWorkspaces: ["wms", "inventory", "finance","accounting", "support"],
     operatingFlows: [
       "ASN → док → приёмка → размещение",
       "Заказ → волна → отбор → упаковка → отгрузка",
