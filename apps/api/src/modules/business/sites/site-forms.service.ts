@@ -320,7 +320,8 @@ export class SiteFormsService {
           displayName:payload.name,
           phone:payload.phone??undefined,
           email:payload.email??undefined,
-          responsibleMembershipId:responsible
+          responsibleMembershipId:responsible,
+          idempotencyKey:"site-submission-party:"+existing.id
         });
 
         const deal=await this.crm.createDeal(context,{
@@ -357,7 +358,8 @@ export class SiteFormsService {
         displayName:payload.name,
         phone:payload.phone??undefined,
         email:payload.email??undefined,
-        responsibleMembershipId:responsible
+        responsibleMembershipId:responsible,
+        idempotencyKey:"site-submission-party:"+existing.id
       });
 
       const booking=await this.bookings.createBooking(context,{
