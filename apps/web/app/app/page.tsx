@@ -4,6 +4,39 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../components/app-sidebar";
 import { apiRequest } from "../../lib/api";
 
+type WorkspaceContext = {
+  roles: string[];
+  permissions: Array<{ code: string; scope: string }>;
+  profileCode: string;
+  workspace:
+    | "OWNER"
+    | "ADMIN"
+    | "SALES"
+    | "SERVICE"
+    | "WAREHOUSE"
+    | "FINANCE"
+    | "PROCUREMENT"
+    | "VIEWER";
+};
+
+type MemberWorkspace = {
+  workspace: string;
+  roles: string[];
+  title: string;
+  metrics: Array<{
+    label: string;
+    value: string;
+    detail: string;
+  }>;
+  actions: Array<{
+    id: string;
+    title: string;
+    detail: string;
+    href: string;
+    severity: "INFO" | "WARNING" | "CRITICAL";
+  }>;
+};
+
 type Activation = {
   profile: string;
   dismissed: boolean;
@@ -63,8 +96,48 @@ const queueLabels: Record<Dashboard["queue"][number]["type"], string> = {
   STOCK_RISK: "Склад"
 };
 
+const workspaceLabels: Record<WorkspaceContext["workspace"], {
+  eyebrow: string;
+  summary: string;
+}> = {
+  OWNER: {
+    eyebrow: "Среда владельца",
+    summary: "Ключевые показатели бизнеса и ситуации, где требуется решение."
+  },
+  ADMIN: {
+    eyebrow: "Среда администратора",
+    summary: "Состояние бизнеса и операционные исключения без лишних технических экранов."
+  },
+  SALES: {
+    eyebrow: "Рабочее место продаж",
+    summary: "Ваши сделки, задачи и заказы — только то, что нужно менеджеру сегодня."
+  },
+  SERVICE: {
+    eyebrow: "Рабочее место сотрудника",
+    summary: "Записи клиентов, ближайшие услуги и ваши задачи."
+  },
+  WAREHOUSE: {
+    eyebrow: "Рабочее место склада",
+    summary: "Очередь складских заданий и проблемы исполнения."
+  },
+  FINANCE: {
+    eyebrow: "Рабочее место финансов",
+    summary: "Дебиторка, кредиторка, банковская сверка и действия на сегодня."
+  },
+  PROCUREMENT: {
+    eyebrow: "Рабочее место закупок",
+    summary: "Заказы поставщикам, ожидаемые поставки и просрочки."
+  },
+  VIEWER: {
+    eyebrow: "Рабочее пространство",
+    summary: "Доступные вам разделы и действия."
+  }
+};
+
 export default function AppHomePage() {
+  const [context, setContext] = useState<WorkspaceContext | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [member, setMember] = useState<MemberWorkspace | null>(null);
   const [activation, setActivation] = useState<Activation | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -74,17 +147,31 @@ export default function AppHomePage() {
     setError("");
 
     try {
-      const [dashboardData, activationData] = await Promise.all([
-        apiRequest<Dashboard>("/dashboard/owner"),
-        apiRequest<Activation>("/dashboard/activation")
-      ]);
-      setDashboard(dashboardData);
-      setActivation(activationData);
+      const workspace = await apiRequest<WorkspaceContext>(
+        "/workspace/context"
+      );
+      setContext(workspace);
+
+      if (workspace.workspace === "OWNER" || workspace.workspace === "ADMIN") {
+        const [dashboardData, activationData] = await Promise.all([
+          apiRequest<Dashboard>("/dashboard/owner"),
+          apiRequest<Activation>("/dashboard/activation")
+        ]);
+        setDashboard(dashboardData);
+        setActivation(activationData);
+        setMember(null);
+      } else {
+        setMember(
+          await apiRequest<MemberWorkspace>("/dashboard/workspace")
+        );
+        setDashboard(null);
+        setActivation(null);
+      }
     } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
-          : "Не удалось загрузить рабочее пространство владельца"
+          : "Не удалось загрузить рабочее пространство"
       );
     } finally {
       setLoading(false);
@@ -112,7 +199,7 @@ export default function AppHomePage() {
     }
   }
 
-  const kpis = useMemo(() => {
+  const ownerKpis = useMemo(() => {
     if (!dashboard) return [];
 
     return [
@@ -125,6 +212,10 @@ export default function AppHomePage() {
     ];
   }, [dashboard]);
 
+  const workspaceCopy = context
+    ? workspaceLabels[context.workspace]
+    : workspaceLabels.VIEWER;
+
   return (
     <main className="app-shell">
       <AppSidebar active="dashboard" />
@@ -132,11 +223,9 @@ export default function AppHomePage() {
       <section className="workspace">
         <header className="workspace-header">
           <div>
-            <p className="muted">Среда владельца</p>
-            <h1>Сегодня</h1>
-            <p className="workspace-summary">
-              Только ключевые показатели и ситуации, где требуется решение.
-            </p>
+            <p className="muted">{workspaceCopy.eyebrow}</p>
+            <h1>{member?.title ?? "Сегодня"}</h1>
+            <p className="workspace-summary">{workspaceCopy.summary}</p>
           </div>
 
           <button onClick={() => void load()} type="button">
@@ -151,7 +240,7 @@ export default function AppHomePage() {
           </div>
         ) : null}
 
-        {loading ? <div className="board-loading">Собираем показатели…</div> : null}
+        {loading ? <div className="board-loading">Собираем рабочее пространство…</div> : null}
 
         {!loading && dashboard ? (
           <>
@@ -209,7 +298,7 @@ export default function AppHomePage() {
             ) : null}
 
             <div className="owner-kpi-grid">
-              {kpis.map(([label, value, detail]) => (
+              {ownerKpis.map(([label, value, detail]) => (
                 <article className="owner-kpi" key={label}>
                   <span>{label}</span>
                   <strong>{value}</strong>
@@ -231,7 +320,7 @@ export default function AppHomePage() {
                 <div className="action-queue">
                   {dashboard.queue.map((item) => (
                     <a className="action-item" href={item.href} key={item.id}>
-                      <span className={`severity-dot ${item.severity.toLowerCase()}`} />
+                      <span className={"severity-dot " + item.severity.toLowerCase()} />
                       <div>
                         <small>{queueLabels[item.type]}</small>
                         <strong>{item.title}</strong>
@@ -246,6 +335,53 @@ export default function AppHomePage() {
                   <strong>Критичных исключений нет</strong>
                   <span>
                     Просроченные задачи, риски по деньгам, CRM и складу появятся здесь автоматически.
+                  </span>
+                </div>
+              )}
+            </section>
+          </>
+        ) : null}
+
+        {!loading && member ? (
+          <>
+            <div className="owner-kpi-grid">
+              {member.metrics.map((item) => (
+                <article className="owner-kpi" key={item.label}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                  <small>{item.detail}</small>
+                </article>
+              ))}
+            </div>
+
+            <section className="attention">
+              <div className="attention-heading">
+                <div>
+                  <p className="muted">Мои действия</p>
+                  <h2>На сегодня</h2>
+                </div>
+                <span className="queue-count">{member.actions.length}</span>
+              </div>
+
+              {member.actions.length ? (
+                <div className="action-queue">
+                  {member.actions.map((item) => (
+                    <a className="action-item" href={item.href} key={item.id}>
+                      <span className={"severity-dot " + item.severity.toLowerCase()} />
+                      <div>
+                        <small>{member.workspace}</small>
+                        <strong>{item.title}</strong>
+                        <span>{item.detail}</span>
+                      </div>
+                      <b>→</b>
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <div className="queue-empty">
+                  <strong>Срочных действий нет</strong>
+                  <span>
+                    Здесь появятся задачи и исключения, относящиеся к вашей роли.
                   </span>
                 </div>
               )}
