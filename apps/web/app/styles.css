@@ -945,3 +945,22 @@ button, .primary, .secondary { font: inherit; }
 .quick-start-actions a strong { font-size: 13px; }
 .quick-start-actions a span { font-size: 12px; color: #72767d; }
 @media (max-width: 920px) { .quick-start-actions { grid-template-columns: 1fr; } }
+
+
+/* Release readiness */
+.release-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:11px; }
+.release-check-list { display:grid; gap:8px; margin-top:12px; }
+.release-check-list > div { border-top:1px solid #eceef0; padding-top:8px; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:3px 10px; }
+.release-check-list > div > div { display:grid; gap:2px; min-width:0; }
+.release-check-list strong { font-size:11px; }
+.release-check-list span,.release-check-list small { color:#858a91; font-size:9px; overflow-wrap:anywhere; }
+.release-check-list small { grid-column:1 / -1; }
+.release-check-list b { font-size:9px; align-self:start; padding:4px 6px; border-radius:999px; background:#eef6ef; color:#356340; }
+.release-check-list b[data-outcome="FAIL"],.release-check-list b[data-outcome="BLOCKED"] { background:#fff0ef; color:#8d2d28; }
+
+@media (max-width:1050px) {
+  .release-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (max-width:720px) {
+  .release-grid { grid-template-columns:1fr; }
+}
