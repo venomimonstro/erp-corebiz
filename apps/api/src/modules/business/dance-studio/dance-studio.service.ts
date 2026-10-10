@@ -868,7 +868,8 @@ export class DanceStudioService {
       const waitlist=await client.query(
         `SELECT
            w.id,w.student_id,p.display_name AS student_name,
-           w.priority,w.status,w.offered_at,w.offer_expires_at,w.created_at
+           w.priority,w.status,w.enrollment_status,w.discount_bps,
+           w.offered_at,w.offer_expires_at,w.created_at
          FROM dance_group_waitlist w
          JOIN dance_student s
            ON s.tenant_id=w.tenant_id AND s.id=w.student_id
@@ -913,8 +914,10 @@ export class DanceStudioService {
         input.overrideReason
       );
 
-      const priceSource:"PACKAGE"|"DIRECT"=
-        input.packageId ? "PACKAGE" : "DIRECT";
+      const discount=Math.floor(input.discountBps??0);
+      if(discount<0||discount>10000){
+        throw new BadRequestException("Некорректная скидка");
+      }
 
       const occupied=await client.query<{count:number}>(
         `SELECT count(*)::integer AS count
@@ -930,18 +933,24 @@ export class DanceStudioService {
           throw new ConflictException("В группе нет свободных мест");
         const wait=await client.query(
           `INSERT INTO dance_group_waitlist(
-             tenant_id,group_id,student_id,status
-           ) VALUES($1,$2,$3,'WAITING')
+             tenant_id,group_id,student_id,status,
+             enrollment_status,discount_bps
+           ) VALUES($1,$2,$3,'WAITING',$4,$5)
            ON CONFLICT(tenant_id,group_id,student_id)
-           DO UPDATE SET status='WAITING',updated_at=now()
-           RETURNING id,status`,
-          [context.tenantId,groupId,input.studentId]
+           DO UPDATE SET
+             status='WAITING',
+             enrollment_status=EXCLUDED.enrollment_status,
+             discount_bps=EXCLUDED.discount_bps,
+             updated_at=now()
+           RETURNING id,status,enrollment_status,discount_bps`,
+          [
+            context.tenantId,groupId,input.studentId,
+            input.status??"ACTIVE",discount
+          ]
         );
         return {waitlisted:true,...wait.rows[0]};
       }
 
-      const discount=Math.floor(input.discountBps??0);
-      if(discount<0||discount>10000) throw new BadRequestException("Некорректная скидка");
       const member=await client.query(
         `INSERT INTO dance_group_member(
            tenant_id,group_id,student_id,status,reserved_place,discount_bps
@@ -2758,9 +2767,12 @@ export class DanceStudioService {
     if((occupied.rows[0]?.count??0)>=group.capacity) return null;
 
     const wait=await client.query<{
-      id:string;student_id:string;
+      id:string;
+      student_id:string;
+      enrollment_status:"TRIAL"|"ACTIVE";
+      discount_bps:number;
     }>(
-      `SELECT id,student_id
+      `SELECT id,student_id,enrollment_status,discount_bps
        FROM dance_group_waitlist
        WHERE tenant_id=$1 AND group_id=$2 AND status='WAITING'
        ORDER BY priority,created_at,id
@@ -2773,13 +2785,20 @@ export class DanceStudioService {
 
     const member=await client.query(
       `INSERT INTO dance_group_member(
-         tenant_id,group_id,student_id,status,reserved_place
-       ) VALUES($1,$2,$3,'ACTIVE',true)
+         tenant_id,group_id,student_id,status,reserved_place,discount_bps
+       ) VALUES($1,$2,$3,$4,true,$5)
        ON CONFLICT(tenant_id,group_id,student_id)
        DO UPDATE SET
-         status='ACTIVE',reserved_place=true,left_at=NULL,updated_at=now()
-       RETURNING id,student_id,status`,
-      [context.tenantId,group.id,row.student_id]
+         status=EXCLUDED.status,
+         reserved_place=true,
+         discount_bps=EXCLUDED.discount_bps,
+         left_at=NULL,
+         updated_at=now()
+       RETURNING id,student_id,status,discount_bps`,
+      [
+        context.tenantId,group.id,row.student_id,
+        row.enrollment_status,row.discount_bps
+      ]
     );
 
     await client.query(
