@@ -1,12 +1,14 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { AuthorizationService } from "../../platform/authorization/authorization.service";
 import { DomainEventService } from "../../platform/events/domain-event.service";
 import { AttributionService } from "../growth/attribution.service";
 
@@ -24,7 +26,8 @@ export class BookingService {
   constructor(
     private readonly database: DatabaseService,
     private readonly events: DomainEventService,
-    private readonly attribution: AttributionService
+    private readonly attribution: AttributionService,
+    private readonly authorization: AuthorizationService
   ) {}
 
   async services(context: TenantContext): Promise<Array<Record<string, unknown>>> {
@@ -192,6 +195,7 @@ export class BookingService {
     }
 
     const step = Math.max(5, Math.min(120, Math.floor(input.slotStepMinutes ?? 30)));
+    const scopedMembershipIds = await this.serviceScope(context, "service.read");
 
     return this.database.withTenantTransaction(context, async (client) => {
       const service = await this.getService(client, context.tenantId, input.serviceId);
@@ -208,6 +212,11 @@ export class BookingService {
          WHERE r.tenant_id = $1
            AND r.status = 'ACTIVE'
            AND ($2::text IS NULL OR r.type = $2)
+           AND (
+             $4::uuid[] IS NULL
+             OR r.membership_id IS NULL
+             OR r.membership_id = ANY($4::uuid[])
+           )
            AND NOT EXISTS (
              SELECT 1
              FROM service_catalog_skill_requirement req
@@ -228,7 +237,8 @@ export class BookingService {
         [
           context.tenantId,
           input.resourceType?.trim().toUpperCase() || null,
-          input.serviceId
+          input.serviceId,
+          scopedMembershipIds
         ]
       );
 
@@ -805,6 +815,8 @@ export class BookingService {
       throw new BadRequestException("Период календаря должен быть от 1 минуты до 31 дня");
     }
 
+    const scopedMembershipIds = await this.serviceScope(context, "service.read");
+
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `SELECT
@@ -847,9 +859,22 @@ export class BookingService {
          WHERE b.tenant_id = $1
            AND b.starts_at < $3
            AND b.ends_at > $2
+           AND (
+             $4::uuid[] IS NULL
+             OR EXISTS (
+               SELECT 1
+               FROM service_booking_resource scope_br
+               JOIN service_resource scope_r
+                 ON scope_r.tenant_id=scope_br.tenant_id
+                AND scope_r.id=scope_br.resource_id
+               WHERE scope_br.tenant_id=b.tenant_id
+                 AND scope_br.booking_id=b.id
+                 AND scope_r.membership_id = ANY($4::uuid[])
+             )
+           )
          GROUP BY b.id, p.display_name, s.name, a.id
          ORDER BY b.starts_at`,
-        [context.tenantId, fromDate, toDate]
+        [context.tenantId, fromDate, toDate, scopedMembershipIds]
       );
 
       return result.rows;
@@ -857,7 +882,14 @@ export class BookingService {
   }
 
   async bookingDetails(context: TenantContext, bookingId: string): Promise<Record<string, unknown>> {
+    const scopedMembershipIds = await this.serviceScope(context, "service.read");
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertBookingAccess(
+        client,
+        context.tenantId,
+        bookingId,
+        scopedMembershipIds
+      );
       const result = await client.query(
         `SELECT b.id,b.business_number,b.status,b.source,b.starts_at,b.ends_at,
                 b.price_minor_snapshot::text,b.currency,b.version,b.notes,b.party_id,b.asset_id,
@@ -911,6 +943,8 @@ export class BookingService {
       throw new BadRequestException("Выберите от 1 до 10 ресурсов");
     }
 
+    const scopedMembershipIds = await this.serviceScope(context, "service.write");
+
     return this.database.withTenantTransaction(context, async (client) => {
       if (input.idempotencyKey) {
         const existing = await client.query<{
@@ -925,6 +959,12 @@ export class BookingService {
         );
 
         if (existing.rows[0]) {
+          await this.assertBookingAccess(
+            client,
+            context.tenantId,
+            existing.rows[0].id,
+            scopedMembershipIds
+          );
           return {
             id: existing.rows[0].id,
             number: existing.rows[0].business_number,
@@ -1003,6 +1043,7 @@ export class BookingService {
         context.tenantId,
         resourceIds
       );
+      this.assertResourceScope(resources, scopedMembershipIds);
 
       await this.assertRequirements(
         client,
@@ -1240,7 +1281,15 @@ export class BookingService {
       throw new BadRequestException("Некорректное время записи");
     }
 
+    const scopedMembershipIds = await this.serviceScope(context, "service.write");
+
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertBookingAccess(
+        client,
+        context.tenantId,
+        bookingId,
+        scopedMembershipIds
+      );
       const bookingResult = await client.query<{
         id: string;
         service_id: string;
@@ -1287,6 +1336,7 @@ export class BookingService {
         context.tenantId,
         resourceIds
       );
+      this.assertResourceScope(resources, scopedMembershipIds);
 
       const endsAt = new Date(
         startsAt.getTime() + booking.duration_minutes_snapshot * 60000
@@ -1377,7 +1427,14 @@ export class BookingService {
         !Number.isSafeInteger(version) || version < 1) {
       throw new BadRequestException("Некорректный статус или версия записи");
     }
+    const scopedMembershipIds = await this.serviceScope(context, "service.write");
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertBookingAccess(
+        client,
+        context.tenantId,
+        bookingId,
+        scopedMembershipIds
+      );
       const result = await client.query<{ version: number; status: string }>(
         `UPDATE service_booking
          SET status = $3,
@@ -1446,6 +1503,73 @@ export class BookingService {
 
       return row;
     });
+  }
+
+  private async serviceScope(
+    context: TenantContext,
+    permission: "service.read" | "service.write"
+  ): Promise<string[] | null> {
+    // Public site bookings use a dedicated system actor and are already
+    // constrained by a published form binding. Interactive user traffic never
+    // receives this actor id from authentication.
+    if (
+      context.membershipId === "00000000-0000-0000-0000-000000000000"
+    ) {
+      return null;
+    }
+
+    const scope = await this.authorization.resolveScope(context, permission);
+    if (!scope) throw new ForbiddenException("Недостаточно прав");
+    return this.authorization.membershipIdsForScope(context, scope);
+  }
+
+  private async assertBookingAccess(
+    client: PoolClient,
+    tenantId: string,
+    bookingId: string,
+    scopedMembershipIds: string[] | null
+  ): Promise<void> {
+    if (scopedMembershipIds === null) return;
+
+    const access = await client.query(
+      `SELECT 1
+       FROM service_booking b
+       WHERE b.tenant_id=$1
+         AND b.id=$2
+         AND EXISTS (
+           SELECT 1
+           FROM service_booking_resource br
+           JOIN service_resource r
+             ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+           WHERE br.tenant_id=b.tenant_id
+             AND br.booking_id=b.id
+             AND r.membership_id = ANY($3::uuid[])
+         )`,
+      [tenantId, bookingId, scopedMembershipIds]
+    );
+
+    if (!access.rowCount) {
+      throw new NotFoundException("Запись не найдена");
+    }
+  }
+
+  private assertResourceScope(
+    resources: Array<{ membership_id: string | null }>,
+    scopedMembershipIds: string[] | null
+  ): void {
+    if (scopedMembershipIds === null) return;
+
+    const staff = resources.filter((resource) => resource.membership_id !== null);
+    if (
+      staff.length === 0 ||
+      staff.some(
+        (resource) => !scopedMembershipIds.includes(resource.membership_id!)
+      )
+    ) {
+      throw new ForbiddenException(
+        "Выбран сотрудник вне доступной области"
+      );
+    }
   }
 
   private async resourceAvailable(
@@ -1548,6 +1672,7 @@ export class BookingService {
     type: string;
     capacity: number;
     cost_per_hour_minor: string;
+    membership_id: string | null;
   }>> {
     const result = await client.query<{
       id: string;
@@ -1555,8 +1680,9 @@ export class BookingService {
       type: string;
       capacity: number;
       cost_per_hour_minor: string;
+      membership_id: string | null;
     }>(
-      `SELECT id, name, type, capacity, cost_per_hour_minor::text
+      `SELECT id, name, type, capacity, cost_per_hour_minor::text, membership_id
        FROM service_resource
        WHERE tenant_id = $1
          AND id = ANY($2::uuid[])
