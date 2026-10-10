@@ -12,7 +12,7 @@ const COMPONENTS = new Set([
 
 const KINDS = new Set([
   "MIGRATIONS","TYPECHECK","TESTS","BUILD","SECURITY",
-  "INTEGRATION","BROWSER_SMOKE","RESTORE","RECONCILIATION"
+  "STABILITY","INTEGRATION","BROWSER_SMOKE","RESTORE","RECONCILIATION"
 ]);
 
 const OUTCOMES = new Set(["PASS","FAIL","BLOCKED"]);
@@ -63,6 +63,7 @@ export class ReleaseVerificationService {
         ["CORE","TESTS"],
         ["CORE","BUILD"],
         ["CORE","SECURITY"],
+        ["CORE","STABILITY"],
         ["API","INTEGRATION"],
         ["API","BROWSER_SMOKE"],
         ["CORE","RESTORE"],
