@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { GlobalCommandPalette } from "./global-command-palette";
+import { ActionQueueCenter } from "./action-queue-center";
 
 type Entry = readonly [href: string, label: string, key: string];
 type Section = { title: string; items: Entry[] };
