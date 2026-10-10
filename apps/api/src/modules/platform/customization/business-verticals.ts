@@ -12,7 +12,7 @@ export const BUSINESS_CAPABILITIES = [
   "sales",
   "procurement",
   "inventory",
-  "finance","accounting",
+  "finance",
   "accounting",
   "service",
   "projects",
@@ -110,7 +110,7 @@ export const BUSINESS_VERTICALS: Record<
       "Какие услуги и мастера дают больше валовой прибыли?",
       "Кто из клиентов давно не возвращался?"
     ],
-    primaryWorkspaces: ["service", "crm", "finance","accounting", "growth"],
+    primaryWorkspaces: ["service", "crm", "finance", "growth"],
     operatingFlows: [
       "Клиент → запись → визит → услуга → оплата",
       "Расход материалов → себестоимость услуги",
@@ -171,7 +171,7 @@ export const BUSINESS_VERTICALS: Record<
       "Какова выручка на час зала?",
       "Кто перестал посещать занятия?"
     ],
-    primaryWorkspaces: ["service", "crm", "finance","accounting", "growth"],
+    primaryWorkspaces: ["service", "crm", "finance", "growth"],
     operatingFlows: [
       "Лид → пробное занятие → клиент → абонемент",
       "Абонемент → резерв посещения → занятие/no-show → списание или возврат",
@@ -363,7 +363,7 @@ export const BUSINESS_VERTICALS: Record<
       "Какие SLA под риском?",
       "Сколько заработано на каждом клиенте 3PL?"
     ],
-    primaryWorkspaces: ["wms", "inventory", "finance","accounting", "support"],
+    primaryWorkspaces: ["wms", "inventory", "finance", "support"],
     operatingFlows: [
       "ASN → док → приёмка → размещение",
       "Заказ → волна → отбор → упаковка → отгрузка",
