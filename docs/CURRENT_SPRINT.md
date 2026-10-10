@@ -680,20 +680,34 @@
 - owner dashboard shows progress automatically;
 - completed activation remains historical, not reset by UI preferences.
 
-## Активно — Sprint 63: Permission-aware Role Workspaces
+### Sprint 63 — Permission-aware Role Workspaces
+- current workspace context resolves roles/effective permissions/profile;
+- dedicated SERVICE_STAFF system role;
+- role workspace identity: owner/admin/sales/service/warehouse/finance/procurement/viewer;
+- “Сегодня” is one route with role-specific data;
+- sales sees own deals/tasks/orders;
+- service staff sees own bookings/tasks;
+- warehouse sees assigned/free WMS task queue;
+- finance sees AR/AP and bank exceptions;
+- procurement sees active/overdue purchase orders;
+- navigation filtered by capabilities and effective permissions;
+- hidden UI is never treated as authorization; backend guards stay authoritative.
+
+## Активно — Sprint 64: Search / Command Palette / Universal Create
 
 Scope:
-- resolve current membership roles/permissions once;
-- role workspace identity: owner / sales / service / warehouse / finance / viewer;
-- home dashboard content differs by role;
-- navigation filtered by both capability and permission;
-- Universal “Сегодня” remains one route, but its content is role-specific;
-- no security reliance on hidden UI;
-- backend authorization remains authoritative;
-- avoid separate codebases/pages for each vertical role.
+- Ctrl/Cmd+K global command palette;
+- permission-aware quick actions;
+- tenant-safe global search;
+- Party / Deal / SalesOrder / SKU / PurchaseOrder results;
+- keyboard navigation;
+- recent commands locally, no sensitive data persisted;
+- Universal Create commands for allowed domains;
+- search result links use existing domain pages;
+- bounded result counts and minimum query length.
 
 ## Следом
 
-Sprint 64 — Search / Command Palette / Universal Create hardening.  
 Sprint 65 — Go-Live Center / tenant readiness gate.  
-Sprint 66 — Notification Center / Action Queue unification.
+Sprint 66 — Notification Center / Action Queue unification.  
+Sprint 67 — Data export / offboarding readiness.
