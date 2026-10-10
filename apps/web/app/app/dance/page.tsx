@@ -40,6 +40,12 @@ type Dashboard = {
     expiring: number;
     low_visits: number;
   };
+  retentionAlerts: Array<{
+    student_id: string;
+    student_name: string;
+    last_attended_at: string | null;
+    days_since_activity: number;
+  }>;
   monthEconomics: {
     revenue_minor: string;
     trainer_cost_minor: string;
@@ -230,6 +236,44 @@ export default function DanceDashboardPage() {
                 </table>
               </div>
             </section>
+
+            {data.retentionAlerts.length ? (
+              <section className="section-block">
+                <div className="section-heading">
+                  <div>
+                    <p className="muted">Удержание</p>
+                    <h2>Кого можно потерять</h2>
+                  </div>
+                  <a href="/app/dance/students">Открыть учеников →</a>
+                </div>
+                <div className="data-table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Ученик</th>
+                        <th>Последнее посещение</th>
+                        <th>Без активности</th>
+                        <th>Действие</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.retentionAlerts.map((item) => (
+                        <tr key={item.student_id}>
+                          <td><strong>{item.student_name}</strong></td>
+                          <td>
+                            {item.last_attended_at
+                              ? new Date(item.last_attended_at).toLocaleDateString("ru-RU")
+                              : "Ещё не посещал"}
+                          </td>
+                          <td>{item.days_since_activity} дн.</td>
+                          <td>Связаться / предложить подходящую группу</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            ) : null}
 
             <section className="section-block">
               <div className="section-heading">
