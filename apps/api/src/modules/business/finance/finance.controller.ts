@@ -69,6 +69,22 @@ export class FinanceController {
     return {ok:true,data:await this.finance.reconcileBankStatement(this.context(request),statementId)};
   }
 
+  @Get("forecast")
+  @RequirePermission("finance.read")
+  async forecast(
+    @Req() request: AuthenticatedRequest,
+    @Query("days") days?: string
+  ): Promise<ApiSuccess<unknown>> {
+    const parsed = days === undefined ? undefined : Number(days);
+    return {
+      ok: true,
+      data: await this.finance.cashForecast(
+        this.context(request),
+        { days: parsed }
+      )
+    };
+  }
+
   @Get("summary")
   @RequirePermission("finance.read")
   async summary(@Req() request: AuthenticatedRequest): Promise<ApiSuccess<unknown>> {
