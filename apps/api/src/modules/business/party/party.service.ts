@@ -91,6 +91,7 @@ export class PartyService {
       email?: string;
       responsibleMembershipId?: string;
       idempotencyKey?: string;
+      deduplicateContacts?: boolean;
     }
   ): Promise<{ id: string; displayName: string; reused?: boolean }> {
     const scope = await this.authorization.resolveScope(context, "crm.write");
@@ -161,6 +162,119 @@ export class PartyService {
             id: row.party_id,
             displayName: row.display_name,
             reused: true
+          };
+        }
+      }
+
+      if (input.deduplicateContacts) {
+        if (!normalizedPhone && !normalizedEmail) {
+          throw new BadRequestException(
+            "Для дедупликации требуется телефон или email"
+          );
+        }
+
+        const contactKey=[
+          normalizedPhone ? "p:"+normalizedPhone : "",
+          normalizedEmail ? "e:"+normalizedEmail : ""
+        ].filter(Boolean).join("|");
+
+        await client.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+          [context.tenantId+"|party-contact|"+contactKey]
+        );
+
+        const matches=await client.query<{
+          id:string;
+          display_name:string;
+          responsible_membership_id:string|null;
+        }>(
+          `SELECT DISTINCT
+             p.id,p.display_name,p.responsible_membership_id
+           FROM party p
+           JOIN party_contact pc
+             ON pc.tenant_id=p.tenant_id AND pc.party_id=p.id
+           WHERE p.tenant_id=$1 AND p.status='ACTIVE'
+             AND (
+               ($2<>'' AND pc.type='PHONE' AND pc.value=$2)
+               OR
+               ($3<>'' AND pc.type='EMAIL' AND lower(pc.value)=lower($3))
+             )
+           ORDER BY p.id
+           LIMIT 3`,
+          [context.tenantId,normalizedPhone,normalizedEmail]
+        );
+
+        if(matches.rowCount>1){
+          throw new ConflictException(
+            "Контакт связан с несколькими карточками клиента; требуется объединение дублей"
+          );
+        }
+
+        const existingContact=matches.rows[0];
+        if(existingContact){
+          if(
+            scopedMembershipIds &&
+            (
+              !existingContact.responsible_membership_id ||
+              !scopedMembershipIds.includes(
+                existingContact.responsible_membership_id
+              )
+            )
+          ){
+            throw new BadRequestException(
+              "Существующий клиент недоступен текущему сотруднику"
+            );
+          }
+
+          await client.query(
+            `INSERT INTO party_role(tenant_id,party_id,role)
+             VALUES($1,$2,'CUSTOMER')
+             ON CONFLICT DO NOTHING`,
+            [context.tenantId,existingContact.id]
+          );
+
+          for(const contact of [
+            normalizedPhone
+              ? {type:"PHONE",value:normalizedPhone}
+              : null,
+            normalizedEmail
+              ? {type:"EMAIL",value:normalizedEmail}
+              : null
+          ].filter(Boolean) as Array<{type:string;value:string}>){
+            await client.query(
+              `INSERT INTO party_contact(
+                 tenant_id,party_id,type,value,is_primary
+               )
+               SELECT $1,$2,$3,$4,true
+               WHERE NOT EXISTS(
+                 SELECT 1 FROM party_contact
+                 WHERE tenant_id=$1 AND party_id=$2
+                   AND type=$3 AND lower(value)=lower($4)
+               )`,
+              [
+                context.tenantId,existingContact.id,
+                contact.type,contact.value
+              ]
+            );
+          }
+
+          if(idempotencyKey){
+            await client.query(
+              `INSERT INTO party_create_idempotency(
+                 tenant_id,idempotency_key,fingerprint,party_id
+               ) VALUES($1,$2,$3,$4)
+               ON CONFLICT(tenant_id,idempotency_key) DO NOTHING`,
+              [
+                context.tenantId,idempotencyKey,fingerprint,
+                existingContact.id
+              ]
+            );
+          }
+
+          return {
+            id:existingContact.id,
+            displayName:existingContact.display_name,
+            reused:true
           };
         }
       }
