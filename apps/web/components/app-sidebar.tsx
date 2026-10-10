@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { apiRequest } from "../lib/api";
+import { GlobalCommandPalette } from "./global-command-palette";
 
 type Entry = readonly [href: string, label: string, key: string];
 type Section = { title: string; items: Entry[] };
@@ -264,7 +265,8 @@ export function AppSidebar({ active }: { active: string }) {
             <option value="warehouse">Склад и логистика</option>
           </select>
         </label>
-        <a className={active === "dashboard" ? "active sidebar-home" : "sidebar-home"}
+        <GlobalCommandPalette />
+        <a className={active === "dashboard" ? "active sidebar-home" : "sidebar-home"
           aria-current={active === "dashboard" ? "page" : undefined}
           href="/app" onClick={() => setMobileOpen(false)}>Сегодня</a>
         {visibleSections.map((section) => (
