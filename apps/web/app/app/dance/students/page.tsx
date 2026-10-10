@@ -307,6 +307,35 @@ export default function DanceStudentsPage() {
     }
   }
 
+  async function addFamilyBeneficiary(pack: Pack) {
+    if (pack.package_kind_snapshot !== "FAMILY") return;
+    const candidates = students.filter((item) => item.id !== selectedId);
+    if (!candidates.length) return;
+    const child = candidates[
+      Number(window.prompt(
+        "Добавить ребёнка в семейный абонемент:\n" +
+          candidates.map((item, index) => `${index + 1}. ${item.display_name}`).join("\n"),
+        "1"
+      )) - 1
+    ];
+    if (!child) return;
+
+    try {
+      await apiRequest(`/dance/packages/${pack.id}/beneficiaries`, {
+        method: "POST",
+        body: JSON.stringify({ studentId: child.id })
+      });
+      window.alert("Ребёнок добавлен в семейный абонемент");
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось добавить бенефициара"
+      );
+    }
+  }
+
   async function freezePackage(pack: Pack) {
     const startsOn = window.prompt(
       "Начало заморозки YYYY-MM-DD",
@@ -444,9 +473,18 @@ export default function DanceStudentsPage() {
                         <td>{new Date(pack.expires_at).toLocaleDateString("ru-RU")}</td>
                         <td><span className="status-pill">{pack.status}</span></td>
                         <td>
-                          {pack.status === "ACTIVE" ? (
-                            <button className="secondary-button" onClick={() => void freezePackage(pack)} type="button">Заморозить</button>
-                          ) : null}
+                          <div className="table-actions">
+                            {pack.package_kind_snapshot === "FAMILY" ? (
+                              <button className="secondary-button" onClick={() => void addFamilyBeneficiary(pack)} type="button">
+                                + Ребёнок
+                              </button>
+                            ) : null}
+                            {pack.status === "ACTIVE" ? (
+                              <button className="secondary-button" onClick={() => void freezePackage(pack)} type="button">
+                                Заморозить
+                              </button>
+                            ) : null}
+                          </div>
                         </td>
                       </tr>
                     ))}
