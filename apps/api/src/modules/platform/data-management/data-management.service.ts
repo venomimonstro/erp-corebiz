@@ -6,10 +6,14 @@ import {
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { RuntimePressureService } from "../runtime-pressure/runtime-pressure.service";
 
 @Injectable()
 export class DataManagementService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly runtime: RuntimePressureService
+  ) {}
 
   async requestExport(
     context: TenantContext,
@@ -32,9 +36,13 @@ export class DataManagementService {
       );
 
       if (running.rows[0]) {
-        throw new ConflictException(
-          "Экспорт уже формируется. Дождитесь завершения."
-        );
+        await this.runtime.deny(context, {
+          operation: "tenant_export",
+          reason: "tenant already has active export job",
+          currentValue: 1,
+          limitValue: 1,
+          retryAfterSeconds: 120
+        });
       }
 
       const result = await client.query<{ id: string; status: string }>(
