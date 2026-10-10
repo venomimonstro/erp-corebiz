@@ -870,7 +870,8 @@ export class FinanceService {
   async createSalesReceivable(
     client: PoolClient,
     context: TenantContext,
-    orderId: string
+    orderId: string,
+    dueAt: Date | null = null
   ): Promise<string> {
     const order = await client.query<{
       id: string;
@@ -894,13 +895,14 @@ export class FinanceService {
     const result = await client.query<{ id: string }>(
       `INSERT INTO financial_obligation(
          tenant_id, direction, party_id, source_type, source_id,
-         currency, amount_minor
-       ) VALUES ($1,'RECEIVABLE',$2,'SALES_ORDER',$3,$4,$5)
+         currency, amount_minor, due_at
+       ) VALUES ($1,'RECEIVABLE',$2,'SALES_ORDER',$3,$4,$5,$6)
        ON CONFLICT (tenant_id, direction, source_type, source_id)
        DO UPDATE SET
          party_id = EXCLUDED.party_id,
          currency = EXCLUDED.currency,
          amount_minor = EXCLUDED.amount_minor,
+         due_at = EXCLUDED.due_at,
          updated_at = now()
        RETURNING id`,
       [
@@ -908,7 +910,8 @@ export class FinanceService {
         row.party_id,
         row.id,
         row.currency,
-        row.total_minor
+        row.total_minor,
+        dueAt
       ]
     );
 
