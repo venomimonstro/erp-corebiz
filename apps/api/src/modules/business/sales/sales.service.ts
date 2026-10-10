@@ -127,6 +127,239 @@ export class SalesService {
     });
   }
 
+  async commercialTerms(
+    context: TenantContext,
+    partyId: string
+  ): Promise<Record<string, unknown> | null> {
+    const scope = await this.authorization.resolveScope(context, "sales.read");
+    if (!scope) throw new BadRequestException("Недостаточно прав");
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertParty(client, context.tenantId, partyId);
+      const result = await client.query(
+        `SELECT
+           party_id,currency,credit_limit_minor::text,payment_term_days,
+           default_discount_bps,allow_over_credit,notes,created_at,updated_at
+         FROM party_commercial_terms
+         WHERE tenant_id=$1 AND party_id=$2`,
+        [context.tenantId, partyId]
+      );
+      return (result.rows[0] as Record<string, unknown> | undefined) ?? null;
+    });
+  }
+
+  async setCommercialTerms(
+    context: TenantContext,
+    partyId: string,
+    input: {
+      currency?: string;
+      creditLimitMinor?: string | null;
+      paymentTermDays?: number;
+      defaultDiscountBps?: number;
+      allowOverCredit?: boolean;
+      notes?: string;
+    }
+  ): Promise<void> {
+    const scope = await this.authorization.resolveScope(context, "sales.write");
+    if (!scope) throw new BadRequestException("Недостаточно прав");
+
+    const currency = input.currency?.trim().toUpperCase() || "RUB";
+    if (!/^[A-Z]{3}$/.test(currency)) {
+      throw new BadRequestException("Некорректная валюта");
+    }
+    const creditLimit =
+      input.creditLimitMinor === null || input.creditLimitMinor === undefined
+        ? null
+        : input.creditLimitMinor;
+    if (creditLimit !== null && !/^\d+$/.test(creditLimit)) {
+      throw new BadRequestException("Некорректный кредитный лимит");
+    }
+
+    const paymentTermDays = Number(input.paymentTermDays ?? 0);
+    const defaultDiscountBps = Number(input.defaultDiscountBps ?? 0);
+    if (
+      !Number.isSafeInteger(paymentTermDays) ||
+      paymentTermDays < 0 ||
+      paymentTermDays > 3650
+    ) {
+      throw new BadRequestException("Некорректная отсрочка платежа");
+    }
+    if (
+      !Number.isSafeInteger(defaultDiscountBps) ||
+      defaultDiscountBps < 0 ||
+      defaultDiscountBps > 10000
+    ) {
+      throw new BadRequestException("Некорректная скидка клиента");
+    }
+
+    await this.database.withTenantTransaction(context, async (client) => {
+      await this.assertParty(client, context.tenantId, partyId);
+      await client.query(
+        `INSERT INTO party_commercial_terms(
+           tenant_id,party_id,currency,credit_limit_minor,payment_term_days,
+           default_discount_bps,allow_over_credit,notes,
+           updated_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT (tenant_id,party_id)
+         DO UPDATE SET
+           currency=EXCLUDED.currency,
+           credit_limit_minor=EXCLUDED.credit_limit_minor,
+           payment_term_days=EXCLUDED.payment_term_days,
+           default_discount_bps=EXCLUDED.default_discount_bps,
+           allow_over_credit=EXCLUDED.allow_over_credit,
+           notes=EXCLUDED.notes,
+           updated_by_membership_id=EXCLUDED.updated_by_membership_id,
+           updated_at=now()`,
+        [
+          context.tenantId,
+          partyId,
+          currency,
+          creditLimit,
+          paymentTermDays,
+          defaultDiscountBps,
+          Boolean(input.allowOverCredit),
+          input.notes?.trim() || null,
+          context.membershipId
+        ]
+      );
+      await this.auditEntity(
+        client,
+        context,
+        "sales.commercial_terms_changed",
+        "party",
+        partyId,
+        {
+          currency,
+          creditLimitMinor: creditLimit,
+          paymentTermDays,
+          defaultDiscountBps,
+          allowOverCredit: Boolean(input.allowOverCredit)
+        }
+      );
+    });
+  }
+
+  async partyPrices(
+    context: TenantContext,
+    partyId: string
+  ): Promise<Array<Record<string, unknown>>> {
+    const scope = await this.authorization.resolveScope(context, "sales.read");
+    if (!scope) throw new BadRequestException("Недостаточно прав");
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertParty(client, context.tenantId, partyId);
+      const result = await client.query(
+        `SELECT
+           pp.id,pp.sku_id,s.code AS sku_code,p.name AS product_name,
+           pp.currency,pp.min_quantity_milli::text,
+           pp.unit_price_minor::text,pp.valid_from,pp.valid_to,pp.status
+         FROM party_sku_price pp
+         JOIN sku s
+           ON s.tenant_id=pp.tenant_id AND s.id=pp.sku_id
+         JOIN product_variant v
+           ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+         JOIN product p
+           ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+         WHERE pp.tenant_id=$1 AND pp.party_id=$2
+         ORDER BY pp.status, p.name, pp.min_quantity_milli DESC, pp.valid_from DESC
+         LIMIT 1000`,
+        [context.tenantId, partyId]
+      );
+      return result.rows;
+    });
+  }
+
+  async addPartyPrice(
+    context: TenantContext,
+    partyId: string,
+    input: {
+      skuId: string;
+      currency?: string;
+      minQuantityMilli?: string;
+      unitPriceMinor: string;
+      validFrom?: string;
+      validTo?: string;
+    }
+  ): Promise<{ id: string }> {
+    const scope = await this.authorization.resolveScope(context, "sales.write");
+    if (!scope) throw new BadRequestException("Недостаточно прав");
+
+    const currency = input.currency?.trim().toUpperCase() || "RUB";
+    const minQuantityMilli = input.minQuantityMilli ?? "1000";
+    if (!/^[A-Z]{3}$/.test(currency)) {
+      throw new BadRequestException("Некорректная валюта");
+    }
+    if (!/^\d+$/.test(minQuantityMilli) || BigInt(minQuantityMilli) <= 0n) {
+      throw new BadRequestException("Некорректный порог количества");
+    }
+    if (!/^\d+$/.test(input.unitPriceMinor ?? "")) {
+      throw new BadRequestException("Некорректная договорная цена");
+    }
+
+    const validFrom = input.validFrom ? new Date(input.validFrom) : new Date();
+    const validTo = input.validTo ? new Date(input.validTo) : null;
+    if (
+      Number.isNaN(validFrom.getTime()) ||
+      (validTo && Number.isNaN(validTo.getTime())) ||
+      (validTo && validTo <= validFrom)
+    ) {
+      throw new BadRequestException("Некорректный период действия цены");
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertParty(client, context.tenantId, partyId);
+      const sku = await client.query(
+        `SELECT 1 FROM sku
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+        [context.tenantId, input.skuId]
+      );
+      if (!sku.rowCount) throw new NotFoundException("SKU не найден");
+
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO party_sku_price(
+           tenant_id,party_id,sku_id,currency,min_quantity_milli,
+           unit_price_minor,valid_from,valid_to,created_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING id`,
+        [
+          context.tenantId,
+          partyId,
+          input.skuId,
+          currency,
+          minQuantityMilli,
+          input.unitPriceMinor,
+          validFrom,
+          validTo,
+          context.membershipId
+        ]
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error("PARTY_PRICE_CREATE_FAILED");
+      return row;
+    });
+  }
+
+  async archivePartyPrice(
+    context: TenantContext,
+    partyId: string,
+    priceId: string
+  ): Promise<void> {
+    const scope = await this.authorization.resolveScope(context, "sales.write");
+    if (!scope) throw new BadRequestException("Недостаточно прав");
+
+    await this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `UPDATE party_sku_price
+         SET status='ARCHIVED',updated_at=now()
+         WHERE tenant_id=$1 AND party_id=$2 AND id=$3 AND status='ACTIVE'`,
+        [context.tenantId, partyId, priceId]
+      );
+      if (!result.rowCount) {
+        throw new NotFoundException("Договорная цена не найдена");
+      }
+    });
+  }
+
   async create(
     context: TenantContext,
     input: {
@@ -152,6 +385,11 @@ export class SalesService {
 
     if (input.lines.length > 200) {
       throw new BadRequestException("Слишком много позиций в одном заказе");
+    }
+
+    const orderCurrency = input.currency?.trim().toUpperCase() || "RUB";
+    if (!/^[A-Z]{3}$/.test(orderCurrency)) {
+      throw new BadRequestException("Некорректная валюта заказа");
     }
 
     const responsible =
@@ -189,8 +427,27 @@ export class SalesService {
 
       await this.assertMembership(client, context.tenantId, responsible);
 
+      let defaultDiscountBps = 0;
       if (input.partyId) {
         await this.assertParty(client, context.tenantId, input.partyId);
+        const terms = await client.query<{
+          currency: string;
+          default_discount_bps: number;
+        }>(
+          `SELECT currency,default_discount_bps
+           FROM party_commercial_terms
+           WHERE tenant_id=$1 AND party_id=$2`,
+          [context.tenantId, input.partyId]
+        );
+        const termRow = terms.rows[0];
+        if (termRow) {
+          if (termRow.currency !== orderCurrency) {
+            throw new ConflictException(
+              "Валюта заказа не совпадает с коммерческими условиями клиента"
+            );
+          }
+          defaultDiscountBps = termRow.default_discount_bps;
+        }
       }
 
       if (input.sourceDealId) {
@@ -232,7 +489,10 @@ export class SalesService {
         const prepared = await this.prepareLine(
           client,
           context.tenantId,
-          line
+          line,
+          input.partyId ?? null,
+          orderCurrency,
+          defaultDiscountBps
         );
         preparedLines.push(prepared);
         subtotal += prepared.lineTotalMinor;
@@ -273,7 +533,7 @@ export class SalesService {
             input.partyId ?? null,
             responsible,
             inventoryOwner.id,
-            input.currency?.trim().toUpperCase() || "RUB",
+            orderCurrency,
             subtotal.toString(),
             input.notes?.trim() || null,
             input.idempotencyKey?.trim() || null
@@ -317,8 +577,8 @@ export class SalesService {
           `INSERT INTO sales_order_line(
              tenant_id, order_id, sku_id, description,
              quantity_milli, unit_price_minor, cost_price_minor_snapshot,
-             discount_minor, line_total_minor
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+             discount_minor, line_total_minor,pricing_source,price_rule_id
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
           [
             context.tenantId,
             order.id,
@@ -328,7 +588,9 @@ export class SalesService {
             line.unitPriceMinor.toString(),
             line.costPriceMinorSnapshot.toString(),
             line.discountMinor.toString(),
-            line.lineTotalMinor.toString()
+            line.lineTotalMinor.toString(),
+            line.pricingSource,
+            line.priceRuleId
           ]
         );
       }
@@ -535,7 +797,10 @@ export class SalesService {
   private async prepareLine(
     client: PoolClient,
     tenantId: string,
-    input: CreateLineInput
+    input: CreateLineInput,
+    partyId: string | null,
+    orderCurrency: string,
+    defaultDiscountBps: number
   ): Promise<{
     skuId: string | null;
     description: string;
@@ -544,8 +809,15 @@ export class SalesService {
     costPriceMinorSnapshot: bigint;
     discountMinor: bigint;
     lineTotalMinor: bigint;
+    pricingSource: "MANUAL" | "LIST" | "PARTY_PRICE" | "DEFAULT_DISCOUNT";
+    priceRuleId: string | null;
   }> {
-    const quantityMilli = BigInt(input.quantityMilli ?? "1000");
+    let quantityMilli: bigint;
+    try {
+      quantityMilli = BigInt(input.quantityMilli ?? "1000");
+    } catch {
+      throw new BadRequestException("Некорректное количество");
+    }
     if (quantityMilli <= 0n) {
       throw new BadRequestException("Количество должно быть больше нуля");
     }
@@ -554,6 +826,19 @@ export class SalesService {
     let unitPriceMinor: bigint;
     let costPriceMinorSnapshot = 0n;
     let skuId: string | null = null;
+    let pricingSource:
+      | "MANUAL"
+      | "LIST"
+      | "PARTY_PRICE"
+      | "DEFAULT_DISCOUNT" = "MANUAL";
+    let priceRuleId: string | null = null;
+
+    if (input.unitPriceMinor !== undefined && !/^\d+$/.test(input.unitPriceMinor)) {
+      throw new BadRequestException("Некорректная цена позиции");
+    }
+    if (input.discountMinor !== undefined && !/^\d+$/.test(input.discountMinor)) {
+      throw new BadRequestException("Некорректная скидка");
+    }
 
     if (input.skuId) {
       const skuResult = await client.query<{
@@ -561,53 +846,95 @@ export class SalesService {
         code: string;
         sale_price_minor: string;
         cost_price_minor: string;
+        currency: string;
         product_name: string;
       }>(
         `SELECT
-           s.id,
-           s.code,
-           s.sale_price_minor::text,
-           s.cost_price_minor::text,
-           p.name AS product_name
+           s.id,s.code,s.sale_price_minor::text,s.cost_price_minor::text,
+           s.currency,p.name AS product_name
          FROM sku s
          JOIN product_variant v
-           ON v.tenant_id = s.tenant_id AND v.id = s.variant_id
+           ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
          JOIN product p
-           ON p.tenant_id = v.tenant_id AND p.id = v.product_id
-         WHERE s.tenant_id = $1
-           AND s.id = $2
-           AND s.status = 'ACTIVE'
-           AND p.status = 'ACTIVE'`,
+           ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+         WHERE s.tenant_id=$1 AND s.id=$2
+           AND s.status='ACTIVE' AND p.status='ACTIVE'`,
         [tenantId, input.skuId]
       );
-
       const sku = skuResult.rows[0];
       if (!sku) throw new NotFoundException("SKU не найден");
 
       skuId = sku.id;
       description ||= sku.product_name;
-      unitPriceMinor = BigInt(input.unitPriceMinor ?? sku.sale_price_minor);
       costPriceMinorSnapshot = BigInt(sku.cost_price_minor);
+
+      if (input.unitPriceMinor !== undefined) {
+        unitPriceMinor = BigInt(input.unitPriceMinor);
+        pricingSource = "MANUAL";
+      } else {
+        let partyPrice: { id: string; unit_price_minor: string } | undefined;
+        if (partyId) {
+          const price = await client.query<{
+            id: string;
+            unit_price_minor: string;
+          }>(
+            `SELECT id,unit_price_minor::text
+             FROM party_sku_price
+             WHERE tenant_id=$1
+               AND party_id=$2
+               AND sku_id=$3
+               AND currency=$4
+               AND status='ACTIVE'
+               AND min_quantity_milli<=$5
+               AND valid_from<=now()
+               AND (valid_to IS NULL OR valid_to>now())
+             ORDER BY min_quantity_milli DESC,valid_from DESC
+             LIMIT 1`,
+            [tenantId, partyId, sku.id, orderCurrency, quantityMilli.toString()]
+          );
+          partyPrice = price.rows[0];
+        }
+
+        if (partyPrice) {
+          unitPriceMinor = BigInt(partyPrice.unit_price_minor);
+          pricingSource = "PARTY_PRICE";
+          priceRuleId = partyPrice.id;
+        } else {
+          if (sku.currency !== orderCurrency) {
+            throw new ConflictException(
+              "Для SKU нет цены в валюте заказа"
+            );
+          }
+          unitPriceMinor = BigInt(sku.sale_price_minor);
+          pricingSource = "LIST";
+        }
+      }
     } else {
       if (!description) {
         throw new BadRequestException("Для строки без SKU нужно описание");
       }
-      if (!input.unitPriceMinor || !/^\d+$/.test(input.unitPriceMinor)) {
+      if (input.unitPriceMinor === undefined) {
         throw new BadRequestException("Укажите цену позиции");
       }
       unitPriceMinor = BigInt(input.unitPriceMinor);
-    }
-
-    if (input.unitPriceMinor && !/^\d+$/.test(input.unitPriceMinor)) {
-      throw new BadRequestException("Некорректная цена позиции");
-    }
-
-    const discountMinor = BigInt(input.discountMinor ?? "0");
-    if (discountMinor < 0n) {
-      throw new BadRequestException("Некорректная скидка");
+      pricingSource = "MANUAL";
     }
 
     const gross = (unitPriceMinor * quantityMilli + 500n) / 1000n;
+    let discountMinor: bigint;
+    if (input.discountMinor !== undefined) {
+      discountMinor = BigInt(input.discountMinor);
+    } else if (
+      pricingSource === "LIST" &&
+      defaultDiscountBps > 0
+    ) {
+      discountMinor =
+        (gross * BigInt(defaultDiscountBps) + 5000n) / 10000n;
+      pricingSource = "DEFAULT_DISCOUNT";
+    } else {
+      discountMinor = 0n;
+    }
+
     if (discountMinor > gross) {
       throw new BadRequestException("Скидка превышает сумму позиции");
     }
@@ -619,7 +946,9 @@ export class SalesService {
       unitPriceMinor,
       costPriceMinorSnapshot,
       discountMinor,
-      lineTotalMinor: gross - discountMinor
+      lineTotalMinor: gross - discountMinor,
+      pricingSource,
+      priceRuleId
     };
   }
 
@@ -680,6 +1009,31 @@ export class SalesService {
     ) {
       throw new NotFoundException("Сделка не найдена");
     }
+  }
+
+  private async auditEntity(
+    client: PoolClient,
+    context: TenantContext,
+    action: string,
+    resourceType: string,
+    resourceId: string,
+    afterData?: Record<string, unknown>
+  ): Promise<void> {
+    await client.query(
+      `INSERT INTO audit_event(
+         tenant_id,actor_user_id,actor_membership_id,
+         action,resource_type,resource_id,after_data
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        context.tenantId,
+        context.userId,
+        context.membershipId,
+        action,
+        resourceType,
+        resourceId,
+        afterData ? JSON.stringify(afterData) : null
+      ]
+    );
   }
 
   private async audit(
