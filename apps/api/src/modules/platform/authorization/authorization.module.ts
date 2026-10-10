@@ -4,9 +4,10 @@ import { AuthorizationService } from "./authorization.service";
 import { PermissionGuard } from "./permission.guard";
 import { RolesController } from "./roles.controller";
 import { RolesService } from "./roles.service";
+import { WorkspaceController } from "./workspace.controller";
 
 @Module({
-  controllers: [RolesController],
+  controllers: [RolesController, WorkspaceController],
   providers: [
     AuthorizationService,
     RolesService,
