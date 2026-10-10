@@ -312,6 +312,17 @@ async function inspectRequiredHardening(root) {
     message: "Public dance booking hardening is missing"
   },
   {
+    path: "scripts/golden-business-journeys.mjs",
+    patterns: [
+      /async function danceStudioJourney/,
+      /DANCE_FITNESS/,
+      /finance\/allocated-payment/,
+      /dance\/lessons\//,
+      /dance\/room-statements\/finalize/
+    ],
+    message: "Dance studio golden owner journey is missing"
+  },
+  {
     path: "apps/worker/src/tenant-export.ts",
     patterns: [
       /dance_students/,
