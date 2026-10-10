@@ -269,7 +269,56 @@ async function inspectRequiredHardening(root) {
       path: "apps/api/src/modules/business/sales/sales.service.ts",
       patterns: [/orderIdempotencyFingerprint/, /pg_advisory_xact_lock/, /idempotency_fingerprint/],
       message: "Sales-order strict idempotency hardening is missing"
-    }
+    },
+  {
+    path: "apps/api/src/modules/business/dance-studio/dance-studio.service.ts",
+    patterns: [
+      /syncGroupRosterToLesson/,
+      /promoteLessonWaitlistTx/,
+      /service_package_entitlement/,
+      /activation_policy_snapshot/
+    ],
+    message: "Dance studio operational hardening is missing"
+  },
+  {
+    path: "apps/api/src/modules/business/dance-studio/dance-economics.service.ts",
+    patterns: [
+      /trainer_compensation_accrual/,
+      /dance_lesson_profitability/,
+      /room_rental_contract/,
+      /package_entitlement_id/
+    ],
+    message: "Dance studio economics hardening is missing"
+  },
+  {
+    path: "apps/api/src/modules/business/finance/finance.service.ts",
+    patterns: [
+      /receiveAllocatedPayment/,
+      /payment_allocation/,
+      /allocationFingerprint/
+    ],
+    message: "Family payment allocation hardening is missing"
+  },
+  {
+    path: "apps/api/src/modules/business/sites/site-forms.service.ts",
+    patterns: [
+      /DANCE_BOOKING/,
+      /danceGroupId/,
+      /childBirthDate/,
+      /deduplicateContacts/
+    ],
+    message: "Public dance booking hardening is missing"
+  },
+  {
+    path: "apps/worker/src/tenant-export.ts",
+    patterns: [
+      /dance_students/,
+      /dance_lessons/,
+      /payment_allocations/,
+      /trainer_compensation_accruals/
+    ],
+    message: "Dance studio tenant export coverage is missing"
+  }
   ];
 
   for (const item of required) {
