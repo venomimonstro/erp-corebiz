@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { CrmModule } from "../crm/crm.module";
 import { PartyModule } from "../party/party.module";
+import { OmsModule } from "../oms/oms.module";
 import { SalesModule } from "../sales/sales.module";
 import { ServiceOpsModule } from "../service-ops/service-ops.module";
 import { SiteDomainsController } from "./site-domains.controller";
@@ -13,7 +14,7 @@ import { StorefrontController } from "./storefront.controller";
 import { StorefrontService } from "./storefront.service";
 
 @Module({
-  imports:[CrmModule,PartyModule,SalesModule,ServiceOpsModule],
+  imports:[CrmModule,PartyModule,SalesModule,ServiceOpsModule,OmsModule],
   controllers:[
     SitesController,
     SiteFormsController,
