@@ -106,6 +106,29 @@ export class PilotService {
           )
         : { rows: [] };
 
+      const feedback = row
+        ? await client.query(
+            `SELECT
+               id,category,priority,disposition,status,release_blocking,
+               title,description,screen_path,root_cause,remediation,
+               fix_version,verification_reference,source_incident_id,
+               source_ticket_id,owner_membership_id,created_at,updated_at,
+               verified_at
+             FROM tenant_pilot_feedback
+             WHERE tenant_id=$1
+               AND pilot_enrollment_id=$2
+             ORDER BY
+               release_blocking DESC,
+               CASE priority
+                 WHEN 'P0' THEN 0 WHEN 'P1' THEN 1
+                 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 ELSE 4
+               END,
+               created_at DESC
+             LIMIT 300`,
+            [context.tenantId, row.id]
+          )
+        : { rows: [] };
+
       const approved = await client.query<{
         id: string;
         target_version: string;
@@ -156,7 +179,8 @@ export class PilotService {
         incidents: incidents.rows,
         history: history.rows,
         snapshots: snapshots.rows,
-        exitReviews: exitReviews.rows
+        exitReviews: exitReviews.rows,
+        feedback: feedback.rows
       };
     });
   }
@@ -484,6 +508,12 @@ export class PilotService {
         incident.status !== "RESOLVED"
     ).length;
 
+    const openReleaseBlockers = (overview.feedback ?? []).filter(
+      (item: any) =>
+        item.release_blocking === true &&
+        !["DONE","REJECTED"].includes(item.status)
+    ).length;
+
     const checks = [
       {
         code: "TENANT_READY",
@@ -505,6 +535,11 @@ export class PilotService {
       {
         code: "NO_OPEN_P0",
         ok: overview.prerequisites.openP0 === 0,
+        blocking: true
+      },
+      {
+        code: "NO_RELEASE_BLOCKING_FEEDBACK",
+        ok: openReleaseBlockers === 0,
         blocking: true
       },
       {
@@ -670,6 +705,240 @@ export class PilotService {
       }
     });
   }
+
+  async createFeedback(
+    context: TenantContext,
+    input: {
+      category: "BUG" | "UX" | "SPEC_GAP" | "FEATURE";
+      priority?: "P0" | "P1" | "P2" | "P3" | "P4";
+      title: string;
+      description?: string;
+      screenPath?: string;
+      sourceIncidentId?: string;
+      sourceTicketId?: string;
+    }
+  ): Promise<{ id: string }> {
+    const categories = ["BUG","UX","SPEC_GAP","FEATURE"];
+    const priorities = ["P0","P1","P2","P3","P4"];
+    if (!categories.includes(input.category)) {
+      throw new BadRequestException("Некорректная категория feedback");
+    }
+    const priority = input.priority ?? "P2";
+    if (!priorities.includes(priority)) {
+      throw new BadRequestException("Некорректный priority");
+    }
+
+    const title = String(input.title ?? "").trim();
+    if (title.length < 3 || title.length > 300) {
+      throw new BadRequestException("Некорректный заголовок feedback");
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const pilot = await client.query<{ id: string }>(
+        `SELECT id FROM tenant_pilot_enrollment
+         WHERE tenant_id=$1`,
+        [context.tenantId]
+      );
+      const row = pilot.rows[0];
+      if (!row) throw new NotFoundException("Pilot enrollment не создан");
+
+      if (input.sourceIncidentId) {
+        const incident = await client.query(
+          `SELECT 1 FROM tenant_pilot_incident
+           WHERE tenant_id=$1
+             AND pilot_enrollment_id=$2
+             AND id=$3`,
+          [context.tenantId, row.id, input.sourceIncidentId]
+        );
+        if (!incident.rowCount) {
+          throw new NotFoundException("Pilot incident не найден");
+        }
+      }
+
+      if (input.sourceTicketId) {
+        const ticket = await client.query(
+          `SELECT 1 FROM support_ticket
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId, input.sourceTicketId]
+        );
+        if (!ticket.rowCount) {
+          throw new NotFoundException("Support ticket не найден");
+        }
+      }
+
+      const releaseBlocking =
+        priority === "P0" ||
+        (priority === "P1" && input.category === "BUG");
+
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO tenant_pilot_feedback(
+           tenant_id,pilot_enrollment_id,category,priority,
+           release_blocking,title,description,screen_path,
+           source_incident_id,source_ticket_id,created_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         RETURNING id`,
+        [
+          context.tenantId,
+          row.id,
+          input.category,
+          priority,
+          releaseBlocking,
+          title,
+          String(input.description ?? "").trim().slice(0, 5000) || null,
+          String(input.screenPath ?? "").trim().slice(0, 500) || null,
+          input.sourceIncidentId ?? null,
+          input.sourceTicketId ?? null,
+          context.membershipId
+        ]
+      );
+
+      return result.rows[0]!;
+    });
+  }
+
+  async triageFeedback(
+    context: TenantContext,
+    feedbackId: string,
+    input: {
+      disposition: "CORE" | "MODULE" | "CONFIG" | "EXTENSION" | "REJECT";
+      rootCause?: string;
+      remediation?: string;
+      ownerMembershipId?: string;
+      releaseBlocking?: boolean;
+    }
+  ): Promise<void> {
+    const dispositions = ["CORE","MODULE","CONFIG","EXTENSION","REJECT"];
+    if (!dispositions.includes(input.disposition)) {
+      throw new BadRequestException("Некорректный disposition");
+    }
+
+    await this.database.withTenantTransaction(context, async (client) => {
+      if (input.ownerMembershipId) {
+        const owner = await client.query(
+          `SELECT 1 FROM tenant_membership
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId, input.ownerMembershipId]
+        );
+        if (!owner.rowCount) {
+          throw new NotFoundException("Ответственный участник не найден");
+        }
+      }
+
+      const result = await client.query(
+        `UPDATE tenant_pilot_feedback
+         SET disposition=$3,
+             status=CASE WHEN $3='REJECT' THEN 'REJECTED' ELSE 'TRIAGED' END,
+             root_cause=$4,
+             remediation=$5,
+             owner_membership_id=COALESCE($6,owner_membership_id),
+             release_blocking=COALESCE($7,release_blocking),
+             updated_at=now()
+         WHERE tenant_id=$1
+           AND id=$2
+           AND status NOT IN ('DONE','REJECTED')
+         RETURNING id`,
+        [
+          context.tenantId,
+          feedbackId,
+          input.disposition,
+          String(input.rootCause ?? "").trim().slice(0, 5000) || null,
+          String(input.remediation ?? "").trim().slice(0, 5000) || null,
+          input.ownerMembershipId ?? null,
+          input.releaseBlocking ?? null
+        ]
+      );
+
+      if (!result.rowCount) {
+        throw new NotFoundException("Активный feedback item не найден");
+      }
+    });
+  }
+
+  async advanceFeedback(
+    context: TenantContext,
+    feedbackId: string,
+    input: {
+      status: "IN_PROGRESS" | "VERIFY" | "DONE";
+      fixVersion?: string;
+      verificationReference?: string;
+    }
+  ): Promise<void> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const item = await client.query<{
+        status: string;
+        release_blocking: boolean;
+      }>(
+        `SELECT status,release_blocking
+         FROM tenant_pilot_feedback
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId, feedbackId]
+      );
+
+      const row = item.rows[0];
+      if (!row) throw new NotFoundException("Feedback item не найден");
+
+      const allowed: Record<string,string[]> = {
+        TRIAGED: ["IN_PROGRESS"],
+        IN_PROGRESS: ["VERIFY"],
+        VERIFY: ["DONE"]
+      };
+
+      if (!allowed[row.status]?.includes(input.status)) {
+        throw new BadRequestException(
+          "Недопустимый переход feedback: " +
+            row.status +
+            " → " +
+            input.status
+        );
+      }
+
+      if (
+        input.status === "VERIFY" &&
+        row.release_blocking &&
+        !String(input.fixVersion ?? "").trim()
+      ) {
+        throw new BadRequestException(
+          "Release-blocking fix требует fixVersion"
+        );
+      }
+
+      if (
+        input.status === "DONE" &&
+        !String(input.verificationReference ?? "").trim()
+      ) {
+        throw new BadRequestException(
+          "DONE требует verification reference"
+        );
+      }
+
+      await client.query(
+        `UPDATE tenant_pilot_feedback
+         SET status=$3,
+             fix_version=COALESCE($4,fix_version),
+             verification_reference=COALESCE($5,verification_reference),
+             verified_by_membership_id=CASE
+               WHEN $3='DONE' THEN $6
+               ELSE verified_by_membership_id
+             END,
+             verified_at=CASE
+               WHEN $3='DONE' THEN now()
+               ELSE verified_at
+             END,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [
+          context.tenantId,
+          feedbackId,
+          input.status,
+          String(input.fixVersion ?? "").trim().slice(0, 200) || null,
+          String(input.verificationReference ?? "").trim().slice(0, 2000) || null,
+          context.membershipId
+        ]
+      );
+    });
+  }
+
 
   private async ensureInitialEvent(
     client: import("pg").PoolClient,
