@@ -285,13 +285,23 @@ export default function PurchasesPage() {
         }
       }
 
-      const receipt = await apiRequest<{ number: string }>(
-        `/procurement/orders/${order.id}/receipts`,
-        {
-          method: "POST",
-          body: JSON.stringify({ lines: payload, idempotencyKey })
-        }
-      );
+      const receiptRequest = () =>
+        apiRequest<{ number: string }>(
+          `/procurement/orders/${order.id}/receipts`,
+          {
+            method: "POST",
+            body: JSON.stringify({ lines: payload, idempotencyKey })
+          }
+        );
+
+      let receipt: { number: string };
+      try {
+        receipt = await receiptRequest();
+      } catch {
+        // Safe single retry: the server serializes this key and verifies
+        // the request fingerprint before returning/reusing a receipt.
+        receipt = await receiptRequest();
+      }
 
       try {
         window.sessionStorage.removeItem(retryStorageKey);
