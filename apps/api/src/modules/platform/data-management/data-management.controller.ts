@@ -9,6 +9,7 @@ import {
 } from "@nestjs/common";
 import type { Response } from "express";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
+import { ApiCost } from "../../../infrastructure/http/api-cost.decorator";
 import type { AuthenticatedRequest } from "../auth/auth.types";
 import { RequirePermission } from "../authorization/require-permission.decorator";
 import { DataManagementService } from "./data-management.service";
@@ -18,6 +19,7 @@ export class DataManagementController {
   constructor(private readonly data: DataManagementService) {}
 
   @Post("exports")
+  @ApiCost("EXPENSIVE")
   @RequirePermission("data.export")
   async requestExport(
     @Req() request: AuthenticatedRequest,
@@ -41,6 +43,7 @@ export class DataManagementController {
   }
 
   @Get("exports/:id/download")
+  @ApiCost("HEAVY")
   @RequirePermission("data.export")
   async download(
     @Req() request: AuthenticatedRequest,
@@ -62,6 +65,7 @@ export class DataManagementController {
   }
 
   @Post("offboarding/review")
+  @ApiCost("HEAVY")
   @RequirePermission("data.offboarding.read")
   async offboardingReview(
     @Req() request: AuthenticatedRequest
