@@ -45,6 +45,7 @@ type Dashboard = {
     trainer_cost_minor: string;
     room_cost_minor: string;
     margin_minor: string;
+    room_statement_adjustment_minor?: string;
   };
   attention: {
     unclosed_past_lessons: number;
@@ -124,6 +125,10 @@ export default function DanceDashboardPage() {
                 <strong>{money(data.monthEconomics.margin_minor)}</strong>
                 <small>
                   тренеры {money(data.monthEconomics.trainer_cost_minor)} · залы {money(data.monthEconomics.room_cost_minor)}
+                  {BigInt(data.monthEconomics.room_statement_adjustment_minor ?? "0") !== 0n
+                    ? " · корректировка аренды " +
+                      money(data.monthEconomics.room_statement_adjustment_minor ?? "0")
+                    : ""}
                 </small>
               </article>
               <article className="owner-kpi">
