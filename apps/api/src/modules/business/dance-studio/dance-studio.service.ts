@@ -182,6 +182,39 @@ export class DanceStudioService {
         [context.tenantId, scopeIds]
       );
 
+      let rentAdjustment=0n;
+      if(scopeIds===null){
+        const reconciliation=await client.query<{adjustment_minor:string}>(
+          `WITH finalized AS (
+             SELECT contract_id,amount_minor
+             FROM room_rental_statement
+             WHERE tenant_id=$1
+               AND status='FINALIZED'
+               AND period_from=date_trunc('month',current_date)::date
+           ),
+           embedded AS (
+             SELECT coalesce(sum(p.room_cost_minor),0) AS amount_minor
+             FROM dance_lesson_profitability p
+             JOIN dance_lesson l
+               ON l.tenant_id=p.tenant_id AND l.id=p.lesson_id
+             JOIN finalized f
+               ON p.calculation_snapshot #>> '{room,contractId}'
+                  = f.contract_id::text
+             WHERE p.tenant_id=$1
+               AND l.starts_at>=date_trunc('month',now())
+               AND l.starts_at<date_trunc('month',now())+interval '1 month'
+           )
+           SELECT (
+             coalesce((SELECT sum(amount_minor) FROM finalized),0)
+             - coalesce((SELECT amount_minor FROM embedded),0)
+           )::text AS adjustment_minor`,
+          [context.tenantId]
+        );
+        rentAdjustment=BigInt(
+          reconciliation.rows[0]?.adjustment_minor??"0"
+        );
+      }
+
       const attention = await client.query(
         `WITH scoped_lessons AS (
            SELECT l.*
@@ -271,12 +304,22 @@ export class DanceStudioService {
           expiring: 0,
           low_visits: 0
         },
-        monthEconomics: economics.rows[0] ?? {
-          revenue_minor: "0",
-          trainer_cost_minor: "0",
-          room_cost_minor: "0",
-          margin_minor: "0"
-        },
+        monthEconomics: (() => {
+          const base=economics.rows[0] ?? {
+            revenue_minor: "0",
+            trainer_cost_minor: "0",
+            room_cost_minor: "0",
+            margin_minor: "0"
+          };
+          return {
+            ...base,
+            room_cost_minor:
+              (BigInt(base.room_cost_minor)+rentAdjustment).toString(),
+            margin_minor:
+              (BigInt(base.margin_minor)-rentAdjustment).toString(),
+            room_statement_adjustment_minor:rentAdjustment.toString()
+          };
+        })(),
         attention: attention.rows[0] ?? {
           unclosed_past_lessons: 0,
           attended_without_payment_source: 0,
