@@ -186,6 +186,31 @@ WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     )
   )
 UNION ALL
+SELECT 'DANCE_TRAINER_RULE_OVERLAP',count(*)::bigint
+FROM trainer_compensation_plan a
+JOIN trainer_compensation_plan b
+  ON b.tenant_id=a.tenant_id
+ AND b.trainer_resource_id=a.trainer_resource_id
+ AND b.lesson_type IS NOT DISTINCT FROM a.lesson_type
+ AND b.priority=a.priority
+ AND b.id>a.id
+ AND b.status='ACTIVE'
+ AND a.status='ACTIVE'
+ AND daterange(a.valid_from,a.valid_to,'[]')
+     && daterange(b.valid_from,b.valid_to,'[]')
+WHERE a.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+UNION ALL
+SELECT 'DANCE_PACKAGE_ENTITLEMENT_DUPLICATE',count(*)::bigint
+FROM (
+  SELECT
+    tenant_id,plan_id,lesson_type,dance_program_id,dance_group_id,priority
+  FROM service_package_plan_entitlement
+  WHERE tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  GROUP BY
+    tenant_id,plan_id,lesson_type,dance_program_id,dance_group_id,priority
+  HAVING count(*)>1
+) q
+UNION ALL
 SELECT 'DANCE_ROOM_RENT_CONTRACT_OVERLAP',count(*)::bigint
 FROM room_rental_contract a
 JOIN room_rental_contract b
