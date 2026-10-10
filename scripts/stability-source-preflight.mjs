@@ -351,6 +351,7 @@ async function inspectRequiredHardening(root) {
     "157_public_dance_booking.sql",
     "160_dance_makeup_revenue.sql",
     "161_dance_makeup_lifecycle.sql",
+    "162_dance_financial_constraints.sql",
     "159_dance_makeup_booking.sql",
     "158_dance_tenant_integrity.sql",
 
