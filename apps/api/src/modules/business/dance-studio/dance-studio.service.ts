@@ -1444,13 +1444,21 @@ export class DanceStudioService {
   async freezePackage(
     context:TenantContext,
     packageId:string,
-    input:{startsOn:string;endsOn:string;reason?:string}
+    input:{
+      startsOn:string;
+      endsOn:string;
+      reason?:string;
+      cancelFutureReservations?:boolean;
+    }
   ){
     const scopeIds=await this.scopeIds(context,"dance.write");
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(input.startsOn)||
-       !/^\d{4}-\d{2}-\d{2}$/.test(input.endsOn)||
-       input.startsOn>input.endsOn)
+    if(
+      !/^\d{4}-\d{2}-\d{2}$/.test(input.startsOn) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(input.endsOn) ||
+      input.startsOn>input.endsOn
+    ){
       throw new BadRequestException("Некорректный период заморозки");
+    }
 
     return this.database.withTenantTransaction(context,async client=>{
       const pack=await client.query<{
@@ -1466,17 +1474,33 @@ export class DanceStudioService {
         [context.tenantId,packageId]
       );
       const row=pack.rows[0];
-      if(!row||row.status!=="ACTIVE")
+      if(!row||row.status!=="ACTIVE"){
         throw new NotFoundException("Активный абонемент не найден");
+      }
 
       if(scopeIds){
-        const party=await client.query(
-          `SELECT 1 FROM party
-           WHERE tenant_id=$1 AND id=$2
-             AND responsible_membership_id=ANY($3::uuid[])`,
-          [context.tenantId,row.party_id,scopeIds]
+        const access=await client.query(
+          `SELECT 1
+           FROM party p
+           WHERE p.tenant_id=$1 AND p.id=$2
+             AND (
+               p.responsible_membership_id=ANY($3::uuid[])
+               OR EXISTS (
+                 SELECT 1
+                 FROM service_package_beneficiary b
+                 JOIN party bp
+                   ON bp.tenant_id=b.tenant_id AND bp.id=b.party_id
+                 WHERE b.tenant_id=p.tenant_id
+                   AND b.package_id=$4
+                   AND b.status='ACTIVE'
+                   AND bp.responsible_membership_id=ANY($3::uuid[])
+               )
+             )`,
+          [context.tenantId,row.party_id,scopeIds,packageId]
         );
-        if(!party.rowCount) throw new NotFoundException("Абонемент не найден");
+        if(!access.rowCount){
+          throw new NotFoundException("Абонемент не найден");
+        }
       }
 
       const overlap=await client.query(
@@ -1486,15 +1510,18 @@ export class DanceStudioService {
                daterange($3::date,$4::date,'[]')`,
         [context.tenantId,packageId,input.startsOn,input.endsOn]
       );
-      if(overlap.rowCount) throw new ConflictException("Периоды заморозки пересекаются");
+      if(overlap.rowCount){
+        throw new ConflictException("Периоды заморозки пересекаются");
+      }
 
       const daysResult=await client.query<{days:number}>(
         "SELECT ($2::date-$1::date+1)::integer AS days",
         [input.startsOn,input.endsOn]
       );
       const days=daysResult.rows[0]?.days??0;
-      if(row.freeze_days_used+days>row.freeze_days_total_snapshot)
+      if(row.freeze_days_used+days>row.freeze_days_total_snapshot){
         throw new ConflictException("Лимит дней заморозки превышен");
+      }
 
       const freeze=await client.query(
         `INSERT INTO service_package_freeze(
@@ -1507,6 +1534,7 @@ export class DanceStudioService {
           input.reason?.trim()||null,context.membershipId
         ]
       );
+
       await client.query(
         `UPDATE service_package
          SET freeze_days_used=freeze_days_used+$3,
@@ -1515,7 +1543,79 @@ export class DanceStudioService {
          WHERE tenant_id=$1 AND id=$2`,
         [context.tenantId,packageId,days]
       );
-      return freeze.rows[0];
+
+      let cancelledReservations=0;
+      let promotedFromWaitlist=0;
+
+      if(input.cancelFutureReservations){
+        const reservations=await client.query<{
+          participant_id:string;
+          lesson_id:string;
+          status:string;
+        }>(
+          `SELECT
+             lp.id AS participant_id,lp.lesson_id,lp.status
+           FROM dance_lesson_participant lp
+           JOIN dance_lesson l
+             ON l.tenant_id=lp.tenant_id AND l.id=lp.lesson_id
+           WHERE lp.tenant_id=$1
+             AND lp.package_id=$2
+             AND lp.status IN ('BOOKED','WAITLIST')
+             AND l.status IN ('PLANNED','OPEN_FOR_BOOKING')
+             AND (l.starts_at AT TIME ZONE 'UTC')::date
+                 BETWEEN $3::date AND $4::date
+           ORDER BY l.starts_at,lp.id
+           FOR UPDATE OF lp`,
+          [context.tenantId,packageId,input.startsOn,input.endsOn]
+        );
+
+        for(const reservation of reservations.rows){
+          const lesson=await this.assertLessonAccess(
+            client,context.tenantId,reservation.lesson_id,scopeIds,true
+          );
+
+          if(reservation.status==="BOOKED"){
+            await this.releaseDanceReservationTx(
+              client,context.tenantId,reservation.participant_id
+            );
+          }
+
+          await client.query(
+            `UPDATE dance_lesson_participant
+             SET status='CANCELLED_IN_TIME',
+                 attendance_marked_by_membership_id=$3,
+                 attendance_marked_at=now(),
+                 version=version+1,updated_at=now()
+             WHERE tenant_id=$1 AND id=$2
+               AND status IN ('BOOKED','WAITLIST')`,
+            [context.tenantId,reservation.participant_id,context.membershipId]
+          );
+          cancelledReservations++;
+
+          if(reservation.status==="BOOKED"){
+            const promoted=await this.promoteLessonWaitlistTx(
+              client,context,lesson
+            );
+            if(promoted) promotedFromWaitlist++;
+          }
+        }
+      }
+
+      await this.audit(
+        client,context,"dance.package_frozen","service_package",packageId,{
+          startsOn:input.startsOn,
+          endsOn:input.endsOn,
+          appliedDays:days,
+          cancelledReservations,
+          promotedFromWaitlist
+        }
+      );
+
+      return {
+        ...freeze.rows[0],
+        cancelledReservations,
+        promotedFromWaitlist
+      };
     });
   }
 
