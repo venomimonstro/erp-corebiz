@@ -628,20 +628,61 @@
 - automatic OPEN→RESOLVED issue lifecycle;
 - owner-facing “Что требует внимания” workspace.
 
-## Активно — Sprint 58: Cash Forecast / Payment Calendar
-
-Scope:
+### Sprint 58 — Cash Forecast / Payment Calendar
 - expected cash inflows/outflows from open financial obligations;
 - due-date payment calendar;
 - daily projected cash balance;
-- configurable planning horizon;
-- cash-gap detection;
-- overdue vs future obligations;
-- no mutation of Accounting ledgers;
-- owner workspace with actionable upcoming deficit;
-- source drill-down to obligations/orders.
+- configurable 14–180 day horizon;
+- overdue obligations moved into today;
+- obligations without due date shown separately;
+- first cash-gap date and minimum balance;
+- source drill-down;
+- no accounting ledger mutation.
+
+### Sprint 59 — Budget / Plan vs Fact
+- versioned management cash-flow budget;
+- DRAFT / PUBLISHED / SUPERSEDED;
+- published budget lines immutable;
+- correction via next DRAFT version;
+- plan by month and cash-flow category;
+- actual from POSTED payments only;
+- unplanned actuals remain visible with plan=0;
+- monthly/category variance workspace.
+
+### Sprint 60 — Controlled Owner Assistant Foundation
+- assistant uses whitelisted domain read-services only;
+- no SQL/database credentials;
+- no arbitrary external tools;
+- no write/execution commands;
+- cash-gap / AR / marketing / operational issue insights;
+- deterministic prioritization;
+- owner snapshot workspace;
+- explicit executionAllowed=false.
+
+### Sprint 61 — Vertical Presets / First Day Experience
+- tenant-level business profile;
+- GENERAL / TRADE / ECOMMERCE / SERVICE / WAREHOUSE_3PL;
+- reversible capability preset;
+- no data deletion when capability is disabled;
+- Accounting/Payroll entitlements are not silently changed by vertical preset;
+- tenant capabilities control global navigation;
+- personal menu profile remains a separate user preference;
+- one Clean Core for every vertical, no forked codebase.
+
+## Активно — Sprint 62: Activation Checklist / First Value
+
+Scope:
+- role-aware first-day checklist;
+- profile-specific recommended first operation;
+- activation progress stored server-side;
+- import/catalog/customer/order/booking/site milestones;
+- dismissible hints without blocking normal work;
+- Time to First Value measurement;
+- owner sees what is missing before real go-live;
+- no artificial wizard locking the user into setup.
 
 ## Следом
 
-Sprint 59 — Budget / Plan vs Fact.  
-Sprint 60 — Controlled AI Owner Assistant.  
+Sprint 63 — Permission-aware role workspaces.  
+Sprint 64 — Search / Command Palette / Universal Create hardening.  
+Sprint 65 — Go-Live Center / tenant readiness gate.
