@@ -343,21 +343,28 @@ export class DanceEconomicsService {
 
         const redemption=await client.query<{
           id:string;state:string;package_id:string;
+          package_entitlement_id:string|null;
           no_show_policy:"RELEASE"|"CONSUME";
           allow_makeup:boolean;makeup_days_valid:number;
           visit_limit_snapshot:number|null;price_minor_snapshot:string;
           management_visit_value_minor:string;
         }>(
           `SELECT
-             r.id,r.state,r.package_id,plan.no_show_policy,
-             plan.allow_makeup,plan.makeup_days_valid,
+             r.id,r.state,r.package_id,r.package_entitlement_id,
+             plan.no_show_policy,plan.allow_makeup,plan.makeup_days_valid,
              sp.visit_limit_snapshot,sp.price_minor_snapshot::text,
-             plan.management_visit_value_minor::text
+             coalesce(
+               pe.management_visit_value_minor_snapshot,
+               plan.management_visit_value_minor
+             )::text AS management_visit_value_minor
            FROM dance_package_redemption r
            JOIN service_package sp
              ON sp.tenant_id=r.tenant_id AND sp.id=r.package_id
            JOIN service_package_plan plan
              ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
+           LEFT JOIN service_package_entitlement pe
+             ON pe.tenant_id=r.tenant_id
+            AND pe.id=r.package_entitlement_id
            WHERE r.tenant_id=$1 AND r.participant_id=$2
            FOR UPDATE OF r,sp`,
           [context.tenantId,participant.id]
@@ -390,6 +397,18 @@ export class DanceEconomicsService {
           );
           if(!update.rowCount)
             throw new ConflictException("Нарушена целостность абонемента");
+          if(red.package_entitlement_id){
+            const bucket=await client.query(
+              `UPDATE service_package_entitlement
+               SET reserved_visits=reserved_visits-1,
+                   used_visits=used_visits+1
+               WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0
+               RETURNING id`,
+              [context.tenantId,red.package_entitlement_id]
+            );
+            if(!bucket.rowCount)
+              throw new ConflictException("Нарушена целостность квоты абонемента");
+          }
           await client.query(
             "UPDATE dance_package_redemption SET state='CONSUMED',settled_at=now() WHERE tenant_id=$1 AND id=$2 AND state='RESERVED'",
             [context.tenantId,red.id]
@@ -430,6 +449,17 @@ export class DanceEconomicsService {
           );
           if(!update.rowCount)
             throw new ConflictException("Нарушена целостность абонемента");
+          if(red.package_entitlement_id){
+            const bucket=await client.query(
+              `UPDATE service_package_entitlement
+               SET reserved_visits=reserved_visits-1
+               WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0
+               RETURNING id`,
+              [context.tenantId,red.package_entitlement_id]
+            );
+            if(!bucket.rowCount)
+              throw new ConflictException("Нарушена целостность квоты абонемента");
+          }
           await client.query(
             "UPDATE dance_package_redemption SET state='RELEASED',settled_at=now() WHERE tenant_id=$1 AND id=$2 AND state='RESERVED'",
             [context.tenantId,red.id]
@@ -550,9 +580,9 @@ export class DanceEconomicsService {
       }
 
       const redemptions=await client.query<{
-        id:string;package_id:string;
+        id:string;package_id:string;package_entitlement_id:string|null;
       }>(
-        `SELECT r.id,r.package_id
+        `SELECT r.id,r.package_id,r.package_entitlement_id
          FROM dance_package_redemption r
          JOIN dance_lesson_participant lp
            ON lp.tenant_id=r.tenant_id AND lp.id=r.participant_id
@@ -570,6 +600,17 @@ export class DanceEconomicsService {
           [context.tenantId,row.package_id]
         );
         if(!pack.rowCount) throw new ConflictException("Нарушена целостность абонемента");
+        if(row.package_entitlement_id){
+          const bucket=await client.query(
+            `UPDATE service_package_entitlement
+             SET reserved_visits=reserved_visits-1
+             WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0
+             RETURNING id`,
+            [context.tenantId,row.package_entitlement_id]
+          );
+          if(!bucket.rowCount)
+            throw new ConflictException("Нарушена целостность квоты абонемента");
+        }
         await client.query(
           "UPDATE dance_package_redemption SET state='RELEASED',settled_at=now() WHERE tenant_id=$1 AND id=$2",
           [context.tenantId,row.id]
