@@ -237,6 +237,26 @@ export class DanceStudioController {
     return {ok:true,data:await this.studio.createLesson(this.ctx(req),body)};
   }
 
+  @Patch("lessons/:lessonId")
+  @RequirePermission("dance.write")
+  async updateLesson(
+    @Req() req:AuthenticatedRequest,
+    @Param("lessonId") lessonId:string,
+    @Body() body:{
+      startsAt?:string;
+      durationMinutes?:number;
+      trainerResourceId?:string;
+      roomResourceId?:string|null;
+      capacity?:number;
+      version:number;
+    }
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.studio.updateLesson(this.ctx(req),lessonId,body)
+    };
+  }
+
   @Get("lessons/:lessonId/participants")
   @RequirePermission("dance.read")
   async participants(
