@@ -1,10 +1,45 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { apiRequest } from "../lib/api";
 
 type Entry = readonly [href: string, label: string, key: string];
 type Section = { title: string; items: Entry[] };
 type MenuProfile = "all" | "commerce" | "service" | "warehouse";
+type Capability = { key: string; enabled: boolean };
+
+const capabilityByKey: Record<string,string> = {
+  deals: "crm",
+  tasks: "tasks",
+  orders: "sales",
+  products: "catalog",
+  purchases: "procurement",
+  stock: "inventory",
+  finance: "finance",
+  "finance-forecast": "finance",
+  "finance-budget": "finance",
+  "service-home": "service",
+  bookings: "service",
+  resources: "service",
+  channels: "channels",
+  oms: "oms",
+  returns: "oms",
+  sites: "sites",
+  analytics: "growth",
+  profitability: "growth",
+  marketing: "growth",
+  growth: "growth",
+  conversions: "growth",
+  "analytics-settings": "growth",
+  wms: "wms",
+  "wms-inbound": "wms",
+  "wms-mobile": "wms",
+  "wms-owners": "wms",
+  "wms-billing": "wms",
+  "wms-portal": "wms",
+  workflows: "workflow",
+  support: "support"
+};
 
 const profileSections: Record<MenuProfile, readonly string[]> = {
   all: [],
@@ -70,6 +105,8 @@ export function AppSidebar({ active }: { active: string }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [profile, setProfile] = useState<MenuProfile>("all");
+  const [capabilities, setCapabilities] = useState<Record<string,boolean> | null>(null);
+
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem("corebiz.menu.profile");
@@ -78,11 +115,55 @@ export function AppSidebar({ active }: { active: string }) {
       }
     } catch { /* Private browsing: use a full navigation menu. */ }
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCapabilities() {
+      try {
+        const rows = await apiRequest<Capability[]>("/customization/capabilities");
+        if (!cancelled) {
+          setCapabilities(
+            Object.fromEntries(rows.map((item) => [item.key,item.enabled]))
+          );
+        }
+      } catch {
+        // Fail open for navigation only. Backend permissions remain authoritative.
+        if (!cancelled) setCapabilities(null);
+      }
+    }
+
+    void loadCapabilities();
+    const refresh = () => void loadCapabilities();
+    window.addEventListener("corebiz-capabilities-changed", refresh);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("corebiz-capabilities-changed", refresh);
+    };
+  }, []);
+
   function updateProfile(value: MenuProfile) {
     setProfile(value);
     try { window.localStorage.setItem("corebiz.menu.profile", value); } catch { /* no persistence */ }
   }
-  const visibleSections = sections.filter((section) =>
+  const capabilityFilteredSections = useMemo(
+    () =>
+      sections
+        .map((section) => ({
+          ...section,
+          items: section.items.filter((entry) => {
+            if (entry[2] === active) return true;
+            const capability = capabilityByKey[entry[2]];
+            if (!capability || capabilities === null) return true;
+            return capabilities[capability] !== false;
+          })
+        }))
+        .filter((section) => section.items.length > 0),
+    [active, capabilities]
+  );
+
+  const visibleSections = capabilityFilteredSections.filter((section) =>
     profile === "all" || profileSections[profile].includes(section.title) ||
     section.items.some((entry) => entry[2] === active)
   );
