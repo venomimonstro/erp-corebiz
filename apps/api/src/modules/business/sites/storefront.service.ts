@@ -8,6 +8,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import { randomBytes } from "node:crypto";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { PartyService } from "../party/party.service";
+import { OmsService } from "../oms/oms.service";
 import { SalesService } from "../sales/sales.service";
 
 @Injectable()
@@ -15,7 +16,8 @@ export class StorefrontService {
   constructor(
     private readonly database: DatabaseService,
     private readonly parties: PartyService,
-    private readonly sales: SalesService
+    private readonly sales: SalesService,
+    private readonly oms: OmsService
   ) {}
 
   async configure(
@@ -419,6 +421,11 @@ export class StorefrontService {
         throw new ConflictException("Заказ уже перешёл в несовместимое состояние");
       }
 
+      // The storefront must not stop at Sales CONFIRMED: allocate inventory
+      // immediately so concurrent buyers see a real reservation/backorder result.
+      const omsOrder = await this.oms.ensureOrder(context, order.id);
+      const allocation = await this.oms.allocate(context, omsOrder.id);
+
       const completed = await this.database.withTenantTransaction(
         context,
         async (client) => await client.query(
@@ -437,11 +444,24 @@ export class StorefrontService {
       if (!completed.rowCount) {
         throw new ConflictException("Состояние корзины изменилось, проверьте заказ");
       }
+
       return {
         accepted: true,
         salesOrderId: order.id,
         number: order.number,
-        orderStatus: "CONFIRMED"
+        orderStatus: "CONFIRMED",
+        fulfillmentStatus:
+          typeof allocation.fulfillmentStatus === "string"
+            ? allocation.fulfillmentStatus
+            : "UNALLOCATED",
+        allocationState:
+          typeof allocation.state === "string"
+            ? allocation.state
+            : "ALLOCATION_FAILED",
+        backorderMilli:
+          typeof allocation.backorderMilli === "string"
+            ? allocation.backorderMilli
+            : "0"
       };
     } catch (error) {
       // Do not unlock an attempt already taken over. If any external domain
