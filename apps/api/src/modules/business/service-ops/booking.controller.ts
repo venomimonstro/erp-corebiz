@@ -66,6 +66,59 @@ export class BookingController {
     };
   }
 
+  @Get("assets")
+  @RequirePermission("service.read")
+  async assets(
+    @Req() request: AuthenticatedRequest,
+    @Query("partyId") partyId?: string
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.booking.assets(this.context(request), partyId)
+    };
+  }
+
+  @Post("assets")
+  @RequirePermission("service.write")
+  async createAsset(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: any
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.booking.createAsset(this.context(request), body)
+    };
+  }
+
+  @Get("assets/:id/history")
+  @RequirePermission("service.read")
+  async assetHistory(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.booking.assetHistory(this.context(request), id)
+    };
+  }
+
+  @Patch("assets/:id/usage")
+  @RequirePermission("service.write")
+  async updateAssetUsage(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: any
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.booking.updateAssetUsage(
+        this.context(request),
+        id,
+        body
+      )
+    };
+  }
+
   @Get("bookings")
   @RequirePermission("service.read")
   async bookings(
