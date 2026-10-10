@@ -74,6 +74,21 @@ export class PilotController {
     };
   }
 
+  @Post("exit-review")
+  @RequirePermission("pilot.manage")
+  async exitReview(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: { note?: string }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.pilot.evaluateExit(
+        this.context(request),
+        body.note
+      )
+    };
+  }
+
   @Post("incidents")
   @RequirePermission("pilot.manage")
   async incident(
