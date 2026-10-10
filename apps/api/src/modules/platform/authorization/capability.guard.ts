@@ -20,6 +20,7 @@ const PERMISSION_CAPABILITY: Record<string, string> = {
   finance: "finance",
   accounting: "accounting",
   service: "service",
+  dance: "dance",
   projects: "projects",
   channels: "channels",
   oms: "oms",
