@@ -259,6 +259,16 @@ async function inspectRequiredHardening(root) {
       path: "apps/api/src/modules/business/service-ops/resources.service.ts",
       patterns: [/serviceScope/, /assertResource/, /membership_id = ANY/],
       message: "Service resource scope enforcement is missing"
+    },
+    {
+      path: "apps/api/src/modules/platform/customization/customization.service.ts",
+      patterns: [/BUSINESS_CAPABILITIES as readonly string\[\]/, /seenPermissions/, /customization\.manage/],
+      message: "Customization capability/role/shared-view validation is missing"
+    },
+    {
+      path: "apps/api/src/modules/business/sales/sales.service.ts",
+      patterns: [/orderIdempotencyFingerprint/, /pg_advisory_xact_lock/, /idempotency_fingerprint/],
+      message: "Sales-order strict idempotency hardening is missing"
     }
   ];
 
@@ -280,7 +290,8 @@ async function inspectRequiredHardening(root) {
   const requiredMigrations = [
     "136_party_create_idempotency.sql",
     "137_runtime_pressure_leases.sql",
-    "148_capability_project_hardening.sql"
+    "148_capability_project_hardening.sql",
+    "149_sales_order_idempotency_fingerprint.sql"
   ];
 
   for (const name of requiredMigrations) {
