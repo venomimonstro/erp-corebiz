@@ -548,20 +548,100 @@
 - ASN becomes RECEIVED only when factual receipt covers expectation;
 - inventory quantity remains sourced only from Goods Receipt / Inventory Ledger.
 
-## Активно — Sprint 49: 3PL Invoicing Handoff to Finance / Accounting
+### Sprint 49 — 3PL Invoicing Handoff to Finance
+- finalized 3PL statement → receivable handoff;
+- one active finance document per statement;
+- immutable statement snapshot;
+- owner/Party identity integrity;
+- payment matching;
+- accounting-ready business event;
+- statement finance/payment status.
+
+### Sprint 50 — Finance Reconciliation / Cash Application
+- bank statement staging;
+- statement/line idempotency;
+- payment matching/unmatching;
+- correction audit;
+- finalization guard;
+- non-empty reconciliation gate;
+- unmatched-bank diagnostics.
+
+### Sprint 51 — Accounting RU Foundation
+- chart/accounting core;
+- deterministic posting rules;
+- approved source snapshots;
+- double-entry enforcement;
+- period locks;
+- policy/rule effective dates;
+- accounting period transition audit.
+
+### Sprint 52 — VAT / Month Close
+- VAT document lifecycle;
+- VAT register direction/integrity;
+- VAT periods and period gates;
+- approved→registered guards;
+- month-close checklist;
+- close readiness;
+- database close gate.
+
+### Sprint 53 — Payroll Staging / Export
+- payroll accrual batches/lines;
+- approval immutability;
+- employee-line guards;
+- correction integrity;
+- export preview;
+- approved payroll cannot be silently mutated.
+
+### Sprint 54 — Analytics / Operational Issue Registry
+- tenant financial snapshots;
+- operational issue registry;
+- bank/VAT/close/payroll issue classes;
+- immutable release verification evidence foundation.
+
+### Sprint 55 — Runtime Security / Idempotency Hardening
+- service booking transition guard;
+- site submission PROCESSING state;
+- storefront checkout claim/lease;
+- auth RLS bootstrap functions;
+- reviewed runtime SECURITY DEFINER grants;
+- runtime app role remains non-owner/NOBYPASSRLS.
+
+### Sprint 56 — Release Integrity / Production Gate
+- one local/server `pnpm release:gate`;
+- disposable migration replay;
+- tenant-table RLS coverage gate;
+- runtime role ownership/BYPASSRLS gate;
+- SECURITY DEFINER execute grant gate;
+- typecheck/test/build;
+- API smoke;
+- browser smoke;
+- public commerce/booking diagnostics;
+- Finance/Accounting/WMS reconciliation;
+- immutable Release Control Center evidence.
+
+### Sprint 57 — Operational Control Center
+- owner financial snapshots refreshed on demand;
+- unmatched bank issue registry;
+- VAT registration gaps;
+- month-close blockers;
+- payroll draft blockers;
+- automatic OPEN→RESOLVED issue lifecycle;
+- owner-facing “Что требует внимания” workspace.
+
+## Активно — Sprint 58: Cash Forecast / Payment Calendar
 
 Scope:
-- FINALIZED 3PL statement → receivable/invoice handoff;
-- one statement can create at most one active finance document;
-- snapshot statement amount/currency/period;
-- finance document lifecycle independent from WMS;
-- cancellation/credit-note path, never mutate finalized statement;
-- payment matching to 3PL receivable;
-- owner/Party identity validation;
-- accounting-ready business event, but no direct statutory posting from WMS;
-- statement shows finance handoff/payment status.
+- expected cash inflows/outflows from open financial obligations;
+- due-date payment calendar;
+- daily projected cash balance;
+- configurable planning horizon;
+- cash-gap detection;
+- overdue vs future obligations;
+- no mutation of Accounting ledgers;
+- owner workspace with actionable upcoming deficit;
+- source drill-down to obligations/orders.
 
 ## Следом
 
-Sprint 50 — Finance reconciliation / cash application hardening.  
-Sprint 51 — Accounting foundation / deterministic posting rules.
+Sprint 59 — Budget / Plan vs Fact.  
+Sprint 60 — Controlled AI Owner Assistant.  
