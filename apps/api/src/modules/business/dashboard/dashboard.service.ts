@@ -775,8 +775,8 @@ export class DashboardService {
             key: "product",
             title: "Добавьте товар или услугу",
             detail: "Каталог нужен для заказов, себестоимости и аналитики.",
-            href: "/app/service",
-            done: values.service > 0
+            href: "/app/catalog/products",
+            done: values.product > 0 || values.service > 0
           },
           {
             key: "first-operation",
@@ -823,7 +823,7 @@ export class DashboardService {
             key: "site-channel",
             title: "Подключите канал продаж или опубликуйте сайт",
             detail: "Можно начать с собственного магазина, Ozon или Wildberries.",
-            href: values.site > 0 || values.channel === 0 ? "/app/channels" : "/app/sites",
+            href: values.site > 0 ? "/app/channels" : "/app/sites",
             done: values.site > 0 || values.channel > 0
           },
           {
@@ -840,8 +840,8 @@ export class DashboardService {
             key: "service",
             title: "Добавьте услугу",
             detail: "Укажите длительность и цену, чтобы открыть расписание.",
-            href: "/app/catalog/products",
-            done: values.product > 0
+            href: "/app/service",
+            done: values.service > 0
           },
           {
             key: "party",
