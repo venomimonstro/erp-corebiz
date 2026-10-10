@@ -72,6 +72,7 @@ export class BookingService {
       currency?: string;
     }
   ): Promise<{ id: string }> {
+    await this.requireServiceAll(context, "service.write");
     const name = input.name.trim();
     if (name.length < 2 || name.length > 160) {
       throw new BadRequestException("Некорректное название услуги");
@@ -134,6 +135,7 @@ export class BookingService {
       resourceType?: string;
     }
   ): Promise<void> {
+    await this.requireServiceAll(context, "service.write");
     const minLevel = Math.floor(input.minLevel ?? 1);
     if (minLevel < 1 || minLevel > 5) {
       throw new BadRequestException("Уровень навыка должен быть от 1 до 5");
@@ -322,6 +324,7 @@ export class BookingService {
       metadata?: Record<string, unknown>;
     }
   ): Promise<{ id: string }> {
+    await this.requireServiceAll(context, "service.write");
     const name = input.name?.trim();
     if (!name || name.length > 180) {
       throw new BadRequestException("Некорректное название абонемента");
@@ -402,6 +405,7 @@ export class BookingService {
     context: TenantContext,
     partyId?: string
   ): Promise<Array<Record<string, unknown>>> {
+    const scopedMembershipIds = await this.serviceScope(context, "service.read");
     return this.database.withTenantTransaction(context, async (client) => {
       await client.query(
         `UPDATE service_package
@@ -426,11 +430,26 @@ export class BookingService {
            ON p.tenant_id=sp.tenant_id AND p.id=sp.party_id
          WHERE sp.tenant_id=$1
            AND ($2::uuid IS NULL OR sp.party_id=$2)
+           AND (
+             $3::uuid[] IS NULL
+             OR p.responsible_membership_id = ANY($3::uuid[])
+             OR EXISTS (
+               SELECT 1
+               FROM service_booking b
+               JOIN service_booking_resource br
+                 ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
+               JOIN service_resource r
+                 ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+               WHERE b.tenant_id=sp.tenant_id
+                 AND b.party_id=sp.party_id
+                 AND r.membership_id = ANY($3::uuid[])
+             )
+           )
          ORDER BY
            CASE sp.status WHEN 'ACTIVE' THEN 0 ELSE 1 END,
            sp.expires_at,sp.created_at DESC
          LIMIT 1000`,
-        [context.tenantId, partyId ?? null]
+        [context.tenantId, partyId ?? null, scopedMembershipIds]
       );
       return result.rows;
     });
@@ -449,6 +468,7 @@ export class BookingService {
     if (Number.isNaN(startsAt.getTime())) {
       throw new BadRequestException("Некорректная дата начала абонемента");
     }
+    const scopedMembershipIds = await this.serviceScope(context, "service.write");
 
     return this.database.withTenantTransaction(context, async (client) => {
       const plan = await client.query<{
@@ -469,8 +489,14 @@ export class BookingService {
 
       const party = await client.query(
         `SELECT 1 FROM party
-         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
-        [context.tenantId, input.partyId]
+         WHERE tenant_id=$1
+           AND id=$2
+           AND status='ACTIVE'
+           AND (
+             $3::uuid[] IS NULL
+             OR responsible_membership_id = ANY($3::uuid[])
+           )`,
+        [context.tenantId, input.partyId, scopedMembershipIds]
       );
       if (!party.rowCount) throw new NotFoundException("Клиент не найден");
 
@@ -542,6 +568,7 @@ export class BookingService {
     context: TenantContext,
     partyId?: string
   ): Promise<Array<Record<string, unknown>>> {
+    const scopedMembershipIds = await this.serviceScope(context, "service.read");
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `SELECT
@@ -563,9 +590,24 @@ export class BookingService {
          WHERE a.tenant_id=$1
            AND a.status='ACTIVE'
            AND ($2::uuid IS NULL OR a.party_id=$2)
+           AND (
+             $3::uuid[] IS NULL
+             OR p.responsible_membership_id = ANY($3::uuid[])
+             OR EXISTS (
+               SELECT 1
+               FROM service_booking b
+               JOIN service_booking_resource br
+                 ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
+               JOIN service_resource r
+                 ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+               WHERE b.tenant_id=a.tenant_id
+                 AND b.asset_id=a.id
+                 AND r.membership_id = ANY($3::uuid[])
+             )
+           )
          ORDER BY a.updated_at DESC,a.display_name
          LIMIT 500`,
-        [context.tenantId, partyId ?? null]
+        [context.tenantId, partyId ?? null, scopedMembershipIds]
       );
       return result.rows;
     });
@@ -619,13 +661,25 @@ export class BookingService {
 
     const externalKey = this.normalizeAssetIdentifier(input.externalKey);
     const registrationNumber = this.normalizeAssetIdentifier(input.registrationNumber);
+    const scopedMembershipIds = await this.serviceScope(context, "service.write");
+    if (scopedMembershipIds !== null && !input.partyId) {
+      throw new ForbiddenException(
+        "Для ограниченной роли объект должен быть привязан к доступному клиенту"
+      );
+    }
 
     return this.database.withTenantTransaction(context, async (client) => {
       if (input.partyId) {
         const party = await client.query(
           `SELECT 1 FROM party
-           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
-          [context.tenantId, input.partyId]
+           WHERE tenant_id=$1
+             AND id=$2
+             AND status='ACTIVE'
+             AND (
+               $3::uuid[] IS NULL
+               OR responsible_membership_id = ANY($3::uuid[])
+             )`,
+          [context.tenantId, input.partyId, scopedMembershipIds]
         );
         if (!party.rowCount) throw new NotFoundException("Клиент не найден");
       }
@@ -698,8 +752,15 @@ export class BookingService {
     if (!/^\d+$/.test(usageValue)) {
       throw new BadRequestException("Пробег/наработка должны быть неотрицательным целым числом");
     }
+    const scopedMembershipIds = await this.serviceScope(context, "service.write");
 
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertAssetAccess(
+        client,
+        context.tenantId,
+        assetId,
+        scopedMembershipIds
+      );
       const current = await client.query<{
         usage_value: string;
         usage_unit: string;
@@ -761,7 +822,14 @@ export class BookingService {
     context: TenantContext,
     assetId: string
   ): Promise<Record<string, unknown>> {
+    const scopedMembershipIds = await this.serviceScope(context, "service.read");
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertAssetAccess(
+        client,
+        context.tenantId,
+        assetId,
+        scopedMembershipIds
+      );
       const asset = await client.query(
         `SELECT
            a.id,a.party_id,a.asset_type,a.display_name,a.external_key,
@@ -1569,6 +1637,60 @@ export class BookingService {
       throw new ForbiddenException(
         "Выбран сотрудник вне доступной области"
       );
+    }
+  }
+
+  private async requireServiceAll(
+    context: TenantContext,
+    permission: "service.read" | "service.write"
+  ): Promise<void> {
+    if (
+      context.membershipId === "00000000-0000-0000-0000-000000000000"
+    ) {
+      return;
+    }
+    const scope = await this.authorization.resolveScope(context, permission);
+    if (scope !== "all") {
+      throw new ForbiddenException(
+        "Операция доступна только администратору сервисного контура"
+      );
+    }
+  }
+
+  private async assertAssetAccess(
+    client: PoolClient,
+    tenantId: string,
+    assetId: string,
+    scopedMembershipIds: string[] | null
+  ): Promise<void> {
+    if (scopedMembershipIds === null) return;
+
+    const access = await client.query(
+      `SELECT 1
+       FROM service_asset a
+       LEFT JOIN party p
+         ON p.tenant_id=a.tenant_id AND p.id=a.party_id
+       WHERE a.tenant_id=$1
+         AND a.id=$2
+         AND (
+           p.responsible_membership_id = ANY($3::uuid[])
+           OR EXISTS (
+             SELECT 1
+             FROM service_booking b
+             JOIN service_booking_resource br
+               ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
+             JOIN service_resource r
+               ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+             WHERE b.tenant_id=a.tenant_id
+               AND b.asset_id=a.id
+               AND r.membership_id = ANY($3::uuid[])
+           )
+         )`,
+      [tenantId, assetId, scopedMembershipIds]
+    );
+
+    if (!access.rowCount) {
+      throw new NotFoundException("Объект обслуживания не найден");
     }
   }
 
