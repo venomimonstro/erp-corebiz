@@ -689,6 +689,19 @@ export class DanceEconomicsService {
       }
 
       await client.query(
+        `UPDATE dance_makeup_credit mc
+         SET status='AVAILABLE',reserved_participant_id=NULL,updated_at=now()
+         FROM dance_lesson_participant lp
+         WHERE mc.tenant_id=$1
+           AND lp.tenant_id=mc.tenant_id
+           AND lp.lesson_id=$2
+           AND lp.makeup_credit_id=mc.id
+           AND mc.status='RESERVED'
+           AND mc.reserved_participant_id=lp.id`,
+        [context.tenantId,lessonId]
+      );
+
+      await client.query(
         `UPDATE dance_lesson_participant
          SET status=CASE WHEN status='WAITLIST' THEN status ELSE 'CANCELLED_IN_TIME' END,
              version=version+1,updated_at=now()
