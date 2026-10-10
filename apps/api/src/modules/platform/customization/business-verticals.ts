@@ -15,6 +15,7 @@ export const BUSINESS_CAPABILITIES = [
   "finance",
   "accounting",
   "service",
+  "dance",
   "projects",
   "channels",
   "oms",
@@ -160,7 +161,7 @@ export const BUSINESS_VERTICALS: Record<
     profileCode: "SERVICE",
     version: 5,
     enabledCapabilities: [
-      "crm","tasks","sales","finance","accounting","service","sites","growth","workflow","support"
+      "crm","tasks","sales","finance","accounting","service","dance","sites","growth","workflow","support"
     ],
     customFields: [
       { entityType: "PARTY", fieldKey: "training_level", label: "Уровень подготовки", dataType: "SELECT", options: ["Новичок", "Средний", "Продвинутый"] },
