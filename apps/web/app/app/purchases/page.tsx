@@ -246,13 +246,58 @@ export default function PurchasesPage() {
 
       if (!payload.length) return;
 
+      const signature = JSON.stringify(
+        [...payload].sort((a, b) =>
+          a.purchaseOrderLineId.localeCompare(b.purchaseOrderLineId)
+        )
+      );
+      const retryStorageKey =
+        "corebiz.procurement.receipt." + order.id;
+
+      let idempotencyKey = "";
+      try {
+        const stored = window.sessionStorage.getItem(retryStorageKey);
+        if (stored) {
+          const parsed = JSON.parse(stored) as {
+            signature?: string;
+            idempotencyKey?: string;
+          };
+          if (
+            parsed.signature === signature &&
+            typeof parsed.idempotencyKey === "string"
+          ) {
+            idempotencyKey = parsed.idempotencyKey;
+          }
+        }
+      } catch {
+        // A blocked sessionStorage must not block the operation.
+      }
+
+      if (!idempotencyKey) {
+        idempotencyKey = crypto.randomUUID();
+        try {
+          window.sessionStorage.setItem(
+            retryStorageKey,
+            JSON.stringify({ signature, idempotencyKey })
+          );
+        } catch {
+          // Server-side fingerprint still protects an explicit retry key.
+        }
+      }
+
       const receipt = await apiRequest<{ number: string }>(
         `/procurement/orders/${order.id}/receipts`,
         {
           method: "POST",
-          body: JSON.stringify({ lines: payload })
+          body: JSON.stringify({ lines: payload, idempotencyKey })
         }
       );
+
+      try {
+        window.sessionStorage.removeItem(retryStorageKey);
+      } catch {
+        // Ignore storage cleanup failures after a confirmed receipt.
+      }
 
       window.alert(`Приёмка ${receipt.number} проведена. Остатки обновлены.`);
       await load();
