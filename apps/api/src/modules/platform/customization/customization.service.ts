@@ -32,6 +32,7 @@ export class CustomizationService {
     context: TenantContext,
     entityType: EntityType
   ): Promise<Array<Record<string, unknown>>> {
+    const normalizedEntityType = this.normalizeEntityType(entityType);
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `SELECT id, entity_type, field_key, label, data_type, options,
@@ -41,7 +42,7 @@ export class CustomizationService {
            AND entity_type = $2
            AND is_active = true
          ORDER BY created_at`,
-        [context.tenantId, entityType]
+        [context.tenantId, normalizedEntityType]
       );
 
       return result.rows;
@@ -59,6 +60,8 @@ export class CustomizationService {
       isRequired?: boolean;
     }
   ): Promise<{ id: string }> {
+    const entityType = this.normalizeEntityType(input.entityType);
+    const dataType = this.normalizeFieldType(input.dataType);
     const key = input.fieldKey.trim().toLowerCase();
     const label = input.label.trim();
 
@@ -76,7 +79,7 @@ export class CustomizationService {
     );
 
     if (
-      ["SELECT", "MULTISELECT"].includes(input.dataType) &&
+      ["SELECT", "MULTISELECT"].includes(dataType) &&
       options.length === 0
     ) {
       throw new BadRequestException("Для списка укажите варианты значений");
@@ -92,10 +95,10 @@ export class CustomizationService {
            RETURNING id`,
           [
             context.tenantId,
-            input.entityType,
+            entityType,
             key,
             label,
-            input.dataType,
+            dataType,
             JSON.stringify(options),
             Boolean(input.isRequired)
           ]
@@ -110,7 +113,7 @@ export class CustomizationService {
           "customization.field_created",
           "custom_field_definition",
           field.id,
-          { entityType: input.entityType, fieldKey: key }
+          { entityType, fieldKey: key }
         );
 
         return field;
@@ -128,9 +131,10 @@ export class CustomizationService {
     entityType: EntityType,
     entityId: string
   ): Promise<Record<string, unknown>> {
+    const normalizedEntityType = this.normalizeEntityType(entityType);
     const scopedMembershipIds = await this.entityScopeMembershipIds(
       context,
-      entityType,
+      normalizedEntityType,
       "read"
     );
 
@@ -138,7 +142,7 @@ export class CustomizationService {
       await this.assertEntity(
         client,
         context.tenantId,
-        entityType,
+        normalizedEntityType,
         entityId,
         scopedMembershipIds
       );
@@ -157,7 +161,7 @@ export class CustomizationService {
            AND d.entity_type = $2
            AND d.is_active = true
          ORDER BY d.created_at`,
-        [context.tenantId, entityType, entityId]
+        [context.tenantId, normalizedEntityType, entityId]
       );
 
       return Object.fromEntries(
@@ -172,9 +176,10 @@ export class CustomizationService {
     entityId: string,
     values: Record<string, unknown>
   ): Promise<void> {
+    const normalizedEntityType = this.normalizeEntityType(entityType);
     const scopedMembershipIds = await this.entityScopeMembershipIds(
       context,
-      entityType,
+      normalizedEntityType,
       "write"
     );
 
@@ -182,7 +187,7 @@ export class CustomizationService {
       await this.assertEntity(
         client,
         context.tenantId,
-        entityType,
+        normalizedEntityType,
         entityId,
         scopedMembershipIds
       );
@@ -198,7 +203,7 @@ export class CustomizationService {
          WHERE tenant_id = $1
            AND entity_type = $2
            AND is_active = true`,
-        [context.tenantId, entityType]
+        [context.tenantId, normalizedEntityType]
       );
 
       const byKey = new Map(
@@ -230,7 +235,7 @@ export class CustomizationService {
           [
             context.tenantId,
             definition.id,
-            entityType,
+            normalizedEntityType,
             entityId,
             JSON.stringify(normalized),
             context.membershipId
@@ -242,7 +247,7 @@ export class CustomizationService {
         client,
         context,
         "customization.values_updated",
-        entityType.toLowerCase(),
+        normalizedEntityType.toLowerCase(),
         entityId,
         { fields: Object.keys(values) }
       );
@@ -918,6 +923,37 @@ export class CustomizationService {
         { permissions }
       );
     });
+  }
+
+  private normalizeEntityType(value: unknown): EntityType {
+    const normalized = String(value ?? "").trim().toUpperCase();
+    const allowed: EntityType[] = [
+      "DEAL",
+      "PARTY",
+      "PRODUCT",
+      "SALES_ORDER",
+      "PURCHASE_ORDER"
+    ];
+    if (!allowed.includes(normalized as EntityType)) {
+      throw new BadRequestException("Неизвестный тип сущности");
+    }
+    return normalized as EntityType;
+  }
+
+  private normalizeFieldType(value: unknown): FieldType {
+    const normalized = String(value ?? "").trim().toUpperCase();
+    const allowed: FieldType[] = [
+      "TEXT",
+      "NUMBER",
+      "DATE",
+      "BOOLEAN",
+      "SELECT",
+      "MULTISELECT"
+    ];
+    if (!allowed.includes(normalized as FieldType)) {
+      throw new BadRequestException("Неизвестный тип custom-поля");
+    }
+    return normalized as FieldType;
   }
 
   private validateValue(
