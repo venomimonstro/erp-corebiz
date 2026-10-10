@@ -9,6 +9,7 @@ import { randomBytes } from "node:crypto";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import {
+  BUSINESS_CAPABILITIES,
   BUSINESS_VERTICAL_LIST,
   BUSINESS_VERTICALS,
   type BusinessVerticalCode
@@ -391,7 +392,10 @@ export class CustomizationService {
       profileCode: template.profileCode,
       version: template.version,
       ownerQuestions: template.ownerQuestions,
-      primaryWorkspaces: template.primaryWorkspaces
+      primaryWorkspaces: template.primaryWorkspaces,
+      enabledCapabilities: template.enabledCapabilities,
+      operatingFlows: template.operatingFlows,
+      attentionSignals: template.attentionSignals
     }));
   }
 
@@ -404,6 +408,8 @@ export class CustomizationService {
     profileCode: string;
     templateVersion: number;
     createdFields: number;
+    enabledCapabilities: string[];
+    disabledCapabilities: string[];
   }> {
     const verticalCode = verticalInput.trim().toUpperCase() as BusinessVerticalCode;
     const template = BUSINESS_VERTICALS[verticalCode];
@@ -411,13 +417,50 @@ export class CustomizationService {
       throw new BadRequestException("Неизвестный тип бизнеса");
     }
 
-    // Capabilities are still owned by the coarse technical profile.
-    // The vertical layer adds defaults, never a fork of Core.
-    await this.applyBusinessProfile(context, template.profileCode);
+    const enabled = new Set<string>(template.enabledCapabilities);
+    const disabled = BUSINESS_CAPABILITIES.filter((key) => !enabled.has(key));
 
-    let createdFields = 0;
+    // A vertical switch is one business operation. Profile, module visibility,
+    // template fields and persisted vertical metadata must never diverge.
+    return this.database.withTenantTransaction(context, async (client) => {
+      await client.query(
+        "SELECT id FROM tenant WHERE id=$1 FOR UPDATE",
+        [context.tenantId]
+      );
 
-    await this.database.withTenantTransaction(context, async (client) => {
+      await client.query(
+        `INSERT INTO tenant_business_profile(
+           tenant_id,profile_code,applied_at,updated_by_membership_id,updated_at
+         ) VALUES ($1,$2,now(),$3,now())
+         ON CONFLICT (tenant_id)
+         DO UPDATE SET
+           profile_code=EXCLUDED.profile_code,
+           applied_at=now(),
+           updated_by_membership_id=EXCLUDED.updated_by_membership_id,
+           updated_at=now()`,
+        [context.tenantId, template.profileCode, context.membershipId]
+      );
+
+      for (const key of BUSINESS_CAPABILITIES) {
+        await client.query(
+          `INSERT INTO capability_toggle(
+             tenant_id,capability_key,enabled,updated_by_membership_id
+           ) VALUES ($1,$2,$3,$4)
+           ON CONFLICT (tenant_id,capability_key)
+           DO UPDATE SET
+             enabled=EXCLUDED.enabled,
+             updated_by_membership_id=EXCLUDED.updated_by_membership_id,
+             updated_at=now()`,
+          [
+            context.tenantId,
+            key,
+            enabled.has(key),
+            context.membershipId
+          ]
+        );
+      }
+
+      let createdFields = 0;
       for (const field of template.customFields) {
         const result = await client.query(
           `INSERT INTO custom_field_definition(
@@ -458,10 +501,28 @@ export class CustomizationService {
             title: template.title,
             profileCode: template.profileCode,
             ownerQuestions: template.ownerQuestions,
-            primaryWorkspaces: template.primaryWorkspaces
+            primaryWorkspaces: template.primaryWorkspaces,
+            enabledCapabilities: template.enabledCapabilities,
+            operatingFlows: template.operatingFlows,
+            attentionSignals: template.attentionSignals
           }),
           context.membershipId
         ]
+      );
+
+      await this.audit(
+        client,
+        context,
+        "customization.business_profile_applied",
+        "tenant_business_profile",
+        context.tenantId,
+        {
+          profileCode: template.profileCode,
+          source: "business_vertical",
+          verticalCode: template.code,
+          enabled: Array.from(enabled),
+          disabled
+        }
       );
 
       await this.audit(
@@ -474,18 +535,22 @@ export class CustomizationService {
           verticalCode: template.code,
           templateVersion: template.version,
           profileCode: template.profileCode,
-          createdFields
+          createdFields,
+          enabled: Array.from(enabled),
+          disabled
         }
       );
-    });
 
-    return {
-      verticalCode: template.code,
-      verticalTitle: template.title,
-      profileCode: template.profileCode,
-      templateVersion: template.version,
-      createdFields
-    };
+      return {
+        verticalCode: template.code,
+        verticalTitle: template.title,
+        profileCode: template.profileCode,
+        templateVersion: template.version,
+        createdFields,
+        enabledCapabilities: Array.from(enabled),
+        disabledCapabilities: disabled
+      };
+    });
   }
 
   async businessProfile(
@@ -495,6 +560,10 @@ export class CustomizationService {
     verticalCode: string | null;
     verticalTitle: string | null;
     verticalVersion: number | null;
+    verticalEnabledCapabilities: string[];
+    verticalMissingCapabilities: string[];
+    verticalOperatingFlows: string[];
+    verticalAttentionSignals: string[];
     capabilities: Array<{ key: string; enabled: boolean }>;
     appliedAt: string;
   }> {
@@ -537,6 +606,15 @@ export class CustomizationService {
             verticalRow.vertical_code as BusinessVerticalCode
           ] ?? null
         : null;
+      const capabilityMap = new Map(
+        capabilities.rows.map((item) => [item.capability_key, item.enabled])
+      );
+      const verticalEnabledCapabilities =
+        verticalTemplate?.enabledCapabilities ?? [];
+      const verticalMissingCapabilities = verticalEnabledCapabilities.filter(
+        (key) => capabilityMap.get(key) !== true
+      );
+
       return {
         profileCode: row?.profile_code ?? "GENERAL",
         verticalCode: verticalRow?.vertical_code ?? null,
@@ -544,6 +622,10 @@ export class CustomizationService {
           verticalTemplate?.title ??
           (verticalRow?.vertical_code ?? null),
         verticalVersion: verticalRow?.template_version ?? null,
+        verticalEnabledCapabilities,
+        verticalMissingCapabilities,
+        verticalOperatingFlows: verticalTemplate?.operatingFlows ?? [],
+        verticalAttentionSignals: verticalTemplate?.attentionSignals ?? [],
         appliedAt: (row?.applied_at ?? new Date()).toISOString(),
         capabilities: capabilities.rows.map((item) => ({
           key: item.capability_key,
@@ -569,10 +651,7 @@ export class CustomizationService {
       throw new BadRequestException("Неизвестный профиль бизнеса");
     }
 
-    const controlled = [
-      "crm","tasks","catalog","sales","procurement","inventory","finance",
-      "service","channels","oms","sites","growth","wms","workflow","support"
-    ];
+    const controlled = [...BUSINESS_CAPABILITIES];
 
     const presets: Record<string, Set<string>> = {
       GENERAL: new Set(controlled),
