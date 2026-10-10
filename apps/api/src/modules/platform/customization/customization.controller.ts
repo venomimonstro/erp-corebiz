@@ -154,6 +154,29 @@ export class CustomizationController {
     };
   }
 
+  @Get("business-verticals")
+  async businessVerticals(): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: this.customization.businessVerticals()
+    };
+  }
+
+  @Put("business-vertical")
+  @RequirePermission("customization.manage")
+  async applyBusinessVertical(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: { verticalCode: string }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.customization.applyBusinessVertical(
+        this.context(request),
+        body.verticalCode
+      )
+    };
+  }
+
   @Get("business-profile")
   async businessProfile(
     @Req() request: AuthenticatedRequest
