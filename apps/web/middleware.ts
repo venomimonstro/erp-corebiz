@@ -32,8 +32,8 @@ export function middleware(request: NextRequest) {
   if (!appHost) return NextResponse.next();
 
   const host = hostname(
-    request.headers.get("x-forwarded-host") ??
-    request.headers.get("host")
+    request.headers.get("host") ??
+    request.headers.get("x-forwarded-host")
   );
 
   if (
