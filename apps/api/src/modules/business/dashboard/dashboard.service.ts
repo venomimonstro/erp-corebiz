@@ -355,7 +355,7 @@ export class DashboardService {
           `SELECT count(*)::text AS count
            FROM migration_batch
            WHERE tenant_id=$1
-             AND status IN ('IMPORTED','RECONCILED','COMPLETED')`,
+             AND status IN ('IMPORTED','RECONCILED')`,
           [context.tenantId]
         )
       ]);
