@@ -373,6 +373,7 @@ async function inspectRequiredHardening(root) {
     "165_room_rental_statement_immutability.sql",
     "166_room_rental_contract_overlap.sql",
     "167_dance_lesson_timezone.sql",
+    "168_dance_rule_ambiguity_guards.sql",
 
   ];
 
