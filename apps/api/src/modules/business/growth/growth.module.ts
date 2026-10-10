@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { RuntimePressureModule } from "../../platform/runtime-pressure/runtime-pressure.module";
 import { AttributionController } from "./attribution.controller";
 import { AttributionService } from "./attribution.service";
 import { ConversionBridgeController } from "./conversion-bridge.controller";
@@ -12,6 +13,7 @@ import { TrackerController } from "./tracker.controller";
 import { TrackerService } from "./tracker.service";
 
 @Module({
+  imports: [RuntimePressureModule],
   controllers: [
     TrackerController,
     MarketingController,
