@@ -92,6 +92,7 @@ type Roster = {
     student_name: string;
     status: string;
     payer_name: string | null;
+    reserved_place?: boolean;
   }>;
   waitlist: Array<{
     id: string;
@@ -309,6 +310,72 @@ export default function DanceGroupsPage() {
       await loadRoster(selectedGroup.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось добавить ученика");
+    }
+  }
+
+  async function syncRoster() {
+    if (!selectedGroup) return;
+    setPending(true);
+    try {
+      const result = await apiRequest<{
+        lessons: number;
+        enrolled: number;
+        already: number;
+        waitlisted: number;
+      }>(`/dance/groups/${selectedGroup.id}/sync-roster`, {
+        method: "POST"
+      });
+      window.alert(
+        `Синхронизировано уроков: ${result.lessons}. Новых записей: ${result.enrolled}, waitlist: ${result.waitlisted}.`
+      );
+      await load();
+      await loadRoster(selectedGroup.id);
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Не удалось синхронизировать состав"
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function changeMember(
+    member: Roster["members"][number],
+    status: "ACTIVE" | "PAUSED" | "LEFT"
+  ) {
+    if (!selectedGroup) return;
+    let keepPlace: boolean | undefined;
+    if (status === "PAUSED") {
+      keepPlace = window.confirm(
+        "Сохранить место в группе на время паузы? OK = сохранить, Отмена = освободить."
+      );
+    }
+    if (
+      status === "LEFT" &&
+      !window.confirm("Вывести ученика из группы и снять будущие записи?")
+    ) {
+      return;
+    }
+
+    try {
+      const result = await apiRequest<{
+        promoted?: { student_id?: string } | null;
+      }>(
+        `/dance/groups/${selectedGroup.id}/members/${member.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ status, keepPlace })
+        }
+      );
+      if (result.promoted) {
+        window.alert("Свободное место передано первому ученику из листа ожидания.");
+      }
+      await load();
+      await loadRoster(selectedGroup.id);
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Не удалось изменить участие"
+      );
     }
   }
 
@@ -551,18 +618,34 @@ export default function DanceGroupsPage() {
               <div><p className="muted">Состав группы</p><h2>{selectedGroup.name}</h2></div>
               <div className="header-actions">
                 <button className="secondary-button" onClick={() => void addMember()} type="button">+ Ученик</button>
+                <button className="secondary-button" disabled={pending} onClick={() => void syncRoster()} type="button">Синхронизировать состав</button>
                 <button disabled={pending} onClick={() => void generateLessons()} type="button">Создать занятия</button>
               </div>
             </div>
             <div className="data-table-wrap">
               <table className="data-table">
-                <thead><tr><th>Ученик</th><th>Статус</th><th>Плательщик</th></tr></thead>
+                <thead><tr><th>Ученик</th><th>Статус</th><th>Плательщик</th><th></th></tr></thead>
                 <tbody>
                   {roster?.members.map((member) => (
-                    <tr key={member.id}><td><strong>{member.student_name}</strong></td><td>{member.status}</td><td>{member.payer_name ?? "—"}</td></tr>
+                    <tr key={member.id}>
+                      <td><strong>{member.student_name}</strong></td>
+                      <td>{member.status}</td>
+                      <td>{member.payer_name ?? "—"}</td>
+                      <td className="table-actions">
+                        {member.status !== "ACTIVE" ? (
+                          <button onClick={() => void changeMember(member, "ACTIVE")} type="button">Вернуть</button>
+                        ) : null}
+                        {member.status === "ACTIVE" ? (
+                          <button className="secondary-button" onClick={() => void changeMember(member, "PAUSED")} type="button">Пауза</button>
+                        ) : null}
+                        {member.status !== "LEFT" ? (
+                          <button className="secondary-button" onClick={() => void changeMember(member, "LEFT")} type="button">Вывести</button>
+                        ) : null}
+                      </td>
+                    </tr>
                   ))}
                   {roster?.waitlist.map((member) => (
-                    <tr key={"w-" + member.id}><td><strong>{member.student_name}</strong></td><td>WAITLIST</td><td>ожидает место</td></tr>
+                    <tr key={"w-" + member.id}><td><strong>{member.student_name}</strong></td><td>WAITLIST</td><td>ожидает место</td><td>Автопереход при освобождении места</td></tr>
                   ))}
                 </tbody>
               </table>
