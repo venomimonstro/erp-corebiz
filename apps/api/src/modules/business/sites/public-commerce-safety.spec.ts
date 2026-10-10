@@ -109,6 +109,111 @@ describe("public commerce safeguards", () => {
     expect(sales.confirm).not.toHaveBeenCalled();
   });
 
+  it("retains the checkout lease if Sales fails after Party was created", async () => {
+    const query = jest.fn(async (sql: string) => {
+      if (sql.includes("SET status='PROCESSING'")) {
+        return {
+          rows: [{ checkout_party_id: null, sales_order_id: null }],
+          rowCount: 1
+        };
+      }
+      if (sql.includes("FROM storefront_config c")) {
+        return {
+          rows: [{
+            responsible_membership_id: context.membershipId,
+            currency: "RUB",
+            user_id: context.userId
+          }],
+          rowCount: 1
+        };
+      }
+      if (sql.includes("FROM storefront_cart_line l")) {
+        return {
+          rows: [{
+            sku_id: "66666666-6666-4666-8666-666666666666",
+            quantity_milli: "1000"
+          }],
+          rowCount: 1
+        };
+      }
+      if (sql.includes("SET checkout_party_id=")) {
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error("Unexpected SQL in checkout mock: " + sql);
+    });
+    const database = {
+      withTenantTransaction: jest.fn(async (_context: unknown, callback: any) =>
+        callback({ query })
+      )
+    };
+    const parties = {
+      create: jest.fn().mockResolvedValue({
+        id: "77777777-7777-4777-8777-777777777777"
+      })
+    };
+    const sales = {
+      create: jest.fn().mockRejectedValue(new Error("SALES_TEMPORARY_ERROR")),
+      confirm: jest.fn()
+    };
+    const service = new StorefrontService(
+      database as any, parties as any, sales as any
+    );
+    jest.spyOn(service as any, "resolveCart").mockResolvedValue(cart);
+
+    await expect(service.checkout("cart_key", {
+      idempotencyKey: "retry-1",
+      name: "Клиент",
+      phone: "+79990000000"
+    })).rejects.toThrow("SALES_TEMPORARY_ERROR");
+
+    expect(parties.create).toHaveBeenCalledTimes(1);
+    expect(sales.create).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("SET status='OPEN'")
+    )).toBe(false);
+  });
+
+  it("reopens the cart only when failure happens before domain writes", async () => {
+    const query = jest.fn(async (sql: string) => {
+      if (sql.includes("SET status='PROCESSING'")) {
+        return {
+          rows: [{ checkout_party_id: null, sales_order_id: null }],
+          rowCount: 1
+        };
+      }
+      if (sql.includes("FROM storefront_config c")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("SET status='OPEN'")) {
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error("Unexpected SQL in pre-domain checkout mock");
+    });
+    const database = {
+      withTenantTransaction: jest.fn(async (_context: unknown, callback: any) =>
+        callback({ query })
+      )
+    };
+    const parties = { create: jest.fn() };
+    const sales = { create: jest.fn(), confirm: jest.fn() };
+    const service = new StorefrontService(
+      database as any, parties as any, sales as any
+    );
+    jest.spyOn(service as any, "resolveCart").mockResolvedValue(cart);
+
+    await expect(service.checkout("cart_key", {
+      idempotencyKey: "retry-2",
+      name: "Клиент",
+      phone: "+79990000000"
+    })).rejects.toBeInstanceOf(ConflictException);
+
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("SET status='OPEN'")
+    )).toBe(true);
+    expect(parties.create).not.toHaveBeenCalled();
+    expect(sales.create).not.toHaveBeenCalled();
+  });
+
   it("rejects public booking bindings with no authorized resources", async () => {
     const database = {
       withTenantTransaction: jest.fn()
