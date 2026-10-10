@@ -13,6 +13,18 @@ type Evidence = {
   executedAt: string;
 };
 
+type ReleaseBlocker = {
+  type: "MISSING" | "STALE" | "FAILING";
+  component: string;
+  kind: string;
+  outcome?: string;
+  executedAt?: string;
+  evidenceReference?: string;
+  href: string;
+  action: string;
+  command?: string;
+};
+
 type Candidate = {
   id: string;
   target_version: string;
@@ -23,6 +35,7 @@ type Candidate = {
     missing?: Array<{ component: string; kind: string }>;
     stale?: Array<{ component: string; kind: string; executedAt: string }>;
     failing?: Array<{ component: string; kind: string; outcome: string }>;
+    blockers?: ReleaseBlocker[];
   };
   review_reason: string | null;
   reviewed_at: string | null;
@@ -33,12 +46,16 @@ type Overview = {
   ready: boolean;
   summary: {
     evidence: number;
+    mandatory?: number;
     failing: number;
     missing: number;
     stale: number;
+    blockers?: number;
   };
-  mandatoryMissing: Array<{ component: string; kind: string }>;
-  stale: Array<{ component: string; kind: string; executedAt: string }>;
+  blockers: ReleaseBlocker[];
+  mandatoryMissing: Array<ReleaseBlocker>;
+  stale: Array<ReleaseBlocker>;
+  failing: Array<ReleaseBlocker>;
   latest: Evidence[];
 };
 
@@ -49,7 +66,9 @@ const COMPONENTS = [
 
 const KINDS = [
   "MIGRATIONS","TYPECHECK","TESTS","BUILD","SECURITY",
-  "STABILITY","INTEGRATION","BROWSER_SMOKE","RESTORE","RECONCILIATION"
+  "STABILITY","PERFORMANCE","INTEGRATION","BROWSER_SMOKE",
+  "RESTORE","RECONCILIATION","RUNTIME_RLS",
+  "BUSINESS_JOURNEYS","NOISY_NEIGHBOR"
 ];
 
 export default function ReleaseReadinessPage() {
@@ -302,71 +321,84 @@ export default function ReleaseReadinessPage() {
               <article className="owner-kpi">
                 <span>Missing / stale</span>
                 <strong>
-                  {overview.summary.missing + overview.summary.stale}
+                  {overview.summary.blockers ??
+                    overview.summary.missing +
+                      overview.summary.stale +
+                      overview.summary.failing}
                 </strong>
-                <small>Missing {overview.summary.missing} · stale {overview.summary.stale}</small>
+                <small>
+                  Missing {overview.summary.missing} · stale {overview.summary.stale} · fail {overview.summary.failing}
+                </small>
               </article>
             </div>
 
-            {overview.mandatoryMissing.length ? (
+            {overview.blockers.length ? (
               <section className="section-block">
                 <div className="section-heading">
                   <div>
-                    <p className="muted">Release blockers</p>
-                    <h2>Не хватает обязательных проверок</h2>
+                    <p className="muted">Sprint 73 / RC blockers</p>
+                    <h2>Что блокирует production candidate</h2>
                   </div>
                 </div>
-                <div className="action-queue">
-                  {overview.mandatoryMissing.map((item) => (
-                    <article
-                      className="action-item"
-                      key={item.component + ":" + item.kind}
-                    >
-                      <span className="severity-dot critical" />
-                      <div>
-                        <strong>{item.component}</strong>
-                        <span>{item.kind}</span>
-                      </div>
-                      <b>MISSING</b>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            ) : null}
 
-            {overview.stale.length ? (
-              <section className="section-block">
-                <div className="section-heading">
-                  <div>
-                    <p className="muted">Older than 30 days</p>
-                    <h2>Устаревшие проверки</h2>
-                  </div>
-                </div>
-                <div className="action-queue">
-                  {overview.stale.map((item) => (
+                <div className="release-blocker-list">
+                  {overview.blockers.map((item) => (
                     <article
-                      className="action-item"
-                      key={item.component + ":" + item.kind}
+                      className="settings-card release-blocker-card"
+                      key={item.type + ":" + item.component + ":" + item.kind}
                     >
-                      <span className="severity-dot warning" />
-                      <div>
-                        <strong>{item.component}</strong>
-                        <span>
-                          {item.kind} ·{" "}
-                          {new Date(item.executedAt).toLocaleString("ru-RU")}
-                        </span>
+                      <div className="growth-site-heading">
+                        <div>
+                          <span className="status-pill">{item.type}</span>
+                          <h3>{item.component} · {item.kind}</h3>
+                        </div>
+                        <span
+                          className={
+                            "severity-dot " +
+                            (item.type === "MISSING" || item.type === "FAILING"
+                              ? "critical"
+                              : "warning")
+                          }
+                        />
                       </div>
-                      <b>STALE</b>
+
+                      <p className="builder-hint">{item.action}</p>
+
+                      {item.executedAt ? (
+                        <small>
+                          Последняя проверка:{" "}
+                          {new Date(item.executedAt).toLocaleString("ru-RU")}
+                        </small>
+                      ) : null}
+
+                      {item.evidenceReference ? (
+                        <small>Evidence: {item.evidenceReference}</small>
+                      ) : null}
+
+                      {item.command ? (
+                        <code className="release-command">{item.command}</code>
+                      ) : null}
+
+                      <a className="secondary-button" href={item.href}>
+                        Открыть место исправления
+                      </a>
                     </article>
                   ))}
                 </div>
               </section>
-            ) : null}
+            ) : (
+              <div className="quality-banner">
+                <strong>RC blockers отсутствуют</strong>
+                <span>
+                  Все обязательные evidence присутствуют, свежие и имеют PASS.
+                </span>
+              </div>
+            )}
 
             <section className="section-block">
               <div className="section-heading">
                 <div>
-                  <p className="muted">Sprint 70 / Production verdict</p>
+                  <p className="muted">Sprint 73 / Production verdict</p>
                   <h2>Release candidates</h2>
                 </div>
               </div>
@@ -512,7 +544,7 @@ export default function ReleaseReadinessPage() {
             <div className="quality-banner">
               <strong>Серверная команда проверки</strong>
               <span>
-                COREBIZ_CONFIRM_DISPOSABLE_DB=YES … pnpm release:gate
+                COREBIZ_CONFIRM_DISPOSABLE_DB=YES COREBIZ_DISPOSABLE_DATABASE_URL=… COREBIZ_RESTORE_DATABASE_URL=… pnpm release:gate
               </span>
             </div>
           </>
