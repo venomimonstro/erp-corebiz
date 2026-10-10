@@ -393,6 +393,329 @@ async function serviceJourney() {
   };
 }
 
+async function danceStudioJourney() {
+  await newTenant(
+    "Golden Dance " + runId.slice(0, 8),
+    "SERVICE"
+  );
+
+  const vertical = await request(
+    "PUT",
+    "/customization/business-vertical",
+    { verticalCode: "DANCE_FITNESS" }
+  );
+  assert.equal(vertical.verticalCode, "DANCE_FITNESS");
+
+  const parent = await request("POST", "/crm/customers", {
+    displayName: "Golden Dance Parent",
+    phone: "+79991112233"
+  });
+  const child = await request("POST", "/crm/customers", {
+    displayName: "Golden Dance Child"
+  });
+  const landlord = await request("POST", "/crm/customers", {
+    type: "ORGANIZATION",
+    displayName: "Golden Dance Landlord"
+  });
+
+  const student = await request("POST", "/dance/students", {
+    partyId: child.id,
+    birthDate: "2015-05-10",
+    status: "ACTIVE",
+    payerPartyId: parent.id,
+    payerRelation: "PARENT"
+  });
+  assert.ok(student.id, "DANCE student");
+
+  const service = await request("POST", "/service/catalog", {
+    name: "Golden dance group lesson",
+    code: "DANCE-" + runId.slice(0, 6).toUpperCase(),
+    durationMinutes: 60,
+    priceMinor: "100000",
+    currency: "RUB"
+  });
+
+  const trainer = await request("POST", "/service/resources", {
+    type: "EMPLOYEE",
+    name: "Golden dance trainer",
+    code: "DTR-" + runId.slice(0, 6).toUpperCase(),
+    capacity: 1,
+    timezone: "Europe/Moscow"
+  });
+  const room = await request("POST", "/service/resources", {
+    type: "ROOM",
+    name: "Golden dance hall",
+    code: "DRM-" + runId.slice(0, 6).toUpperCase(),
+    capacity: 20,
+    timezone: "Europe/Moscow"
+  });
+
+  const program = await request("POST", "/dance/programs", {
+    name: "Golden Hip-Hop",
+    code: "HIP-" + runId.slice(0, 6).toUpperCase(),
+    serviceId: service.id,
+    defaultDurationMinutes: 60
+  });
+
+  const group = await request("POST", "/dance/groups", {
+    programId: program.id,
+    name: "Golden Kids Group",
+    trainerResourceId: trainer.id,
+    roomResourceId: room.id,
+    capacity: 8,
+    breakEvenMembers: 2,
+    schedule: []
+  });
+
+  const membership = await request(
+    "POST",
+    "/dance/groups/" + group.id + "/members",
+    {
+      studentId: student.id,
+      status: "ACTIVE",
+      discountBps: 1000,
+      allowWaitlist: true
+    }
+  );
+  assert.equal(membership.waitlisted, false);
+
+  const plan = await request("POST", "/service/package-plans", {
+    name: "Golden 8 dance visits",
+    packageKind: "VISITS",
+    applicableServiceId: service.id,
+    danceProgramId: program.id,
+    danceGroupId: group.id,
+    visitLimit: 8,
+    durationDays: 45,
+    priceMinor: "800000",
+    managementVisitValueMinor: "100000",
+    freezeDaysAllowed: 7,
+    makeupDaysValid: 14,
+    allowMakeup: true,
+    activationPolicy: "FULL_PAYMENT",
+    noShowPolicy: "CONSUME"
+  });
+
+  const issuedPackage = await request("POST", "/service/packages", {
+    planId: plan.id,
+    partyId: child.id,
+    payerPartyId: parent.id,
+    startsAt: new Date().toISOString()
+  });
+  assert.ok(issuedPackage.id);
+
+  const beforePayment = await request(
+    "GET",
+    "/service/packages?partyId=" + encodeURIComponent(child.id)
+  );
+  const pendingPackage = beforePayment.find(
+    (item) => item.id === issuedPackage.id
+  );
+  assert.equal(
+    pendingPackage?.status,
+    "PENDING_PAYMENT",
+    "DANCE full-payment package must wait for money"
+  );
+
+  const charges = await request(
+    "GET",
+    "/dance/charges?studentId=" + encodeURIComponent(student.id)
+  );
+  const packageCharge = charges.find(
+    (item) =>
+      item.source_type === "PACKAGE" &&
+      item.source_id === issuedPackage.id
+  );
+  assert.ok(packageCharge?.obligation_id, "DANCE package receivable");
+
+  const paymentKey = "golden-dance-payment-" + randomUUID();
+  const payment = await request("POST", "/finance/allocated-payment", {
+    partyId: parent.id,
+    allocations: [
+      {
+        obligationId: packageCharge.obligation_id,
+        amountMinor: packageCharge.remaining_minor
+      }
+    ],
+    idempotencyKey: paymentKey,
+    note: "Golden dance family payment"
+  });
+  const paymentRetry = await request(
+    "POST",
+    "/finance/allocated-payment",
+    {
+      partyId: parent.id,
+      allocations: [
+        {
+          obligationId: packageCharge.obligation_id,
+          amountMinor: packageCharge.remaining_minor
+        }
+      ],
+      idempotencyKey: paymentKey,
+      note: "Golden dance family payment"
+    }
+  );
+  assert.equal(
+    paymentRetry.paymentId,
+    payment.paymentId,
+    "DANCE family payment retry must be idempotent"
+  );
+
+  const afterPayment = await request(
+    "GET",
+    "/service/packages?partyId=" + encodeURIComponent(child.id)
+  );
+  assert.equal(
+    afterPayment.find((item) => item.id === issuedPackage.id)?.status,
+    "ACTIVE",
+    "DANCE paid package must activate"
+  );
+
+  await request("POST", "/dance/compensation-plans", {
+    trainerResourceId: trainer.id,
+    lessonType: "GROUP",
+    calculationType: "ATTENDEE",
+    fixedMinor: "120000",
+    perAttendeeMinor: "10000",
+    revenueBasis: "EARNED"
+  });
+
+  await request("POST", "/dance/room-contracts", {
+    roomResourceId: room.id,
+    counterpartyPartyId: landlord.id,
+    pricingType: "HOURLY",
+    hourlyRateMinor: "80000",
+    minimumBillableMinutes: 60,
+    cancellationChargeBps: 5000,
+    paymentTermDays: 5
+  });
+
+  const startsAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+  startsAt.setUTCMinutes(0, 0, 0);
+
+  const lesson = await request("POST", "/dance/lessons", {
+    groupId: group.id,
+    startsAt: startsAt.toISOString(),
+    durationMinutes: 60,
+    capacity: 8,
+    idempotencyKey: "golden-dance-lesson-" + randomUUID()
+  });
+
+  const synced = await request(
+    "POST",
+    "/dance/groups/" + group.id + "/sync-roster"
+  );
+  assert.ok(
+    synced.enrolled >= 1 || synced.already >= 1,
+    "DANCE group roster must reach lesson journal"
+  );
+
+  const participants = await request(
+    "GET",
+    "/dance/lessons/" + lesson.id + "/participants"
+  );
+  const participant = participants.find(
+    (item) => item.student_id === student.id
+  );
+  assert.ok(participant, "DANCE student must be on lesson");
+  assert.equal(
+    participant.package_id,
+    issuedPackage.id,
+    "DANCE roster must choose active scoped package"
+  );
+
+  const attended = await request(
+    "PATCH",
+    "/dance/lessons/" +
+      lesson.id +
+      "/participants/" +
+      participant.id +
+      "/attendance",
+    {
+      status: "ATTENDED",
+      version: participant.version
+    }
+  );
+  assert.equal(attended.status, "ATTENDED");
+
+  const profitability = await request(
+    "POST",
+    "/dance/lessons/" + lesson.id + "/complete"
+  );
+  assert.equal(profitability.lesson_id, lesson.id);
+  assert.ok(
+    BigInt(profitability.earned_revenue_minor) > 0n,
+    "DANCE completed lesson must recognize revenue"
+  );
+  assert.ok(
+    BigInt(profitability.trainer_cost_minor) > 0n,
+    "DANCE completed lesson must accrue trainer compensation"
+  );
+  assert.ok(
+    BigInt(profitability.room_cost_minor) > 0n,
+    "DANCE completed lesson must recognize room cost"
+  );
+
+  const accruals = await request(
+    "GET",
+    "/dance/compensation-accruals?from=" +
+      encodeURIComponent(
+        new Date(startsAt.getTime() - 86400000).toISOString()
+      ) +
+      "&to=" +
+      encodeURIComponent(
+        new Date(startsAt.getTime() + 86400000).toISOString()
+      )
+  );
+  assert.ok(
+    accruals.some(
+      (item) =>
+        item.lesson_id === lesson.id &&
+        BigInt(item.amount_minor) > 0n
+    ),
+    "DANCE trainer accrual must be traceable"
+  );
+
+  const month = startsAt.toISOString().slice(0, 7);
+  const rent = await request(
+    "POST",
+    "/dance/room-statements/finalize",
+    { month }
+  );
+  const rentStatement = rent.statements.find(
+    (item) =>
+      item.contractId !== undefined &&
+      BigInt(item.amountMinor ?? item.amount_minor ?? "0") > 0n
+  );
+  assert.ok(rentStatement, "DANCE room rent statement");
+  assert.ok(
+    rentStatement.obligationId ?? rentStatement.obligation_id,
+    "DANCE landlord payable must be created"
+  );
+
+  const dashboard = await request("GET", "/dance/dashboard");
+  assert.ok(
+    BigInt(dashboard.monthEconomics.revenue_minor) > 0n,
+    "DANCE owner dashboard must show realized revenue"
+  );
+  assert.equal(
+    dashboard.attention.completed_without_profitability,
+    0,
+    "DANCE completed lesson must have profitability snapshot"
+  );
+
+  return {
+    profile: "DANCE_FITNESS",
+    result:
+      "parent → child → group → package → payment → lesson → attendance → trainer + room economics",
+    studentId: student.id,
+    groupId: group.id,
+    lessonId: lesson.id,
+    packageId: issuedPackage.id,
+    paymentId: payment.paymentId
+  };
+}
+
 async function warehouse3plJourney() {
   await newTenant(
     "Golden 3PL " + runId.slice(0, 8),
@@ -511,6 +834,7 @@ async function main() {
   results.push(await tradeJourney());
   results.push(await ecommerceJourney());
   results.push(await serviceJourney());
+  results.push(await danceStudioJourney());
   results.push(await warehouse3plJourney());
 
   process.stdout.write(
@@ -525,7 +849,7 @@ async function main() {
     ) + "\n"
   );
   console.log(
-    "PASS: TRADE + ECOMMERCE + SERVICE + WAREHOUSE_3PL golden journeys"
+    "PASS: TRADE + ECOMMERCE + SERVICE + DANCE_FITNESS + WAREHOUSE_3PL golden journeys"
   );
   console.log(
     "Disposable local environment only. This is not production approval."
