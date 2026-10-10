@@ -248,9 +248,9 @@ export const BUSINESS_VERTICALS: Record<
   WHOLESALE_B2B: {
     code: "WHOLESALE_B2B",
     title: "Оптовая B2B торговля",
-    summary: "CRM, коммерческие предложения, заказы, закупки, склад и дебиторка.",
+    summary: "CRM, договорные цены, кредитные лимиты, заказы, склад и дебиторка.",
     profileCode: "TRADE",
-    version: 2,
+    version: 3,
     enabledCapabilities: [
       "crm","tasks","catalog","sales","procurement","inventory","finance",
       "growth","workflow","support"
@@ -267,12 +267,14 @@ export const BUSINESS_VERTICALS: Record<
     ],
     primaryWorkspaces: ["crm", "sales", "procurement", "inventory", "finance"],
     operatingFlows: [
+      "Клиент → коммерческие условия → договорная цена → заказ",
       "Лид → КП → заказ клиента → резерв → отгрузка",
-      "Дефицит → закупка → приход → обеспечение заказа",
-      "Отгрузка → дебиторка → оплата"
+      "Подтверждение заказа → кредитный лимит → дебиторка → оплата",
+      "Дефицит → закупка → приход → обеспечение заказа"
     ],
     attentionSignals: [
       "Заказ не обеспечен остатком",
+      "Кредитный лимит клиента исчерпан",
       "Поставка опаздывает к заказу клиента",
       "Просроченная дебиторка"
     ]
