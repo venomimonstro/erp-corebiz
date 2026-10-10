@@ -1,12 +1,15 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
+import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { AuthorizationService } from "../../platform/authorization/authorization.service";
 import { InventoryService } from "../inventory/inventory.service";
 import { DomainEventService } from "../../platform/events/domain-event.service";
 import { FinanceService } from "../finance/finance.service";
@@ -26,6 +29,7 @@ type ReceiptLineInput = {
 export class ProcurementService {
   constructor(
     private readonly database: DatabaseService,
+    private readonly authorization: AuthorizationService,
     private readonly inventory: InventoryService,
     private readonly finance: FinanceService,
     private readonly events: DomainEventService
@@ -809,6 +813,15 @@ export class ProcurementService {
         orderStatus: newStatus
       };
     });
+  }
+
+  private async procurementScope(
+    context: TenantContext,
+    permission: "procurement.read" | "procurement.write"
+  ): Promise<string[] | null> {
+    const scope = await this.authorization.resolveScope(context, permission);
+    if (!scope) throw new ForbiddenException("Недостаточно прав");
+    return this.authorization.membershipIdsForScope(context, scope);
   }
 
   private async getDefaultWarehouseId(
