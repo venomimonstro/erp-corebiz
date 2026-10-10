@@ -22,8 +22,13 @@ type PackagePlan = {
   description: string | null;
   applicable_service_id: string | null;
   applicable_service_name: string | null;
-  visit_limit: number;
+  package_kind: "VISITS" | "PERIOD" | "UNLIMITED" | "FAMILY" | "INDIVIDUAL" | "COMBO" | "TRIAL" | "GIFT";
+  visit_limit: number | null;
   duration_days: number;
+  management_visit_value_minor: string;
+  freeze_days_allowed: number;
+  makeup_days_valid: number;
+  allow_makeup: boolean;
   price_minor: string;
   currency: string;
   no_show_policy: "RELEASE" | "CONSUME";
@@ -35,10 +40,11 @@ type ServicePackage = {
   plan_id: string;
   starts_at: string;
   expires_at: string;
-  visit_limit_snapshot: number;
+  visit_limit_snapshot: number | null;
   reserved_visits: number;
   used_visits: number;
-  available_visits: number;
+  available_visits: number | null;
+  package_kind_snapshot: string;
   price_minor_snapshot: string;
   currency: string;
   status: string;
@@ -98,19 +104,64 @@ export default function ServicePackagesPage() {
     const name = window.prompt("Название абонемента", "8 занятий");
     if (!name?.trim()) return;
 
-    const visits = Number(window.prompt("Количество посещений", "8") ?? "8");
+    const kindRaw = (
+      window.prompt(
+        "Тип: VISITS, PERIOD, UNLIMITED, FAMILY, INDIVIDUAL, COMBO, TRIAL или GIFT",
+        "VISITS"
+      ) ?? "VISITS"
+    ).trim().toUpperCase();
+    const allowedKinds = [
+      "VISITS",
+      "PERIOD",
+      "UNLIMITED",
+      "FAMILY",
+      "INDIVIDUAL",
+      "COMBO",
+      "TRIAL",
+      "GIFT"
+    ] as const;
+    if (!allowedKinds.includes(kindRaw as (typeof allowedKinds)[number])) {
+      setError("Неизвестный тип абонемента");
+      return;
+    }
+    const packageKind = kindRaw as (typeof allowedKinds)[number];
+
+    const visits =
+      packageKind === "UNLIMITED"
+        ? undefined
+        : Number(window.prompt("Количество посещений", "8") ?? "8");
     const days = Number(window.prompt("Срок действия, дней", "30") ?? "30");
     const priceRub = Number(
       (window.prompt("Цена абонемента, ₽", "0") ?? "0").replace(",", ".")
     );
+    const visitValueRub = Number(
+      (
+        window.prompt(
+          "Управленческая стоимость одного посещения, ₽ (для безлимита особенно важно)",
+          packageKind === "UNLIMITED" ? "0" : String(priceRub / Math.max(visits ?? 1, 1))
+        ) ?? "0"
+      ).replace(",", ".")
+    );
+    const freezeDays = Number(
+      window.prompt("Дней заморозки", "0") ?? "0"
+    );
+    const makeupDays = Number(
+      window.prompt("Срок действия отработки, дней (0 = без отработок)", "0") ?? "0"
+    );
 
     if (
-      !Number.isSafeInteger(visits) ||
-      visits < 1 ||
+      (packageKind !== "UNLIMITED" &&
+        (!Number.isSafeInteger(visits) || Number(visits) < 1)) ||
       !Number.isSafeInteger(days) ||
       days < 1 ||
       !Number.isFinite(priceRub) ||
-      priceRub < 0
+      priceRub < 0 ||
+      !Number.isFinite(visitValueRub) ||
+      visitValueRub < 0 ||
+      !Number.isSafeInteger(freezeDays) ||
+      freezeDays < 0 ||
+      !Number.isSafeInteger(makeupDays) ||
+      makeupDays < 0
     ) {
       setError("Некорректные параметры абонемента");
       return;
@@ -131,17 +182,27 @@ export default function ServicePackagesPage() {
       return;
     }
 
+    const consumeNoShow = window.confirm(
+      "Списывать посещение при no-show?"
+    );
+
     setPending(true);
     try {
       await apiRequest("/service/package-plans", {
         method: "POST",
         body: JSON.stringify({
           name: name.trim(),
+          packageKind,
           visitLimit: visits,
           durationDays: days,
           priceMinor: String(Math.round(priceRub * 100)),
+          managementVisitValueMinor: String(Math.round(visitValueRub * 100)),
+          freezeDaysAllowed: freezeDays,
+          makeupDaysValid: makeupDays,
+          allowMakeup: makeupDays > 0,
+          familyEligible: packageKind === "FAMILY",
           applicableServiceId: service?.id,
-          noShowPolicy: "RELEASE"
+          noShowPolicy: consumeNoShow ? "CONSUME" : "RELEASE"
         })
       });
       await load();
@@ -211,10 +272,16 @@ export default function ServicePackagesPage() {
           <article className="metric-card">
             <span>Доступно посещений</span>
             <strong>
-              {activePackages.reduce(
-                (sum, item) => sum + Number(item.available_visits || 0),
-                0
-              )}
+              {activePackages.some((item) => item.available_visits === null)
+                ? "∞ + " +
+                  activePackages.reduce(
+                    (sum, item) => sum + Number(item.available_visits ?? 0),
+                    0
+                  )
+                : activePackages.reduce(
+                    (sum, item) => sum + Number(item.available_visits ?? 0),
+                    0
+                  )}
             </strong>
             <small>по всем активным клиентам</small>
           </article>
@@ -267,7 +334,7 @@ export default function ServicePackagesPage() {
                 <option value="">Выберите тариф</option>
                 {plans.map((plan) => (
                   <option key={plan.id} value={plan.id}>
-                    {plan.name} · {plan.visit_limit} посещений ·{" "}
+                    {plan.name} · {plan.visit_limit === null ? "безлимит" : plan.visit_limit + " посещений"} ·{" "}
                     {money(plan.price_minor, plan.currency)}
                   </option>
                 ))}
@@ -303,9 +370,12 @@ export default function ServicePackagesPage() {
               <tbody>
                 {plans.map((plan) => (
                   <tr key={plan.id}>
-                    <td><strong>{plan.name}</strong></td>
+                    <td>
+                      <strong>{plan.name}</strong>
+                      <small>{plan.package_kind}</small>
+                    </td>
                     <td>{plan.applicable_service_name ?? "Любая услуга"}</td>
-                    <td>{plan.visit_limit}</td>
+                    <td>{plan.visit_limit === null ? "∞" : plan.visit_limit}</td>
                     <td>{plan.duration_days} дней</td>
                     <td>{money(plan.price_minor, plan.currency)}</td>
                     <td>{plan.no_show_policy}</td>
@@ -354,7 +424,7 @@ export default function ServicePackagesPage() {
                     <td>{item.plan_name}</td>
                     <td>{item.used_visits}</td>
                     <td>{item.reserved_visits}</td>
-                    <td><strong>{item.available_visits}</strong></td>
+                    <td><strong>{item.available_visits === null ? "∞" : item.available_visits}</strong></td>
                     <td>{new Date(item.expires_at).toLocaleDateString("ru-RU")}</td>
                     <td><span className="status-pill">{item.status}</span></td>
                   </tr>
