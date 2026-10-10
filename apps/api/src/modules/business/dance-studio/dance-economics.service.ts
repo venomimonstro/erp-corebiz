@@ -1454,17 +1454,26 @@ export class DanceEconomicsService {
     const packagePaid=await client.query<{amount:string}>(
       `SELECT coalesce(sum(
            CASE
-             WHEN so.amount_minor>0 THEN
+             WHEN coalesce(pkg_o.amount_minor,so.amount_minor,0)>0 THEN
                (
                  CASE
-                   WHEN plan.management_visit_value_minor>0
-                     THEN plan.management_visit_value_minor
+                   WHEN coalesce(
+                     pe.management_visit_value_minor_snapshot,
+                     plan.management_visit_value_minor
+                   )>0
+                     THEN coalesce(
+                       pe.management_visit_value_minor_snapshot,
+                       plan.management_visit_value_minor
+                     )
                    WHEN sp.visit_limit_snapshot IS NOT NULL
                      THEN sp.price_minor_snapshot/sp.visit_limit_snapshot
                    ELSE 0
                  END
-                 * least(so.settled_minor,so.amount_minor)
-                 / so.amount_minor
+                 * least(
+                     coalesce(pkg_o.settled_minor,so.settled_minor,0),
+                     coalesce(pkg_o.amount_minor,so.amount_minor,0)
+                   )
+                 / coalesce(pkg_o.amount_minor,so.amount_minor,1)
                )
              ELSE 0
            END
@@ -1476,6 +1485,18 @@ export class DanceEconomicsService {
          ON sp.tenant_id=r.tenant_id AND sp.id=r.package_id
        JOIN service_package_plan plan
          ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
+       LEFT JOIN service_package_entitlement pe
+         ON pe.tenant_id=r.tenant_id
+        AND pe.id=r.package_entitlement_id
+       LEFT JOIN dance_student_charge dc
+         ON dc.tenant_id=sp.tenant_id
+        AND dc.source_type='PACKAGE'
+        AND dc.source_id=sp.id
+        AND dc.status<>'CANCELLED'
+       LEFT JOIN financial_obligation pkg_o
+         ON pkg_o.tenant_id=dc.tenant_id
+        AND pkg_o.id=dc.obligation_id
+        AND pkg_o.direction='RECEIVABLE'
        LEFT JOIN financial_obligation so
          ON so.tenant_id=sp.tenant_id
         AND so.direction='RECEIVABLE'
