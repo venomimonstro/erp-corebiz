@@ -12,7 +12,9 @@ const COMPONENTS = new Set([
 
 const KINDS = new Set([
   "MIGRATIONS","TYPECHECK","TESTS","BUILD","SECURITY",
-  "STABILITY","PERFORMANCE","INTEGRATION","BROWSER_SMOKE","RESTORE","RECONCILIATION"
+  "STABILITY","PERFORMANCE","INTEGRATION","BROWSER_SMOKE",
+  "RESTORE","RECONCILIATION","RUNTIME_RLS",
+  "BUSINESS_JOURNEYS","NOISY_NEIGHBOR"
 ]);
 
 const OUTCOMES = new Set(["PASS","FAIL","BLOCKED"]);
@@ -112,7 +114,11 @@ export class ReleaseVerificationService {
 
       const missing = mandatory
         .filter(([component, kind]) => !map.has(component + ":" + kind))
-        .map(([component, kind]) => ({ component, kind }));
+        .map(([component, kind]) => ({
+          component,
+          kind,
+          ...this.remediation(component, kind)
+        }));
 
       const staleBefore = Date.now() - 7 * 86400000;
       const stale = mandatory
@@ -124,7 +130,8 @@ export class ReleaseVerificationService {
         .map((row) => ({
           component: row.component,
           kind: row.kind,
-          executedAt: row.executedAt
+          executedAt: row.executedAt,
+          ...this.remediation(row.component, row.kind)
         }));
 
       const failing = mandatory
@@ -135,7 +142,8 @@ export class ReleaseVerificationService {
           component: row.component,
           kind: row.kind,
           outcome: row.outcome,
-          evidenceReference: row.evidenceReference
+          evidenceReference: row.evidenceReference,
+          ...this.remediation(row.component, row.kind)
         }));
 
       const evidenceHealthy =
@@ -173,10 +181,26 @@ export class ReleaseVerificationService {
           : null,
         summary: {
           evidence: rows.length,
+          mandatory: mandatory.length,
           failing: failing.length,
           missing: missing.length,
-          stale: stale.length
+          stale: stale.length,
+          blockers: missing.length + stale.length + failing.length
         },
+        blockers: [
+          ...missing.map((item) => ({
+            type: "MISSING",
+            ...item
+          })),
+          ...stale.map((item) => ({
+            type: "STALE",
+            ...item
+          })),
+          ...failing.map((item) => ({
+            type: "FAILING",
+            ...item
+          }))
+        ],
         mandatoryMissing: missing,
         stale,
         failing,
@@ -194,13 +218,117 @@ export class ReleaseVerificationService {
       ["CORE","SECURITY"],
       ["CORE","STABILITY"],
       ["CORE","PERFORMANCE"],
-      ["API","INTEGRATION"],
-      ["API","BROWSER_SMOKE"],
       ["CORE","RESTORE"],
+      ["CORE","NOISY_NEIGHBOR"],
+      ["AUTH","RUNTIME_RLS"],
+      ["API","INTEGRATION"],
+      ["API","BUSINESS_JOURNEYS"],
+      ["API","BROWSER_SMOKE"],
       ["FINANCE","RECONCILIATION"],
       ["ACCOUNTING","RECONCILIATION"],
       ["WMS","RECONCILIATION"]
     ];
+  }
+
+  private remediation(
+    component: string,
+    kind: string
+  ): {
+    href: string;
+    action: string;
+    command?: string;
+  } {
+    const key = component + ":" + kind;
+    const map: Record<
+      string,
+      { href: string; action: string; command?: string }
+    > = {
+      "CORE:MIGRATIONS": {
+        href: "/app/settings/release",
+        action: "Повторить replay всех миграций на чистой disposable PostgreSQL.",
+        command:
+          "COREBIZ_CONFIRM_DISPOSABLE_DB=YES COREBIZ_DISPOSABLE_DATABASE_URL=... pnpm release:gate"
+      },
+      "CORE:TYPECHECK": {
+        href: "/app/settings/release",
+        action: "Исправить TypeScript ошибки и повторить typecheck.",
+        command: "pnpm typecheck"
+      },
+      "CORE:TESTS": {
+        href: "/app/settings/release",
+        action: "Исправить упавшие unit/integration tests.",
+        command: "pnpm test"
+      },
+      "CORE:BUILD": {
+        href: "/app/settings/release",
+        action: "Получить чистую production-сборку.",
+        command: "pnpm build"
+      },
+      "CORE:SECURITY": {
+        href: "/app/settings/security",
+        action:
+          "Закрыть security preflight, grants, secret boundaries и критические findings."
+      },
+      "CORE:STABILITY": {
+        href: "/app/settings/release",
+        action: "Закрыть source stability blockers.",
+        command: "pnpm stability:check"
+      },
+      "CORE:PERFORMANCE": {
+        href: "/app/settings/runtime-pressure",
+        action:
+          "Записать performance evidence после проверки latency/queue budgets."
+      },
+      "CORE:NOISY_NEIGHBOR": {
+        href: "/app/settings/runtime-pressure",
+        action:
+          "Проверить concurrency budgets, lease release, 429/retry и отсутствие starvation."
+      },
+      "AUTH:RUNTIME_RLS": {
+        href: "/app/settings/security",
+        action:
+          "Запустить runtime DB-role/RLS cross-tenant тесты под non-owner NOBYPASSRLS ролью."
+      },
+      "API:INTEGRATION": {
+        href: "/app/settings/release",
+        action: "Пройти API integration smoke на целевой версии."
+      },
+      "API:BUSINESS_JOURNEYS": {
+        href: "/app/settings/release",
+        action:
+          "Пройти Golden Business Journeys для TRADE, ECOMMERCE, SERVICE и WAREHOUSE_3PL.",
+        command: "node scripts/golden-business-journeys.mjs"
+      },
+      "API:BROWSER_SMOKE": {
+        href: "/app/settings/release",
+        action: "Пройти browser smoke на production-like HTTPS environment."
+      },
+      "CORE:RESTORE": {
+        href: "/app/settings/release",
+        action:
+          "Выполнить backup/restore drill и подтвердить читаемость восстановленной БД.",
+        command: "bash scripts/restore-postgres.sh"
+      },
+      "FINANCE:RECONCILIATION": {
+        href: "/app/finance",
+        action: "Закрыть Finance reconciliation и unmatched exceptions."
+      },
+      "ACCOUNTING:RECONCILIATION": {
+        href: "/app/accounting",
+        action: "Закрыть Accounting double-entry/VAT/month-close reconciliation."
+      },
+      "WMS:RECONCILIATION": {
+        href: "/app/wms",
+        action: "Закрыть WMS inventory/location/owner reconciliation."
+      }
+    };
+
+    return (
+      map[key] ?? {
+        href: "/app/settings/release",
+        action: "Повторить обязательную проверку и приложить immutable evidence."
+      }
+    );
   }
 
   async candidates(
@@ -359,6 +487,20 @@ export class ReleaseVerificationService {
         missing,
         stale,
         failing,
+        blockers: [
+          ...missing.map((item) => ({
+            type: "MISSING",
+            ...item
+          })),
+          ...stale.map((item) => ({
+            type: "STALE",
+            ...item
+          })),
+          ...failing.map((item) => ({
+            type: "FAILING",
+            ...item
+          }))
+        ],
         evidence: rows
       };
 
