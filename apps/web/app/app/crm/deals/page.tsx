@@ -72,6 +72,20 @@ export default function DealsPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("create") !== "1") return;
+
+    params.delete("create");
+    const next = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      window.location.pathname + (next ? "?" + next : "")
+    );
+    void quickCreate();
+  }, []);
+
   const totals = useMemo(() => {
     if (!board) return { deals: 0, amountMinor: 0 };
     return board.stages.reduce(
