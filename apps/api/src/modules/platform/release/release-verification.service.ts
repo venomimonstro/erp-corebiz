@@ -89,11 +89,44 @@ export class ReleaseVerificationService {
           executedAt: row.executedAt
         }));
 
+      const approvedCandidate = await client.query<{
+        id: string;
+        target_version: string;
+        reviewed_at: Date | null;
+        verdict_snapshot: {
+          readyForApproval?: boolean;
+          evaluatedAt?: string;
+        };
+      }>(
+        `SELECT id,target_version,reviewed_at,verdict_snapshot
+         FROM release_candidate
+         WHERE tenant_id=$1
+           AND status='APPROVED'
+         ORDER BY reviewed_at DESC NULLS LAST,created_at DESC
+         LIMIT 1`,
+        [context.tenantId]
+      );
+
+      const approved = approvedCandidate.rows[0] ?? null;
+      const evidenceHealthy =
+        failCount === 0 &&
+        missing.length === 0 &&
+        stale.length === 0;
+
       return {
         ready:
-          failCount === 0 &&
-          missing.length === 0 &&
-          stale.length === 0,
+          Boolean(approved) &&
+          approved?.verdict_snapshot?.readyForApproval === true,
+        evidenceHealthy,
+        approvedCandidate: approved
+          ? {
+              id: approved.id,
+              targetVersion: approved.target_version,
+              reviewedAt: approved.reviewed_at?.toISOString() ?? null,
+              evaluatedAt:
+                approved.verdict_snapshot?.evaluatedAt ?? null
+            }
+          : null,
         summary: {
           evidence: rows.length,
           failing: failCount,
