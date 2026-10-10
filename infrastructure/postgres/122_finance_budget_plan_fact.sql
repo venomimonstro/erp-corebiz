@@ -28,7 +28,8 @@ CREATE TABLE finance_budget_version (
   published_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE(budget_id,version_no)
+  UNIQUE(budget_id,version_no),
+  UNIQUE(tenant_id,id)
 );
 
 ALTER TABLE finance_budget
@@ -36,10 +37,6 @@ ALTER TABLE finance_budget
   FOREIGN KEY(tenant_id,active_version_id)
   REFERENCES finance_budget_version(tenant_id,id)
   DEFERRABLE INITIALLY DEFERRED;
-
-ALTER TABLE finance_budget_version
-  ADD CONSTRAINT finance_budget_version_tenant_unique
-  UNIQUE(tenant_id,id);
 
 CREATE UNIQUE INDEX finance_budget_one_draft_idx
   ON finance_budget_version(budget_id)
