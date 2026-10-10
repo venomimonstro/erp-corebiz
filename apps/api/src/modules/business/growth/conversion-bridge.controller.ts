@@ -7,6 +7,7 @@ import {
   Req
 } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
+import { ApiCost } from "../../../infrastructure/http/api-cost.decorator";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { Public } from "../../platform/auth/public.decorator";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
@@ -46,6 +47,7 @@ export class ConversionBridgeController {
 
   @Public()
   @Post("calltracking/webhook/:connectionId/:secret")
+  @ApiCost("WEBHOOK")
   async callWebhook(
     @Param("connectionId") connectionId: string,
     @Param("secret") secret: string,
@@ -62,6 +64,7 @@ export class ConversionBridgeController {
   }
 
   @Get("calls")
+  @ApiCost("HEAVY")
   @RequirePermission("analytics.read")
   async calls(
     @Req() request: AuthenticatedRequest
@@ -99,6 +102,7 @@ export class ConversionBridgeController {
   }
 
   @Post("offline/connections/:id/queue")
+  @ApiCost("EXPENSIVE")
   @RequirePermission("analytics.manage")
   async queue(
     @Req() request: AuthenticatedRequest,
@@ -116,6 +120,7 @@ export class ConversionBridgeController {
   }
 
   @Get("offline/jobs")
+  @ApiCost("HEAVY")
   @RequirePermission("analytics.read")
   async jobs(
     @Req() request: AuthenticatedRequest
