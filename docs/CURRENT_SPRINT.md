@@ -669,20 +669,31 @@
 - personal menu profile remains a separate user preference;
 - one Clean Core for every vertical, no forked codebase.
 
-## Активно — Sprint 62: Activation Checklist / First Value
+### Sprint 62 — Activation Checklist / First Value
+- activation state stored per tenant;
+- profile-specific milestones;
+- milestones derived from real Party/Product/Deal/Order/Booking/Site/WMS/Migration data;
+- no click-based fake completion;
+- first_value_at captured once;
+- Time to First Value in minutes;
+- checklist is dismissible and never blocks normal work;
+- owner dashboard shows progress automatically;
+- completed activation remains historical, not reset by UI preferences.
+
+## Активно — Sprint 63: Permission-aware Role Workspaces
 
 Scope:
-- role-aware first-day checklist;
-- profile-specific recommended first operation;
-- activation progress stored server-side;
-- import/catalog/customer/order/booking/site milestones;
-- dismissible hints without blocking normal work;
-- Time to First Value measurement;
-- owner sees what is missing before real go-live;
-- no artificial wizard locking the user into setup.
+- resolve current membership roles/permissions once;
+- role workspace identity: owner / sales / service / warehouse / finance / viewer;
+- home dashboard content differs by role;
+- navigation filtered by both capability and permission;
+- Universal “Сегодня” remains one route, but its content is role-specific;
+- no security reliance on hidden UI;
+- backend authorization remains authoritative;
+- avoid separate codebases/pages for each vertical role.
 
 ## Следом
 
-Sprint 63 — Permission-aware role workspaces.  
 Sprint 64 — Search / Command Palette / Universal Create hardening.  
-Sprint 65 — Go-Live Center / tenant readiness gate.
+Sprint 65 — Go-Live Center / tenant readiness gate.  
+Sprint 66 — Notification Center / Action Queue unification.
