@@ -283,6 +283,7 @@ export class TasksService {
       PARTY: { table: "party", notFoundMessage: "Клиент не найден" },
       SALES_ORDER: { table: "sales_order", notFoundMessage: "Заказ продажи не найден" },
       PURCHASE_ORDER: { table: "purchase_order", notFoundMessage: "Заказ закупки не найден" },
+      PROJECT: { table: "work_project", notFoundMessage: "Проект не найден" },
       SERVICE_BOOKING: { table: "service_booking", notFoundMessage: "Запись клиента не найдена" },
       SERVICE_ASSET: { table: "service_asset", notFoundMessage: "Объект обслуживания не найден" },
       SERVICE_PACKAGE: { table: "service_package", notFoundMessage: "Абонемент клиента не найден" },
