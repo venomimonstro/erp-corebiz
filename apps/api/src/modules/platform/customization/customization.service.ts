@@ -378,6 +378,145 @@ export class CustomizationService {
     });
   }
 
+  async businessProfile(
+    context: TenantContext
+  ): Promise<{
+    profileCode: "GENERAL" | "TRADE" | "ECOMMERCE" | "SERVICE" | "WAREHOUSE_3PL";
+    capabilities: Array<{ key: string; enabled: boolean }>;
+    appliedAt: string;
+  }> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const profile = await client.query<{
+        profile_code: "GENERAL" | "TRADE" | "ECOMMERCE" | "SERVICE" | "WAREHOUSE_3PL";
+        applied_at: Date;
+      }>(
+        `SELECT profile_code,applied_at
+         FROM tenant_business_profile
+         WHERE tenant_id=$1`,
+        [context.tenantId]
+      );
+
+      const capabilities = await client.query<{
+        capability_key: string;
+        enabled: boolean;
+      }>(
+        `SELECT capability_key,enabled
+         FROM capability_toggle
+         WHERE tenant_id=$1
+         ORDER BY capability_key`,
+        [context.tenantId]
+      );
+
+      const row = profile.rows[0];
+      return {
+        profileCode: row?.profile_code ?? "GENERAL",
+        appliedAt: (row?.applied_at ?? new Date()).toISOString(),
+        capabilities: capabilities.rows.map((item) => ({
+          key: item.capability_key,
+          enabled: item.enabled
+        }))
+      };
+    });
+  }
+
+  async applyBusinessProfile(
+    context: TenantContext,
+    profileInput: string
+  ): Promise<{
+    profileCode: string;
+    enabled: string[];
+    disabled: string[];
+  }> {
+    const profile = profileInput.trim().toUpperCase();
+    const allowed = new Set([
+      "GENERAL","TRADE","ECOMMERCE","SERVICE","WAREHOUSE_3PL"
+    ]);
+    if (!allowed.has(profile)) {
+      throw new BadRequestException("Неизвестный профиль бизнеса");
+    }
+
+    const controlled = [
+      "crm","tasks","catalog","sales","procurement","inventory","finance",
+      "service","channels","oms","sites","growth","wms","workflow","support"
+    ];
+
+    const presets: Record<string, Set<string>> = {
+      GENERAL: new Set(controlled),
+      TRADE: new Set([
+        "crm","tasks","catalog","sales","procurement","inventory","finance",
+        "growth","workflow","support"
+      ]),
+      ECOMMERCE: new Set([
+        "crm","tasks","catalog","sales","procurement","inventory","finance",
+        "channels","oms","sites","growth","workflow","support"
+      ]),
+      SERVICE: new Set([
+        "crm","tasks","catalog","sales","procurement","inventory","finance",
+        "service","sites","growth","workflow","support"
+      ]),
+      WAREHOUSE_3PL: new Set([
+        "tasks","catalog","sales","procurement","inventory","finance",
+        "oms","wms","workflow","support"
+      ])
+    };
+
+    const enabled = presets[profile]!;
+    const disabled = controlled.filter((key) => !enabled.has(key));
+
+    await this.database.withTenantTransaction(context, async (client) => {
+      await client.query(
+        `INSERT INTO tenant_business_profile(
+           tenant_id,profile_code,applied_at,updated_by_membership_id,updated_at
+         ) VALUES ($1,$2,now(),$3,now())
+         ON CONFLICT (tenant_id)
+         DO UPDATE SET
+           profile_code=EXCLUDED.profile_code,
+           applied_at=now(),
+           updated_by_membership_id=EXCLUDED.updated_by_membership_id,
+           updated_at=now()`,
+        [context.tenantId, profile, context.membershipId]
+      );
+
+      for (const key of controlled) {
+        await client.query(
+          `INSERT INTO capability_toggle(
+             tenant_id,capability_key,enabled,updated_by_membership_id
+           ) VALUES ($1,$2,$3,$4)
+           ON CONFLICT (tenant_id,capability_key)
+           DO UPDATE SET
+             enabled=EXCLUDED.enabled,
+             updated_by_membership_id=EXCLUDED.updated_by_membership_id,
+             updated_at=now()`,
+          [
+            context.tenantId,
+            key,
+            enabled.has(key),
+            context.membershipId
+          ]
+        );
+      }
+
+      await this.audit(
+        client,
+        context,
+        "customization.business_profile_applied",
+        "tenant_business_profile",
+        context.tenantId,
+        {
+          profileCode: profile,
+          enabled: Array.from(enabled),
+          disabled
+        }
+      );
+    });
+
+    return {
+      profileCode: profile,
+      enabled: Array.from(enabled),
+      disabled
+    };
+  }
+
   async capabilities(context: TenantContext): Promise<Array<{
     key: string;
     enabled: boolean;
