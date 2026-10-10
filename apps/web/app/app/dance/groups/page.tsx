@@ -92,6 +92,7 @@ type Roster = {
     student_name: string;
     status: string;
     payer_name: string | null;
+    discount_bps?: number;
     reserved_place?: boolean;
   }>;
   waitlist: Array<{
@@ -428,6 +429,18 @@ export default function DanceGroupsPage() {
     const student = students[Number(window.prompt("Ученик:\n" + list, "1")) - 1];
     if (!student) return;
     const allowWaitlist = window.confirm("Если группа заполнена — поставить в лист ожидания?");
+    const discountPercent = Number(
+      (window.prompt("Персональная/семейная скидка, %", "0") ?? "0")
+        .replace(",", ".")
+    );
+    if (
+      !Number.isFinite(discountPercent) ||
+      discountPercent < 0 ||
+      discountPercent > 100
+    ) {
+      setError("Скидка должна быть от 0 до 100%");
+      return;
+    }
 
     try {
       await apiRequest(`/dance/groups/${selectedGroup.id}/members`, {
@@ -435,6 +448,7 @@ export default function DanceGroupsPage() {
         body: JSON.stringify({
           studentId: student.id,
           status: "ACTIVE",
+          discountBps: Math.round(discountPercent * 100),
           allowWaitlist
         })
       });
@@ -833,13 +847,14 @@ export default function DanceGroupsPage() {
             </div>
             <div className="data-table-wrap">
               <table className="data-table">
-                <thead><tr><th>Ученик</th><th>Статус</th><th>Плательщик</th><th></th></tr></thead>
+                <thead><tr><th>Ученик</th><th>Статус</th><th>Плательщик</th><th>Скидка</th><th></th></tr></thead>
                 <tbody>
                   {roster?.members.map((member) => (
                     <tr key={member.id}>
                       <td><strong>{member.student_name}</strong></td>
                       <td>{member.status}</td>
                       <td>{member.payer_name ?? "—"}</td>
+                      <td>{((member.discount_bps ?? 0) / 100).toLocaleString("ru-RU")}%</td>
                       <td className="table-actions">
                         {member.status !== "ACTIVE" ? (
                           <button onClick={() => void changeMember(member, "ACTIVE")} type="button">Вернуть</button>
@@ -854,7 +869,7 @@ export default function DanceGroupsPage() {
                     </tr>
                   ))}
                   {roster?.waitlist.map((member) => (
-                    <tr key={"w-" + member.id}><td><strong>{member.student_name}</strong></td><td>WAITLIST</td><td>ожидает место</td><td>Автопереход при освобождении места</td></tr>
+                    <tr key={"w-" + member.id}><td><strong>{member.student_name}</strong></td><td>WAITLIST</td><td>ожидает место</td><td>—</td><td>Автопереход при освобождении места</td></tr>
                   ))}
                 </tbody>
               </table>
