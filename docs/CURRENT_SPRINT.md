@@ -15,7 +15,7 @@
 ## Статус
 
 **Функциональная линия:** R2 — ERP Pilot реализована до Sprint 12 включительно.  
-**Активная разработка:** Sprint 70 — Production stabilization review.  
+**Активная разработка:** Sprint 72 — Performance budgets / noisy-neighbor controls.  
 **Ветка разработки:** `main`, без GitHub Actions/CI по решению владельца.
 
 ## Реализовано в main
@@ -765,23 +765,41 @@
 - owner/admin gap dashboard;
 - support entry preserves source screen.
 
-## Активно — Sprint 70: Production stabilization review
+### Sprint 70 — Production Stabilization Review
+- deterministic source stability preflight;
+- controller→DatabaseService coupling blocked;
+- browser-exposed secrets / unsafe credential localStorage blocked;
+- dangerouslySetInnerHTML blocked;
+- direct Inventory/Accounting ledger write boundaries checked;
+- AppModule duplicate-module guard;
+- public mutating endpoints surfaced for explicit review;
+- GitHub Actions workflows blocked by repository policy;
+- CORE/STABILITY mandatory immutable release evidence;
+- release:check runs source stability before typecheck/test/build;
+- production remains NO-GO until runtime gates actually pass.
+
+### Sprint 71 — Golden Business Journey Simulation
+- disposable-only API matrix;
+- separate tenant per business profile;
+- TRADE: stock → order → reserve → ship;
+- ECOMMERCE: ERP catalog → public cart → idempotent checkout → SalesOrder;
+- SERVICE: service/resource/schedule → idempotent booking;
+- WAREHOUSE_3PL: WMS topology → client owner → active 3PL contract;
+- production gate executes matrix before reconciliation checks;
+- no SQL shortcuts inside journeys.
+
+## Активно — Sprint 72: Performance Budgets / Noisy-neighbor Controls
 
 Scope:
-- deterministic source stability preflight;
-- no controller→DatabaseService coupling;
-- no browser-exposed secrets / unsafe localStorage credentials;
-- no arbitrary dangerouslySetInnerHTML;
-- direct Inventory/Accounting ledger write boundaries;
-- AppModule duplicate-module guard;
-- explicit review of public mutating endpoints;
-- no GitHub Actions workflows by project policy;
-- CORE/STABILITY becomes mandatory immutable release evidence;
-- release:check runs stability guard before typecheck/test/build;
-- production stays NO-GO until disposable DB, RLS/runtime-role, smoke, restore and reconciliation gates actually pass.
+- tenant/user concurrency leases for expensive operations;
+- endpoint cost classes;
+- export/report/search/AI/integration quotas;
+- bounded queue depth and payload sizes;
+- tenant-level runtime pressure diagnostics;
+- heavy operations fail fast with retry guidance instead of exhausting workers;
+- global product remains usable when one tenant creates a workload spike.
 
 ## Следом
 
-Sprint 71 — Golden business journey simulation / pilot matrix.  
-Sprint 72 — Performance budgets / noisy-neighbor controls.  
-Sprint 73 — Production release candidate hardening.
+Sprint 73 — Production release candidate hardening.  
+Sprint 74 — Pilot rollout / hypercare telemetry.
