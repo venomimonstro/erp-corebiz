@@ -5,6 +5,7 @@ import {
   NotFoundException
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
+import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
@@ -438,21 +439,64 @@ export class SalesService {
       throw new BadRequestException("Ответственный сотрудник недоступен");
     }
 
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
+    if (
+      idempotencyKey &&
+      (idempotencyKey.length < 8 || idempotencyKey.length > 160)
+    ) {
+      throw new BadRequestException("Некорректный ключ идемпотентности заказа");
+    }
+    const idempotencyFingerprint = idempotencyKey
+      ? this.orderIdempotencyFingerprint({
+          partyId: input.partyId ?? null,
+          responsibleMembershipId: responsible,
+          currency: orderCurrency,
+          notes: input.notes?.trim() || null,
+          sourceDealId: input.sourceDealId ?? null,
+          inventoryOwnerId: input.inventoryOwnerId ?? null,
+          lines: input.lines
+        })
+      : null;
+
     return this.database.withTenantTransaction(context, async (client) => {
-      if (input.idempotencyKey) {
+      if (idempotencyKey) {
+        await client.query(
+          "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+          [context.tenantId, idempotencyKey]
+        );
+
         const existing = await client.query<{
           id: string;
           business_number: string;
           version: number;
+          responsible_membership_id: string | null;
+          idempotency_fingerprint: string | null;
         }>(
-          `SELECT id, business_number, version
+          `SELECT
+             id,business_number,version,responsible_membership_id,
+             idempotency_fingerprint
            FROM sales_order
-           WHERE tenant_id = $1 AND idempotency_key = $2`,
-          [context.tenantId, input.idempotencyKey]
+           WHERE tenant_id=$1 AND idempotency_key=$2`,
+          [context.tenantId, idempotencyKey]
         );
 
         const row = existing.rows[0];
         if (row) {
+          if (
+            scopedMembershipIds &&
+            (!row.responsible_membership_id ||
+              !scopedMembershipIds.includes(row.responsible_membership_id))
+          ) {
+            throw new NotFoundException("Заказ не найден");
+          }
+          if (
+            row.idempotency_fingerprint &&
+            row.idempotency_fingerprint !== idempotencyFingerprint
+          ) {
+            throw new ConflictException(
+              "Ключ идемпотентности уже использован для другого заказа"
+            );
+          }
           return {
             id: row.id,
             number: row.business_number,
@@ -465,7 +509,12 @@ export class SalesService {
 
       let defaultDiscountBps = 0;
       if (input.partyId) {
-        await this.assertParty(client, context.tenantId, input.partyId);
+        await this.assertParty(
+          client,
+          context.tenantId,
+          input.partyId,
+          scopedMembershipIds
+        );
         const terms = await client.query<{
           currency: string;
           default_discount_bps: number;
@@ -559,8 +608,9 @@ export class SalesService {
           `INSERT INTO sales_order(
              tenant_id, business_number, source_deal_id, party_id,
              responsible_membership_id, inventory_owner_id, currency,
-             subtotal_minor, total_minor, notes, idempotency_key
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8,$9,$10)
+             subtotal_minor, total_minor, notes, idempotency_key,
+             idempotency_fingerprint
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8,$9,$10,$11)
            RETURNING id, business_number, version`,
           [
             context.tenantId,
@@ -572,12 +622,13 @@ export class SalesService {
             orderCurrency,
             subtotal.toString(),
             input.notes?.trim() || null,
-            input.idempotencyKey?.trim() || null
+            idempotencyKey,
+            idempotencyFingerprint
           ]
         );
       } catch (error) {
         if (
-          input.idempotencyKey &&
+          idempotencyKey &&
           error &&
           typeof error === "object" &&
           "code" in error &&
@@ -587,14 +638,33 @@ export class SalesService {
             id: string;
             business_number: string;
             version: number;
+            responsible_membership_id: string | null;
+            idempotency_fingerprint: string | null;
           }>(
-            `SELECT id, business_number, version
+            `SELECT
+               id,business_number,version,responsible_membership_id,
+               idempotency_fingerprint
              FROM sales_order
-             WHERE tenant_id = $1 AND idempotency_key = $2`,
-            [context.tenantId, input.idempotencyKey]
+             WHERE tenant_id=$1 AND idempotency_key=$2`,
+            [context.tenantId, idempotencyKey]
           );
           const row = existing.rows[0];
           if (row) {
+            if (
+              scopedMembershipIds &&
+              (!row.responsible_membership_id ||
+                !scopedMembershipIds.includes(row.responsible_membership_id))
+            ) {
+              throw new NotFoundException("Заказ не найден");
+            }
+            if (
+              row.idempotency_fingerprint &&
+              row.idempotency_fingerprint !== idempotencyFingerprint
+            ) {
+              throw new ConflictException(
+                "Ключ идемпотентности уже использован для другого заказа"
+              );
+            }
             return {
               id: row.id,
               number: row.business_number,
@@ -869,6 +939,37 @@ export class SalesService {
       orderId,
       idempotencyKey
     });
+  }
+
+  private orderIdempotencyFingerprint(input: {
+    partyId: string | null;
+    responsibleMembershipId: string;
+    currency: string;
+    notes: string | null;
+    sourceDealId: string | null;
+    inventoryOwnerId: string | null;
+    lines: CreateLineInput[];
+  }): string {
+    const normalized = {
+      version: 1,
+      partyId: input.partyId,
+      responsibleMembershipId: input.responsibleMembershipId,
+      currency: input.currency,
+      notes: input.notes,
+      sourceDealId: input.sourceDealId,
+      inventoryOwnerId: input.inventoryOwnerId,
+      lines: input.lines.map((line) => ({
+        skuId: line.skuId ?? null,
+        description: line.description?.trim() || null,
+        quantityMilli: line.quantityMilli ?? "1000",
+        unitPriceMinor: line.unitPriceMinor ?? null,
+        discountMinor: line.discountMinor ?? null
+      }))
+    };
+
+    return createHash("sha256")
+      .update(JSON.stringify(normalized))
+      .digest("hex");
   }
 
   private async validateCommercialCredit(
