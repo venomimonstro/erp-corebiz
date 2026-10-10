@@ -1043,15 +1043,22 @@ export class DanceStudioService {
   ){
     const scopeIds=await this.scopeIds(context,"dance.write");
     const charge=String(input.chargeMinor??"0");
-    if(!/^\d+$/.test(charge)) throw new BadRequestException("Некорректная стоимость");
+    if(!/^\d+$/.test(charge)){
+      throw new BadRequestException("Некорректная стоимость");
+    }
+    const priceSource:"PACKAGE"|"DIRECT"=
+      input.packageId ? "PACKAGE" : "DIRECT";
 
     return this.database.withTenantTransaction(context,async client=>{
       const lesson=await this.assertLessonAccess(
         client,context.tenantId,lessonId,scopeIds,true
       );
-      if(!["PLANNED","OPEN_FOR_BOOKING"].includes(lesson.status)||
-         lesson.attendance_locked_at)
+      if(
+        !["PLANNED","OPEN_FOR_BOOKING"].includes(lesson.status) ||
+        lesson.attendance_locked_at
+      ){
         throw new ConflictException("Урок закрыт для записи");
+      }
 
       const student=await this.assertStudentAccess(
         client,context.tenantId,input.studentId,scopeIds
@@ -1062,22 +1069,90 @@ export class DanceStudioService {
         );
       }
 
-      const existing=await client.query(
-        `SELECT id,status FROM dance_lesson_participant
-         WHERE tenant_id=$1 AND lesson_id=$2 AND student_id=$3`,
-        [context.tenantId,lessonId,input.studentId]
-      );
-      if(existing.rows[0]) return existing.rows[0];
-
-      const occupied=await client.query<{count:number}>(
+      const occupiedResult=await client.query<{count:number}>(
         `SELECT count(*)::integer AS count
          FROM dance_lesson_participant
          WHERE tenant_id=$1 AND lesson_id=$2
            AND status NOT IN ('WAITLIST','CANCELLED_IN_TIME')`,
         [context.tenantId,lessonId]
       );
-      if((occupied.rows[0]?.count??0)>=lesson.capacity){
-        if(!input.allowWaitlist) throw new ConflictException("В уроке нет свободных мест");
+      const full=(occupiedResult.rows[0]?.count??0)>=lesson.capacity;
+
+      const existing=await client.query<{
+        id:string;status:string;version:number;
+      }>(
+        `SELECT id,status,version
+         FROM dance_lesson_participant
+         WHERE tenant_id=$1 AND lesson_id=$2 AND student_id=$3
+         FOR UPDATE`,
+        [context.tenantId,lessonId,input.studentId]
+      );
+      const previous=existing.rows[0];
+
+      if(previous && previous.status!=="CANCELLED_IN_TIME"){
+        if(previous.status==="WAITLIST" && !full){
+          return (
+            await this.promoteSpecificWaitlistParticipantTx(
+              client,context,lesson,previous.id
+            )
+          ) ?? previous;
+        }
+        return previous;
+      }
+
+      if(previous?.status==="CANCELLED_IN_TIME"){
+        if(full){
+          if(!input.allowWaitlist){
+            throw new ConflictException("В уроке нет свободных мест");
+          }
+          const wait=await client.query(
+            `UPDATE dance_lesson_participant
+             SET package_id=$4,status='WAITLIST',price_source=$5,
+                 charge_minor=$6,currency=$7,
+                 attendance_marked_by_membership_id=NULL,
+                 attendance_marked_at=NULL,
+                 version=version+1,updated_at=now()
+             WHERE tenant_id=$1 AND lesson_id=$2 AND id=$3
+               AND status='CANCELLED_IN_TIME'
+             RETURNING id,status,version`,
+            [
+              context.tenantId,lessonId,previous.id,input.packageId??null,
+              priceSource,charge,lesson.currency
+            ]
+          );
+          return wait.rows[0];
+        }
+
+        const rebooked=await client.query(
+          `UPDATE dance_lesson_participant
+           SET package_id=$4,status='BOOKED',price_source=$5,
+               charge_minor=$6,currency=$7,
+               attendance_marked_by_membership_id=NULL,
+               attendance_marked_at=NULL,
+               version=version+1,updated_at=now()
+           WHERE tenant_id=$1 AND lesson_id=$2 AND id=$3
+             AND status='CANCELLED_IN_TIME'
+           RETURNING id,status,version`,
+          [
+            context.tenantId,lessonId,previous.id,input.packageId??null,
+            priceSource,charge,lesson.currency
+          ]
+        );
+        const participant=rebooked.rows[0];
+        if(!participant){
+          throw new ConflictException("Запись уже изменилась");
+        }
+        await this.attachParticipantPaymentTx(
+          client,context,lesson,student.party_id,input.studentId,
+          participant.id,input.packageId,charge
+        );
+        return participant;
+      }
+
+      if(full){
+        if(!input.allowWaitlist){
+          throw new ConflictException("В уроке нет свободных мест");
+        }
         const wait=await client.query(
           `INSERT INTO dance_lesson_participant(
              tenant_id,lesson_id,student_id,package_id,status,
@@ -1104,26 +1179,14 @@ export class DanceStudioService {
         ]
       );
       const participant=row.rows[0];
-      if(!participant) throw new Error("DANCE_PARTICIPANT_CREATE_FAILED");
-
-      if(input.packageId){
-        await this.reserveDancePackage(
-          client,context.tenantId,input.packageId,participant.id,
-          student.party_id,lesson
-        );
-      } else if (BigInt(charge) > 0n) {
-        const payerId=await this.defaultPayer(
-          client,context.tenantId,student.party_id
-        );
-        await this.createLessonChargeTx(client,context,{
-          studentId:input.studentId,
-          payerPartyId:payerId,
-          lessonId,
-          amountMinor:charge,
-          dueAt:new Date(lesson.starts_at)
-        });
+      if(!participant){
+        throw new Error("DANCE_PARTICIPANT_CREATE_FAILED");
       }
 
+      await this.attachParticipantPaymentTx(
+        client,context,lesson,student.party_id,input.studentId,
+        participant.id,input.packageId,charge
+      );
       return participant;
     });
   }
@@ -1548,6 +1611,37 @@ export class DanceStudioService {
       roomResourceId:roomId
     });
     return row;
+  }
+
+  private async attachParticipantPaymentTx(
+    client:PoolClient,
+    context:TenantContext,
+    lesson:any,
+    studentPartyId:string,
+    studentId:string,
+    participantId:string,
+    packageId:string|undefined,
+    chargeMinor:string
+  ):Promise<void>{
+    if(packageId){
+      await this.reserveDancePackage(
+        client,context.tenantId,packageId,participantId,
+        studentPartyId,lesson
+      );
+      return;
+    }
+    if(BigInt(chargeMinor)>0n){
+      const payerId=await this.defaultPayer(
+        client,context.tenantId,studentPartyId
+      );
+      await this.createLessonChargeTx(client,context,{
+        studentId,
+        payerPartyId:payerId,
+        lessonId:lesson.id,
+        amountMinor:chargeMinor,
+        dueAt:new Date(lesson.starts_at)
+      });
+    }
   }
 
   private async candidatePackageIds(
