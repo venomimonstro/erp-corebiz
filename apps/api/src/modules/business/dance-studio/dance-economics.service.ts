@@ -625,6 +625,44 @@ export class DanceEconomicsService {
     });
   }
 
+  async compensationAccruals(
+    context:TenantContext,
+    input:{from?:string;to?:string}
+  ){
+    const scopeIds=await this.scopeIds(context,"dance.read");
+    const from=input.from?new Date(input.from):new Date(new Date().getFullYear(),new Date().getMonth(),1);
+    const to=input.to?new Date(input.to):new Date(Date.now()+86400000);
+    if(Number.isNaN(from.getTime())||Number.isNaN(to.getTime())||to<=from)
+      throw new BadRequestException("Некорректный период начислений");
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           a.id,a.lesson_id,a.trainer_resource_id,r.name AS trainer_name,
+           a.plan_id,a.rule_snapshot,a.attended_count,
+           a.eligible_revenue_minor::text,a.amount_minor::text,
+           a.currency,a.status,a.payroll_batch_id,a.created_at,
+           l.lesson_type,l.starts_at,l.ends_at,g.name AS group_name
+         FROM trainer_compensation_accrual a
+         JOIN dance_lesson l
+           ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
+         JOIN service_resource r
+           ON r.tenant_id=a.tenant_id AND r.id=a.trainer_resource_id
+         LEFT JOIN dance_group g
+           ON g.tenant_id=l.tenant_id AND g.id=l.group_id
+         WHERE a.tenant_id=$1
+           AND l.starts_at>=$2 AND l.starts_at<$3
+           AND (
+             $4::uuid[] IS NULL
+             OR r.membership_id = ANY($4::uuid[])
+           )
+         ORDER BY l.starts_at DESC,r.name`,
+        [context.tenantId,from,to,scopeIds]
+      );
+      return result.rows;
+    });
+  }
+
   async approveCompensation(
     context:TenantContext,
     input:{from:string;to:string}
