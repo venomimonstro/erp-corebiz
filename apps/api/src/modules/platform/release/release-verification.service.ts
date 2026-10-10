@@ -384,6 +384,64 @@ export class ReleaseVerificationService {
         );
       }
 
+      if (decision === "APPROVE") {
+        const evaluatedAtRaw =
+          row.verdict_snapshot?.evaluatedAt ?? null;
+        const evaluatedAt = evaluatedAtRaw
+          ? new Date(evaluatedAtRaw)
+          : null;
+
+        if (
+          !evaluatedAt ||
+          Number.isNaN(evaluatedAt.getTime()) ||
+          Date.now() - evaluatedAt.getTime() > 4 * 3600000
+        ) {
+          throw new BadRequestException(
+            "Verdict устарел. Выполните повторный evaluate перед approval."
+          );
+        }
+
+        const candidateMeta = await client.query<{
+          target_version: string;
+        }>(
+          `SELECT target_version
+           FROM release_candidate
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId, candidateId]
+        );
+
+        const targetVersion = candidateMeta.rows[0]?.target_version;
+        if (!targetVersion) {
+          throw new BadRequestException("Release candidate не найден");
+        }
+
+        const newerEvidence = await client.query<{ exists: boolean }>(
+          `SELECT EXISTS(
+             SELECT 1
+             FROM release_verification_record
+             WHERE tenant_id=$1
+               AND target_version=$2
+               AND executed_at > $3
+           ) AS exists`,
+          [context.tenantId, targetVersion, evaluatedAt]
+        );
+
+        if (newerEvidence.rows[0]?.exists) {
+          throw new BadRequestException(
+            "После evaluate появилось новое evidence. Пересчитайте verdict."
+          );
+        }
+
+        await client.query(
+          `UPDATE release_candidate
+           SET status='SUPERSEDED',updated_at=now()
+           WHERE tenant_id=$1
+             AND status='APPROVED'
+             AND id<>$2`,
+          [context.tenantId, candidateId]
+        );
+      }
+
       const status =
         decision === "APPROVE" ? "APPROVED" : "REJECTED";
 
