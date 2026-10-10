@@ -595,17 +595,48 @@ export class BookingService {
            sp.package_kind_snapshot,sp.dance_program_id_snapshot,
            sp.dance_group_id_snapshot,sp.payer_party_id,
            p.display_name AS party_name,plan.name AS plan_name,
-           plan.no_show_policy,plan.applicable_service_id
+           plan.no_show_policy,plan.applicable_service_id,
+           coalesce(
+             (
+               SELECT array_agg(b.party_id ORDER BY b.party_id)
+               FROM service_package_beneficiary b
+               WHERE b.tenant_id=sp.tenant_id
+                 AND b.package_id=sp.id
+                 AND b.status='ACTIVE'
+             ),
+             ARRAY[]::uuid[]
+           ) AS beneficiary_party_ids
          FROM service_package sp
          JOIN service_package_plan plan
            ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
          JOIN party p
            ON p.tenant_id=sp.tenant_id AND p.id=sp.party_id
          WHERE sp.tenant_id=$1
-           AND ($2::uuid IS NULL OR sp.party_id=$2)
+           AND (
+             $2::uuid IS NULL
+             OR sp.party_id=$2
+             OR EXISTS (
+               SELECT 1
+               FROM service_package_beneficiary fb
+               WHERE fb.tenant_id=sp.tenant_id
+                 AND fb.package_id=sp.id
+                 AND fb.party_id=$2
+                 AND fb.status='ACTIVE'
+             )
+           )
            AND (
              $3::uuid[] IS NULL
              OR p.responsible_membership_id = ANY($3::uuid[])
+             OR EXISTS (
+               SELECT 1
+               FROM service_package_beneficiary sb
+               JOIN party bp
+                 ON bp.tenant_id=sb.tenant_id AND bp.id=sb.party_id
+               WHERE sb.tenant_id=sp.tenant_id
+                 AND sb.package_id=sp.id
+                 AND sb.status='ACTIVE'
+                 AND bp.responsible_membership_id = ANY($3::uuid[])
+             )
              OR EXISTS (
                SELECT 1
                FROM service_booking b
