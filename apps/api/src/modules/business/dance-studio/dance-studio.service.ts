@@ -2258,9 +2258,11 @@ export class DanceStudioService {
       id:string;
       student_id:string;
       package_id:string|null;
+      makeup_credit_id:string|null;
       charge_minor:string;
     }>(
-      `SELECT id,student_id,package_id,charge_minor::text
+      `SELECT
+         id,student_id,package_id,makeup_credit_id,charge_minor::text
        FROM dance_lesson_participant
        WHERE tenant_id=$1 AND lesson_id=$2 AND id=$3 AND status='WAITLIST'
        FOR UPDATE`,
