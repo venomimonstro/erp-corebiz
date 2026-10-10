@@ -66,6 +66,53 @@ export class BookingController {
     };
   }
 
+  @Get("package-plans")
+  @RequirePermission("service.read")
+  async packagePlans(
+    @Req() request: AuthenticatedRequest
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.booking.packagePlans(this.context(request))
+    };
+  }
+
+  @Post("package-plans")
+  @RequirePermission("service.write")
+  async createPackagePlan(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: any
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.booking.createPackagePlan(this.context(request), body)
+    };
+  }
+
+  @Get("packages")
+  @RequirePermission("service.read")
+  async packages(
+    @Req() request: AuthenticatedRequest,
+    @Query("partyId") partyId?: string
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.booking.packages(this.context(request), partyId)
+    };
+  }
+
+  @Post("packages")
+  @RequirePermission("service.write")
+  async issuePackage(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: any
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.booking.issuePackage(this.context(request), body)
+    };
+  }
+
   @Get("assets")
   @RequirePermission("service.read")
   async assets(
