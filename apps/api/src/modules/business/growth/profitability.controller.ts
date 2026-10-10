@@ -8,6 +8,7 @@ import {
   Req
 } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
+import { ApiCost } from "../../../infrastructure/http/api-cost.decorator";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
 import { ProfitabilityService } from "./profitability.service";
@@ -19,6 +20,7 @@ export class ProfitabilityController {
   ) {}
 
   @Get()
+  @ApiCost("HEAVY")
   @RequirePermission("analytics.read")
   async dashboard(
     @Req() request: AuthenticatedRequest,
@@ -71,6 +73,7 @@ export class ProfitabilityController {
   }
 
   @Post("alerts/evaluate")
+  @ApiCost("EXPENSIVE")
   @RequirePermission("analytics.manage")
   async evaluate(
     @Req() request: AuthenticatedRequest
