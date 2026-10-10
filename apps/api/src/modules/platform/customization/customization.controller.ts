@@ -154,6 +154,33 @@ export class CustomizationController {
     };
   }
 
+  @Get("business-profile")
+  async businessProfile(
+    @Req() request: AuthenticatedRequest
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.customization.businessProfile(
+        this.context(request)
+      )
+    };
+  }
+
+  @Put("business-profile")
+  @RequirePermission("customization.manage")
+  async applyBusinessProfile(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: { profileCode: string }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.customization.applyBusinessProfile(
+        this.context(request),
+        body.profileCode
+      )
+    };
+  }
+
   @Get("capabilities")
   async capabilities(
     @Req() request: AuthenticatedRequest
