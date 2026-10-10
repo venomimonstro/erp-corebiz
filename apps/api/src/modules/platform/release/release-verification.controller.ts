@@ -7,6 +7,7 @@ import {
   Req
 } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
+import { ApiCost } from "../../../infrastructure/http/api-cost.decorator";
 import type { AuthenticatedRequest } from "../auth/auth.types";
 import { RequirePermission } from "../authorization/require-permission.decorator";
 import { ReleaseVerificationService } from "./release-verification.service";
@@ -55,6 +56,7 @@ export class ReleaseVerificationController {
   }
 
   @Post("candidates/:id/evaluate")
+  @ApiCost("HEAVY")
   @RequirePermission("release.manage")
   async evaluateCandidate(
     @Req() request: AuthenticatedRequest,
