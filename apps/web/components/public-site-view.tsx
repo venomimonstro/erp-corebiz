@@ -182,6 +182,7 @@ function PublicBlock({
         publicKey={String(c.bindingId ?? "")}
         heading={c.heading}
         booking
+        danceBooking={Boolean(c.danceBooking)}
       />
     );
   }
