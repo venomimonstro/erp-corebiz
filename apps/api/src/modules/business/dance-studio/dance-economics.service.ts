@@ -1348,6 +1348,28 @@ export class DanceEconomicsService {
     return result.rows[0]?.id??studentPartyId;
   }
 
+  private normalizeMonth(month?:string){
+    const value=(month??new Date().toISOString().slice(0,7)).trim();
+    if(!/^\d{4}-\d{2}$/.test(value)){
+      throw new BadRequestException("Месяц должен быть в формате YYYY-MM");
+    }
+    const [year,monthNumber]=value.split("-").map(Number);
+    if(
+      !Number.isInteger(year) ||
+      !Number.isInteger(monthNumber) ||
+      monthNumber<1 ||
+      monthNumber>12
+    ){
+      throw new BadRequestException("Некорректный месяц");
+    }
+    const from=value+"-01";
+    const nextMonth=new Date(Date.UTC(year,monthNumber,1));
+    const to=new Date(nextMonth.getTime()-86400000)
+      .toISOString()
+      .slice(0,10);
+    return {month:value,from,to};
+  }
+
   private dateRange(fromText:string,toText:string){
     const from=new Date(fromText);
     const to=new Date(toText);
