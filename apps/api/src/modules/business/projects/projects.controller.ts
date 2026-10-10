@@ -17,13 +17,13 @@ export class ProjectsController {
   constructor(private readonly projects: ProjectsService) {}
 
   @Get()
-  @RequirePermission("tasks.read")
+  @RequirePermission("projects.read")
   async list(@Req() request: AuthenticatedRequest): Promise<ApiSuccess<unknown>> {
     return { ok: true, data: await this.projects.list(this.context(request)) };
   }
 
   @Get(":id")
-  @RequirePermission("tasks.read")
+  @RequirePermission("projects.read")
   async details(
     @Req() request: AuthenticatedRequest,
     @Param("id") id: string
@@ -35,7 +35,7 @@ export class ProjectsController {
   }
 
   @Post()
-  @RequirePermission("tasks.write")
+  @RequirePermission("projects.write")
   async create(
     @Req() request: AuthenticatedRequest,
     @Body() body: any
@@ -47,7 +47,7 @@ export class ProjectsController {
   }
 
   @Post("from-deal/:dealId")
-  @RequirePermission("tasks.write")
+  @RequirePermission("projects.write")
   async fromDeal(
     @Req() request: AuthenticatedRequest,
     @Param("dealId") dealId: string
@@ -62,7 +62,7 @@ export class ProjectsController {
   }
 
   @Patch(":id/status")
-  @RequirePermission("tasks.write")
+  @RequirePermission("projects.write")
   async status(
     @Req() request: AuthenticatedRequest,
     @Param("id") id: string,
@@ -79,7 +79,7 @@ export class ProjectsController {
   }
 
   @Post(":id/milestones")
-  @RequirePermission("tasks.write")
+  @RequirePermission("projects.write")
   async addMilestone(
     @Req() request: AuthenticatedRequest,
     @Param("id") id: string,
@@ -96,7 +96,7 @@ export class ProjectsController {
   }
 
   @Patch(":id/milestones/:milestoneId/status")
-  @RequirePermission("tasks.write")
+  @RequirePermission("projects.write")
   async milestoneStatus(
     @Req() request: AuthenticatedRequest,
     @Param("id") id: string,
@@ -115,7 +115,7 @@ export class ProjectsController {
   }
 
   @Post(":id/time-entries")
-  @RequirePermission("tasks.write")
+  @RequirePermission("projects.write")
   async timeEntry(
     @Req() request: AuthenticatedRequest,
     @Param("id") id: string,
