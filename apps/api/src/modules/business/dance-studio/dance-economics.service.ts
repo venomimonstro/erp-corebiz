@@ -328,6 +328,212 @@ export class DanceEconomicsService {
     });
   }
 
+  async finalizeRoomStatements(
+    context:TenantContext,
+    input:{month:string}
+  ){
+    await this.requireAll(context,"dance.write");
+    const target=this.normalizeMonth(input.month);
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const contracts=await client.query<{
+        id:string;
+        counterparty_party_id:string|null;
+        pricing_type:"HOURLY"|"FIXED_MONTHLY"|"FIXED_SLOT";
+        monthly_minor:string;
+        currency:string;
+        payment_term_days:number;
+        valid_from:string;
+        valid_to:string|null;
+      }>(
+        `SELECT
+           id,counterparty_party_id,pricing_type,monthly_minor::text,
+           currency,payment_term_days,valid_from::text,valid_to::text
+         FROM room_rental_contract
+         WHERE tenant_id=$1 AND status='ACTIVE'
+           AND valid_from <= $3::date
+           AND (valid_to IS NULL OR valid_to >= $2::date)
+         ORDER BY id
+         FOR UPDATE`,
+        [context.tenantId,target.from,target.to]
+      );
+
+      const statements:Array<Record<string,unknown>>=[];
+
+      for(const contract of contracts.rows){
+        const finalized=await client.query<{
+          id:string;amount_minor:string;obligation_id:string|null;
+        }>(
+          `SELECT id,amount_minor::text,obligation_id
+           FROM room_rental_statement
+           WHERE tenant_id=$1 AND contract_id=$2
+             AND period_from=$3::date AND period_to=$4::date
+             AND status='FINALIZED'`,
+          [context.tenantId,contract.id,target.from,target.to]
+        );
+        if(finalized.rows[0]){
+          statements.push({
+            ...finalized.rows[0],
+            contractId:contract.id,
+            reused:true
+          });
+          continue;
+        }
+
+        const stats=await client.query<{
+          lesson_count:number;amount_minor:string;
+        }>(
+          `SELECT
+             count(*)::integer AS lesson_count,
+             coalesce(sum(p.room_cost_minor),0)::text AS amount_minor
+           FROM dance_lesson_profitability p
+           JOIN dance_lesson l
+             ON l.tenant_id=p.tenant_id AND l.id=p.lesson_id
+           WHERE p.tenant_id=$1
+             AND l.starts_at >= $2::date
+             AND l.starts_at < ($3::date + interval '1 day')
+             AND p.calculation_snapshot #>> '{room,contractId}' = $4`,
+          [context.tenantId,target.from,target.to,contract.id]
+        );
+        const lessonCount=stats.rows[0]?.lesson_count??0;
+        let amount=BigInt(stats.rows[0]?.amount_minor??"0");
+        let snapshot:Record<string,unknown>={
+          pricingType:contract.pricing_type,
+          lessonCount,
+          source:"lesson_profitability"
+        };
+
+        if(contract.pricing_type==="FIXED_MONTHLY"){
+          const active=await client.query<{
+            active_days:number;month_days:number;
+          }>(
+            `SELECT
+               (
+                 least($2::date,coalesce($4::date,$2::date))
+                 - greatest($1::date,$3::date) + 1
+               )::integer AS active_days,
+               ($2::date-$1::date+1)::integer AS month_days`,
+            [target.from,target.to,contract.valid_from,contract.valid_to]
+          );
+          const activeDays=Math.max(0,active.rows[0]?.active_days??0);
+          const monthDays=Math.max(1,active.rows[0]?.month_days??1);
+          amount=(
+            BigInt(contract.monthly_minor)*BigInt(activeDays)+
+            BigInt(monthDays-1)
+          )/BigInt(monthDays);
+          snapshot={
+            pricingType:"FIXED_MONTHLY",
+            monthlyMinor:contract.monthly_minor,
+            activeDays,
+            monthDays,
+            lessonCount
+          };
+        }
+
+        const statement=await client.query<{id:string}>(
+          `INSERT INTO room_rental_statement(
+             tenant_id,contract_id,period_from,period_to,currency,
+             amount_minor,lesson_count,calculation_snapshot
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+           ON CONFLICT(tenant_id,contract_id,period_from,period_to)
+           DO UPDATE SET
+             amount_minor=EXCLUDED.amount_minor,
+             lesson_count=EXCLUDED.lesson_count,
+             calculation_snapshot=EXCLUDED.calculation_snapshot,
+             updated_at=now()
+           WHERE room_rental_statement.status='DRAFT'
+           RETURNING id`,
+          [
+            context.tenantId,contract.id,target.from,target.to,
+            contract.currency,amount.toString(),lessonCount,
+            JSON.stringify(snapshot)
+          ]
+        );
+        let statementId=statement.rows[0]?.id;
+        if(!statementId){
+          const current=await client.query<{id:string}>(
+            `SELECT id FROM room_rental_statement
+             WHERE tenant_id=$1 AND contract_id=$2
+               AND period_from=$3::date AND period_to=$4::date`,
+            [context.tenantId,contract.id,target.from,target.to]
+          );
+          statementId=current.rows[0]?.id;
+        }
+        if(!statementId){
+          throw new Error("ROOM_RENTAL_STATEMENT_CREATE_FAILED");
+        }
+
+        let obligationId:string|null=null;
+        if(amount>0n&&contract.counterparty_party_id){
+          const obligation=await client.query<{id:string}>(
+            `INSERT INTO financial_obligation(
+               tenant_id,direction,party_id,source_type,source_id,
+               currency,amount_minor,due_at
+             ) VALUES(
+               $1,'PAYABLE',$2,'DANCE_ROOM_RENT_STATEMENT',$3,$4,$5,
+               ($6::date + make_interval(days=>$7::int))
+             )
+             ON CONFLICT(tenant_id,direction,source_type,source_id)
+             DO UPDATE SET
+               party_id=EXCLUDED.party_id,
+               currency=EXCLUDED.currency,
+               amount_minor=EXCLUDED.amount_minor,
+               due_at=EXCLUDED.due_at,
+               updated_at=now()
+             WHERE financial_obligation.status IN ('OPEN','PARTIALLY_SETTLED')
+             RETURNING id`,
+            [
+              context.tenantId,contract.counterparty_party_id,statementId,
+              contract.currency,amount.toString(),target.to,
+              contract.payment_term_days
+            ]
+          );
+          obligationId=obligation.rows[0]?.id??null;
+          if(!obligationId){
+            const existing=await client.query<{id:string}>(
+              `SELECT id FROM financial_obligation
+               WHERE tenant_id=$1 AND direction='PAYABLE'
+                 AND source_type='DANCE_ROOM_RENT_STATEMENT'
+                 AND source_id=$2`,
+              [context.tenantId,statementId]
+            );
+            obligationId=existing.rows[0]?.id??null;
+          }
+        }
+
+        await client.query(
+          `UPDATE room_rental_statement
+           SET status='FINALIZED',obligation_id=$3,
+               finalized_at=now(),finalized_by_membership_id=$4,
+               updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status='DRAFT'`,
+          [context.tenantId,statementId,obligationId,context.membershipId]
+        );
+
+        await this.audit(
+          client,context,"dance.room_rental_statement_finalized",
+          "room_rental_statement",statementId,{
+            contractId:contract.id,
+            month:target.month,
+            amountMinor:amount.toString(),
+            obligationId
+          }
+        );
+
+        statements.push({
+          id:statementId,
+          contractId:contract.id,
+          amountMinor:amount.toString(),
+          lessonCount,
+          obligationId,
+          reused:false
+        });
+      }
+
+      return {month:target.month,statements};
+    });
+  }
+
   async completeLesson(context:TenantContext,lessonId:string){
     const scopeIds=await this.scopeIds(context,"dance.write");
     return this.database.withTenantTransaction(context,async client=>{
