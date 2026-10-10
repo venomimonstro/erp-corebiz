@@ -105,11 +105,11 @@ export class DanceStudioService {
       const groupHealth = await client.query(
         `SELECT
            g.id,g.name,g.capacity,g.break_even_members,
-           count(gm.id) FILTER (
+           count(DISTINCT gm.id) FILTER (
              WHERE gm.status IN ('TRIAL','ACTIVE','PAUSED')
                AND gm.reserved_place
            )::integer AS members,
-           count(w.id) FILTER (WHERE w.status='WAITING')::integer AS waitlist
+           count(DISTINCT w.id) FILTER (WHERE w.status='WAITING')::integer AS waitlist
          FROM dance_group g
          LEFT JOIN service_resource tr
            ON tr.tenant_id=g.tenant_id AND tr.id=g.trainer_resource_id
@@ -642,10 +642,10 @@ export class DanceStudioService {
            g.room_resource_id,rr.name AS room_name,g.capacity,
            g.break_even_members,g.status,g.starts_on,g.ends_on,g.schedule,
            g.version,
-           count(gm.id) FILTER (
+           count(DISTINCT gm.id) FILTER (
              WHERE gm.status IN ('TRIAL','ACTIVE','PAUSED') AND gm.reserved_place
            )::integer AS members,
-           count(w.id) FILTER (WHERE w.status='WAITING')::integer AS waitlist
+           count(DISTINCT w.id) FILTER (WHERE w.status='WAITING')::integer AS waitlist
          FROM dance_group g
          JOIN dance_program p
            ON p.tenant_id=g.tenant_id AND p.id=g.program_id
