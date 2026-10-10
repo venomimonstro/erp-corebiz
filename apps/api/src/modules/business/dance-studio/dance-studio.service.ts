@@ -876,6 +876,17 @@ export class DanceStudioService {
           client,context.tenantId,input.packageId,participant.id,
           student.party_id,lesson
         );
+      } else if (BigInt(charge) > 0n) {
+        const payerId=await this.defaultPayer(
+          client,context.tenantId,student.party_id
+        );
+        await this.createLessonChargeTx(client,context,{
+          studentId:input.studentId,
+          payerPartyId:payerId,
+          lessonId,
+          amountMinor:charge,
+          dueAt:new Date(lesson.starts_at)
+        });
       }
 
       return participant;
@@ -1172,6 +1183,103 @@ export class DanceStudioService {
     return row;
   }
 
+  private async defaultPayer(
+    client:PoolClient,
+    tenantId:string,
+    studentPartyId:string
+  ):Promise<string>{
+    const result=await client.query<{id:string}>(
+      `SELECT p.id
+       FROM party_relationship r
+       JOIN party p
+         ON p.tenant_id=r.tenant_id AND p.id=r.to_party_id
+       WHERE r.tenant_id=$1 AND r.from_party_id=$2
+         AND r.relation_type='PAYER'
+         AND (r.ends_on IS NULL OR r.ends_on>=current_date)
+       ORDER BY r.is_primary DESC,r.created_at
+       LIMIT 1`,
+      [tenantId,studentPartyId]
+    );
+    return result.rows[0]?.id??studentPartyId;
+  }
+
+  private async createLessonChargeTx(
+    client:PoolClient,
+    context:TenantContext,
+    input:{
+      studentId:string;
+      payerPartyId:string;
+      lessonId:string;
+      amountMinor:string;
+      dueAt:Date;
+    }
+  ):Promise<void>{
+    const existing=await client.query(
+      `SELECT id FROM dance_student_charge
+       WHERE tenant_id=$1 AND student_id=$2
+         AND source_type='LESSON' AND source_id=$3
+         AND status<>'CANCELLED'`,
+      [context.tenantId,input.studentId,input.lessonId]
+    );
+    if(existing.rowCount) return;
+
+    const charge=await client.query<{id:string}>(
+      `INSERT INTO dance_student_charge(
+         tenant_id,student_id,payer_party_id,source_type,source_id,
+         currency,amount_minor,due_at,created_by_membership_id
+       ) VALUES($1,$2,$3,'LESSON',$4,'RUB',$5,$6,$7)
+       RETURNING id`,
+      [
+        context.tenantId,input.studentId,input.payerPartyId,input.lessonId,
+        input.amountMinor,input.dueAt,context.membershipId
+      ]
+    );
+    const chargeId=charge.rows[0]?.id;
+    if(!chargeId) throw new Error("DANCE_LESSON_CHARGE_CREATE_FAILED");
+
+    const obligation=await client.query<{id:string}>(
+      `INSERT INTO financial_obligation(
+         tenant_id,direction,party_id,source_type,source_id,
+         currency,amount_minor,due_at
+       ) VALUES(
+         $1,'RECEIVABLE',$2,'DANCE_STUDENT_CHARGE',$3,'RUB',$4,$5
+       )
+       RETURNING id`,
+      [
+        context.tenantId,input.payerPartyId,chargeId,
+        input.amountMinor,input.dueAt
+      ]
+    );
+    const obligationId=obligation.rows[0]?.id;
+    if(!obligationId) throw new Error("DANCE_LESSON_OBLIGATION_CREATE_FAILED");
+
+    const number=await this.nextNumber(
+      client,context.tenantId,"finance_invoice","INV"
+    );
+    const invoice=await client.query<{id:string}>(
+      `INSERT INTO finance_invoice(
+         tenant_id,business_number,party_id,source_type,source_id,
+         obligation_id,currency,amount_minor,due_at,created_by_membership_id
+       ) VALUES(
+         $1,$2,$3,'DANCE_STUDENT_CHARGE',$4,$5,'RUB',$6,$7,$8
+       )
+       RETURNING id`,
+      [
+        context.tenantId,number,input.payerPartyId,chargeId,obligationId,
+        input.amountMinor,input.dueAt,context.membershipId
+      ]
+    );
+    const invoiceId=invoice.rows[0]?.id;
+    if(!invoiceId) throw new Error("DANCE_LESSON_INVOICE_CREATE_FAILED");
+
+    await client.query(
+      `UPDATE dance_student_charge
+       SET obligation_id=$3,invoice_id=$4,updated_at=now()
+       WHERE tenant_id=$1 AND id=$2`,
+      [context.tenantId,chargeId,obligationId,invoiceId]
+    );
+  }
+
   private async reserveDancePackage(
     client:PoolClient,
     tenantId:string,
@@ -1246,7 +1354,9 @@ export class DanceStudioService {
   ):Promise<any>{
     const result=await client.query(
       `SELECT
-         l.*,g.program_id,p.service_id,p.default_duration_minutes,
+         l.*,g.program_id,
+         coalesce(p.service_id,b.service_id) AS service_id,
+         p.default_duration_minutes,
          tr.membership_id AS trainer_membership_id
        FROM dance_lesson l
        LEFT JOIN dance_group g
