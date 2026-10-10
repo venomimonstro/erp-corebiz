@@ -716,6 +716,18 @@ export class DashboardService {
         ),
         client.query<{ count: string }>(
           `SELECT count(*)::text AS count
+           FROM service_catalog_item
+           WHERE tenant_id=$1 AND status='ACTIVE'`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM channel_connection
+           WHERE tenant_id=$1 AND status='ACTIVE'`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
            FROM wms_task
            WHERE tenant_id=$1
              AND status IN ('READY','ASSIGNED','IN_PROGRESS','DONE')`,
@@ -737,8 +749,10 @@ export class DashboardService {
         order: Number(counts[3].rows[0]?.count ?? "0"),
         booking: Number(counts[4].rows[0]?.count ?? "0"),
         site: Number(counts[5].rows[0]?.count ?? "0"),
-        wmsTask: Number(counts[6].rows[0]?.count ?? "0"),
-        migration: Number(counts[7].rows[0]?.count ?? "0")
+        service: Number(counts[6].rows[0]?.count ?? "0"),
+        channel: Number(counts[7].rows[0]?.count ?? "0"),
+        wmsTask: Number(counts[8].rows[0]?.count ?? "0"),
+        migration: Number(counts[9].rows[0]?.count ?? "0")
       };
 
       const definitions: Record<string, Array<{
@@ -761,8 +775,8 @@ export class DashboardService {
             key: "product",
             title: "Добавьте товар или услугу",
             detail: "Каталог нужен для заказов, себестоимости и аналитики.",
-            href: "/app/catalog/products",
-            done: values.product > 0
+            href: "/app/service",
+            done: values.service > 0
           },
           {
             key: "first-operation",
@@ -809,8 +823,8 @@ export class DashboardService {
             key: "site-channel",
             title: "Подключите канал продаж или опубликуйте сайт",
             detail: "Можно начать с собственного магазина, Ozon или Wildberries.",
-            href: values.site > 0 ? "/app/channels" : "/app/sites",
-            done: values.site > 0
+            href: values.site > 0 || values.channel === 0 ? "/app/channels" : "/app/sites",
+            done: values.site > 0 || values.channel > 0
           },
           {
             key: "order",
