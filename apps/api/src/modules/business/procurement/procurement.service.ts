@@ -41,6 +41,10 @@ export class ProcurementService {
     phone: string | null;
     email: string | null;
   }>> {
+    const scopedMembershipIds = await this.procurementScope(
+      context,
+      "procurement.read"
+    );
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query<{
         id: string;
@@ -70,6 +74,10 @@ export class ProcurementService {
          FROM party p
          WHERE p.tenant_id = $1
            AND p.status = 'ACTIVE'
+           AND (
+             $2::uuid[] IS NULL
+             OR p.responsible_membership_id = ANY($2::uuid[])
+           )
            AND EXISTS (
              SELECT 1 FROM party_role r
              WHERE r.party_id = p.id
@@ -77,7 +85,7 @@ export class ProcurementService {
                AND r.role = 'SUPPLIER'
            )
          ORDER BY p.display_name`,
-        [context.tenantId]
+        [context.tenantId, scopedMembershipIds]
       );
 
       return result.rows.map((row) => ({
@@ -98,6 +106,7 @@ export class ProcurementService {
       email?: string;
     }
   ): Promise<{ id: string; displayName: string }> {
+    await this.procurementScope(context, "procurement.write");
     const displayName = input.displayName.trim();
 
     if (displayName.length < 2 || displayName.length > 200) {
@@ -169,6 +178,10 @@ export class ProcurementService {
     inventoryOwnerType: string;
     version: number;
   }>> {
+    const scopedMembershipIds = await this.procurementScope(
+      context,
+      "procurement.read"
+    );
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query<{
         id: string;
@@ -203,9 +216,13 @@ export class ProcurementService {
            ON p.tenant_id = po.tenant_id
           AND p.id = po.supplier_party_id
          WHERE po.tenant_id = $1
+           AND (
+             $2::uuid[] IS NULL
+             OR po.responsible_membership_id = ANY($2::uuid[])
+           )
          ORDER BY po.created_at DESC
          LIMIT 500`,
-        [context.tenantId]
+        [context.tenantId, scopedMembershipIds]
       );
 
       return result.rows.map((row) => ({
@@ -236,6 +253,10 @@ export class ProcurementService {
       lines: PurchaseLineInput[];
     }
   ): Promise<{ id: string; number: string; version: number }> {
+    const scopedMembershipIds = await this.procurementScope(
+      context,
+      "procurement.write"
+    );
     if (!input.lines?.length) {
       throw new BadRequestException("Добавьте хотя бы одну позицию");
     }
@@ -256,7 +277,8 @@ export class ProcurementService {
       await this.assertSupplier(
         client,
         context.tenantId,
-        input.supplierPartyId
+        input.supplierPartyId,
+        scopedMembershipIds
       );
 
       if (input.destinationBranchId) {
@@ -457,6 +479,10 @@ export class ProcurementService {
     orderId: string,
     version: number
   ): Promise<{ id: string; status: string; version: number }> {
+    const scopedMembershipIds = await this.procurementScope(
+      context,
+      "procurement.write"
+    );
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query<{
         id: string;
@@ -472,8 +498,12 @@ export class ProcurementService {
            AND id = $2
            AND version = $3
            AND status = 'DRAFT'
+           AND (
+             $4::uuid[] IS NULL
+             OR responsible_membership_id = ANY($4::uuid[])
+           )
          RETURNING id, status, version`,
-        [context.tenantId, orderId, version]
+        [context.tenantId, orderId, version, scopedMembershipIds]
       );
 
       const order = result.rows[0];
@@ -521,11 +551,20 @@ export class ProcurementService {
     remainingQuantityMilli: string;
     unitCostMinor: string;
   }>> {
+    const scopedMembershipIds = await this.procurementScope(
+      context,
+      "procurement.read"
+    );
     return this.database.withTenantTransaction(context, async (client) => {
       const order = await client.query(
         `SELECT 1 FROM purchase_order
-         WHERE tenant_id = $1 AND id = $2`,
-        [context.tenantId, orderId]
+         WHERE tenant_id=$1
+           AND id=$2
+           AND (
+             $3::uuid[] IS NULL
+             OR responsible_membership_id = ANY($3::uuid[])
+           )`,
+        [context.tenantId, orderId, scopedMembershipIds]
       );
 
       if (!order.rowCount) throw new NotFoundException("Закупка не найдена");
@@ -868,7 +907,8 @@ export class ProcurementService {
   private async assertSupplier(
     client: PoolClient,
     tenantId: string,
-    partyId: string
+    partyId: string,
+    scopedMembershipIds: string[] | null
   ): Promise<void> {
     const result = await client.query(
       `SELECT 1
@@ -876,13 +916,17 @@ export class ProcurementService {
        WHERE p.tenant_id = $1
          AND p.id = $2
          AND p.status = 'ACTIVE'
+         AND (
+           $3::uuid[] IS NULL
+           OR p.responsible_membership_id = ANY($3::uuid[])
+         )
          AND EXISTS (
            SELECT 1 FROM party_role r
            WHERE r.tenant_id = p.tenant_id
              AND r.party_id = p.id
              AND r.role = 'SUPPLIER'
          )`,
-      [tenantId, partyId]
+      [tenantId, partyId, scopedMembershipIds]
     );
 
     if (!result.rowCount) {
