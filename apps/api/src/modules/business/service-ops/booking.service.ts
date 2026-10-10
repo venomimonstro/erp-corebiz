@@ -276,6 +276,267 @@ export class BookingService {
     });
   }
 
+  async assets(
+    context: TenantContext,
+    partyId?: string
+  ): Promise<Array<Record<string, unknown>>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `SELECT
+           a.id,a.party_id,a.asset_type,a.display_name,a.external_key,
+           a.registration_number,a.manufacturer,a.model,a.production_year,
+           a.usage_value::text,a.usage_unit,a.status,a.metadata,
+           a.created_at,a.updated_at,
+           p.display_name AS party_name,
+           (
+             SELECT max(b.starts_at)
+             FROM service_booking b
+             WHERE b.tenant_id=a.tenant_id
+               AND b.asset_id=a.id
+               AND b.status='COMPLETED'
+           ) AS last_service_at
+         FROM service_asset a
+         LEFT JOIN party p
+           ON p.tenant_id=a.tenant_id AND p.id=a.party_id
+         WHERE a.tenant_id=$1
+           AND a.status='ACTIVE'
+           AND ($2::uuid IS NULL OR a.party_id=$2)
+         ORDER BY a.updated_at DESC,a.display_name
+         LIMIT 500`,
+        [context.tenantId, partyId ?? null]
+      );
+      return result.rows;
+    });
+  }
+
+  async createAsset(
+    context: TenantContext,
+    input: {
+      partyId?: string;
+      assetType?: "VEHICLE" | "EQUIPMENT" | "DEVICE" | "OTHER";
+      displayName: string;
+      externalKey?: string;
+      registrationNumber?: string;
+      manufacturer?: string;
+      model?: string;
+      productionYear?: number;
+      usageValue?: string | number;
+      usageUnit?: "KM" | "HOURS" | "CYCLES" | "UNIT";
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<{ id: string }> {
+    const displayName = input.displayName?.trim();
+    if (!displayName || displayName.length > 180) {
+      throw new BadRequestException("Некорректное название объекта");
+    }
+
+    const assetType = input.assetType ?? "OTHER";
+    if (!["VEHICLE","EQUIPMENT","DEVICE","OTHER"].includes(assetType)) {
+      throw new BadRequestException("Некорректный тип объекта");
+    }
+
+    const productionYear = input.productionYear;
+    if (
+      productionYear !== undefined &&
+      (!Number.isInteger(productionYear) ||
+        productionYear < 1886 ||
+        productionYear > 2200)
+    ) {
+      throw new BadRequestException("Некорректный год выпуска");
+    }
+
+    const usageValue = String(input.usageValue ?? "0");
+    if (!/^\d+$/.test(usageValue)) {
+      throw new BadRequestException("Пробег/наработка должны быть неотрицательным целым числом");
+    }
+
+    const usageUnit = input.usageUnit ?? (assetType === "VEHICLE" ? "KM" : "UNIT");
+    if (!["KM","HOURS","CYCLES","UNIT"].includes(usageUnit)) {
+      throw new BadRequestException("Некорректная единица наработки");
+    }
+
+    const externalKey = this.normalizeAssetIdentifier(input.externalKey);
+    const registrationNumber = this.normalizeAssetIdentifier(input.registrationNumber);
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      if (input.partyId) {
+        const party = await client.query(
+          `SELECT 1 FROM party
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId, input.partyId]
+        );
+        if (!party.rowCount) throw new NotFoundException("Клиент не найден");
+      }
+
+      try {
+        const result = await client.query<{ id: string }>(
+          `INSERT INTO service_asset(
+             tenant_id,party_id,asset_type,display_name,external_key,
+             registration_number,manufacturer,model,production_year,
+             usage_value,usage_unit,metadata,created_by_membership_id
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+           RETURNING id`,
+          [
+            context.tenantId,
+            input.partyId ?? null,
+            assetType,
+            displayName,
+            externalKey,
+            registrationNumber,
+            input.manufacturer?.trim() || null,
+            input.model?.trim() || null,
+            productionYear ?? null,
+            usageValue,
+            usageUnit,
+            JSON.stringify(input.metadata ?? {}),
+            context.membershipId
+          ]
+        );
+
+        const row = result.rows[0];
+        if (!row) throw new Error("SERVICE_ASSET_CREATE_FAILED");
+
+        await client.query(
+          `INSERT INTO audit_event(
+             tenant_id,actor_user_id,actor_membership_id,
+             action,resource_type,resource_id,after_data
+           ) VALUES ($1,$2,$3,'service.asset_created','service_asset',$4,$5)`,
+          [
+            context.tenantId,
+            context.userId,
+            context.membershipId,
+            row.id,
+            JSON.stringify({
+              assetType,
+              partyId: input.partyId ?? null,
+              externalKey,
+              registrationNumber
+            })
+          ]
+        );
+
+        return row;
+      } catch (error) {
+        if (this.isUniqueViolation(error)) {
+          throw new ConflictException(
+            "Объект с таким VIN/серийным номером уже существует"
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  async updateAssetUsage(
+    context: TenantContext,
+    assetId: string,
+    input: { usageValue: string | number; usageUnit?: "KM" | "HOURS" | "CYCLES" | "UNIT" }
+  ): Promise<{ usageValue: string; usageUnit: string }> {
+    const usageValue = String(input.usageValue);
+    if (!/^\d+$/.test(usageValue)) {
+      throw new BadRequestException("Пробег/наработка должны быть неотрицательным целым числом");
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const current = await client.query<{
+        usage_value: string;
+        usage_unit: string;
+      }>(
+        `SELECT usage_value::text,usage_unit
+         FROM service_asset
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+         FOR UPDATE`,
+        [context.tenantId, assetId]
+      );
+      const row = current.rows[0];
+      if (!row) throw new NotFoundException("Объект обслуживания не найден");
+
+      const usageUnit = input.usageUnit ?? row.usage_unit;
+      if (!["KM","HOURS","CYCLES","UNIT"].includes(usageUnit)) {
+        throw new BadRequestException("Некорректная единица наработки");
+      }
+      if (usageUnit !== row.usage_unit && BigInt(row.usage_value) > 0n) {
+        throw new BadRequestException(
+          "Нельзя менять единицу наработки после начала учёта"
+        );
+      }
+      if (BigInt(usageValue) < BigInt(row.usage_value)) {
+        throw new ConflictException(
+          "Пробег/наработка не могут уменьшаться. Исправление истории выполняется отдельно."
+        );
+      }
+
+      await client.query(
+        `UPDATE service_asset
+         SET usage_value=$3,usage_unit=$4,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId, assetId, usageValue, usageUnit]
+      );
+
+      await client.query(
+        `INSERT INTO audit_event(
+           tenant_id,actor_user_id,actor_membership_id,
+           action,resource_type,resource_id,before_data,after_data
+         ) VALUES ($1,$2,$3,'service.asset_usage_updated','service_asset',$4,$5,$6)`,
+        [
+          context.tenantId,
+          context.userId,
+          context.membershipId,
+          assetId,
+          JSON.stringify({
+            usageValue: row.usage_value,
+            usageUnit: row.usage_unit
+          }),
+          JSON.stringify({ usageValue, usageUnit })
+        ]
+      );
+
+      return { usageValue, usageUnit };
+    });
+  }
+
+  async assetHistory(
+    context: TenantContext,
+    assetId: string
+  ): Promise<Record<string, unknown>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const asset = await client.query(
+        `SELECT
+           a.id,a.party_id,a.asset_type,a.display_name,a.external_key,
+           a.registration_number,a.manufacturer,a.model,a.production_year,
+           a.usage_value::text,a.usage_unit,a.status,a.metadata,
+           p.display_name AS party_name
+         FROM service_asset a
+         LEFT JOIN party p
+           ON p.tenant_id=a.tenant_id AND p.id=a.party_id
+         WHERE a.tenant_id=$1 AND a.id=$2`,
+        [context.tenantId, assetId]
+      );
+      if (!asset.rows[0]) {
+        throw new NotFoundException("Объект обслуживания не найден");
+      }
+
+      const history = await client.query(
+        `SELECT
+           b.id,b.business_number,b.status,b.starts_at,b.ends_at,
+           b.price_minor_snapshot::text,b.currency,b.notes,
+           s.name AS service_name
+         FROM service_booking b
+         JOIN service_catalog_item s
+           ON s.tenant_id=b.tenant_id AND s.id=b.service_id
+         WHERE b.tenant_id=$1 AND b.asset_id=$2
+         ORDER BY b.starts_at DESC
+         LIMIT 500`,
+        [context.tenantId, assetId]
+      );
+
+      return {
+        asset: asset.rows[0],
+        bookings: history.rows
+      };
+    });
+  }
+
   async bookings(
     context: TenantContext,
     from?: string,
@@ -300,6 +561,15 @@ export class BookingService {
            b.currency, b.version, b.notes,
            p.display_name AS party_name,
            s.name AS service_name,
+           CASE WHEN a.id IS NULL THEN NULL ELSE json_build_object(
+             'id',a.id,
+             'assetType',a.asset_type,
+             'displayName',a.display_name,
+             'externalKey',a.external_key,
+             'registrationNumber',a.registration_number,
+             'usageValue',a.usage_value::text,
+             'usageUnit',a.usage_unit
+           ) END AS asset,
            COALESCE(
              json_agg(
                json_build_object(
@@ -316,6 +586,8 @@ export class BookingService {
            ON s.tenant_id = b.tenant_id AND s.id = b.service_id
          LEFT JOIN party p
            ON p.tenant_id = b.tenant_id AND p.id = b.party_id
+         LEFT JOIN service_asset a
+           ON a.tenant_id=b.tenant_id AND a.id=b.asset_id
          LEFT JOIN service_booking_resource br
            ON br.tenant_id = b.tenant_id AND br.booking_id = b.id
          LEFT JOIN service_resource r
@@ -323,7 +595,7 @@ export class BookingService {
          WHERE b.tenant_id = $1
            AND b.starts_at < $3
            AND b.ends_at > $2
-         GROUP BY b.id, p.display_name, s.name
+         GROUP BY b.id, p.display_name, s.name, a.id
          ORDER BY b.starts_at`,
         [context.tenantId, fromDate, toDate]
       );
@@ -336,17 +608,25 @@ export class BookingService {
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `SELECT b.id,b.business_number,b.status,b.source,b.starts_at,b.ends_at,
-                b.price_minor_snapshot::text,b.currency,b.version,b.notes,b.party_id,
+                b.price_minor_snapshot::text,b.currency,b.version,b.notes,b.party_id,b.asset_id,
                 p.display_name AS party_name,s.name AS service_name,
+                CASE WHEN a.id IS NULL THEN NULL ELSE json_build_object(
+                  'id',a.id,'assetType',a.asset_type,'displayName',a.display_name,
+                  'externalKey',a.external_key,'registrationNumber',a.registration_number,
+                  'manufacturer',a.manufacturer,'model',a.model,
+                  'productionYear',a.production_year,
+                  'usageValue',a.usage_value::text,'usageUnit',a.usage_unit
+                ) END AS asset,
                 COALESCE(json_agg(json_build_object('resourceId',r.id,'resourceName',r.name,'type',r.type))
                   FILTER (WHERE r.id IS NOT NULL),'[]'::json) AS resources
          FROM service_booking b
          JOIN service_catalog_item s ON s.tenant_id=b.tenant_id AND s.id=b.service_id
          LEFT JOIN party p ON p.tenant_id=b.tenant_id AND p.id=b.party_id
+         LEFT JOIN service_asset a ON a.tenant_id=b.tenant_id AND a.id=b.asset_id
          LEFT JOIN service_booking_resource br ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
          LEFT JOIN service_resource r ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
          WHERE b.tenant_id=$1 AND b.id=$2
-         GROUP BY b.id,p.display_name,s.name`,
+         GROUP BY b.id,p.display_name,s.name,a.id`,
         [context.tenantId, bookingId]
       );
       if (!result.rows[0]) throw new NotFoundException("Запись не найдена");
@@ -361,6 +641,7 @@ export class BookingService {
       resourceIds: string[];
       startsAt: string;
       partyId?: string;
+      assetId?: string;
       branchId?: string;
       notes?: string;
       source?: "MANUAL" | "PUBLIC_SITE" | "PHONE" | "API" | "IMPORT";
@@ -404,11 +685,38 @@ export class BookingService {
         startsAt.getTime() + service.duration_minutes * 60000
       );
 
-      if (input.partyId) {
+      let effectivePartyId = input.partyId ?? null;
+      if (input.assetId) {
+        const asset = await client.query<{
+          party_id: string | null;
+        }>(
+          `SELECT party_id
+           FROM service_asset
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+           FOR SHARE`,
+          [context.tenantId, input.assetId]
+        );
+        const assetRow = asset.rows[0];
+        if (!assetRow) {
+          throw new NotFoundException("Объект обслуживания не найден");
+        }
+        if (
+          effectivePartyId &&
+          assetRow.party_id &&
+          assetRow.party_id !== effectivePartyId
+        ) {
+          throw new ConflictException(
+            "Объект обслуживания принадлежит другому клиенту"
+          );
+        }
+        effectivePartyId = effectivePartyId ?? assetRow.party_id;
+      }
+
+      if (effectivePartyId) {
         const party = await client.query(
           `SELECT 1 FROM party
            WHERE tenant_id = $1 AND id = $2 AND status = 'ACTIVE'`,
-          [context.tenantId, input.partyId]
+          [context.tenantId, effectivePartyId]
         );
         if (!party.rowCount) throw new NotFoundException("Клиент не найден");
       }
@@ -458,7 +766,7 @@ export class BookingService {
         version: number;
       }>(
         `INSERT INTO service_booking(
-           tenant_id, business_number, party_id, service_id, branch_id,
+           tenant_id, business_number, party_id, asset_id, service_id, branch_id,
            status, source, starts_at, ends_at,
            price_minor_snapshot, currency,
            duration_minutes_snapshot,
@@ -466,13 +774,14 @@ export class BookingService {
            buffer_after_minutes_snapshot,
            notes, idempotency_key, created_by_membership_id
          ) VALUES (
-           $1,$2,$3,$4,$5,'CONFIRMED',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+           $1,$2,$3,$4,$5,$6,'CONFIRMED',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
          )
          RETURNING id, business_number, version`,
         [
           context.tenantId,
           number,
-          input.partyId ?? null,
+          effectivePartyId,
+          input.assetId ?? null,
           input.serviceId,
           input.branchId ?? null,
           input.source ?? "MANUAL",
@@ -508,7 +817,7 @@ export class BookingService {
       }
 
       await this.attribution.recordConversion(client, context, {
-        partyId: input.partyId ?? null,
+        partyId: effectivePartyId,
         sourceType: "SERVICE_BOOKING",
         sourceId: booking.id,
         conversionType: "BOOKING",
@@ -530,7 +839,8 @@ export class BookingService {
           serviceId: input.serviceId,
           startsAt: startsAt.toISOString(),
           endsAt: endsAt.toISOString(),
-          partyId: input.partyId ?? null,
+          partyId: effectivePartyId,
+          assetId: input.assetId ?? null,
           resourceIds
         }
       });
@@ -551,12 +861,13 @@ export class BookingService {
     await this.database.withTenantTransaction(context, async (client) => {
       const booking = await client.query<{
         party_id: string | null;
+        asset_id: string | null;
         service_id: string;
         starts_at: Date;
         created_at: Date;
         currency: string;
       }>(
-        `SELECT party_id,service_id,starts_at,created_at,currency
+        `SELECT party_id,asset_id,service_id,starts_at,created_at,currency
          FROM service_booking
          WHERE tenant_id=$1 AND id=$2
          FOR UPDATE`,
@@ -577,6 +888,20 @@ export class BookingService {
         throw new ConflictException(
           "К записи уже привязан другой клиент"
         );
+      }
+
+      if (row.asset_id) {
+        const asset = await client.query<{ party_id: string | null }>(
+          `SELECT party_id FROM service_asset
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId, row.asset_id]
+        );
+        const assetPartyId = asset.rows[0]?.party_id ?? null;
+        if (assetPartyId && assetPartyId !== partyId) {
+          throw new ConflictException(
+            "Объект обслуживания принадлежит другому клиенту"
+          );
+        }
       }
 
       if (!row.party_id) {
@@ -1059,6 +1384,15 @@ export class BookingService {
     const sequence = BigInt(counter.rows[0]?.value ?? "0");
     const year = new Date().getUTCFullYear();
     return `${prefix}-${year}-${sequence.toString().padStart(6, "0")}`;
+  }
+
+  private normalizeAssetIdentifier(value?: string): string | null {
+    const normalized = value?.trim().toUpperCase().replace(/\s+/g, "") ?? "";
+    if (!normalized) return null;
+    if (normalized.length > 80) {
+      throw new BadRequestException("Идентификатор объекта слишком длинный");
+    }
+    return normalized;
   }
 
   private isUniqueViolation(error: unknown): boolean {
