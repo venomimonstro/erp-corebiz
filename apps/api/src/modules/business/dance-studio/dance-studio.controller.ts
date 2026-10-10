@@ -267,6 +267,21 @@ export class DanceStudioController {
     };
   }
 
+  @Post("packages/:packageId/beneficiaries")
+  @RequirePermission("dance.write")
+  async packageBeneficiary(
+    @Req() req:AuthenticatedRequest,
+    @Param("packageId") packageId:string,
+    @Body() body:{studentId:string}
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.studio.addPackageBeneficiary(
+        this.ctx(req),packageId,body
+      )
+    };
+  }
+
   @Post("packages/:packageId/freeze")
   @RequirePermission("dance.write")
   async freeze(
