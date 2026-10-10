@@ -119,6 +119,18 @@ export class DanceStudioController {
     return {ok:true,data:await this.studio.createGroup(this.ctx(req),body)};
   }
 
+  @Get("groups/:groupId/members")
+  @RequirePermission("dance.read")
+  async groupMembers(
+    @Req() req:AuthenticatedRequest,
+    @Param("groupId") groupId:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.studio.groupMembers(this.ctx(req),groupId)
+    };
+  }
+
   @Post("groups/:groupId/members")
   @RequirePermission("dance.write")
   async addGroupMember(
@@ -320,6 +332,21 @@ export class DanceStudioController {
     return {
       ok:true,
       data:await this.economics.createCompensationPlan(this.ctx(req),body)
+    };
+  }
+
+  @Get("compensation-accruals")
+  @RequirePermission("dance.read")
+  async compensationAccruals(
+    @Req() req:AuthenticatedRequest,
+    @Query("from") from?:string,
+    @Query("to") to?:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.economics.compensationAccruals(
+        this.ctx(req),{from,to}
+      )
     };
   }
 
