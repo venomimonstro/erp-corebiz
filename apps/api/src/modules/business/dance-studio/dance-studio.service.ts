@@ -702,6 +702,83 @@ export class DanceStudioService {
     });
   }
 
+  async changeGroupMemberStatus(
+    context:TenantContext,
+    groupId:string,
+    memberId:string,
+    input:{
+      status:"ACTIVE"|"PAUSED"|"LEFT";
+      keepPlace?:boolean;
+    }
+  ){
+    const scopeIds=await this.scopeIds(context,"dance.write");
+    const result=await this.database.withTenantTransaction(
+      context,
+      async client=>{
+        const group=await this.assertGroupAccess(
+          client,context.tenantId,groupId,scopeIds,true
+        );
+        const memberResult=await client.query<{
+          id:string;student_id:string;status:string;reserved_place:boolean;
+        }>(
+          `SELECT id,student_id,status,reserved_place
+           FROM dance_group_member
+           WHERE tenant_id=$1 AND group_id=$2 AND id=$3
+           FOR UPDATE`,
+          [context.tenantId,groupId,memberId]
+        );
+        const member=memberResult.rows[0];
+        if(!member) throw new NotFoundException("Участник группы не найден");
+
+        const reservedPlace=
+          input.status==="ACTIVE"
+            ? true
+            : input.status==="PAUSED"
+              ? Boolean(input.keepPlace ?? true)
+              : false;
+        const releasesPlace=member.reserved_place&&!reservedPlace;
+
+        const updated=await client.query(
+          `UPDATE dance_group_member
+           SET status=$4,reserved_place=$5,
+               left_at=CASE WHEN $4='LEFT' THEN now() ELSE NULL END,
+               updated_at=now()
+           WHERE tenant_id=$1 AND group_id=$2 AND id=$3
+           RETURNING id,student_id,status,reserved_place`,
+          [
+            context.tenantId,groupId,memberId,input.status,reservedPlace
+          ]
+        );
+
+        let promoted:null|Record<string,unknown>=null;
+        if(releasesPlace){
+          promoted=await this.promoteGroupWaitlistTx(
+            client,context,group
+          );
+        }
+
+        return {
+          member:updated.rows[0],
+          promoted,
+          removeFuture:input.status!=="ACTIVE"
+        };
+      }
+    );
+
+    if(result.removeFuture){
+      await this.cancelStudentFutureGroupLessons(
+        context,groupId,String((result.member as any).student_id)
+      );
+    }
+
+    await this.syncGroupRoster(context,groupId);
+
+    return {
+      member:result.member,
+      promoted:result.promoted
+    };
+  }
+
   async lessons(
     context: TenantContext,
     input: { from?: string; to?: string }
@@ -1812,10 +1889,11 @@ export class DanceStudioService {
     }
   }
 
-  private async promoteLessonWaitlistTx(
+  private async promoteSpecificWaitlistParticipantTx(
     client:PoolClient,
     context:TenantContext,
-    lesson:any
+    lesson:any,
+    participantId:string
   ):Promise<Record<string,unknown>|null>{
     const occupied=await client.query<{count:number}>(
       `SELECT count(*)::integer AS count
@@ -1831,54 +1909,38 @@ export class DanceStudioService {
       student_id:string;
       package_id:string|null;
       charge_minor:string;
-      price_source:string;
     }>(
-      `SELECT
-         id,student_id,package_id,charge_minor::text,price_source
+      `SELECT id,student_id,package_id,charge_minor::text
        FROM dance_lesson_participant
-       WHERE tenant_id=$1 AND lesson_id=$2 AND status='WAITLIST'
-       ORDER BY created_at,id
-       LIMIT 1
-       FOR UPDATE SKIP LOCKED`,
-      [context.tenantId,lesson.id]
+       WHERE tenant_id=$1 AND lesson_id=$2 AND id=$3 AND status='WAITLIST'
+       FOR UPDATE`,
+      [context.tenantId,lesson.id,participantId]
     );
     const candidate=candidateResult.rows[0];
     if(!candidate) return null;
 
     const student=await client.query<{party_id:string}>(
-      `SELECT party_id FROM dance_student
+      `SELECT party_id
+       FROM dance_student
        WHERE tenant_id=$1 AND id=$2 AND status<>'ARCHIVED'`,
       [context.tenantId,candidate.student_id]
     );
     const studentRow=student.rows[0];
     if(!studentRow) return null;
 
-    if(candidate.package_id){
-      try{
-        await this.reserveDancePackage(
-          client,context.tenantId,candidate.package_id,candidate.id,
-          studentRow.party_id,lesson
-        );
-      }catch(error){
-        if(
-          error instanceof ConflictException ||
-          error instanceof NotFoundException
-        ){
-          return null;
-        }
-        throw error;
-      }
-    }else if(BigInt(candidate.charge_minor)>0n){
-      const payer=await this.defaultPayer(
-        client,context.tenantId,studentRow.party_id
+    try{
+      await this.attachParticipantPaymentTx(
+        client,context,lesson,studentRow.party_id,candidate.student_id,
+        candidate.id,candidate.package_id??undefined,candidate.charge_minor
       );
-      await this.createLessonChargeTx(client,context,{
-        studentId:candidate.student_id,
-        payerPartyId:payer,
-        lessonId:lesson.id,
-        amountMinor:candidate.charge_minor,
-        dueAt:new Date(lesson.starts_at)
-      });
+    }catch(error){
+      if(
+        error instanceof ConflictException ||
+        error instanceof NotFoundException
+      ){
+        return null;
+      }
+      throw error;
     }
 
     const promoted=await client.query(
@@ -1889,6 +1951,121 @@ export class DanceStudioService {
       [context.tenantId,candidate.id]
     );
     return promoted.rows[0]??null;
+  }
+
+  private async promoteGroupWaitlistTx(
+    client:PoolClient,
+    context:TenantContext,
+    group:any
+  ):Promise<Record<string,unknown>|null>{
+    const occupied=await client.query<{count:number}>(
+      `SELECT count(*)::integer AS count
+       FROM dance_group_member
+       WHERE tenant_id=$1 AND group_id=$2
+         AND status IN ('TRIAL','ACTIVE','PAUSED')
+         AND reserved_place`,
+      [context.tenantId,group.id]
+    );
+    if((occupied.rows[0]?.count??0)>=group.capacity) return null;
+
+    const wait=await client.query<{
+      id:string;student_id:string;
+    }>(
+      `SELECT id,student_id
+       FROM dance_group_waitlist
+       WHERE tenant_id=$1 AND group_id=$2 AND status='WAITING'
+       ORDER BY priority,created_at,id
+       LIMIT 1
+       FOR UPDATE SKIP LOCKED`,
+      [context.tenantId,group.id]
+    );
+    const row=wait.rows[0];
+    if(!row) return null;
+
+    const member=await client.query(
+      `INSERT INTO dance_group_member(
+         tenant_id,group_id,student_id,status,reserved_place
+       ) VALUES($1,$2,$3,'ACTIVE',true)
+       ON CONFLICT(tenant_id,group_id,student_id)
+       DO UPDATE SET
+         status='ACTIVE',reserved_place=true,left_at=NULL,updated_at=now()
+       RETURNING id,student_id,status`,
+      [context.tenantId,group.id,row.student_id]
+    );
+
+    await client.query(
+      `UPDATE dance_group_waitlist
+       SET status='ACCEPTED',updated_at=now()
+       WHERE tenant_id=$1 AND id=$2 AND status='WAITING'`,
+      [context.tenantId,row.id]
+    );
+
+    await client.query(
+      `UPDATE dance_student
+       SET status='ACTIVE',joined_at=coalesce(joined_at,now()),updated_at=now()
+       WHERE tenant_id=$1 AND id=$2`,
+      [context.tenantId,row.student_id]
+    );
+
+    return member.rows[0]??null;
+  }
+
+  private async cancelStudentFutureGroupLessons(
+    context:TenantContext,
+    groupId:string,
+    studentId:string
+  ):Promise<void>{
+    const rows=await this.database.withTenantTransaction(
+      context,
+      async client=>{
+        const result=await client.query<{
+          lesson_id:string;participant_id:string;version:number;
+        }>(
+          `SELECT
+             lp.lesson_id,lp.id AS participant_id,lp.version
+           FROM dance_lesson_participant lp
+           JOIN dance_lesson l
+             ON l.tenant_id=lp.tenant_id AND l.id=lp.lesson_id
+           WHERE lp.tenant_id=$1 AND lp.student_id=$2
+             AND l.group_id=$3 AND l.starts_at>now()
+             AND l.status IN ('PLANNED','OPEN_FOR_BOOKING')
+             AND lp.status IN ('BOOKED','WAITLIST')
+           ORDER BY l.starts_at`,
+          [context.tenantId,studentId,groupId]
+        );
+        return result.rows;
+      }
+    );
+
+    for(const row of rows){
+      await this.markAttendance(
+        context,row.lesson_id,row.participant_id,{
+          status:"CANCELLED_IN_TIME",
+          version:row.version
+        }
+      );
+    }
+  }
+
+  private async promoteLessonWaitlistTx(
+    client:PoolClient,
+    context:TenantContext,
+    lesson:any
+  ):Promise<Record<string,unknown>|null>{
+    const candidate=await client.query<{id:string}>(
+      `SELECT id
+       FROM dance_lesson_participant
+       WHERE tenant_id=$1 AND lesson_id=$2 AND status='WAITLIST'
+       ORDER BY created_at,id
+       LIMIT 1
+       FOR UPDATE SKIP LOCKED`,
+      [context.tenantId,lesson.id]
+    );
+    const row=candidate.rows[0];
+    if(!row) return null;
+    return this.promoteSpecificWaitlistParticipantTx(
+      client,context,lesson,row.id
+    );
   }
 
   private async defaultPayer(
