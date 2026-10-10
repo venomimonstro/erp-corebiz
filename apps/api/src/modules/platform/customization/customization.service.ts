@@ -314,32 +314,6 @@ export class CustomizationService {
     context: TenantContext,
     layoutId: string
   ): Promise<void> {
-    if (!Array.isArray(permissions) || permissions.length > 200) {
-      throw new BadRequestException("Некорректный список прав");
-    }
-    const seenPermissions = new Set<string>();
-    const allowedScopes = new Set<PermissionScope>([
-      "own",
-      "team",
-      "branch",
-      "all"
-    ]);
-    for (const permission of permissions) {
-      if (
-        !permission ||
-        typeof permission.code !== "string" ||
-        !allowedScopes.has(permission.scope)
-      ) {
-        throw new BadRequestException("Некорректное право или scope");
-      }
-      const code = permission.code.trim();
-      if (!code || seenPermissions.has(code)) {
-        throw new BadRequestException("Права роли не должны дублироваться");
-      }
-      permission.code = code;
-      seenPermissions.add(code);
-    }
-
     await this.database.withTenantTransaction(context, async (client) => {
       const draft = await client.query<{
         id: string;
@@ -910,6 +884,32 @@ export class CustomizationService {
       scope: PermissionScope;
     }>
   ): Promise<void> {
+    if (!Array.isArray(permissions) || permissions.length > 200) {
+      throw new BadRequestException("Некорректный список прав");
+    }
+    const seenPermissions = new Set<string>();
+    const allowedScopes = new Set<PermissionScope>([
+      "own",
+      "team",
+      "branch",
+      "all"
+    ]);
+    for (const permission of permissions) {
+      if (
+        !permission ||
+        typeof permission.code !== "string" ||
+        !allowedScopes.has(permission.scope)
+      ) {
+        throw new BadRequestException("Некорректное право или scope");
+      }
+      const code = permission.code.trim();
+      if (!code || seenPermissions.has(code)) {
+        throw new BadRequestException("Права роли не должны дублироваться");
+      }
+      permission.code = code;
+      seenPermissions.add(code);
+    }
+
     await this.database.withTenantTransaction(context, async (client) => {
       const role = await client.query<{ is_system: boolean }>(
         `SELECT is_system
