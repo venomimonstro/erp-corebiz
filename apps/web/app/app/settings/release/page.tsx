@@ -13,6 +13,22 @@ type Evidence = {
   executedAt: string;
 };
 
+type Candidate = {
+  id: string;
+  target_version: string;
+  status: string;
+  verdict_snapshot: {
+    readyForApproval?: boolean;
+    evaluatedAt?: string;
+    missing?: Array<{ component: string; kind: string }>;
+    stale?: Array<{ component: string; kind: string; executedAt: string }>;
+    failing?: Array<{ component: string; kind: string; outcome: string }>;
+  };
+  review_reason: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+};
+
 type Overview = {
   ready: boolean;
   summary: {
@@ -38,13 +54,19 @@ const KINDS = [
 
 export default function ReleaseReadinessPage() {
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     setError("");
     try {
-      setOverview(await apiRequest<Overview>("/release/overview"));
+      const [overviewData, candidateRows] = await Promise.all([
+        apiRequest<Overview>("/release/overview"),
+        apiRequest<Candidate[]>("/release/candidates")
+      ]);
+      setOverview(overviewData);
+      setCandidates(candidateRows);
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -57,6 +79,95 @@ export default function ReleaseReadinessPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function createCandidate() {
+    const targetVersion = window.prompt(
+      "Commit SHA / tag / версия release candidate"
+    );
+    if (!targetVersion?.trim()) return;
+
+    setBusy(true);
+    setError("");
+    try {
+      const created = await apiRequest<{ id: string }>(
+        "/release/candidates",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            targetVersion: targetVersion.trim()
+          })
+        }
+      );
+      await apiRequest(
+        "/release/candidates/" + created.id + "/evaluate",
+        { method: "POST" }
+      );
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось создать release candidate"
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function evaluateCandidate(id: string) {
+    setBusy(true);
+    setError("");
+    try {
+      await apiRequest("/release/candidates/" + id + "/evaluate", {
+        method: "POST"
+      });
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось пересчитать verdict"
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reviewCandidate(
+    candidate: Candidate,
+    decision: "APPROVE" | "REJECT"
+  ) {
+    const reason =
+      window.prompt(
+        decision === "APPROVE"
+          ? "Комментарий владельца к approval"
+          : "Причина отклонения"
+      ) ?? "";
+
+    setBusy(true);
+    setError("");
+    try {
+      await apiRequest(
+        "/release/candidates/" + candidate.id + "/review",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            decision,
+            reason: reason.trim() || undefined
+          })
+        }
+      );
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось сохранить решение"
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function addEvidence() {
     const component = (
@@ -140,6 +251,14 @@ export default function ReleaseReadinessPage() {
               onClick={() => void load()}
             >
               Обновить
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={busy}
+              onClick={() => void createCandidate()}
+            >
+              + Release candidate
             </button>
             <button
               type="button"
@@ -243,6 +362,110 @@ export default function ReleaseReadinessPage() {
                 </div>
               </section>
             ) : null}
+
+            <section className="section-block">
+              <div className="section-heading">
+                <div>
+                  <p className="muted">Sprint 70 / Production verdict</p>
+                  <h2>Release candidates</h2>
+                </div>
+              </div>
+
+              <div className="release-grid">
+                {candidates.map((candidate) => {
+                  const verdict = candidate.verdict_snapshot ?? {};
+                  const missing = verdict.missing?.length ?? 0;
+                  const stale = verdict.stale?.length ?? 0;
+                  const failing = verdict.failing?.length ?? 0;
+
+                  return (
+                    <article className="settings-card" key={candidate.id}>
+                      <div className="growth-site-heading">
+                        <div>
+                          <h3>{candidate.target_version}</h3>
+                          <small>
+                            {new Date(candidate.created_at).toLocaleString("ru-RU")}
+                          </small>
+                        </div>
+                        <span className="status-pill">
+                          {candidate.status}
+                        </span>
+                      </div>
+
+                      <dl className="growth-site-meta">
+                        <div><dt>Missing</dt><dd>{missing}</dd></div>
+                        <div><dt>Stale</dt><dd>{stale}</dd></div>
+                        <div><dt>Fail / blocked</dt><dd>{failing}</dd></div>
+                        <div>
+                          <dt>Verdict</dt>
+                          <dd>
+                            {verdict.readyForApproval === true
+                              ? "READY FOR APPROVAL"
+                              : verdict.evaluatedAt
+                                ? "BLOCKED"
+                                : "NOT EVALUATED"}
+                          </dd>
+                        </div>
+                      </dl>
+
+                      {candidate.review_reason ? (
+                        <p className="builder-hint">
+                          Решение: {candidate.review_reason}
+                        </p>
+                      ) : null}
+
+                      <div className="builder-actions">
+                        {!["APPROVED","REJECTED"].includes(candidate.status) ? (
+                          <button
+                            className="secondary-button"
+                            disabled={busy}
+                            onClick={() => void evaluateCandidate(candidate.id)}
+                            type="button"
+                          >
+                            Пересчитать
+                          </button>
+                        ) : null}
+
+                        {candidate.status === "READY_FOR_APPROVAL" ? (
+                          <button
+                            disabled={busy}
+                            onClick={() =>
+                              void reviewCandidate(candidate, "APPROVE")
+                            }
+                            type="button"
+                          >
+                            Approve
+                          </button>
+                        ) : null}
+
+                        {!["APPROVED","REJECTED"].includes(candidate.status) ? (
+                          <button
+                            className="secondary-button"
+                            disabled={busy}
+                            onClick={() =>
+                              void reviewCandidate(candidate, "REJECT")
+                            }
+                            type="button"
+                          >
+                            Reject
+                          </button>
+                        ) : null}
+                      </div>
+                    </article>
+                  );
+                })}
+
+                {!candidates.length ? (
+                  <div className="table-empty">
+                    <strong>Release candidate ещё не создан</strong>
+                    <span>
+                      Укажите commit/tag, соберите evidence именно для него,
+                      затем выполните owner approval.
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            </section>
 
             <section className="section-block">
               <div className="section-heading">
