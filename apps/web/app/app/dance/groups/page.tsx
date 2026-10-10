@@ -100,6 +100,8 @@ type Roster = {
     student_id: string;
     student_name: string;
     status: string;
+    enrollment_status?: string;
+    discount_bps?: number;
   }>;
 };
 
@@ -956,7 +958,13 @@ export default function DanceGroupsPage() {
                     </tr>
                   ))}
                   {roster?.waitlist.map((member) => (
-                    <tr key={"w-" + member.id}><td><strong>{member.student_name}</strong></td><td>WAITLIST</td><td>ожидает место</td><td>—</td><td>Автопереход при освобождении места</td></tr>
+                    <tr key={"w-" + member.id}>
+                      <td><strong>{member.student_name}</strong></td>
+                      <td>WAITLIST → {member.enrollment_status ?? "ACTIVE"}</td>
+                      <td>ожидает место</td>
+                      <td>{((member.discount_bps ?? 0) / 100).toLocaleString("ru-RU")}%</td>
+                      <td>Автопереход при освобождении места</td>
+                    </tr>
                   ))}
                 </tbody>
               </table>
