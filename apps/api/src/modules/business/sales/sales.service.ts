@@ -690,6 +690,38 @@ export class SalesService {
         scopeSql = "AND responsible_membership_id = ANY($4::uuid[])";
       }
 
+      const draft = await client.query<{
+        party_id: string | null;
+        total_minor: string;
+        currency: string;
+        payment_status: string;
+      }>(
+        `SELECT party_id,total_minor::text,currency,payment_status
+         FROM sales_order
+         WHERE tenant_id=$1
+           AND id=$2
+           AND version=$3
+           AND order_status='DRAFT'
+           ${scopeSql}
+         FOR UPDATE`,
+        values
+      );
+      const draftRow = draft.rows[0];
+      if (!draftRow) {
+        throw new ConflictException(
+          "Заказ уже изменён или не может быть подтверждён"
+        );
+      }
+
+      const paymentTermDays = await this.validateCommercialCredit(
+        client,
+        context.tenantId,
+        draftRow.party_id,
+        BigInt(draftRow.total_minor),
+        draftRow.currency,
+        draftRow.payment_status
+      );
+
       const result = await client.query<{
         id: string;
         order_status: string;
@@ -716,7 +748,16 @@ export class SalesService {
         );
       }
 
-      await this.finance.createSalesReceivable(client, context, order.id);
+      const dueAt =
+        paymentTermDays === null
+          ? null
+          : new Date(Date.now() + paymentTermDays * 86400000);
+      await this.finance.createSalesReceivable(
+        client,
+        context,
+        order.id,
+        dueAt
+      );
 
       const confirmedOrder = await client.query<{
         party_id: string | null;
@@ -792,6 +833,65 @@ export class SalesService {
       orderId,
       idempotencyKey
     });
+  }
+
+  private async validateCommercialCredit(
+    client: PoolClient,
+    tenantId: string,
+    partyId: string | null,
+    orderTotalMinor: bigint,
+    orderCurrency: string,
+    paymentStatus: string
+  ): Promise<number | null> {
+    if (!partyId) return null;
+
+    const terms = await client.query<{
+      currency: string;
+      credit_limit_minor: string | null;
+      payment_term_days: number;
+      allow_over_credit: boolean;
+    }>(
+      `SELECT
+         currency,credit_limit_minor::text,payment_term_days,allow_over_credit
+       FROM party_commercial_terms
+       WHERE tenant_id=$1 AND party_id=$2
+       FOR UPDATE`,
+      [tenantId, partyId]
+    );
+    const row = terms.rows[0];
+    if (!row) return null;
+
+    if (row.currency !== orderCurrency) {
+      throw new ConflictException(
+        "Валюта заказа не совпадает с коммерческими условиями клиента"
+      );
+    }
+
+    if (
+      row.credit_limit_minor !== null &&
+      !row.allow_over_credit &&
+      paymentStatus !== "PAID"
+    ) {
+      const exposure = await client.query<{ amount_minor: string }>(
+        `SELECT COALESCE(sum(amount_minor-settled_minor),0)::text AS amount_minor
+         FROM financial_obligation
+         WHERE tenant_id=$1
+           AND party_id=$2
+           AND direction='RECEIVABLE'
+           AND currency=$3
+           AND status IN ('OPEN','PARTIALLY_SETTLED')`,
+        [tenantId, partyId, orderCurrency]
+      );
+      const current = BigInt(exposure.rows[0]?.amount_minor ?? "0");
+      const limit = BigInt(row.credit_limit_minor);
+      if (current + orderTotalMinor > limit) {
+        throw new ConflictException(
+          "Кредитный лимит клиента превышен"
+        );
+      }
+    }
+
+    return row.payment_term_days;
   }
 
   private async prepareLine(
