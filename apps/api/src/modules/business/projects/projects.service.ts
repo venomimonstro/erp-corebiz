@@ -121,10 +121,12 @@ export class ProjectsService {
           `SELECT
              e.id,e.task_id,e.membership_id,e.work_date,e.minutes,e.billable,
              e.hourly_rate_minor_snapshot::text,e.note,e.created_at,
-             m.display_name AS membership_name
+             u.email AS membership_name
            FROM work_project_time_entry e
            JOIN tenant_membership m
              ON m.tenant_id=e.tenant_id AND m.id=e.membership_id
+           JOIN app_user u
+             ON u.id=m.user_id
            WHERE e.tenant_id=$1 AND e.project_id=$2
            ORDER BY e.work_date DESC,e.created_at DESC
            LIMIT 1000`,
@@ -677,7 +679,10 @@ export class ProjectsService {
       throw new BadRequestException("Некорректная " + label);
     }
     const parsed = new Date(value + "T00:00:00Z");
-    if (Number.isNaN(parsed.getTime())) {
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.toISOString().slice(0, 10) !== value
+    ) {
       throw new BadRequestException("Некорректная " + label);
     }
   }
