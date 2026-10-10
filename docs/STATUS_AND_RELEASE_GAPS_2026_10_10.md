@@ -135,10 +135,19 @@ CI/GitHub Actions: не используются по решению владе�
 - regression test добавлен.
 
 ### Release Candidate hardening
-- добавлен verification kind `PERFORMANCE`;
-- RC обязательно требует свежий `CORE:PERFORMANCE=PASS`;
-- RC overview теперь оценивает evidence **только целевой версии**, а не смешивает результаты разных релизов;
-- stale/failing/missing evidence блокируют readiness.
+- RC использует единую матрицу из 16 обязательных evidence;
+- добавлены `RUNTIME_RLS`, `BUSINESS_JOURNEYS`, `NOISY_NEIGHBOR`, `PERFORMANCE`;
+- RC оценивает evidence **только целевой версии**;
+- stale/failing/missing evidence блокируют readiness;
+- approval дополнительно защищён PostgreSQL trigger и не может обойти release gates;
+- verdict старше 4 часов не допускается к approval;
+- новое evidence после evaluate требует повторного evaluate;
+- Release UI показывает точную remediation для каждого blocker;
+- `production-gate.sh` теперь включает реальный backup→restore drill на отдельной disposable DB;
+- runtime noisy-neighbor gate проверяет атомарный Redis semaphore, release и TTL recovery;
+- gate сохраняет machine-readable manifest.
+
+Важно: наличие этих механизмов не означает PASS. Production остаётся **NO-GO**, пока gate не выполнен на disposable/staging окружении и immutable evidence не записано для конкретного release candidate.
 
 ## Что ещё НЕ доказано / НЕ завершено
 
@@ -176,7 +185,7 @@ CI/GitHub Actions: не используются по решению владе�
 ## Следующий порядок
 
 ### Sprint 73 — RC hardening
-Закрыть immutable evidence и runtime acceptance.
+Контроли реализации закрыты. Runtime acceptance остаётся обязательным внешним gate перед pilot/production.
 
 ### Sprint 74 — Pilot rollout / hypercare
 5–10 реальных компаний, разные профили:
