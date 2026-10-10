@@ -34,11 +34,13 @@ async function submit<T>(
 export function PublicSiteForm({
   publicKey,
   heading,
-  booking = false
+  booking = false,
+  danceBooking = false
 }: {
   publicKey: string;
   heading?: string;
   booking?: boolean;
+  danceBooking?: boolean;
 }) {
   // Keep the same submission key after a network timeout: retries
   // must not create a second lead or appointment.
@@ -49,8 +51,19 @@ export function PublicSiteForm({
   const [message, setMessage] = useState("");
   const [startsAt, setStartsAt] = useState("");
   const [bookingDay, setBookingDay] = useState("");
-  const [slots, setSlots] = useState<Array<{resourceId:string;resourceName:string;startsAt:string}>>([]);
+  const [slots, setSlots] = useState<Array<{
+    resourceId:string;
+    resourceName:string;
+    startsAt:string;
+    lessonId?:string;
+    groupName?:string;
+    spotsLeft?:number;
+    waitlist?:number;
+  }>>([]);
   const [resourceId, setResourceId] = useState("");
+  const [lessonId, setLessonId] = useState("");
+  const [childName, setChildName] = useState("");
+  const [childBirthDate, setChildBirthDate] = useState("");
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [honeypot, setHoneypot] = useState("");
   const [busy, setBusy] = useState(false);
@@ -74,7 +87,15 @@ export function PublicSiteForm({
     try {
       const query=new URLSearchParams({from:from.toISOString(),to:to.toISOString()});
       const response=await fetch(API_URL+"/site-forms/availability/"+encodeURIComponent(publicKey)+"?"+query);
-      const data=await response.json() as ApiResponse<Array<{resourceId:string;resourceName:string;startsAt:string}>>;
+      const data=await response.json() as ApiResponse<Array<{
+        resourceId:string;
+        resourceName:string;
+        startsAt:string;
+        lessonId?:string;
+        groupName?:string;
+        spotsLeft?:number;
+        waitlist?:number;
+      }>>;
       if(!response.ok || !data.ok) throw new Error(!data.ok?data.error.message:"Расписание недоступно");
       setSlots(data.data);
     } catch (cause) {
@@ -100,8 +121,11 @@ export function PublicSiteForm({
         phone: phone.trim() || undefined,
         email: email.trim() || undefined,
         message: message.trim() || undefined,
-        startsAt: booking && startsAt ? startsAt : undefined,
-        resourceId: booking ? resourceId : undefined,
+        startsAt: booking && !danceBooking && startsAt ? startsAt : undefined,
+        resourceId: booking && !danceBooking ? resourceId : undefined,
+        childName: danceBooking ? childName.trim() : undefined,
+        childBirthDate: danceBooking ? childBirthDate : undefined,
+        lessonId: danceBooking ? lessonId : undefined,
         honeypot
       });
 
@@ -115,9 +139,11 @@ export function PublicSiteForm({
 
       submissionKey.current = null;
       setSuccess(
-        booking
-          ? "Запись создана. Компания увидит её в расписании."
-          : "Заявка отправлена. Компания увидит её в CRM."
+        danceBooking
+          ? "Ребёнок записан. Если группа заполнена, заявка поставлена в лист ожидания."
+          : booking
+            ? "Запись создана. Компания увидит её в расписании."
+            : "Заявка отправлена. Компания увидит её в CRM."
       );
       setName("");
       setPhone("");
@@ -125,6 +151,9 @@ export function PublicSiteForm({
       setMessage("");
       setStartsAt("");
       setResourceId("");
+      setLessonId("");
+      setChildName("");
+      setChildBirthDate("");
       setSlots([]);
     } catch (cause) {
       setError(
@@ -162,7 +191,7 @@ export function PublicSiteForm({
         {success ? <div className="public-store-success">{success}</div> : null}
 
         <label>
-          <span>Имя *</span>
+          <span>{danceBooking ? "Родитель / плательщик *" : "Имя *"}</span>
           <input
             autoComplete="name"
             value={name}
@@ -190,27 +219,98 @@ export function PublicSiteForm({
           </label>
         </div>
 
+        {danceBooking ? (
+          <div className="public-form-two">
+            <label>
+              <span>Имя ребёнка *</span>
+              <input
+                value={childName}
+                onChange={(event) => setChildName(event.target.value)}
+              />
+            </label>
+            <label>
+              <span>Дата рождения *</span>
+              <input
+                type="date"
+                value={childBirthDate}
+                onChange={(event) => setChildBirthDate(event.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
+
         {booking ? (
           <div>
             <label>
               <span>Дата *</span>
-              <input type="date" value={bookingDay} onChange={(e) => {setBookingDay(e.target.value);setStartsAt("");setResourceId("");setSlots([]);}} />
+              <input
+                type="date"
+                value={bookingDay}
+                onChange={(e) => {
+                  setBookingDay(e.target.value);
+                  setStartsAt("");
+                  setResourceId("");
+                  setLessonId("");
+                  setSlots([]);
+                }}
+              />
             </label>
             <button type="button" disabled={!bookingDay||loadingSlots} onClick={() => void loadSlots()}>
               {loadingSlots ? "Ищем свободное время…" : "Показать свободное время"}
             </button>
             {slots.length ? (
               <label>
-                <span>Специалист и время *</span>
-                <select value={startsAt+"|"+resourceId} onChange={(e) => {
-                  const [start,resource]=e.target.value.split("|");
-                  setStartsAt(start||"");
-                  setResourceId(resource||"");
-                }}>
-                  <option value="|">Выбрать время</option>
-                  {slots.map((slot) => <option key={slot.resourceId+slot.startsAt} value={slot.startsAt+"|"+slot.resourceId}>
-                    {slot.resourceName} · {new Date(slot.startsAt).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})}
-                  </option>)}
+                <span>{danceBooking ? "Занятие *" : "Специалист и время *"}</span>
+                <select
+                  value={
+                    danceBooking
+                      ? lessonId
+                      : startsAt + "|" + resourceId
+                  }
+                  onChange={(e) => {
+                    if (danceBooking) {
+                      const slot = slots.find(
+                        (item) => item.lessonId === e.target.value
+                      );
+                      setLessonId(e.target.value);
+                      setStartsAt(slot?.startsAt ?? "");
+                      setResourceId(slot?.resourceId ?? "");
+                      return;
+                    }
+                    const [start,resource]=e.target.value.split("|");
+                    setStartsAt(start||"");
+                    setResourceId(resource||"");
+                  }}
+                >
+                  <option value={danceBooking ? "" : "|"}>Выбрать время</option>
+                  {slots.map((slot) => (
+                    <option
+                      key={(slot.lessonId ?? slot.resourceId)+slot.startsAt}
+                      value={
+                        danceBooking
+                          ? slot.lessonId ?? ""
+                          : slot.startsAt+"|"+slot.resourceId
+                      }
+                    >
+                      {danceBooking
+                        ? (slot.groupName ?? "Группа") +
+                          " · " +
+                          new Date(slot.startsAt).toLocaleTimeString(
+                            "ru-RU",
+                            {hour:"2-digit",minute:"2-digit"}
+                          ) +
+                          " · " +
+                          ((slot.spotsLeft ?? 0) > 0
+                            ? "мест: " + slot.spotsLeft
+                            : "лист ожидания")
+                        : slot.resourceName +
+                          " · " +
+                          new Date(slot.startsAt).toLocaleTimeString(
+                            "ru-RU",
+                            {hour:"2-digit",minute:"2-digit"}
+                          )}
+                    </option>
+                  ))}
                 </select>
               </label>
             ) : null}
@@ -242,7 +342,12 @@ export function PublicSiteForm({
             busy ||
             name.trim().length < 2 ||
             (!phone.trim() && !email.trim()) ||
-            (booking && (!startsAt || !resourceId))
+            (booking && !danceBooking && (!startsAt || !resourceId)) ||
+            (danceBooking && (
+              childName.trim().length < 2 ||
+              !childBirthDate ||
+              !lessonId
+            ))
           }
           onClick={() => void send()}
         >
