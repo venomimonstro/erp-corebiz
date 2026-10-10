@@ -39,6 +39,7 @@ import { AuthorizationModule } from "./modules/platform/authorization/authorizat
 import { HealthModule } from "./modules/platform/health/health.module";
 import { GoLiveModule } from "./modules/platform/go-live/go-live.module";
 import { ReleaseVerificationModule } from "./modules/platform/release/release-verification.module";
+import { RuntimePressureModule } from "./modules/platform/runtime-pressure/runtime-pressure.module";
 import { SecurityCenterModule } from "./modules/platform/security-center/security-center.module";
 import { TenantContextModule } from "./modules/platform/tenant-context/tenant-context.module";
 import { TenantsModule } from "./modules/platform/tenants/tenants.module";
@@ -80,6 +81,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     HealthModule,
     GoLiveModule,
     ReleaseVerificationModule,
+    RuntimePressureModule,
     SecurityCenterModule
   ],
   providers: [
