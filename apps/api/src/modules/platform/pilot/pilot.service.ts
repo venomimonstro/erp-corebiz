@@ -94,6 +94,18 @@ export class PilotService {
           )
         : { rows: [] };
 
+      const exitReviews = row
+        ? await client.query(
+            `SELECT id,decision,verdict,note,reviewed_at
+             FROM tenant_pilot_exit_review
+             WHERE tenant_id=$1
+               AND pilot_enrollment_id=$2
+             ORDER BY reviewed_at DESC
+             LIMIT 20`,
+            [context.tenantId, row.id]
+          )
+        : { rows: [] };
+
       const approved = await client.query<{
         id: string;
         target_version: string;
@@ -143,7 +155,8 @@ export class PilotService {
         currentHypercare: hypercare,
         incidents: incidents.rows,
         history: history.rows,
-        snapshots: snapshots.rows
+        snapshots: snapshots.rows,
+        exitReviews: exitReviews.rows
       };
     });
   }
@@ -321,6 +334,23 @@ export class PilotService {
           "Pilot completion заблокирован открытым P0"
         );
       }
+
+      const exitReview = overview.exitReviews?.[0];
+      const latestSnapshot = overview.snapshots?.[0];
+      if (
+        !exitReview ||
+        exitReview.decision !== "PASS" ||
+        Date.now() - new Date(exitReview.reviewed_at).getTime() > 4 * 3600000 ||
+        (
+          latestSnapshot &&
+          new Date(exitReview.reviewed_at).getTime() <
+            new Date(latestSnapshot.captured_at).getTime()
+        )
+      ) {
+        throw new BadRequestException(
+          "Перед COMPLETED выполните свежий PASS pilot exit review после последнего snapshot"
+        );
+      }
     }
 
     return this.database.withTenantTransaction(context, async (client) => {
@@ -425,6 +455,108 @@ export class PilotService {
       };
     });
   }
+
+  async evaluateExit(
+    context: TenantContext,
+    note?: string
+  ): Promise<Record<string, unknown>> {
+    const overview = await this.overview(context) as any;
+    const enrollment = overview.enrollment;
+    if (!enrollment) {
+      throw new NotFoundException("Pilot enrollment не создан");
+    }
+
+    if (enrollment.status !== "RUNNING") {
+      throw new BadRequestException(
+        "Exit review доступен только для RUNNING pilot"
+      );
+    }
+
+    const latestSnapshot = overview.snapshots?.[0] ?? null;
+    const snapshotFresh =
+      Boolean(latestSnapshot) &&
+      new Date(latestSnapshot.captured_at).getTime() >=
+        Date.now() - 24 * 3600000;
+
+    const openP1 = (overview.incidents ?? []).filter(
+      (incident: any) =>
+        incident.severity === "P1" &&
+        incident.status !== "RESOLVED"
+    ).length;
+
+    const checks = [
+      {
+        code: "TENANT_READY",
+        ok: overview.prerequisites.tenantReady === true,
+        blocking: true
+      },
+      {
+        code: "APPROVED_RELEASE",
+        ok: overview.prerequisites.releaseApproved === true,
+        blocking: true
+      },
+      {
+        code: "FRESH_GREEN_HYPERCARE",
+        ok:
+          snapshotFresh &&
+          latestSnapshot?.health === "GREEN",
+        blocking: true
+      },
+      {
+        code: "NO_OPEN_P0",
+        ok: overview.prerequisites.openP0 === 0,
+        blocking: true
+      },
+      {
+        code: "NO_OPEN_P1",
+        ok: openP1 === 0,
+        blocking: false
+      }
+    ];
+
+    const blockers = checks.filter(
+      (check) => check.blocking && !check.ok
+    );
+    const warnings = checks.filter(
+      (check) => !check.blocking && !check.ok
+    );
+    const decision = blockers.length === 0 ? "PASS" : "BLOCKED";
+
+    const verdict = {
+      evaluatedAt: new Date().toISOString(),
+      decision,
+      checks,
+      blockers,
+      warnings,
+      latestSnapshotId: latestSnapshot?.id ?? null,
+      latestSnapshotAt: latestSnapshot?.captured_at ?? null
+    };
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query<{ id: string; reviewed_at: Date }>(
+        `INSERT INTO tenant_pilot_exit_review(
+           tenant_id,pilot_enrollment_id,decision,verdict,note,
+           reviewed_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6)
+         RETURNING id,reviewed_at`,
+        [
+          context.tenantId,
+          enrollment.id,
+          decision,
+          JSON.stringify(verdict),
+          String(note ?? "").trim().slice(0, 2000) || null,
+          context.membershipId
+        ]
+      );
+
+      return {
+        id: result.rows[0]!.id,
+        reviewedAt: result.rows[0]!.reviewed_at.toISOString(),
+        ...verdict
+      };
+    });
+  }
+
 
   async openIncident(
     context: TenantContext,
