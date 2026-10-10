@@ -7,6 +7,49 @@ type Entry = readonly [href: string, label: string, key: string];
 type Section = { title: string; items: Entry[] };
 type MenuProfile = "all" | "commerce" | "service" | "warehouse";
 type Capability = { key: string; enabled: boolean };
+type WorkspaceContext = {
+  roles: string[];
+  permissions: Array<{ code: string; scope: string }>;
+  profileCode: string;
+  workspace: string;
+};
+
+const permissionByKey: Record<string,string> = {
+  deals: "crm.read",
+  tasks: "tasks.read",
+  orders: "sales.read",
+  products: "catalog.read",
+  purchases: "procurement.read",
+  stock: "inventory.read",
+  finance: "finance.read",
+  "finance-forecast": "finance.read",
+  "finance-budget": "finance.read",
+  "service-home": "service.read",
+  bookings: "service.read",
+  resources: "service.read",
+  channels: "channels.read",
+  oms: "oms.read",
+  returns: "returns.read",
+  sites: "sites.read",
+  analytics: "analytics.read",
+  profitability: "analytics.read",
+  marketing: "analytics.read",
+  growth: "analytics.read",
+  conversions: "analytics.read",
+  "analytics-settings": "analytics.read",
+  wms: "wms.read",
+  "wms-inbound": "wms.read",
+  "wms-mobile": "wms.read",
+  "wms-owners": "wms.read",
+  "wms-billing": "wms.read",
+  "wms-portal": "wms.read",
+  workflows: "workflow.read",
+  "owner-assistant": "dashboard.owner.read",
+  operations: "dashboard.owner.read",
+  customization: "customization.manage",
+  "release-readiness": "release.read",
+  support: "support.read"
+};
 
 const capabilityByKey: Record<string,string> = {
   deals: "crm",
@@ -106,6 +149,7 @@ export function AppSidebar({ active }: { active: string }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [profile, setProfile] = useState<MenuProfile>("all");
   const [capabilities, setCapabilities] = useState<Record<string,boolean> | null>(null);
+  const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContext | null>(null);
 
   useEffect(() => {
     try {
@@ -121,15 +165,22 @@ export function AppSidebar({ active }: { active: string }) {
 
     async function loadCapabilities() {
       try {
-        const rows = await apiRequest<Capability[]>("/customization/capabilities");
+        const [rows, context] = await Promise.all([
+          apiRequest<Capability[]>("/customization/capabilities"),
+          apiRequest<WorkspaceContext>("/workspace/context")
+        ]);
         if (!cancelled) {
           setCapabilities(
             Object.fromEntries(rows.map((item) => [item.key,item.enabled]))
           );
+          setWorkspaceContext(context);
         }
       } catch {
-        // Fail open for navigation only. Backend permissions remain authoritative.
-        if (!cancelled) setCapabilities(null);
+        // Fail open for navigation only. Backend guards remain authoritative.
+        if (!cancelled) {
+          setCapabilities(null);
+          setWorkspaceContext(null);
+        }
       }
     }
 
@@ -154,13 +205,31 @@ export function AppSidebar({ active }: { active: string }) {
           ...section,
           items: section.items.filter((entry) => {
             if (entry[2] === active) return true;
+
             const capability = capabilityByKey[entry[2]];
-            if (!capability || capabilities === null) return true;
-            return capabilities[capability] !== false;
+            if (
+              capability &&
+              capabilities !== null &&
+              capabilities[capability] === false
+            ) {
+              return false;
+            }
+
+            const requiredPermission = permissionByKey[entry[2]];
+            if (!requiredPermission || workspaceContext === null) {
+              return true;
+            }
+
+            const permissions = workspaceContext.permissions;
+            return permissions.some(
+              (permission) =>
+                permission.code === "*" ||
+                permission.code === requiredPermission
+            );
           })
         }))
         .filter((section) => section.items.length > 0),
-    [active, capabilities]
+    [active, capabilities, workspaceContext]
   );
 
   const visibleSections = capabilityFilteredSections.filter((section) =>
