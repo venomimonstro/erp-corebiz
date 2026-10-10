@@ -286,6 +286,8 @@ async function inspectRequiredHardening(root) {
       /trainer_compensation_accrual/,
       /dance_lesson_profitability/,
       /room_rental_contract/,
+      /room_rental_statement/,
+      /DANCE_ROOM_RENT_STATEMENT/,
       /package_entitlement_id/
     ],
     message: "Dance studio economics hardening is missing"
@@ -315,7 +317,8 @@ async function inspectRequiredHardening(root) {
       /dance_students/,
       /dance_lessons/,
       /payment_allocations/,
-      /trainer_compensation_accruals/
+      /trainer_compensation_accruals/,
+      /room_rental_statements/
     ],
     message: "Dance studio tenant export coverage is missing"
   }
@@ -349,11 +352,13 @@ async function inspectRequiredHardening(root) {
     "155_package_management_revenue.sql",
     "156_package_family_combo_activation.sql",
     "157_public_dance_booking.sql",
+    "158_dance_tenant_integrity.sql",
+    "159_dance_makeup_booking.sql",
     "160_dance_makeup_revenue.sql",
     "161_dance_makeup_lifecycle.sql",
     "162_dance_financial_constraints.sql",
-    "159_dance_makeup_booking.sql",
-    "158_dance_tenant_integrity.sql",
+    "163_room_rental_statements.sql",
+    "164_room_rental_payment_terms.sql",
 
   ];
 
