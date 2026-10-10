@@ -399,6 +399,289 @@ export class GoLiveService {
     });
   }
 
+  async hypercare(
+    context: TenantContext
+  ): Promise<Record<string, unknown>> {
+    return this.database.withTenantTransaction(context, async (client) => {
+      const stateResult = await client.query<{
+        stage: "PREPARING" | "HYPERCARE" | "LIVE";
+        go_live_at: Date | null;
+        hypercare_until: Date | null;
+      }>(
+        `SELECT stage,go_live_at,hypercare_until
+         FROM tenant_launch_state
+         WHERE tenant_id=$1`,
+        [context.tenantId]
+      );
+
+      const state = stateResult.rows[0] ?? {
+        stage: "PREPARING" as const,
+        go_live_at: null,
+        hypercare_until: null
+      };
+
+      const [
+        orders,
+        bookings,
+        payments,
+        channelFailures,
+        marketingFailures,
+        workflowFailures,
+        wmsBlocked,
+        support,
+        runtime,
+        issues
+      ] = await Promise.all([
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM sales_order
+           WHERE tenant_id=$1
+             AND created_at >= now()-interval '24 hours'`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM service_booking
+           WHERE tenant_id=$1
+             AND created_at >= now()-interval '24 hours'`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string; amount_minor: string }>(
+          `SELECT
+             count(*)::text AS count,
+             COALESCE(sum(amount_minor),0)::text AS amount_minor
+           FROM payment
+           WHERE tenant_id=$1
+             AND status='POSTED'
+             AND created_at >= now()-interval '24 hours'`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM channel_sync_job
+           WHERE tenant_id=$1
+             AND status='FAILED'
+             AND created_at >= now()-interval '24 hours'`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM marketing_sync_job
+           WHERE tenant_id=$1
+             AND status='FAILED'
+             AND created_at >= now()-interval '24 hours'`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM workflow_execution
+           WHERE tenant_id=$1
+             AND status='FAILED'
+             AND created_at >= now()-interval '24 hours'`,
+          [context.tenantId]
+        ).catch(() => ({ rows: [{ count: "0" }] } as any)),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM warehouse_task
+           WHERE tenant_id=$1
+             AND status IN ('BLOCKED','FAILED')`,
+          [context.tenantId]
+        ),
+        client.query<{ urgent: string; open: string }>(
+          `SELECT
+             count(*) FILTER (
+               WHERE priority IN ('URGENT','HIGH')
+                 AND status NOT IN ('RESOLVED','CLOSED')
+             )::text AS urgent,
+             count(*) FILTER (
+               WHERE status NOT IN ('RESOLVED','CLOSED')
+             )::text AS open
+           FROM support_ticket
+           WHERE tenant_id=$1`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM tenant_runtime_pressure_event
+           WHERE tenant_id=$1
+             AND created_at >= now()-interval '24 hours'`,
+          [context.tenantId]
+        ),
+        client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM tenant_operational_issue
+           WHERE tenant_id=$1
+             AND state='OPEN'`,
+          [context.tenantId]
+        )
+      ]);
+
+      const metrics = {
+        periodHours: 24,
+        orders: Number(orders.rows[0]?.count ?? "0"),
+        bookings: Number(bookings.rows[0]?.count ?? "0"),
+        postedPayments: Number(payments.rows[0]?.count ?? "0"),
+        postedPaymentsMinor: payments.rows[0]?.amount_minor ?? "0",
+        channelSyncFailures: Number(
+          channelFailures.rows[0]?.count ?? "0"
+        ),
+        marketingSyncFailures: Number(
+          marketingFailures.rows[0]?.count ?? "0"
+        ),
+        workflowFailures: Number(
+          workflowFailures.rows[0]?.count ?? "0"
+        ),
+        wmsBlockedOrFailed: Number(
+          wmsBlocked.rows[0]?.count ?? "0"
+        ),
+        urgentSupportTickets: Number(
+          support.rows[0]?.urgent ?? "0"
+        ),
+        openSupportTickets: Number(
+          support.rows[0]?.open ?? "0"
+        ),
+        runtimeBudgetDenials: Number(
+          runtime.rows[0]?.count ?? "0"
+        ),
+        openOperationalIssues: Number(
+          issues.rows[0]?.count ?? "0"
+        )
+      };
+
+      const blockers: Array<{
+        code: string;
+        message: string;
+        count: number;
+      }> = [];
+      const warnings: Array<{
+        code: string;
+        message: string;
+        count: number;
+      }> = [];
+
+      const blocker = (
+        code: string,
+        message: string,
+        count: number,
+        threshold = 1
+      ) => {
+        if (count >= threshold) blockers.push({ code, message, count });
+      };
+      const warning = (
+        code: string,
+        message: string,
+        count: number,
+        threshold = 1
+      ) => {
+        if (count >= threshold) warnings.push({ code, message, count });
+      };
+
+      blocker(
+        "URGENT_SUPPORT",
+        "Есть срочные обращения клиентов.",
+        metrics.urgentSupportTickets
+      );
+      blocker(
+        "WMS_BLOCKED",
+        "Есть заблокированные или failed WMS-задачи.",
+        metrics.wmsBlockedOrFailed
+      );
+      blocker(
+        "OPERATIONAL_ISSUES",
+        "Есть открытые операционные исключения.",
+        metrics.openOperationalIssues,
+        5
+      );
+
+      warning(
+        "CHANNEL_FAILURES",
+        "Есть failed marketplace/channel sync.",
+        metrics.channelSyncFailures
+      );
+      warning(
+        "MARKETING_FAILURES",
+        "Есть failed marketing sync.",
+        metrics.marketingSyncFailures
+      );
+      warning(
+        "WORKFLOW_FAILURES",
+        "Есть failed workflow executions.",
+        metrics.workflowFailures
+      );
+      warning(
+        "RUNTIME_PRESSURE",
+        "Срабатывали ограничения нагрузки tenant.",
+        metrics.runtimeBudgetDenials,
+        5
+      );
+      warning(
+        "SUPPORT_BACKLOG",
+        "Есть очередь обращений поддержки.",
+        metrics.openSupportTickets,
+        10
+      );
+
+      const health =
+        blockers.length > 0
+          ? "RED"
+          : warnings.length > 0
+            ? "YELLOW"
+            : "GREEN";
+
+      const history = await client.query(
+        `SELECT id,stage,health,metrics,blockers,warnings,captured_at
+         FROM tenant_hypercare_snapshot
+         WHERE tenant_id=$1
+         ORDER BY captured_at DESC
+         LIMIT 30`,
+        [context.tenantId]
+      );
+
+      return {
+        stage: state.stage,
+        goLiveAt: state.go_live_at?.toISOString() ?? null,
+        hypercareUntil:
+          state.hypercare_until?.toISOString() ?? null,
+        health,
+        metrics,
+        blockers,
+        warnings,
+        history: history.rows
+      };
+    });
+  }
+
+  async captureHypercare(
+    context: TenantContext
+  ): Promise<{ id: string; health: string }> {
+    const snapshot = await this.hypercare(context) as any;
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO tenant_hypercare_snapshot(
+           tenant_id,stage,health,metrics,blockers,warnings,
+           captured_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+         RETURNING id`,
+        [
+          context.tenantId,
+          snapshot.stage,
+          snapshot.health,
+          JSON.stringify(snapshot.metrics),
+          JSON.stringify(snapshot.blockers),
+          JSON.stringify(snapshot.warnings),
+          context.membershipId
+        ]
+      );
+
+      return {
+        id: result.rows[0]!.id,
+        health: snapshot.health
+      };
+    });
+  }
+
+
   async review(
     context: TenantContext,
     input: {
@@ -498,31 +781,73 @@ export class GoLiveService {
   async finishHypercare(
     context: TenantContext
   ): Promise<void> {
-    const snapshot = await this.readiness(context) as any;
-    if (!snapshot.ready) {
+    const readiness = await this.readiness(context) as any;
+    if (!readiness.ready) {
       throw new BadRequestException(
-        "Нельзя завершить hypercare при активных блокерах"
+        "Нельзя завершить hypercare при активных readiness blockers"
       );
     }
 
     await this.database.withTenantTransaction(context, async (client) => {
-      const result = await client.query(
-        `UPDATE tenant_launch_state
-         SET stage='LIVE',
-             updated_by_membership_id=$2,
-             updated_at=now()
+      const state = await client.query<{
+        stage: string;
+        hypercare_until: Date | null;
+      }>(
+        `SELECT stage,hypercare_until
+         FROM tenant_launch_state
          WHERE tenant_id=$1
-           AND stage='HYPERCARE'
-           AND go_live_at IS NOT NULL
-         RETURNING tenant_id`,
-        [context.tenantId, context.membershipId]
+         FOR UPDATE`,
+        [context.tenantId]
       );
 
-      if (!result.rowCount) {
+      const row = state.rows[0];
+      if (!row || row.stage !== "HYPERCARE") {
         throw new BadRequestException(
           "Tenant не находится в HYPERCARE"
         );
       }
+
+      if (
+        row.hypercare_until &&
+        row.hypercare_until.getTime() > Date.now()
+      ) {
+        throw new BadRequestException(
+          "Минимальный hypercare-период ещё не завершён"
+        );
+      }
+
+      const latest = await client.query<{
+        health: string;
+        captured_at: Date;
+      }>(
+        `SELECT health,captured_at
+         FROM tenant_hypercare_snapshot
+         WHERE tenant_id=$1
+         ORDER BY captured_at DESC
+         LIMIT 1`,
+        [context.tenantId]
+      );
+
+      const health = latest.rows[0];
+      if (
+        !health ||
+        health.health !== "GREEN" ||
+        health.captured_at.getTime() <
+          Date.now() - 24 * 3600000
+      ) {
+        throw new BadRequestException(
+          "Для LIVE нужен свежий GREEN hypercare snapshot не старше 24 часов"
+        );
+      }
+
+      await client.query(
+        `UPDATE tenant_launch_state
+         SET stage='LIVE',
+             updated_by_membership_id=$2,
+             updated_at=now()
+         WHERE tenant_id=$1`,
+        [context.tenantId, context.membershipId]
+      );
     });
   }
 }
