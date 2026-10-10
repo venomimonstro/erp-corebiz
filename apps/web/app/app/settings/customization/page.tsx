@@ -9,6 +9,40 @@ type Capability = {
   enabled: boolean;
 };
 
+type BusinessProfile = {
+  profileCode: "GENERAL" | "TRADE" | "ECOMMERCE" | "SERVICE" | "WAREHOUSE_3PL";
+  appliedAt: string;
+  capabilities: Capability[];
+};
+
+const PROFILE_CARDS = [
+  {
+    code: "GENERAL",
+    title: "Универсальный бизнес",
+    text: "Все основные контуры доступны. Подходит, если процессы смешанные или вы пока не хотите ничего скрывать."
+  },
+  {
+    code: "TRADE",
+    title: "Торговля / опт / розница",
+    text: "CRM, заказы, закупки, остатки, деньги, автоматизации и аналитика без сложного WMS."
+  },
+  {
+    code: "ECOMMERCE",
+    title: "Интернет-магазин / маркетплейсы",
+    text: "Торговое ядро + каналы продаж, OMS, сайт-магазин и сквозная аналитика."
+  },
+  {
+    code: "SERVICE",
+    title: "Услуги / салон / автосервис",
+    text: "CRM, задачи, запись клиентов, услуги, материалы, деньги, сайт и аналитика."
+  },
+  {
+    code: "WAREHOUSE_3PL",
+    title: "Склад / 3PL",
+    text: "Операционный склад, OMS, закупки, финансы, WMS и 3PL без лишнего маркетингового интерфейса."
+  }
+] as const;
+
 type Field = {
   id: string;
   entity_type: string;
@@ -20,6 +54,7 @@ type Field = {
 
 export default function CustomizationPage() {
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
+  const [profile, setProfile] = useState<BusinessProfile | null>(null);
   const [fields, setFields] = useState<Field[]>([]);
   const [entityType, setEntityType] = useState("DEAL");
   const [error, setError] = useState("");
@@ -30,10 +65,12 @@ export default function CustomizationPage() {
     try {
       const data = await Promise.all([
         apiRequest<Capability[]>("/customization/capabilities"),
+        apiRequest<BusinessProfile>("/customization/business-profile"),
         apiRequest<Field[]>("/customization/fields?entityType=" + encodeURIComponent(entityType))
       ]);
       setCapabilities(data[0]);
-      setFields(data[1]);
+      setProfile(data[1]);
+      setFields(data[2]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить настройки");
     }
@@ -53,6 +90,34 @@ export default function CustomizationPage() {
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось изменить модуль");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function applyProfile(profileCode: string) {
+    if (
+      !window.confirm(
+        "Применить этот профиль? Данные не удаляются; изменится только набор включённых рабочих модулей."
+      )
+    ) {
+      return;
+    }
+
+    setPending(true);
+    try {
+      await apiRequest("/customization/business-profile", {
+        method: "PUT",
+        body: JSON.stringify({ profileCode })
+      });
+      await load();
+      window.dispatchEvent(new Event("corebiz-capabilities-changed"));
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось применить профиль бизнеса"
+      );
     } finally {
       setPending(false);
     }
@@ -200,6 +265,40 @@ export default function CustomizationPage() {
             <span>{error}</span>
           </div>
         ) : null}
+
+        <section className="settings-card">
+          <div className="section-heading">
+            <div>
+              <p className="muted">Первый день / Business preset</p>
+              <h2>Как работает ваша компания</h2>
+              <p className="workspace-summary">
+                Это не отдельные версии программы. Профиль только включает нужные рабочие контуры единого Business OS.
+              </p>
+            </div>
+          </div>
+
+          <div className="profile-preset-grid">
+            {PROFILE_CARDS.map((item) => (
+              <button
+                key={item.code}
+                className={
+                  profile?.profileCode === item.code
+                    ? "profile-preset-card active"
+                    : "profile-preset-card"
+                }
+                disabled={pending}
+                onClick={() => void applyProfile(item.code)}
+                type="button"
+              >
+                <span className="status-pill">
+                  {profile?.profileCode === item.code ? "Активен" : "Выбрать"}
+                </span>
+                <strong>{item.title}</strong>
+                <p>{item.text}</p>
+              </button>
+            ))}
+          </div>
+        </section>
 
         <section className="settings-card">
           <div className="section-heading">
