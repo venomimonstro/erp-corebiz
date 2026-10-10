@@ -186,6 +186,18 @@ WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     )
   )
 UNION ALL
+SELECT 'DANCE_ROOM_RENT_CONTRACT_OVERLAP',count(*)::bigint
+FROM room_rental_contract a
+JOIN room_rental_contract b
+  ON b.tenant_id=a.tenant_id
+ AND b.room_resource_id=a.room_resource_id
+ AND b.id>a.id
+ AND b.status='ACTIVE'
+ AND a.status='ACTIVE'
+ AND daterange(a.valid_from,a.valid_to,'[]')
+     && daterange(b.valid_from,b.valid_to,'[]')
+WHERE a.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+UNION ALL
 SELECT 'DANCE_RENT_STATEMENT_AMOUNT_MISMATCH',count(*)::bigint
 FROM room_rental_statement s
 JOIN financial_obligation o
