@@ -77,6 +77,7 @@ const EXPORT_ENTITIES: ExportEntity[] = [
   { table: "trainer_compensation_accrual", label: "trainer_compensation_accruals" },
   { table: "room_rental_contract", label: "room_rental_contracts" },
   { table: "room_rental_slot", label: "room_rental_slots" },
+  { table: "room_rental_statement", label: "room_rental_statements" },
   { table: "dance_lesson_profitability", label: "dance_lesson_profitability" },
   { table: "site", label: "sites" },
   { table: "site_page", label: "site_pages" },
