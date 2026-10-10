@@ -43,7 +43,8 @@ type ServicePackage = {
   id: string;
   party_id: string;
   plan_name: string;
-  available_visits: number;
+  available_visits: number | null;
+  package_kind_snapshot?: string;
   expires_at: string;
   applicable_service_id: string | null;
   status: string;
@@ -596,7 +597,7 @@ export default function BookingsPage() {
                           )
                           .map((item) => (
                             <option key={item.id} value={item.id}>
-                              {item.plan_name} · осталось {item.available_visits}
+                              {item.plan_name} · осталось {item.available_visits === null ? "∞" : item.available_visits}
                             </option>
                           ))}
                       </select>
