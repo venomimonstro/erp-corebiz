@@ -4,6 +4,26 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../components/app-sidebar";
 import { apiRequest } from "../../lib/api";
 
+type Activation = {
+  profile: string;
+  dismissed: boolean;
+  completed: boolean;
+  progressPercent: number;
+  doneCount: number;
+  total: number;
+  firstSeenAt: string;
+  firstValueAt: string | null;
+  timeToFirstValueMinutes: number | null;
+  milestones: Array<{
+    key: string;
+    title: string;
+    detail: string;
+    href: string;
+    done: boolean;
+    firstValue?: boolean;
+  }>;
+};
+
 type Dashboard = {
   kpis: {
     cashMinor: string;
@@ -45,6 +65,7 @@ const queueLabels: Record<Dashboard["queue"][number]["type"], string> = {
 
 export default function AppHomePage() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [activation, setActivation] = useState<Activation | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -53,7 +74,12 @@ export default function AppHomePage() {
     setError("");
 
     try {
-      setDashboard(await apiRequest<Dashboard>("/dashboard/owner"));
+      const [dashboardData, activationData] = await Promise.all([
+        apiRequest<Dashboard>("/dashboard/owner"),
+        apiRequest<Activation>("/dashboard/activation")
+      ]);
+      setDashboard(dashboardData);
+      setActivation(activationData);
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -68,6 +94,23 @@ export default function AppHomePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function dismissActivation() {
+    if (!activation) return;
+    try {
+      await apiRequest("/dashboard/activation/dismiss", {
+        method: "PATCH",
+        body: JSON.stringify({ dismissed: true })
+      });
+      setActivation({ ...activation, dismissed: true });
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось скрыть подсказки"
+      );
+    }
+  }
 
   const kpis = useMemo(() => {
     if (!dashboard) return [];
@@ -112,18 +155,59 @@ export default function AppHomePage() {
 
         {!loading && dashboard ? (
           <>
-            {dashboard.kpis.openOrders === 0 && dashboard.queue.length === 0 ? (
-              <section className="quick-start" aria-labelledby="corebiz-get-started">
-                <p className="muted">Первые шаги</p>
-                <h2 id="corebiz-get-started">Начните с одной операции</h2>
-                <p>Не нужно настраивать всю ERP: выберите основное действие своего бизнеса.</p>
-                <div className="quick-start-actions">
-                  <a href="/app/crm/deals"><strong>Добавить клиента и сделку</strong><span>Построить воронку продаж →</span></a>
-                  <a href="/app/catalog/products"><strong>Добавить товар или услугу</strong><span>Создать первую позицию каталога →</span></a>
-                  <a href="/app/service/bookings"><strong>Настроить запись клиентов</strong><span>Рабочее место для услуг →</span></a>
+            {activation && !activation.dismissed && !activation.completed ? (
+              <section className="activation-card" aria-labelledby="corebiz-activation">
+                <div className="activation-heading">
+                  <div>
+                    <p className="muted">Первый результат</p>
+                    <h2 id="corebiz-activation">
+                      Запустите рабочий сценарий · {activation.progressPercent}%
+                    </h2>
+                    <p>
+                      Не нужно настраивать всю систему. Выполните реальные операции своего профиля — прогресс отмечается автоматически.
+                    </p>
+                  </div>
+                  <button
+                    className="secondary-button"
+                    onClick={() => void dismissActivation()}
+                    type="button"
+                  >
+                    Скрыть
+                  </button>
                 </div>
+
+                <div className="activation-progress" aria-hidden="true">
+                  <span style={{ width: activation.progressPercent + "%" }} />
+                </div>
+
+                <div className="activation-steps">
+                  {activation.milestones.map((item) => (
+                    <a
+                      href={item.href}
+                      key={item.key}
+                      className={item.done ? "activation-step done" : "activation-step"}
+                    >
+                      <span>{item.done ? "✓" : "○"}</span>
+                      <div>
+                        <strong>{item.title}</strong>
+                        <small>{item.detail}</small>
+                      </div>
+                      <b>{item.done ? "Готово" : "Открыть →"}</b>
+                    </a>
+                  ))}
+                </div>
+
+                {activation.firstValueAt ? (
+                  <small className="activation-ttfv">
+                    Первый результат получен
+                    {activation.timeToFirstValueMinutes !== null
+                      ? " за " + activation.timeToFirstValueMinutes + " мин."
+                      : ""}.
+                  </small>
+                ) : null}
               </section>
             ) : null}
+
             <div className="owner-kpi-grid">
               {kpis.map(([label, value, detail]) => (
                 <article className="owner-kpi" key={label}>
