@@ -52,7 +52,8 @@ const permissionByKey: Record<string,string> = {
   "release-readiness": "release.read",
   "go-live": "go_live.read",
   support: "support.read",
-  "data-management": "data.export"
+  "data-management": "data.export",
+  "security-center": "audit.read"
 };
 
 const capabilityByKey: Record<string,string> = {
@@ -146,6 +147,7 @@ const sections: Section[] = [
     ["/app/settings/release", "Готовность релиза", "release-readiness"],
     ["/app/settings/go-live", "Go-Live Center", "go-live"],
     ["/app/settings/data", "Экспорт данных", "data-management"],
+    ["/app/settings/security", "Безопасность и аудит", "security-center"],
     ["/app/support", "Поддержка", "support"]
   ] }
 ];
