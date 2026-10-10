@@ -1513,8 +1513,10 @@ export class DanceEconomicsService {
   ):Promise<any>{
     const result=await client.query(
       `SELECT
-         l.*,tr.membership_id AS trainer_membership_id
+         l.*,g.program_id,tr.membership_id AS trainer_membership_id
        FROM dance_lesson l
+       LEFT JOIN dance_group g
+         ON g.tenant_id=l.tenant_id AND g.id=l.group_id
        LEFT JOIN service_resource tr
          ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
        WHERE l.tenant_id=$1 AND l.id=$2
