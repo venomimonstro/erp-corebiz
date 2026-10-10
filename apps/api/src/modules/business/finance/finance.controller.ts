@@ -69,6 +69,97 @@ export class FinanceController {
     return {ok:true,data:await this.finance.reconcileBankStatement(this.context(request),statementId)};
   }
 
+  @Get("budgets")
+  @RequirePermission("finance.read")
+  async budgets(
+    @Req() request: AuthenticatedRequest
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.finance.budgets(this.context(request))
+    };
+  }
+
+  @Post("budgets")
+  @RequirePermission("finance.write")
+  async createBudget(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: {
+      name: string;
+      periodFrom: string;
+      periodTo: string;
+      currency?: string;
+    }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.finance.createBudget(this.context(request), body)
+    };
+  }
+
+  @Get("budget-categories")
+  @RequirePermission("finance.read")
+  async budgetCategories(
+    @Req() request: AuthenticatedRequest
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.finance.budgetCategories(this.context(request))
+    };
+  }
+
+  @Post("budgets/:budgetId/lines")
+  @RequirePermission("finance.write")
+  async setBudgetLine(
+    @Req() request: AuthenticatedRequest,
+    @Param("budgetId") budgetId: string,
+    @Body() body: {
+      month: string;
+      categoryId: string;
+      plannedMinor: string;
+      note?: string;
+    }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.finance.setBudgetLine(
+        this.context(request),
+        budgetId,
+        body
+      )
+    };
+  }
+
+  @Post("budgets/:budgetId/publish")
+  @RequirePermission("finance.write")
+  async publishBudget(
+    @Req() request: AuthenticatedRequest,
+    @Param("budgetId") budgetId: string
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.finance.publishBudget(
+        this.context(request),
+        budgetId
+      )
+    };
+  }
+
+  @Get("budgets/:budgetId/comparison")
+  @RequirePermission("finance.read")
+  async budgetComparison(
+    @Req() request: AuthenticatedRequest,
+    @Param("budgetId") budgetId: string
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.finance.budgetComparison(
+        this.context(request),
+        budgetId
+      )
+    };
+  }
+
   @Get("forecast")
   @RequirePermission("finance.read")
   async forecast(
