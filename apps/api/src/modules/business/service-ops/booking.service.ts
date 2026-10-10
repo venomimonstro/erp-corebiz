@@ -553,9 +553,10 @@ export class BookingService {
         party_id: string | null;
         service_id: string;
         starts_at: Date;
+        created_at: Date;
         currency: string;
       }>(
-        `SELECT party_id,service_id,starts_at,currency
+        `SELECT party_id,service_id,starts_at,created_at,currency
          FROM service_booking
          WHERE tenant_id=$1 AND id=$2
          FOR UPDATE`,
@@ -594,7 +595,7 @@ export class BookingService {
         conversionType: "BOOKING",
         revenueMinor: 0n,
         currency: row.currency,
-        occurredAt: row.starts_at,
+        occurredAt: row.created_at,
         metadata: {
           serviceId: row.service_id,
           startsAt: row.starts_at.toISOString()
