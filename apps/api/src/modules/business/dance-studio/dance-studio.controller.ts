@@ -132,6 +132,37 @@ export class DanceStudioController {
     };
   }
 
+  @Post("groups/:groupId/sync-roster")
+  @RequirePermission("dance.write")
+  async syncRoster(
+    @Req() req:AuthenticatedRequest,
+    @Param("groupId") groupId:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.studio.syncGroupRoster(this.ctx(req),groupId)
+    };
+  }
+
+  @Patch("groups/:groupId/members/:memberId")
+  @RequirePermission("dance.write")
+  async groupMemberStatus(
+    @Req() req:AuthenticatedRequest,
+    @Param("groupId") groupId:string,
+    @Param("memberId") memberId:string,
+    @Body() body:{
+      status:"ACTIVE"|"PAUSED"|"LEFT";
+      keepPlace?:boolean;
+    }
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.studio.changeGroupMemberStatus(
+        this.ctx(req),groupId,memberId,body
+      )
+    };
+  }
+
   @Post("groups/:groupId/members")
   @RequirePermission("dance.write")
   async addGroupMember(
