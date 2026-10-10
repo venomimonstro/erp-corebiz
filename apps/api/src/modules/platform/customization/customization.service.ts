@@ -314,6 +314,32 @@ export class CustomizationService {
     context: TenantContext,
     layoutId: string
   ): Promise<void> {
+    if (!Array.isArray(permissions) || permissions.length > 200) {
+      throw new BadRequestException("Некорректный список прав");
+    }
+    const seenPermissions = new Set<string>();
+    const allowedScopes = new Set<PermissionScope>([
+      "own",
+      "team",
+      "branch",
+      "all"
+    ]);
+    for (const permission of permissions) {
+      if (
+        !permission ||
+        typeof permission.code !== "string" ||
+        !allowedScopes.has(permission.scope)
+      ) {
+        throw new BadRequestException("Некорректное право или scope");
+      }
+      const code = permission.code.trim();
+      if (!code || seenPermissions.has(code)) {
+        throw new BadRequestException("Права роли не должны дублироваться");
+      }
+      permission.code = code;
+      seenPermissions.add(code);
+    }
+
     await this.database.withTenantTransaction(context, async (client) => {
       const draft = await client.query<{
         id: string;
@@ -393,8 +419,30 @@ export class CustomizationService {
     }
   ): Promise<{ id: string }> {
     const name = input.name.trim();
+    const entityType = input.entityType?.trim();
     if (name.length < 2 || name.length > 120) {
       throw new BadRequestException("Некорректное название представления");
+    }
+    if (!entityType || entityType.length > 80 || !/^[A-Za-z0-9_.:-]+$/.test(entityType)) {
+      throw new BadRequestException("Некорректный тип представления");
+    }
+    if (
+      !input.configuration ||
+      typeof input.configuration !== "object" ||
+      Array.isArray(input.configuration)
+    ) {
+      throw new BadRequestException("Некорректная конфигурация представления");
+    }
+    if (input.isShared) {
+      const scope = await this.authorization.resolveScope(
+        context,
+        "customization.manage"
+      );
+      if (!scope) {
+        throw new ForbiddenException(
+          "Общее представление может создать только администратор"
+        );
+      }
     }
 
     return this.database.withTenantTransaction(context, async (client) => {
@@ -406,7 +454,7 @@ export class CustomizationService {
          RETURNING id`,
         [
           context.tenantId,
-          input.entityType,
+          entityType,
           name,
           context.membershipId,
           Boolean(input.isShared),
@@ -796,6 +844,9 @@ export class CustomizationService {
 
     if (!/^[a-z][a-z0-9_.-]{1,63}$/.test(key)) {
       throw new BadRequestException("Некорректный capability key");
+    }
+    if (!(BUSINESS_CAPABILITIES as readonly string[]).includes(key)) {
+      throw new BadRequestException("Неизвестный модуль системы");
     }
 
     await this.database.withTenantTransaction(context, async (client) => {
