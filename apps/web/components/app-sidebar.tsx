@@ -31,6 +31,8 @@ const permissionByKey: Record<string,string> = {
   "service-home": "service.read",
   bookings: "service.read",
   resources: "service.read",
+  "service-assets": "service.read",
+  "service-packages": "service.read",
   channels: "channels.read",
   oms: "oms.read",
   returns: "returns.read",
@@ -75,6 +77,8 @@ const capabilityByKey: Record<string,string> = {
   "service-home": "service",
   bookings: "service",
   resources: "service",
+  "service-assets": "service",
+  "service-packages": "service",
   channels: "channels",
   oms: "oms",
   returns: "oms",
@@ -121,7 +125,9 @@ const sections: Section[] = [
   { title: "Запись и услуги", items: [
     ["/app/service", "Сегодня", "service-home"],
     ["/app/service/bookings", "Записи клиентов", "bookings"],
-    ["/app/service/resources", "Сотрудники и ресурсы", "resources"]
+    ["/app/service/resources", "Сотрудники и ресурсы", "resources"],
+    ["/app/service/assets", "Автомобили и объекты", "service-assets"],
+    ["/app/service/packages", "Абонементы", "service-packages"]
   ] },
   { title: "Онлайн-торговля", items: [
     ["/app/channels", "Каналы продаж", "channels"],
