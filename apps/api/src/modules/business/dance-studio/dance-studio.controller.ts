@@ -33,6 +33,18 @@ export class DanceStudioController {
     return {ok:true,data:await this.studio.students(this.ctx(req))};
   }
 
+  @Get("makeup-credits")
+  @RequirePermission("dance.read")
+  async makeupCredits(
+    @Req() req:AuthenticatedRequest,
+    @Query("studentId") studentId?:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.studio.makeupCredits(this.ctx(req),studentId)
+    };
+  }
+
   @Post("students")
   @RequirePermission("dance.write")
   async createStudent(
@@ -245,6 +257,7 @@ export class DanceStudioController {
     @Body() body:{
       studentId:string;
       packageId?:string;
+      makeupCreditId?:string;
       chargeMinor?:string;
       priceSource?:"DIRECT"|"TRIAL"|"FREE"|"MAKEUP";
       allowWaitlist?:boolean;
