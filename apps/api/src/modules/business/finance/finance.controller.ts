@@ -249,6 +249,30 @@ export class FinanceController {
     };
   }
 
+  @Post("allocated-payment")
+  @RequirePermission("finance.write")
+  async allocatedPayment(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: {
+      partyId: string;
+      allocations: Array<{
+        obligationId: string;
+        amountMinor: string;
+      }>;
+      cashAccountId?: string;
+      idempotencyKey: string;
+      note?: string;
+    }
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.finance.receiveAllocatedPayment(
+        this.context(request),
+        body
+      )
+    };
+  }
+
   @Post("accounts")
   @RequirePermission("finance.write")
   async createAccount(
