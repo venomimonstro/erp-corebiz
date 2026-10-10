@@ -133,9 +133,16 @@ export class SalesService {
   ): Promise<Record<string, unknown> | null> {
     const scope = await this.authorization.resolveScope(context, "sales.read");
     if (!scope) throw new BadRequestException("Недостаточно прав");
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
 
     return this.database.withTenantTransaction(context, async (client) => {
-      await this.assertParty(client, context.tenantId, partyId);
+      await this.assertParty(
+        client,
+        context.tenantId,
+        partyId,
+        scopedMembershipIds
+      );
       const result = await client.query(
         `SELECT
            party_id,currency,credit_limit_minor::text,payment_term_days,
@@ -162,6 +169,8 @@ export class SalesService {
   ): Promise<void> {
     const scope = await this.authorization.resolveScope(context, "sales.write");
     if (!scope) throw new BadRequestException("Недостаточно прав");
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
 
     const currency = input.currency?.trim().toUpperCase() || "RUB";
     if (!/^[A-Z]{3}$/.test(currency)) {
@@ -193,7 +202,12 @@ export class SalesService {
     }
 
     await this.database.withTenantTransaction(context, async (client) => {
-      await this.assertParty(client, context.tenantId, partyId);
+      await this.assertParty(
+        client,
+        context.tenantId,
+        partyId,
+        scopedMembershipIds
+      );
       await client.query(
         `INSERT INTO party_commercial_terms(
            tenant_id,party_id,currency,credit_limit_minor,payment_term_days,
@@ -245,9 +259,16 @@ export class SalesService {
   ): Promise<Array<Record<string, unknown>>> {
     const scope = await this.authorization.resolveScope(context, "sales.read");
     if (!scope) throw new BadRequestException("Недостаточно прав");
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
 
     return this.database.withTenantTransaction(context, async (client) => {
-      await this.assertParty(client, context.tenantId, partyId);
+      await this.assertParty(
+        client,
+        context.tenantId,
+        partyId,
+        scopedMembershipIds
+      );
       const result = await client.query(
         `SELECT
            pp.id,pp.sku_id,s.code AS sku_code,p.name AS product_name,
@@ -283,6 +304,8 @@ export class SalesService {
   ): Promise<{ id: string }> {
     const scope = await this.authorization.resolveScope(context, "sales.write");
     if (!scope) throw new BadRequestException("Недостаточно прав");
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
 
     const currency = input.currency?.trim().toUpperCase() || "RUB";
     const minQuantityMilli = input.minQuantityMilli ?? "1000";
@@ -307,7 +330,12 @@ export class SalesService {
     }
 
     return this.database.withTenantTransaction(context, async (client) => {
-      await this.assertParty(client, context.tenantId, partyId);
+      await this.assertParty(
+        client,
+        context.tenantId,
+        partyId,
+        scopedMembershipIds
+      );
       const sku = await client.query(
         `SELECT 1 FROM sku
          WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
@@ -346,8 +374,16 @@ export class SalesService {
   ): Promise<void> {
     const scope = await this.authorization.resolveScope(context, "sales.write");
     if (!scope) throw new BadRequestException("Недостаточно прав");
+    const scopedMembershipIds =
+      await this.authorization.membershipIdsForScope(context, scope);
 
     await this.database.withTenantTransaction(context, async (client) => {
+      await this.assertParty(
+        client,
+        context.tenantId,
+        partyId,
+        scopedMembershipIds
+      );
       const result = await client.query(
         `UPDATE party_sku_price
          SET status='ARCHIVED',updated_at=now()
@@ -1071,12 +1107,19 @@ export class SalesService {
   private async assertParty(
     client: PoolClient,
     tenantId: string,
-    partyId: string
+    partyId: string,
+    scopedMembershipIds: string[] | null = null
   ): Promise<void> {
     const result = await client.query(
       `SELECT 1 FROM party
-       WHERE tenant_id = $1 AND id = $2 AND status = 'ACTIVE'`,
-      [tenantId, partyId]
+       WHERE tenant_id = $1
+         AND id = $2
+         AND status = 'ACTIVE'
+         AND (
+           $3::uuid[] IS NULL
+           OR responsible_membership_id = ANY($3::uuid[])
+         )`,
+      [tenantId, partyId, scopedMembershipIds]
     );
 
     if (!result.rowCount) {
