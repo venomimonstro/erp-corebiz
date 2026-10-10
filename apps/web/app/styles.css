@@ -964,3 +964,11 @@ button, .primary, .secondary { font: inherit; }
 @media (max-width:720px) {
   .release-grid { grid-template-columns:1fr; }
 }
+
+
+/* Finance budget */
+.budget-layout { display:grid; grid-template-columns:220px minmax(0,1fr); gap:12px; align-items:start; }
+
+@media (max-width:800px) {
+  .budget-layout { grid-template-columns:1fr; }
+}
