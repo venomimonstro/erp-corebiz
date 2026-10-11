@@ -95,6 +95,17 @@ export class CommercePaymentsService {
         "SELECT 1 FROM site WHERE id=$1 AND tenant_id=$2 AND status='ACTIVE'",
         [siteId,context.tenantId]);
       if(!site.rowCount)throw new NotFoundException("Сайт не найден");
+      // Rotating merchant credentials during an in-flight provider payment
+      // would make authenticated status verification impossible.
+      if(input.secret){
+        const active=await client.query(
+          `SELECT 1 FROM commerce_payment_intent
+           WHERE tenant_id=$1 AND site_id=$2 AND status IN ('NEW','PENDING')
+           LIMIT 1`,[context.tenantId,siteId]);
+        if(active.rowCount)throw new ConflictException(
+          "Дождитесь завершения незакрытых оплат перед сменой секретного ключа"
+        );
+      }
       const old=await client.query<{encrypted_secret:string;shop_id:string}>(
         "SELECT encrypted_secret,shop_id FROM commerce_merchant_config WHERE tenant_id=$1 AND site_id=$2",
         [context.tenantId,siteId]);
@@ -255,6 +266,12 @@ export class CommercePaymentsService {
     }
     const cred=this.platform();
     const row=await this.database.withTenantTransaction(context,async client=>{
+      // Serialize checkout attempts for one tenant before looking for an
+      // existing intent. Together with the partial unique index this prevents
+      // concurrent unpaid subscription charges.
+      await client.query(
+        "SELECT tenant_id FROM tenant_subscription WHERE tenant_id=$1 FOR UPDATE",
+        [context.tenantId]);
       const plan=await client.query<{id:string;code:string;monthly_price_minor:string}>(
         `SELECT id,code,monthly_price_minor::text FROM billing_plan
          WHERE code=$1 AND status='ACTIVE' AND currency='RUB'`,
@@ -316,7 +333,8 @@ export class CommercePaymentsService {
            JOIN commerce_order_delivery d
              ON d.tenant_id=c.tenant_id AND d.sales_order_id=o.id
            WHERE c.tenant_id=$1 AND c.id=$2 AND c.status='CHECKED_OUT'
-             AND o.order_status IN ('CONFIRMED','COMPLETED')`,
+             AND o.order_status IN ('CONFIRMED','COMPLETED')
+           FOR UPDATE OF c`,
           [cart.tenant_id,cart.cart_id]);
         const o=order.rows[0];
         if(!o)throw new ConflictException(
@@ -489,7 +507,7 @@ export class CommercePaymentsService {
       const existing=await client.query<{
         id:string;provider_refund_id:string|null;status:string;idempotency_key:string;
       }>(
-        "SELECT * FROM commerce_refund WHERE tenant_id=$1 AND intent_id=$2 FOR UPDATE",
+        "SELECT * FROM commerce_refund WHERE tenant_id=$1 AND intent_id=$2 AND status IN ('NEW','PENDING','SUCCEEDED') FOR UPDATE",
         [context.tenantId,intent.intent_id]);
       if(existing.rows[0])return {intent,refund:existing.rows[0]};
       const id=randomUUID();
