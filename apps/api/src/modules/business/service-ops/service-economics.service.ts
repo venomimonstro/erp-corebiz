@@ -343,7 +343,37 @@ export class ServiceEconomicsService {
       [context.tenantId,bookingId]
     );
     const resourceCost=BigInt(resourceResult.rows[0]?.cost_minor??"0");
-    const revenue=BigInt(booking.price_minor_snapshot);
+
+    const packageRevenue=await client.query<{revenue_minor:string}>(
+      `SELECT
+         CASE
+           WHEN pe.management_visit_value_minor_snapshot>0
+             THEN pe.management_visit_value_minor_snapshot
+           WHEN plan.management_visit_value_minor>0
+             THEN plan.management_visit_value_minor
+           WHEN sp.visit_limit_snapshot IS NOT NULL
+             AND sp.visit_limit_snapshot>0
+             THEN sp.price_minor_snapshot/sp.visit_limit_snapshot
+           ELSE 0
+         END::text AS revenue_minor
+       FROM service_package_redemption red
+       JOIN service_package sp
+         ON sp.tenant_id=red.tenant_id AND sp.id=red.package_id
+       JOIN service_package_plan plan
+         ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
+       LEFT JOIN service_package_entitlement pe
+         ON pe.tenant_id=red.tenant_id
+        AND pe.id=red.package_entitlement_id
+       WHERE red.tenant_id=$1
+         AND red.booking_id=$2
+         AND red.state IN ('RESERVED','CONSUMED')
+       LIMIT 1`,
+      [context.tenantId,bookingId]
+    );
+    const revenue=packageRevenue.rows[0]
+      ?BigInt(packageRevenue.rows[0].revenue_minor)
+      :BigInt(booking.price_minor_snapshot);
+    const revenueSource=packageRevenue.rows[0]?"PACKAGE":"DIRECT";
     const marginBeforeEmployee=
       revenue>materialCost+resourceCost
         ?revenue-materialCost-resourceCost
@@ -445,6 +475,7 @@ export class ServiceEconomicsService {
         JSON.stringify({
           serviceId:booking.service_id,
           deliveryFormat:booking.delivery_format_snapshot,
+          revenueSource,
           employeePlanId:planId,
           components:componentSnapshot
         })
