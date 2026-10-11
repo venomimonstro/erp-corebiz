@@ -1038,3 +1038,58 @@ LEFT JOIN warehouse w
 WHERE p.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
   AND p.warehouse_id IS NOT NULL
   AND w.id IS NULL;
+
+
+-- Confirmed tax payment tasks must be represented in Finance.
+SELECT 'ACCOUNTING_TAX_PAYABLE_MISSING' AS code,count(*)::bigint AS affected
+FROM accounting_compliance_obligation o
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND o.obligation_type='PAY'
+  AND o.calculation_status='CONFIRMED'
+  AND coalesce(o.amount_minor,0)>0
+  AND o.workflow_status NOT IN ('CANCELLED')
+  AND o.payment_obligation_id IS NULL
+UNION ALL
+SELECT 'ACCOUNTING_TAX_PAYABLE_AMOUNT_DRIFT',count(*)::bigint
+FROM accounting_compliance_obligation o
+JOIN financial_obligation f
+  ON f.tenant_id=o.tenant_id AND f.id=o.payment_obligation_id
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND o.obligation_type='PAY'
+  AND (
+    f.direction<>'PAYABLE'
+    OR f.source_type<>'ACCOUNTING_COMPLIANCE'
+    OR f.source_id<>o.id
+    OR f.amount_minor<>coalesce(o.amount_minor,0)
+  )
+UNION ALL
+SELECT 'ACCOUNTING_TAX_PAID_NOT_SETTLED',count(*)::bigint
+FROM accounting_compliance_obligation o
+LEFT JOIN financial_obligation f
+  ON f.tenant_id=o.tenant_id AND f.id=o.payment_obligation_id
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND o.workflow_status='PAID'
+  AND (
+    f.id IS NULL
+    OR f.status<>'SETTLED'
+    OR f.settled_minor<>f.amount_minor
+  )
+UNION ALL
+SELECT 'AUTOMOTIVE_PART_PARTIAL_INVENTORY_LINK',count(*)::bigint
+FROM automotive_dismantled_part p
+WHERE p.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND ((p.sku_id IS NULL)<>(p.warehouse_id IS NULL))
+UNION ALL
+SELECT 'AUTOMOTIVE_LINKED_PART_WITHOUT_RECEIPT',count(*)::bigint
+FROM automotive_dismantled_part p
+WHERE p.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND p.sku_id IS NOT NULL
+  AND p.warehouse_id IS NOT NULL
+  AND NOT EXISTS(
+    SELECT 1
+    FROM inventory_transaction t
+    WHERE t.tenant_id=p.tenant_id
+      AND t.source_type='AUTOMOTIVE_DISMANTLED_PART'
+      AND t.source_id=p.id
+      AND t.movement_type='RECEIPT'
+  );
