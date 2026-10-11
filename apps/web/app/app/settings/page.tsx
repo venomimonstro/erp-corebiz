@@ -140,6 +140,22 @@ export default function SettingsPage() {
         </header>
 
         <section className="settings-card">
+          <div className="section-heading"><div>
+            <p className="muted">Компания / Безопасный доступ</p>
+            <h2>Сотрудники и интеграции</h2>
+            <p>Пригласите сотрудников и проверьте готовность касс, платежей,
+              маркировки и доставки, прежде чем принимать реальные заказы.</p>
+          </div></div>
+          <div className="studio-hero-actions">
+            <a className="secondary-button" href="/app/settings/team">
+              Сотрудники и приглашения →
+            </a>
+            <a className="secondary-button" href="/app/settings/integrations">
+              Кассы, эквайринг и доставка →
+            </a>
+          </div>
+        </section>
+        <section className="settings-card">
           <div className="section-heading">
             <div>
               <p className="muted">Migration Center</p>
