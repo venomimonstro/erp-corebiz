@@ -15,6 +15,14 @@ type Resource = {
   id: string;
   name: string;
   type: string;
+  capacity: number;
+};
+
+type Zone = {
+  id: string;
+  resource_id: string;
+  name: string;
+  capacity_units: number;
 };
 
 type Plan = {
@@ -60,6 +68,9 @@ type Contract = {
   minimum_billable_minutes: number;
   cancellation_charge_bps: number;
   payment_term_days: number;
+  capacity_units: number;
+  zone_id: string | null;
+  zone_name: string | null;
   valid_from: string;
   valid_to: string | null;
 };
@@ -142,6 +153,19 @@ export default function DanceTeamPage() {
   const [payroll, setPayroll] = useState<PayrollBatch[]>([]);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [zones, setZones] = useState<Record<string, Zone[]>>({});
+  const [roomModal, setRoomModal] = useState(false);
+  const [roomId, setRoomId] = useState("");
+  const [roomZoneId, setRoomZoneId] = useState("");
+  const [roomCapacityUnits, setRoomCapacityUnits] = useState("1");
+  const [roomLandlordId, setRoomLandlordId] = useState("");
+  const [roomPricingType, setRoomPricingType] = useState<
+    "HOURLY" | "FIXED_MONTHLY" | "FIXED_SLOT"
+  >("HOURLY");
+  const [roomAmountRub, setRoomAmountRub] = useState("1000");
+  const [roomMinimumMinutes, setRoomMinimumMinutes] = useState("60");
+  const [roomCancelPercent, setRoomCancelPercent] = useState("0");
+  const [roomPaymentTermDays, setRoomPaymentTermDays] = useState("5");
   const [planModal, setPlanModal] = useState(false);
   const [planTrainerId, setPlanTrainerId] = useState("");
   const [planScheme, setPlanScheme] = useState<
@@ -184,6 +208,16 @@ export default function DanceTeamPage() {
         ]);
       setCustomers(customerRows);
       setResources(resourceRows);
+      const roomRows = resourceRows.filter((item) =>
+        ["ROOM", "HALL", "WORKPLACE"].includes(item.type)
+      );
+      const zoneRows = await Promise.all(
+        roomRows.map(async (room) => [
+          room.id,
+          await apiRequest<Zone[]>("/service/resources/" + room.id + "/zones")
+        ] as const)
+      );
+      setZones(Object.fromEntries(zoneRows));
       setPlans(planRows);
       setAccruals(accrualRows);
       setContracts(contractRows);
@@ -311,77 +345,81 @@ export default function DanceTeamPage() {
     }
   }
 
+  function openRoomModal() {
+    const firstRoom = rooms[0];
+    setRoomId((current) => current || firstRoom?.id || "");
+    setRoomZoneId("");
+    setRoomCapacityUnits("1");
+    setRoomLandlordId("");
+    setRoomPricingType("HOURLY");
+    setRoomAmountRub("1000");
+    setRoomMinimumMinutes("60");
+    setRoomCancelPercent("0");
+    setRoomPaymentTermDays("5");
+    setRoomModal(true);
+  }
+
   async function createRoomContract() {
-    if (!rooms.length) {
-      setError("Сначала создайте ресурс-зал");
+    if (!roomId) {
+      setError("Выберите зал");
       return;
     }
-    const room = rooms[
-      Number(window.prompt(
-        "Зал:\n" + rooms.map((item, i) => `${i + 1}. ${item.name}`).join("\n"),
-        "1"
-      )) - 1
-    ];
-    if (!room) return;
+    const amountRub = Number(roomAmountRub.replace(",", "."));
+    const capacityUnits = Number(roomCapacityUnits);
+    const minimum = Number(roomMinimumMinutes);
+    const cancelPercent = Number(roomCancelPercent.replace(",", "."));
+    const paymentTermDays = Number(roomPaymentTermDays);
 
-    let counterpartyPartyId: string | undefined;
     if (
-      customers.length &&
-      window.confirm(
-        "Указать арендодателя? Если да, по итогам месяца будет создана кредиторка."
-      )
+      !Number.isFinite(amountRub) || amountRub < 0 ||
+      !Number.isSafeInteger(capacityUnits) || capacityUnits < 1 ||
+      !Number.isSafeInteger(minimum) || minimum < 0 || minimum > 1440 ||
+      !Number.isFinite(cancelPercent) || cancelPercent < 0 || cancelPercent > 100 ||
+      !Number.isSafeInteger(paymentTermDays) || paymentTermDays < 0
     ) {
-      const landlord = customers[
-        Number(
-          window.prompt(
-            "Арендодатель:\n" +
-              customers
-                .slice(0, 80)
-                .map((item, i) => `${i + 1}. ${item.displayName}`)
-                .join("\n"),
-            "1"
-          )
-        ) - 1
-      ];
-      counterpartyPartyId = landlord?.id;
+      setError("Проверьте условия аренды");
+      return;
     }
-    const pricingType = (
-      window.prompt("Тип аренды: HOURLY, FIXED_MONTHLY или FIXED_SLOT", "HOURLY") ?? "HOURLY"
-    ).trim().toUpperCase();
-    const amountRub = Number(
-      (window.prompt(
-        pricingType === "FIXED_MONTHLY" ? "Аренда в месяц, ₽" : pricingType === "FIXED_SLOT" ? "Стоимость слота, ₽" : "Стоимость часа, ₽",
-        "1000"
-      ) ?? "0").replace(",", ".")
-    );
-    const minimum = pricingType === "HOURLY"
-      ? Number(window.prompt("Минимально оплачиваемых минут", "60") ?? "60")
-      : 0;
-    const cancelPercent = Number(
-      (window.prompt("Штраф при отмене, %", "0") ?? "0").replace(",", ".")
-    );
-    const paymentTermDays = Number(
-      window.prompt("Срок оплаты аренды после конца месяца, дней", "5") ?? "5"
-    );
 
+    setPending(true);
+    setError("");
     try {
       await apiRequest("/dance/room-contracts", {
         method: "POST",
         body: JSON.stringify({
-          roomResourceId: room.id,
-          counterpartyPartyId,
-          pricingType,
-          hourlyRateMinor: pricingType === "HOURLY" ? String(Math.round(amountRub * 100)) : "0",
-          monthlyMinor: pricingType === "FIXED_MONTHLY" ? String(Math.round(amountRub * 100)) : "0",
-          slotMinor: pricingType === "FIXED_SLOT" ? String(Math.round(amountRub * 100)) : "0",
-          minimumBillableMinutes: minimum,
+          roomResourceId: roomId,
+          zoneId: roomZoneId || undefined,
+          capacityUnits,
+          counterpartyPartyId: roomLandlordId || undefined,
+          pricingType: roomPricingType,
+          hourlyRateMinor:
+            roomPricingType === "HOURLY"
+              ? String(Math.round(amountRub * 100))
+              : "0",
+          monthlyMinor:
+            roomPricingType === "FIXED_MONTHLY"
+              ? String(Math.round(amountRub * 100))
+              : "0",
+          slotMinor:
+            roomPricingType === "FIXED_SLOT"
+              ? String(Math.round(amountRub * 100))
+              : "0",
+          minimumBillableMinutes:
+            roomPricingType === "HOURLY" ? minimum : 0,
           cancellationChargeBps: Math.round(cancelPercent * 100),
           paymentTermDays
         })
       });
+      setRoomModal(false);
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось создать договор аренды");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось создать договор аренды"
+      );
+    } finally {
+      setPending(false);
     }
   }
 
@@ -509,7 +547,7 @@ export default function DanceTeamPage() {
           </div>
           <div className="header-actions">
             <button className="secondary-button" onClick={openPlanModal} type="button">+ Правило зарплаты</button>
-            <button className="secondary-button" onClick={() => void createRoomContract()} type="button">+ Аренда зала</button>
+            <button className="secondary-button" onClick={openRoomModal} type="button">+ Аренда зала</button>
             <button className="secondary-button" disabled={pending} onClick={() => void finalizeRoomMonth()} type="button">Закрыть аренду месяца</button>
             <button disabled={pending} onClick={() => void approveMonth()} type="button">Утвердить месяц</button>
             <button disabled={pending} onClick={() => void exportPayroll()} type="button">В payroll</button>
@@ -589,7 +627,7 @@ export default function DanceTeamPage() {
           <div className="section-heading"><div><p className="muted">Залы</p><h2>Договоры и себестоимость</h2></div></div>
           <div className="data-table-wrap">
             <table className="data-table">
-              <thead><tr><th>Зал</th><th>Тип</th><th>Ставка</th><th>Минимум</th><th>Отмена</th><th>Оплата</th><th>Период</th></tr></thead>
+              <thead><tr><th>Зал</th><th>Тип</th><th>Ставка</th><th>Минимум</th><th>Отмена</th><th>Оплата</th><th>Зона / доля</th><th>Период</th></tr></thead>
               <tbody>
                 {contracts.map((item) => (
                   <tr key={item.id}>
@@ -601,6 +639,10 @@ export default function DanceTeamPage() {
                     <td>{item.minimum_billable_minutes} мин</td>
                     <td>{item.cancellation_charge_bps / 100}%</td>
                     <td>{item.payment_term_days} дн.</td>
+                    <td>
+                      {item.zone_name ? item.zone_name + " · " : ""}
+                      {item.capacity_units} ед.
+                    </td>
                     <td>{item.valid_from}{item.valid_to ? " — " + item.valid_to : " — ∞"}</td>
                   </tr>
                 ))}
@@ -656,6 +698,197 @@ export default function DanceTeamPage() {
             </table>
           </div>
         </section>
+        {roomModal ? (
+          <StudioModal
+            eyebrow="Аренда пространства"
+            title="Условия аренды зала"
+            description="Можно арендовать весь зал, конкретную зону или только часть вместимости. Остаток останется доступен для других занятий и арендаторов."
+            onClose={() => setRoomModal(false)}
+            footer={
+              <>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setRoomModal(false)}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => void createRoomContract()}
+                >
+                  {pending ? "Сохраняем…" : "Сохранить договор"}
+                </button>
+              </>
+            }
+          >
+            <div className="studio-form-section">
+              <header>
+                <strong>Что арендуем</strong>
+                <span>Выберите зал, зону и сколько единиц вместимости занимает договор.</span>
+              </header>
+              <div className="studio-form-grid">
+                <label>
+                  <span>Зал</span>
+                  <select
+                    value={roomId}
+                    onChange={(event) => {
+                      setRoomId(event.target.value);
+                      setRoomZoneId("");
+                    }}
+                  >
+                    <option value="">Выберите зал</option>
+                    {rooms.map((room) => (
+                      <option key={room.id} value={room.id}>
+                        {room.name} · {room.capacity} ед.
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Зона</span>
+                  <select
+                    value={roomZoneId}
+                    onChange={(event) => setRoomZoneId(event.target.value)}
+                  >
+                    <option value="">Весь ресурс / без зоны</option>
+                    {(zones[roomId] ?? []).map((zone) => (
+                      <option key={zone.id} value={zone.id}>
+                        {zone.name} · {zone.capacity_units} ед.
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="studio-form-grid">
+                <label>
+                  <span>Занимаемая вместимость</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={roomCapacityUnits}
+                    onChange={(event) => setRoomCapacityUnits(event.target.value)}
+                  />
+                  <small>Например, 40 из 100 единиц большого зала.</small>
+                </label>
+                <label>
+                  <span>Арендодатель</span>
+                  <select
+                    value={roomLandlordId}
+                    onChange={(event) => setRoomLandlordId(event.target.value)}
+                  >
+                    <option value="">Без контрагента</option>
+                    {customers.map((customer) => (
+                      <option key={customer.id} value={customer.id}>
+                        {customer.displayName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div className="studio-form-section">
+              <header>
+                <strong>Как считать аренду</strong>
+                <span>Ставка попадёт в себестоимость занятий и P&L студии.</span>
+              </header>
+              <div className="studio-choice-grid">
+                {[
+                  ["HOURLY", "За час", "Фактическое время использования"],
+                  ["FIXED_MONTHLY", "За месяц", "Фиксированная месячная аренда"],
+                  ["FIXED_SLOT", "За слот", "Фикс за каждое занятие / слот"]
+                ].map(([value,label,hint]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={
+                      "studio-choice " +
+                      (roomPricingType === value ? "active" : "")
+                    }
+                    onClick={() =>
+                      setRoomPricingType(
+                        value as "HOURLY" | "FIXED_MONTHLY" | "FIXED_SLOT"
+                      )
+                    }
+                  >
+                    <strong>{label}</strong>
+                    <span>{hint}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="studio-form-grid">
+                <label>
+                  <span>
+                    {roomPricingType === "HOURLY"
+                      ? "Стоимость часа, ₽"
+                      : roomPricingType === "FIXED_MONTHLY"
+                        ? "Стоимость месяца, ₽"
+                        : "Стоимость слота, ₽"}
+                  </span>
+                  <input
+                    inputMode="decimal"
+                    value={roomAmountRub}
+                    onChange={(event) => setRoomAmountRub(event.target.value)}
+                  />
+                </label>
+                {roomPricingType === "HOURLY" ? (
+                  <label>
+                    <span>Минимально оплачиваемых минут</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="1440"
+                      value={roomMinimumMinutes}
+                      onChange={(event) =>
+                        setRoomMinimumMinutes(event.target.value)
+                      }
+                    />
+                  </label>
+                ) : (
+                  <label>
+                    <span>Срок оплаты после месяца, дней</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={roomPaymentTermDays}
+                      onChange={(event) =>
+                        setRoomPaymentTermDays(event.target.value)
+                      }
+                    />
+                  </label>
+                )}
+              </div>
+              <div className="studio-form-grid">
+                <label>
+                  <span>Штраф при отмене, %</span>
+                  <input
+                    inputMode="decimal"
+                    value={roomCancelPercent}
+                    onChange={(event) =>
+                      setRoomCancelPercent(event.target.value)
+                    }
+                  />
+                </label>
+                {roomPricingType === "HOURLY" ? (
+                  <label>
+                    <span>Срок оплаты после месяца, дней</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={roomPaymentTermDays}
+                      onChange={(event) =>
+                        setRoomPaymentTermDays(event.target.value)
+                      }
+                    />
+                  </label>
+                ) : null}
+              </div>
+            </div>
+          </StudioModal>
+        ) : null}
+
         {planModal ? (
           <StudioModal
             eyebrow="Зарплата тренера"
