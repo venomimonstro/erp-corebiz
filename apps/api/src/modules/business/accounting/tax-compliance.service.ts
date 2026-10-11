@@ -87,14 +87,73 @@ export class TaxComplianceService {
          WHERE tenant_id=$1 AND legal_entity_id=$2 ORDER BY provider`,
         [context.tenantId,legalEntityId]
       );
+      const income=await client.query<{amount_minor:string}>(
+        `SELECT coalesce(sum(amount_minor),0)::text AS amount_minor
+         FROM accounting_tax_ledger_item
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+           AND direction='INCOME' AND tax_treatment='INCLUDED'
+           AND recognition_date>=date_trunc('year',current_date)::date
+           AND recognition_date<(
+             date_trunc('year',current_date)+interval '1 year'
+           )::date`,
+        [context.tenantId,legalEntityId]
+      );
+      const ytdIncome=BigInt(income.rows[0]?.amount_minor??"0");
+      const activeProfile=profile.rows[0]??null;
+      const alerts:Array<{
+        code:string;
+        severity:"INFO"|"WARNING"|"CRITICAL";
+        title:string;
+        detail:string;
+      }>=[];
+      if(!activeProfile){
+        alerts.push({
+          code:"TAX_PROFILE_MISSING",
+          severity:"CRITICAL",
+          title:"Не настроен налоговый профиль",
+          detail:"Без профиля нельзя безопасно рассчитывать налоги и отчётность."
+        });
+      }else if(
+        String(activeProfile.tax_regime).startsWith("USN") &&
+        activeProfile.vat_mode==="NO_VAT"
+      ){
+        const warn=18_000_00000n;
+        const threshold=20_000_00000n;
+        if(ytdIncome>=threshold){
+          alerts.push({
+            code:"USN_VAT_THRESHOLD_REACHED",
+            severity:"CRITICAL",
+            title:"Доход достиг контрольного порога НДС",
+            detail:"Проверьте дату возникновения обязанности по НДС и актуальный режим."
+          });
+        }else if(ytdIncome>=warn){
+          alerts.push({
+            code:"USN_VAT_THRESHOLD_NEAR",
+            severity:"WARNING",
+            title:"До порога НДС осталось менее 2 млн ₽",
+            detail:"Проверьте прогноз поступлений и заранее подготовьте настройку НДС."
+          });
+        }
+      }
+      const ensRow=ens.rows[0]??null;
+      if(ensRow&&BigInt(ensRow.overdue_minor??"0")>0n){
+        alerts.push({
+          code:"ENS_OVERDUE",
+          severity:"CRITICAL",
+          title:"На ЕНС есть просроченные обязательства",
+          detail:"Сверьте сальдо ЕНС и ближайшие платежи."
+        });
+      }
       return {
         entity:entity.rows[0],
-        profile:profile.rows[0]??null,
+        profile:activeProfile,
         counts:counts.rows[0]??{},
         obligations:obligations.rows,
-        ens:ens.rows[0]??null,
+        ens:ensRow,
         calculations:calculations.rows,
-        connectors:connectors.rows
+        connectors:connectors.rows,
+        ytdTaxableIncomeMinor:ytdIncome.toString(),
+        alerts
       };
     });
   }
