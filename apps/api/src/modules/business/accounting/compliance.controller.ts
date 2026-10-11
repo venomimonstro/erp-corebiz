@@ -283,6 +283,21 @@ export class ComplianceController {
     };
   }
 
+  @Post("obligations/:id/pay")
+  @RequirePermission("accounting.compliance.approve")
+  async payTaxObligation(
+    @Req() req:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:{cashAccountId:string;note?:string}
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.payTaxObligation(
+        this.context(req),id,body
+      )
+    };
+  }
+
   @Post("obligations/:id/receipt")
   @RequirePermission("accounting.compliance.approve")
   async recordReceipt(
