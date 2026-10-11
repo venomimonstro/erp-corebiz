@@ -146,4 +146,35 @@ describe("ApiRateLimitGuard", () => {
       .toBe(redis.incrementWindow.mock.calls[3]?.[0]);
   });
 
+
+  it("limits anonymous checkout much more strictly than signed webhooks", async () => {
+    const reflector = {
+      getAllAndOverride: jest.fn(() => "PUBLIC_CHECKOUT")
+    } as unknown as Reflector;
+    const guard = new ApiRateLimitGuard(redis as any, reflector, pressure as any);
+    redis.incrementWindow.mockResolvedValueOnce(11);
+    await expect(guard.canActivate(context("PUBLIC_CHECKOUT", {
+      auth: undefined,
+      method: "POST",
+      path: "/api/v1/storefront/carts/cart-secret/checkout",
+      ip: "192.0.2.12"
+    }))).rejects.toMatchObject({ status: 429 });
+    expect(redis.incrementWindow).toHaveBeenCalledTimes(1);
+    expect(redis.acquireSemaphore).not.toHaveBeenCalled();
+  });
+
+  it("keeps cart traffic in a separate bounded anonymous budget", async () => {
+    const reflector = {
+      getAllAndOverride: jest.fn(() => "PUBLIC_CART")
+    } as unknown as Reflector;
+    const guard = new ApiRateLimitGuard(redis as any, reflector, pressure as any);
+    redis.incrementWindow.mockResolvedValueOnce(46);
+    await expect(guard.canActivate(context("PUBLIC_CART", {
+      auth: undefined,
+      method: "POST",
+      path: "/api/v1/storefront/my-shop/carts",
+      ip: "192.0.2.12"
+    }))).rejects.toMatchObject({ status: 429 });
+  });
+
 });
