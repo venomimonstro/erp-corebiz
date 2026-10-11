@@ -1151,9 +1151,15 @@ export class DanceStudioService {
              ON pp.tenant_id=rel.tenant_id AND pp.id=rel.to_party_id
            WHERE rel.tenant_id=s.tenant_id
              AND rel.from_party_id=s.party_id
-             AND rel.relation_type='PAYER'
+             AND rel.relation_type IN ('PAYER','PARENT','GUARDIAN')
              AND (rel.ends_on IS NULL OR rel.ends_on>=current_date)
-           ORDER BY rel.is_primary DESC,rel.created_at
+           ORDER BY
+             CASE rel.relation_type
+               WHEN 'PAYER' THEN 0
+               WHEN 'PARENT' THEN 1
+               ELSE 2
+             END,
+             rel.is_primary DESC,rel.created_at
            LIMIT 1
          ) payer ON true
          WHERE gm.tenant_id=$1 AND gm.group_id=$2
