@@ -36,7 +36,11 @@ describe("business vertical operating models", () => {
   });
 
   it("keeps stock-dependent service businesses operationally complete", () => {
-    for (const code of ["BEAUTY_SALON", "AUTO_SERVICE"] as const) {
+    for (const code of [
+      "BEAUTY_SALON",
+      "AUTO_SERVICE",
+      "AUTO_PARTS_DISMANTLING"
+    ] as const) {
       const capabilities = new Set(
         BUSINESS_VERTICALS[code].enabledCapabilities
       );
@@ -88,6 +92,7 @@ describe("business vertical operating models", () => {
     for (const code of [
       "BEAUTY_SALON",
       "AUTO_SERVICE",
+      "AUTO_PARTS_DISMANTLING",
       "DANCE_FITNESS",
       "RETAIL_STORE",
       "WHOLESALE_B2B",
