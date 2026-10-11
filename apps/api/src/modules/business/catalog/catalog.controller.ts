@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, Req } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
@@ -30,6 +30,16 @@ export class CatalogController {
     };
   }
 
+  @Patch(":productId/image")
+  @RequirePermission("catalog.write")
+  async updateImage(
+    @Req() request:AuthenticatedRequest,
+    @Param("productId") productId:string,
+    @Body() body:{imageUrl?:string|null}
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.catalog.updateImage(this.context(request),productId,body)};
+  }
+
   @Post()
   @RequirePermission("catalog.write")
   async create(
@@ -43,6 +53,7 @@ export class CatalogController {
       costPriceMinor?: string;
       categoryId?: string;
       description?: string;
+      imageUrl?: string;
     }
   ): Promise<ApiSuccess<unknown>> {
     return {
