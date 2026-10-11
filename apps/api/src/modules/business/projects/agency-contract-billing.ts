@@ -37,6 +37,11 @@ export function calculateAgencyContractCharge(
       warnings.push("Договор "+c.contract_number+" не активирован или не подписан: автоматическое начисление запрещено");
       continue;
     }
+    if(c.signed_on>last){
+      needsReview=true;
+      warnings.push("Договор "+c.contract_number+" подписан позднее отчётного месяца: автоматическое начисление запрещено");
+      continue;
+    }
     const contractMonth=Number(c.starts_on.slice(0,4))*12+
       Number(c.starts_on.slice(5,7))-1;
     const index=monthIndex-contractMonth;

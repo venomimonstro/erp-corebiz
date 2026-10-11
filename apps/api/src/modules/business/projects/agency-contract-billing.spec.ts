@@ -35,4 +35,34 @@ describe("contract-driven agency billing",()=>{
     expect(result.serviceRevenueMinor).toBe("0");
     expect(result.needsReview).toBe(true);
   });
+  it("never bills a contract before its signature even if active now",()=>{
+    const result=calculateAgencyContractCharge("2026-06",[
+      {...base,signed_on:"2026-07-12"}
+    ]);
+    expect(result.serviceRevenueMinor).toBe("0");
+    expect(result.needsReview).toBe(true);
+    expect(result.warnings.join(" ")).toContain("подписан позднее");
+  });
+
+  it("blocks expired and paused contracts rather than silently charging",()=>{
+    for(const status of ["PAUSED","TERMINATED","EXPIRED"]){
+      const result=calculateAgencyContractCharge("2026-06",[{...base,status}]);
+      expect(result.serviceRevenueMinor).toBe("0");
+      expect(result.needsReview).toBe(true);
+    }
+  });
+
+  it("charges a one-time web build only once",()=>{
+    const c={...base,billing_cycle:"ONE_TIME" as const};
+    expect(calculateAgencyContractCharge("2026-01",[c]).serviceRevenueMinor).toBe("8000000");
+    expect(calculateAgencyContractCharge("2026-02",[c]).serviceRevenueMinor).toBe("0");
+  });
+
+  it("needs finance review for signed but partial termination month",()=>{
+    const c={...base,ends_on:"2026-06-12"};
+    const result=calculateAgencyContractCharge("2026-06",[c]);
+    expect(result.needsReview).toBe(true);
+    expect(result.serviceRevenueMinor).toBe("8000000");
+  });
+
 });
