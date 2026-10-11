@@ -404,7 +404,7 @@ export class AccountingService {
     legalEntityId:string;
     entityKind:"ORGANIZATION"|"IP";
     taxRegime:"USN_INCOME"|"USN_INCOME_EXPENSE"|"OSNO"|"AUSN"|"OTHER";
-    vatMode?:"NO_VAT"|"VAT_5"|"VAT_7"|"VAT_20"|"VAT_MIXED";
+    vatMode?:"NO_VAT"|"VAT_5"|"VAT_7"|"VAT_22"|"VAT_MIXED";
     hasEmployees?:boolean;
     taxRegionCode?:string;
     taxOfficeCode?:string;
@@ -428,7 +428,7 @@ export class AccountingService {
     const vatMode=input.vatMode??"NO_VAT";
     const reportingMode=input.reportingMode??"ASSISTED";
     const riskTolerance=input.riskTolerance??"CONSERVATIVE";
-    if(!["NO_VAT","VAT_5","VAT_7","VAT_20","VAT_MIXED"].includes(vatMode) ||
+    if(!["NO_VAT","VAT_5","VAT_7","VAT_22","VAT_MIXED"].includes(vatMode) ||
        !["ASSISTED","SEMI_AUTOMATIC","EXTERNAL_ACCOUNTANT"].includes(reportingMode) ||
        !["CONSERVATIVE","STANDARD"].includes(riskTolerance)) {
       throw new BadRequestException("Некорректные параметры налогового профиля");
@@ -528,8 +528,9 @@ export class AccountingService {
         tax_regime:string;
         vat_mode:string;
         has_employees:boolean;
+        compliance_enabled:boolean;
       }>(
-        `SELECT id,entity_kind,tax_regime,vat_mode,has_employees
+        `SELECT id,entity_kind,tax_regime,vat_mode,has_employees,compliance_enabled
          FROM accounting_tax_profile
          WHERE tenant_id=$1 AND legal_entity_id=$2 AND status='ACTIVE'
            AND effective_from<=make_date($3,12,31)
@@ -542,6 +543,11 @@ export class AccountingService {
       if(!profile){
         throw new ConflictException(
           "Сначала настройте налоговый профиль юридического лица"
+        );
+      }
+      if(profile.compliance_enabled===false){
+        throw new ConflictException(
+          "Налоговый контур выключен для этого юридического лица"
         );
       }
 
