@@ -177,6 +177,30 @@ export default function DanceGroupsPage() {
   const [generateModal, setGenerateModal] = useState(false);
   const [generateFrom, setGenerateFrom] = useState(dateInput(0));
   const [generateTo, setGenerateTo] = useState(dateInput(35));
+  const [groupPackageModal, setGroupPackageModal] = useState(false);
+  const [groupPackageName, setGroupPackageName] = useState("");
+  const [groupPackageScope, setGroupPackageScope] = useState<"GROUP"|"PROGRAM">("GROUP");
+  const [groupPackageKind, setGroupPackageKind] = useState<"VISITS"|"PERIOD"|"UNLIMITED">("VISITS");
+  const [groupPackageVisits, setGroupPackageVisits] = useState("8");
+  const [groupPackageDays, setGroupPackageDays] = useState("30");
+  const [groupPackagePrice, setGroupPackagePrice] = useState("6000");
+  const [groupPackageVisitValue, setGroupPackageVisitValue] = useState("750");
+
+  const [participantModal, setParticipantModal] = useState(false);
+  const [participantStudentId, setParticipantStudentId] = useState("");
+  const [participantPaymentMode, setParticipantPaymentMode] = useState<"DIRECT"|"PACKAGE"|"MAKEUP">("DIRECT");
+  const [participantPackageId, setParticipantPackageId] = useState("");
+  const [participantMakeupId, setParticipantMakeupId] = useState("");
+  const [participantChargeRub, setParticipantChargeRub] = useState("0");
+
+  const [editLessonModal, setEditLessonModal] = useState(false);
+  const [editStartsAt, setEditStartsAt] = useState("");
+  const [editTrainerId, setEditTrainerId] = useState("");
+  const [editRoomId, setEditRoomId] = useState("");
+  const [editCapacity, setEditCapacity] = useState("1");
+
+  const [cancelLessonModal, setCancelLessonModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState("Отмена студией");
   const [lessonModal, setLessonModal] = useState<
     "INDIVIDUAL" | "SELF_PRACTICE" | null
   >(null);
@@ -377,96 +401,63 @@ export default function DanceGroupsPage() {
     }finally{setPending(false);}
   }
 
+  function openGroupPackageModal() {
+    if(!selectedGroup)return;
+    setGroupPackageName("Абонемент · "+selectedGroup.name);
+    setGroupPackageScope("GROUP");
+    setGroupPackageKind("VISITS");
+    setGroupPackageVisits("8");
+    setGroupPackageDays("30");
+    setGroupPackagePrice("6000");
+    setGroupPackageVisitValue("750");
+    setGroupPackageModal(true);
+  }
+
   async function createGroupPackage() {
-    if (!selectedGroup) return;
-    const name =
-      window.prompt(
-        "Название тарифа",
-        "Абонемент · " + selectedGroup.name
-      )?.trim();
-    if (!name) return;
-
-    const scope = (
-      window.prompt(
-        "Ограничение: GROUP = только эта группа, PROGRAM = всё направление",
-        "GROUP"
-      ) ?? "GROUP"
-    ).trim().toUpperCase();
-    if (!["GROUP", "PROGRAM"].includes(scope)) {
-      setError("Неизвестное ограничение тарифа");
+    if(!selectedGroup)return;
+    const visits=
+      groupPackageKind==="UNLIMITED"
+        ?undefined
+        :Number(groupPackageVisits);
+    const days=Number(groupPackageDays);
+    const priceRub=Number(groupPackagePrice.replace(",","."));
+    const visitValueRub=Number(groupPackageVisitValue.replace(",","."));
+    if(
+      !groupPackageName.trim()||
+      (groupPackageKind!=="UNLIMITED"&&(!Number.isSafeInteger(visits)||Number(visits)<1))||
+      !Number.isSafeInteger(days)||days<1||
+      !Number.isFinite(priceRub)||priceRub<0||
+      !Number.isFinite(visitValueRub)||visitValueRub<0
+    ){
+      setError("Проверьте параметры тарифа");
       return;
     }
-
-    const kind = (
-      window.prompt("Тип: VISITS, PERIOD или UNLIMITED", "VISITS") ?? "VISITS"
-    ).trim().toUpperCase();
-    if (!["VISITS", "PERIOD", "UNLIMITED"].includes(kind)) {
-      setError("Неизвестный тип тарифа");
-      return;
-    }
-
-    const visits =
-      kind === "UNLIMITED"
-        ? undefined
-        : Number(window.prompt("Количество занятий", "8") ?? "8");
-    const days = Number(window.prompt("Срок, дней", "30") ?? "30");
-    const priceRub = Number(
-      (window.prompt("Цена, ₽", "6000") ?? "0").replace(",", ".")
-    );
-    const visitValueRub = Number(
-      (
-        window.prompt(
-          "Управленческая реализация одного посещения, ₽",
-          kind === "UNLIMITED"
-            ? "700"
-            : String(priceRub / Math.max(visits ?? 1, 1))
-        ) ?? "0"
-      ).replace(",", ".")
-    );
-
-    if (
-      (kind !== "UNLIMITED" &&
-        (!Number.isSafeInteger(visits) || Number(visits) < 1)) ||
-      !Number.isSafeInteger(days) ||
-      days < 1 ||
-      !Number.isFinite(priceRub) ||
-      priceRub < 0 ||
-      !Number.isFinite(visitValueRub) ||
-      visitValueRub < 0
-    ) {
-      setError("Некорректные параметры тарифа");
-      return;
-    }
-
-    try {
-      await apiRequest("/service/package-plans", {
-        method: "POST",
-        body: JSON.stringify({
-          name,
-          packageKind: kind,
-          visitLimit: visits,
-          durationDays: days,
-          priceMinor: String(Math.round(priceRub * 100)),
-          managementVisitValueMinor: String(
-            Math.round(visitValueRub * 100)
-          ),
-          applicableServiceId: selectedGroup.service_id,
-          danceProgramId: selectedGroup.program_id,
-          danceGroupId:
-            scope === "GROUP" ? selectedGroup.id : undefined,
-          noShowPolicy: "CONSUME",
-          activationPolicy: "FULL_PAYMENT",
-          freezeDaysAllowed: 7,
-          makeupDaysValid: 14,
-          allowMakeup: true
+    setPending(true);setError("");setNotice("");
+    try{
+      await apiRequest("/service/package-plans",{
+        method:"POST",
+        body:JSON.stringify({
+          name:groupPackageName.trim(),
+          packageKind:groupPackageKind,
+          visitLimit:visits,
+          durationDays:days,
+          priceMinor:String(Math.round(priceRub*100)),
+          managementVisitValueMinor:String(Math.round(visitValueRub*100)),
+          applicableServiceId:selectedGroup.service_id,
+          danceProgramId:selectedGroup.program_id,
+          danceGroupId:groupPackageScope==="GROUP"?selectedGroup.id:undefined,
+          noShowPolicy:"CONSUME",
+          activationPolicy:"FULL_PAYMENT",
+          freezeDaysAllowed:7,
+          makeupDaysValid:14,
+          allowMakeup:true
         })
       });
-      window.alert("Тариф создан");
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Не удалось создать тариф"
-      );
-    }
+      setGroupPackageModal(false);
+      setNotice("Тариф группы создан.");
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось создать тариф");
+    }finally{setPending(false);}
   }
 
   function openMemberModal() {
@@ -519,7 +510,7 @@ export default function DanceGroupsPage() {
       }>(`/dance/groups/${selectedGroup.id}/sync-roster`, {
         method: "POST"
       });
-      window.alert(
+      setNotice(
         `Синхронизировано уроков: ${result.lessons}. Новых записей: ${result.enrolled}, waitlist: ${result.waitlisted}.`
       );
       await load();
@@ -562,7 +553,7 @@ export default function DanceGroupsPage() {
         }
       );
       if (result.promoted) {
-        window.alert("Свободное место передано первому ученику из листа ожидания.");
+        setNotice("Свободное место передано первому ученику из листа ожидания.");
       }
       await load();
       await loadRoster(selectedGroup.id);
@@ -693,83 +684,56 @@ export default function DanceGroupsPage() {
     }
   }
 
+  function openParticipantModal() {
+    if(!selectedLesson||!students.length)return;
+    const first=students[0];
+    setParticipantStudentId(first?.id??"");
+    setParticipantPaymentMode("DIRECT");
+    setParticipantPackageId("");
+    setParticipantMakeupId("");
+    setParticipantChargeRub("0");
+    setParticipantModal(true);
+  }
+
   async function addParticipant() {
-    if (!selectedLesson || !students.length) return;
-    const student = students[
-      Number(window.prompt(
-        "Ученик:\n" + students.map((item, i) => `${i + 1}. ${item.display_name}`).join("\n"),
-        "1"
-      )) - 1
-    ];
-    if (!student) return;
-
-    const studentMakeups = makeupCredits.filter(
-      (credit) =>
-        credit.student_id === student.id &&
-        credit.status === "AVAILABLE" &&
-        new Date(credit.expires_at).getTime() >=
-          new Date(selectedLesson.starts_at).getTime()
-    );
-    let makeupCreditId: string | undefined;
-    if (
-      studentMakeups.length &&
-      window.confirm("Использовать отработку?")
-    ) {
-      const credit = studentMakeups[
-        Number(
-          window.prompt(
-            "Отработка:\n" +
-              studentMakeups
-                .map(
-                  (item, i) =>
-                    `${i + 1}. до ${new Date(item.expires_at).toLocaleDateString("ru-RU")} · ${item.program_name ?? "любое направление"}`
-                )
-                .join("\n"),
-            "1"
-          )
-        ) - 1
-      ];
-      makeupCreditId = credit?.id;
+    if(!selectedLesson||!participantStudentId)return;
+    const chargeRub=Number(participantChargeRub.replace(",","."));
+    if(
+      participantPaymentMode==="DIRECT" &&
+      (!Number.isFinite(chargeRub)||chargeRub<0)
+    ){
+      setError("Проверьте стоимость разового занятия");
+      return;
     }
 
-    const studentPackages = packages.filter(
-      (pack) => pack.party_id === student.party_id && pack.status === "ACTIVE"
-    );
-    let packageId: string | undefined;
-    if (
-      !makeupCreditId &&
-      studentPackages.length &&
-      window.confirm("Списать занятие из абонемента?")
-    ) {
-      const pack = studentPackages[
-        Number(window.prompt(
-          "Абонемент:\n" + studentPackages.map((item, i) =>
-            `${i + 1}. ${item.plan_name} · ${item.available_visits === null ? "∞" : item.available_visits}`
-          ).join("\n"),
-          "1"
-        )) - 1
-      ];
-      packageId = pack?.id;
-    }
-    const chargeRub = packageId || makeupCreditId
-      ? 0
-      : Number((window.prompt("Стоимость разового занятия, ₽", "0") ?? "0").replace(",", "."));
-
-    try {
-      await apiRequest(`/dance/lessons/${selectedLesson.id}/participants`, {
-        method: "POST",
-        body: JSON.stringify({
-          studentId: student.id,
-          packageId,
-          makeupCreditId,
-          chargeMinor: String(Math.round(chargeRub * 100)),
-          allowWaitlist: true
+    setPending(true);setError("");setNotice("");
+    try{
+      await apiRequest(`/dance/lessons/${selectedLesson.id}/participants`,{
+        method:"POST",
+        body:JSON.stringify({
+          studentId:participantStudentId,
+          packageId:
+            participantPaymentMode==="PACKAGE"
+              ?participantPackageId||undefined
+              :undefined,
+          makeupCreditId:
+            participantPaymentMode==="MAKEUP"
+              ?participantMakeupId||undefined
+              :undefined,
+          chargeMinor:
+            participantPaymentMode==="DIRECT"
+              ?String(Math.round(chargeRub*100))
+              :"0",
+          allowWaitlist:true
         })
       });
+      setParticipantModal(false);
+      setNotice("Ученик записан на занятие.");
       await loadParticipants(selectedLesson.id);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось записать ученика");
-    }
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось записать ученика");
+    }finally{setPending(false);}
   }
 
   async function attendance(participant: Participant, status: string) {
@@ -788,91 +752,60 @@ export default function DanceGroupsPage() {
     }
   }
 
+  function openEditLessonModal() {
+    if(!selectedLesson)return;
+    setEditStartsAt(
+      new Date(selectedLesson.starts_at).toISOString().slice(0,16)
+    );
+    setEditTrainerId(
+      trainers.find((item)=>item.name===selectedLesson.trainer_name)?.id??""
+    );
+    setEditRoomId(
+      rooms.find((item)=>item.name===selectedLesson.room_name)?.id??""
+    );
+    setEditCapacity(String(selectedLesson.capacity));
+    setEditLessonModal(true);
+  }
+
   async function editLesson() {
-    if (!selectedLesson) return;
-
-    const currentStart = new Date(selectedLesson.starts_at)
-      .toISOString()
-      .slice(0, 16);
-    const startsAtRaw = window.prompt(
-      "Новое начало YYYY-MM-DDTHH:MM",
-      currentStart
-    );
-    if (!startsAtRaw) return;
-
-    const trainer = trainers[
-      Number(
-        window.prompt(
-          "Тренер:\n" +
-            trainers.map((item, i) => `${i + 1}. ${item.name}`).join("\n"),
-          String(
-            Math.max(
-              1,
-              trainers.findIndex((item) => item.name === selectedLesson.trainer_name) + 1
-            )
-          )
-        )
-      ) - 1
-    ];
-    if (!trainer) return;
-
-    let roomId: string | null | undefined;
-    if (rooms.length) {
-      const roomChoice = window.prompt(
-        "Зал (0 = без зала):\n0. Без зала\n" +
-          rooms.map((item, i) => `${i + 1}. ${item.name}`).join("\n"),
-        String(
-          Math.max(
-            0,
-            rooms.findIndex((item) => item.name === selectedLesson.room_name) + 1
-          )
-        )
-      );
-      if (roomChoice === null) return;
-      const roomIndex = Number(roomChoice);
-      roomId = roomIndex === 0 ? null : rooms[roomIndex - 1]?.id;
+    if(!selectedLesson)return;
+    const start=new Date(editStartsAt);
+    const capacity=Number(editCapacity);
+    if(Number.isNaN(start.getTime())||!Number.isSafeInteger(capacity)||capacity<1){
+      setError("Проверьте дату, время и вместимость");
+      return;
     }
-
-    const capacity = Number(
-      window.prompt("Вместимость", String(selectedLesson.capacity)) ??
-        String(selectedLesson.capacity)
-    );
-    const durationMinutes = Math.max(
+    const durationMinutes=Math.max(
       5,
       Math.round(
-        (new Date(selectedLesson.ends_at).getTime() -
-          new Date(selectedLesson.starts_at).getTime()) /
-          60000
+        (new Date(selectedLesson.ends_at).getTime()-
+          new Date(selectedLesson.starts_at).getTime())/60000
       )
     );
-
-    try {
-      const updated = await apiRequest<{ version: number }>(
+    setPending(true);setError("");setNotice("");
+    try{
+      const updated=await apiRequest<{version:number}>(
         `/dance/lessons/${selectedLesson.id}`,
         {
-          method: "PATCH",
-          body: JSON.stringify({
-            startsAt: new Date(startsAtRaw).toISOString(),
+          method:"PATCH",
+          body:JSON.stringify({
+            startsAt:start.toISOString(),
             durationMinutes,
-            trainerResourceId: trainer.id,
-            roomResourceId: roomId,
+            trainerResourceId:editTrainerId||undefined,
+            roomResourceId:editRoomId||null,
             capacity,
-            version: selectedLesson.version
+            version:selectedLesson.version
           })
         }
       );
+      setEditLessonModal(false);
+      setNotice("Занятие обновлено.");
       await load();
       setSelectedLessonId(selectedLesson.id);
-      if (updated.version) {
-        await loadParticipants(selectedLesson.id);
-      }
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Не удалось изменить занятие"
-      );
-    }
+      if(updated.version)await loadParticipants(selectedLesson.id);
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось изменить занятие");
+    }finally{setPending(false);}
   }
 
   async function completeLesson() {
@@ -888,19 +821,31 @@ export default function DanceGroupsPage() {
     }
   }
 
+  function openCancelLessonModal() {
+    if(!selectedLesson)return;
+    setCancelReason("Отмена студией");
+    setCancelLessonModal(true);
+  }
+
   async function cancelLesson() {
-    if (!selectedLesson) return;
-    const reason = window.prompt("Причина отмены", "Отмена студией");
-    if (!reason) return;
-    try {
-      await apiRequest(`/dance/lessons/${selectedLesson.id}/cancel`, {
-        method: "POST",
-        body: JSON.stringify({ reason })
-      });
-      await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось отменить занятие");
+    if(!selectedLesson)return;
+    if(cancelReason.trim().length<5){
+      setError("Укажите причину отмены");
+      return;
     }
+    setPending(true);setError("");setNotice("");
+    try{
+      await apiRequest(`/dance/lessons/${selectedLesson.id}/cancel`,{
+        method:"POST",
+        body:JSON.stringify({reason:cancelReason.trim()})
+      });
+      setCancelLessonModal(false);
+      setNotice("Занятие отменено. Резервы и открытые начисления обработаны автоматически.");
+      await load();
+      await loadParticipants(selectedLesson.id);
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось отменить занятие");
+    }finally{setPending(false);}
   }
 
   return (
@@ -957,7 +902,7 @@ export default function DanceGroupsPage() {
               <div><p className="muted">Состав группы</p><h2>{selectedGroup.name}</h2></div>
               <div className="header-actions">
                 <button className="secondary-button" onClick={openMemberModal} type="button">+ Ученик</button>
-                <button className="secondary-button" onClick={() => void createGroupPackage()} type="button">+ Тариф группы</button>
+                <button className="secondary-button" onClick={openGroupPackageModal} type="button">+ Тариф группы</button>
                 <button className="secondary-button" disabled={pending} onClick={() => void syncRoster()} type="button">Синхронизировать состав</button>
                 <button disabled={pending} onClick={openGenerateModal} type="button">Создать занятия</button>
               </div>
@@ -1029,11 +974,11 @@ export default function DanceGroupsPage() {
                 <h2>{selectedLesson.group_name ?? selectedLesson.lesson_type} · {new Date(selectedLesson.starts_at).toLocaleString("ru-RU")}</h2>
               </div>
               <div className="header-actions">
-                <button className="secondary-button" onClick={() => void addParticipant()} type="button">+ Ученик</button>
+                <button className="secondary-button" onClick={openParticipantModal} type="button">+ Ученик</button>
                 {!["COMPLETED","CANCELLED_BY_STUDIO","CANCELLED_BY_TRAINER"].includes(selectedLesson.status) ? (
                   <>
-                    <button className="secondary-button" onClick={() => void editLesson()} type="button">Перенести / заменить</button>
-                    <button className="secondary-button" onClick={() => void cancelLesson()} type="button">Отменить</button>
+                    <button className="secondary-button" onClick={openEditLessonModal} type="button">Перенести / заменить</button>
+                    <button className="secondary-button" onClick={openCancelLessonModal} type="button">Отменить</button>
                     <button onClick={() => void completeLesson()} type="button">Закрыть урок</button>
                   </>
                 ) : null}
@@ -1065,6 +1010,177 @@ export default function DanceGroupsPage() {
             </div>
           </section>
         ) : null}
+        {groupPackageModal && selectedGroup ? (
+          <StudioModal
+            eyebrow="Тариф группы"
+            title={"Абонемент · " + selectedGroup.name}
+            description="Быстрый тариф уже будет привязан к услуге и направлению выбранной группы."
+            onClose={() => setGroupPackageModal(false)}
+            footer={
+              <>
+                <a className="secondary-button" href="/app/service/packages">Расширенный конструктор</a>
+                <button disabled={pending} type="button" onClick={() => void createGroupPackage()}>{pending ? "Сохраняем…" : "Создать тариф"}</button>
+              </>
+            }
+          >
+            <label><span>Название</span><input value={groupPackageName} onChange={(event)=>setGroupPackageName(event.target.value)} /></label>
+            <div className="studio-form-grid">
+              <label>
+                <span>Действует</span>
+                <select value={groupPackageScope} onChange={(event)=>setGroupPackageScope(event.target.value as "GROUP"|"PROGRAM")}>
+                  <option value="GROUP">Только эта группа</option>
+                  <option value="PROGRAM">Всё направление</option>
+                </select>
+              </label>
+              <label>
+                <span>Тип</span>
+                <select value={groupPackageKind} onChange={(event)=>setGroupPackageKind(event.target.value as "VISITS"|"PERIOD"|"UNLIMITED")}>
+                  <option value="VISITS">Пакет посещений</option>
+                  <option value="PERIOD">На период</option>
+                  <option value="UNLIMITED">Безлимит</option>
+                </select>
+              </label>
+            </div>
+            <div className="studio-form-grid">
+              {groupPackageKind!=="UNLIMITED" ? (
+                <label><span>Посещений</span><input type="number" min="1" value={groupPackageVisits} onChange={(event)=>setGroupPackageVisits(event.target.value)} /></label>
+              ) : (
+                <div className="package-unlimited-note"><strong>Безлимит</strong><span>Общий счётчик посещений не ограничивается.</span></div>
+              )}
+              <label><span>Срок, дней</span><input type="number" min="1" value={groupPackageDays} onChange={(event)=>setGroupPackageDays(event.target.value)} /></label>
+            </div>
+            <div className="studio-form-grid">
+              <label><span>Цена, ₽</span><input inputMode="decimal" value={groupPackagePrice} onChange={(event)=>setGroupPackagePrice(event.target.value)} /></label>
+              <label><span>Реализация посещения, ₽</span><input inputMode="decimal" value={groupPackageVisitValue} onChange={(event)=>setGroupPackageVisitValue(event.target.value)} /></label>
+            </div>
+          </StudioModal>
+        ) : null}
+
+        {participantModal && selectedLesson ? (
+          <StudioModal
+            eyebrow="Журнал занятия"
+            title="Записать ученика"
+            description="Выберите ученика и источник оплаты. Абонемент и отработка будут дополнительно проверены backend."
+            onClose={() => setParticipantModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setParticipantModal(false)}>Отмена</button>
+                <button disabled={pending} type="button" onClick={() => void addParticipant()}>{pending ? "Записываем…" : "Записать"}</button>
+              </>
+            }
+          >
+            <label>
+              <span>Ученик</span>
+              <select
+                value={participantStudentId}
+                onChange={(event)=>{
+                  setParticipantStudentId(event.target.value);
+                  setParticipantPackageId("");
+                  setParticipantMakeupId("");
+                }}
+              >
+                {students.map((student)=><option key={student.id} value={student.id}>{student.display_name}</option>)}
+              </select>
+            </label>
+            <div className="studio-choice-grid">
+              {[
+                ["DIRECT","Разовая оплата","Отдельная стоимость занятия"],
+                ["PACKAGE","Абонемент","Списать подходящее посещение"],
+                ["MAKEUP","Отработка","Использовать доступную компенсацию"]
+              ].map(([value,label,hint])=>(
+                <button
+                  key={value}
+                  type="button"
+                  className={"studio-choice "+(participantPaymentMode===value?"active":"")}
+                  onClick={()=>setParticipantPaymentMode(value as typeof participantPaymentMode)}
+                >
+                  <strong>{label}</strong><span>{hint}</span>
+                </button>
+              ))}
+            </div>
+            {participantPaymentMode==="DIRECT" ? (
+              <label><span>Стоимость, ₽</span><input inputMode="decimal" value={participantChargeRub} onChange={(event)=>setParticipantChargeRub(event.target.value)} /></label>
+            ) : null}
+            {participantPaymentMode==="PACKAGE" ? (
+              <label>
+                <span>Абонемент</span>
+                <select value={participantPackageId} onChange={(event)=>setParticipantPackageId(event.target.value)}>
+                  <option value="">Выберите абонемент</option>
+                  {packages.filter((pack)=>{
+                    const student=students.find((item)=>item.id===participantStudentId);
+                    return student&&pack.status==="ACTIVE"&&(
+                      pack.party_id===student.party_id||
+                      pack.beneficiary_party_ids?.includes(student.party_id)
+                    );
+                  }).map((pack)=>(
+                    <option key={pack.id} value={pack.id}>
+                      {pack.plan_name} · осталось {pack.available_visits===null?"∞":pack.available_visits}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {participantPaymentMode==="MAKEUP" ? (
+              <label>
+                <span>Отработка</span>
+                <select value={participantMakeupId} onChange={(event)=>setParticipantMakeupId(event.target.value)}>
+                  <option value="">Выберите отработку</option>
+                  {makeupCredits.filter((credit)=>
+                    credit.student_id===participantStudentId&&
+                    credit.status==="AVAILABLE"&&
+                    new Date(credit.expires_at).getTime()>=new Date(selectedLesson.starts_at).getTime()
+                  ).map((credit)=>(
+                    <option key={credit.id} value={credit.id}>
+                      до {new Date(credit.expires_at).toLocaleDateString("ru-RU")} · {credit.program_name??"любое направление"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </StudioModal>
+        ) : null}
+
+        {editLessonModal && selectedLesson ? (
+          <StudioModal
+            eyebrow="Занятие"
+            title="Перенести или заменить ресурсы"
+            description="Backend повторно проверит расписание, вместимость, абонементы, заморозки и конфликты ресурсов."
+            onClose={() => setEditLessonModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setEditLessonModal(false)}>Отмена</button>
+                <button disabled={pending} type="button" onClick={() => void editLesson()}>{pending ? "Сохраняем…" : "Сохранить"}</button>
+              </>
+            }
+          >
+            <div className="studio-form-grid">
+              <label><span>Дата и время</span><input type="datetime-local" value={editStartsAt} onChange={(event)=>setEditStartsAt(event.target.value)} /></label>
+              <label><span>Вместимость</span><input type="number" min="1" max="500" value={editCapacity} onChange={(event)=>setEditCapacity(event.target.value)} /></label>
+            </div>
+            <div className="studio-form-grid">
+              <label><span>Тренер</span><select value={editTrainerId} onChange={(event)=>setEditTrainerId(event.target.value)}><option value="">Без тренера</option>{trainers.map((trainer)=><option key={trainer.id} value={trainer.id}>{trainer.name}</option>)}</select></label>
+              <label><span>Зал</span><select value={editRoomId} onChange={(event)=>setEditRoomId(event.target.value)}><option value="">Без зала</option>{rooms.map((room)=><option key={room.id} value={room.id}>{room.name}</option>)}</select></label>
+            </div>
+          </StudioModal>
+        ) : null}
+
+        {cancelLessonModal && selectedLesson ? (
+          <StudioModal
+            eyebrow="Отмена занятия"
+            title="Отменить занятие"
+            description="Резервы абонементов и отработок будут возвращены; открытые разовые начисления будут отменены."
+            onClose={() => setCancelLessonModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setCancelLessonModal(false)}>Назад</button>
+                <button disabled={pending} type="button" onClick={() => void cancelLesson()}>{pending ? "Отменяем…" : "Отменить занятие"}</button>
+              </>
+            }
+          >
+            <label><span>Причина</span><input autoFocus value={cancelReason} onChange={(event)=>setCancelReason(event.target.value)} /></label>
+          </StudioModal>
+        ) : null}
+
         {programModal ? (
           <StudioModal
             eyebrow="Направление"
