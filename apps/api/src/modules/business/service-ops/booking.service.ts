@@ -3029,20 +3029,22 @@ export class BookingService {
     bookingId: string,
     partyId: string | null,
     serviceId: string,
-    startsAt: Date
+    startsAt: Date,
+    employeeResourceId:string|null,
+    timezone:string
   ): Promise<void> {
     if (!partyId) {
       throw new BadRequestException("Для абонемента необходимо выбрать клиента");
     }
 
-    const result = await client.query<{
-      party_id: string;
-      starts_at: Date;
-      expires_at: Date;
-      visit_limit_snapshot: number | null;
-      reserved_visits: number;
-      used_visits: number;
-      applicable_service_id: string | null;
+    const result=await client.query<{
+      party_id:string;
+      starts_at:Date;
+      expires_at:Date;
+      visit_limit_snapshot:number|null;
+      reserved_visits:number;
+      used_visits:number;
+      applicable_service_id:string|null;
     }>(
       `SELECT
          sp.party_id,sp.starts_at,sp.expires_at,
@@ -3053,44 +3055,143 @@ export class BookingService {
          ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
        WHERE sp.tenant_id=$1 AND sp.id=$2 AND sp.status='ACTIVE'
        FOR UPDATE OF sp`,
-      [tenantId, packageId]
+      [tenantId,packageId]
     );
-    const row = result.rows[0];
-    if (!row) throw new NotFoundException("Активный абонемент не найден");
-    if (row.party_id !== partyId) {
-      throw new ConflictException("Абонемент принадлежит другому клиенту");
+    const row=result.rows[0];
+    if(!row) throw new NotFoundException("Активный абонемент не найден");
+
+    if(row.party_id!==partyId){
+      const beneficiary=await client.query(
+        `SELECT 1 FROM service_package_beneficiary
+         WHERE tenant_id=$1 AND package_id=$2 AND party_id=$3
+           AND status='ACTIVE'`,
+        [tenantId,packageId,partyId]
+      );
+      if(!beneficiary.rowCount){
+        throw new ConflictException("Абонемент принадлежит другому клиенту");
+      }
     }
-    if (startsAt < row.starts_at || startsAt >= row.expires_at) {
+
+    if(startsAt<row.starts_at||startsAt>=row.expires_at){
       throw new ConflictException(
         "Дата записи находится вне срока действия абонемента"
       );
     }
-    if (
+    if(
       row.applicable_service_id &&
-      row.applicable_service_id !== serviceId
-    ) {
+      row.applicable_service_id!==serviceId
+    ){
       throw new ConflictException(
         "Абонемент не действует на выбранную услугу"
       );
     }
-    if (
-      row.visit_limit_snapshot !== null &&
-      row.reserved_visits + row.used_visits >= row.visit_limit_snapshot
-    ) {
+    if(
+      row.visit_limit_snapshot!==null &&
+      row.reserved_visits+row.used_visits>=row.visit_limit_snapshot
+    ){
+      throw new ConflictException("В абонементе закончились посещения");
+    }
+
+    const entitlementCount=await client.query<{count:number}>(
+      `SELECT count(*)::integer AS count
+       FROM service_package_entitlement
+       WHERE tenant_id=$1 AND package_id=$2`,
+      [tenantId,packageId]
+    );
+
+    let entitlementId:string|null=null;
+    if((entitlementCount.rows[0]?.count??0)>0){
+      const entitlement=await client.query<{
+        id:string;
+        visit_limit_snapshot:number|null;
+        reserved_visits:number;
+        used_visits:number;
+      }>(
+        `SELECT id,visit_limit_snapshot,reserved_visits,used_visits
+         FROM service_package_entitlement
+         WHERE tenant_id=$1
+           AND package_id=$2
+           AND lesson_type IS NULL
+           AND dance_program_id IS NULL
+           AND dance_group_id IS NULL
+           AND (service_id IS NULL OR service_id=$3)
+           AND (
+             trainer_resource_id IS NULL OR
+             trainer_resource_id=$4::uuid
+           )
+           AND extract(
+             isodow FROM ($5::timestamptz AT TIME ZONE $6)
+           )::smallint=ANY(weekdays)
+           AND (
+             extract(hour FROM ($5::timestamptz AT TIME ZONE $6))::int*60+
+             extract(minute FROM ($5::timestamptz AT TIME ZONE $6))::int
+           )>=start_minute
+           AND (
+             extract(hour FROM ($5::timestamptz AT TIME ZONE $6))::int*60+
+             extract(minute FROM ($5::timestamptz AT TIME ZONE $6))::int
+           )<end_minute
+         ORDER BY
+           (
+             CASE WHEN service_id IS NULL THEN 0 ELSE 2 END+
+             CASE WHEN trainer_resource_id IS NULL THEN 0 ELSE 4 END
+           ) DESC,
+           priority,id
+         LIMIT 1
+         FOR UPDATE`,
+        [
+          tenantId,packageId,serviceId,employeeResourceId,
+          startsAt,timezone
+        ]
+      );
+      const bucket=entitlement.rows[0];
+      if(!bucket){
+        throw new ConflictException(
+          "Абонемент не действует на эту услугу, сотрудника или время"
+        );
+      }
+      if(
+        bucket.visit_limit_snapshot!==null &&
+        bucket.reserved_visits+bucket.used_visits>=bucket.visit_limit_snapshot
+      ){
+        throw new ConflictException("Квота абонемента для этой услуги исчерпана");
+      }
+      entitlementId=bucket.id;
+      const bucketUpdate=await client.query(
+        `UPDATE service_package_entitlement
+         SET reserved_visits=reserved_visits+1
+         WHERE tenant_id=$1 AND id=$2
+           AND (
+             visit_limit_snapshot IS NULL OR
+             reserved_visits+used_visits<visit_limit_snapshot
+           )
+         RETURNING id`,
+        [tenantId,entitlementId]
+      );
+      if(!bucketUpdate.rowCount){
+        throw new ConflictException("Квота абонемента была исчерпана");
+      }
+    }
+
+    const packageUpdate=await client.query(
+      `UPDATE service_package
+       SET reserved_visits=reserved_visits+1,updated_at=now()
+       WHERE tenant_id=$1 AND id=$2
+         AND (
+           visit_limit_snapshot IS NULL OR
+           reserved_visits+used_visits<visit_limit_snapshot
+         )
+       RETURNING id`,
+      [tenantId,packageId]
+    );
+    if(!packageUpdate.rowCount){
       throw new ConflictException("В абонементе закончились посещения");
     }
 
     await client.query(
-      `UPDATE service_package
-       SET reserved_visits=reserved_visits+1,updated_at=now()
-       WHERE tenant_id=$1 AND id=$2`,
-      [tenantId, packageId]
-    );
-    await client.query(
       `INSERT INTO service_package_redemption(
-         tenant_id,package_id,booking_id,state
-       ) VALUES ($1,$2,$3,'RESERVED')`,
-      [tenantId, packageId, bookingId]
+         tenant_id,package_id,booking_id,package_entitlement_id,state
+       ) VALUES($1,$2,$3,$4,'RESERVED')`,
+      [tenantId,packageId,bookingId,entitlementId]
     );
   }
 
@@ -3100,13 +3201,16 @@ export class BookingService {
     bookingId: string,
     bookingStatus: "COMPLETED" | "CANCELLED" | "NO_SHOW"
   ): Promise<void> {
-    const redemption = await client.query<{
-      id: string;
-      package_id: string;
-      state: string;
-      no_show_policy: "RELEASE" | "CONSUME";
+    const redemption=await client.query<{
+      id:string;
+      package_id:string;
+      package_entitlement_id:string|null;
+      state:string;
+      no_show_policy:"RELEASE"|"CONSUME";
     }>(
-      `SELECT r.id,r.package_id,r.state,plan.no_show_policy
+      `SELECT
+         r.id,r.package_id,r.package_entitlement_id,r.state,
+         plan.no_show_policy
        FROM service_package_redemption r
        JOIN service_package sp
          ON sp.tenant_id=r.tenant_id AND sp.id=r.package_id
@@ -3114,73 +3218,100 @@ export class BookingService {
          ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
        WHERE r.tenant_id=$1 AND r.booking_id=$2
        FOR UPDATE OF r,sp`,
-      [tenantId, bookingId]
+      [tenantId,bookingId]
     );
-    const row = redemption.rows[0];
-    if (!row || row.state !== "RESERVED") return;
+    const row=redemption.rows[0];
+    if(!row||row.state!=="RESERVED") return;
 
-    const consume =
-      bookingStatus === "COMPLETED" ||
-      (bookingStatus === "NO_SHOW" && row.no_show_policy === "CONSUME");
+    const consume=
+      bookingStatus==="COMPLETED" ||
+      (bookingStatus==="NO_SHOW"&&row.no_show_policy==="CONSUME");
 
-    if (consume) {
-      const packageUpdate = await client.query(
+    if(consume){
+      const packageUpdate=await client.query(
         `UPDATE service_package
          SET reserved_visits=reserved_visits-1,
              used_visits=used_visits+1,
              status=CASE
                WHEN visit_limit_snapshot IS NOT NULL
-                AND used_visits+1 >= visit_limit_snapshot THEN 'EXHAUSTED'
+                AND used_visits+1>=visit_limit_snapshot THEN 'EXHAUSTED'
                ELSE status
              END,
              updated_at=now()
          WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0
          RETURNING id`,
-        [tenantId, row.package_id]
+        [tenantId,row.package_id]
       );
-      if (!packageUpdate.rowCount) {
+      if(!packageUpdate.rowCount){
         throw new ConflictException(
-          "Нарушена целостность абонемента: отсутствует зарезервированное посещение"
+          "Нарушена целостность абонемента: отсутствует резерв"
         );
       }
 
-      const redemptionUpdate = await client.query(
+      if(row.package_entitlement_id){
+        const bucketUpdate=await client.query(
+          `UPDATE service_package_entitlement
+           SET reserved_visits=reserved_visits-1,
+               used_visits=used_visits+1
+           WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0
+           RETURNING id`,
+          [tenantId,row.package_entitlement_id]
+        );
+        if(!bucketUpdate.rowCount){
+          throw new ConflictException(
+            "Нарушена целостность квоты абонемента"
+          );
+        }
+      }
+
+      const redemptionUpdate=await client.query(
         `UPDATE service_package_redemption
          SET state='CONSUMED',settled_at=now()
          WHERE tenant_id=$1 AND id=$2 AND state='RESERVED'
          RETURNING id`,
-        [tenantId, row.id]
+        [tenantId,row.id]
       );
-      if (!redemptionUpdate.rowCount) {
-        throw new ConflictException(
-          "Посещение абонемента уже было обработано"
-        );
+      if(!redemptionUpdate.rowCount){
+        throw new ConflictException("Посещение абонемента уже обработано");
       }
-    } else {
-      const packageUpdate = await client.query(
+    }else{
+      const packageUpdate=await client.query(
         `UPDATE service_package
          SET reserved_visits=reserved_visits-1,updated_at=now()
          WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0
          RETURNING id`,
-        [tenantId, row.package_id]
+        [tenantId,row.package_id]
       );
-      if (!packageUpdate.rowCount) {
+      if(!packageUpdate.rowCount){
         throw new ConflictException(
-          "Нарушена целостность абонемента: отсутствует зарезервированное посещение"
+          "Нарушена целостность абонемента: отсутствует резерв"
         );
       }
 
-      const redemptionUpdate = await client.query(
+      if(row.package_entitlement_id){
+        const bucketUpdate=await client.query(
+          `UPDATE service_package_entitlement
+           SET reserved_visits=reserved_visits-1
+           WHERE tenant_id=$1 AND id=$2 AND reserved_visits>0
+           RETURNING id`,
+          [tenantId,row.package_entitlement_id]
+        );
+        if(!bucketUpdate.rowCount){
+          throw new ConflictException(
+            "Нарушена целостность квоты абонемента"
+          );
+        }
+      }
+
+      const redemptionUpdate=await client.query(
         `UPDATE service_package_redemption
          SET state='RELEASED',settled_at=now()
          WHERE tenant_id=$1 AND id=$2 AND state='RESERVED'
          RETURNING id`,
-        [tenantId, row.id]
+        [tenantId,row.id]
       );
-      if (!redemptionUpdate.rowCount) {
-        throw new ConflictException(
-          "Посещение абонемента уже было обработано"
-        );
+      if(!redemptionUpdate.rowCount){
+        throw new ConflictException("Посещение абонемента уже обработано");
       }
     }
   }
