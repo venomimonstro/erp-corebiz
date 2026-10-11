@@ -170,6 +170,7 @@ export default function BookingsPage() {
   const [serviceName,setServiceName]=useState("");
   const [serviceDuration,setServiceDuration]=useState("60");
   const [servicePrice,setServicePrice]=useState("0");
+  const [serviceRebookDays,setServiceRebookDays]=useState("");
   const [serviceFormat,setServiceFormat]=useState<Service["delivery_format"]>("INDIVIDUAL");
 
   const [showCustomer,setShowCustomer]=useState(false);
@@ -382,6 +383,9 @@ export default function BookingsPage() {
           durationMinutes:duration,
           priceMinor:String(Math.round(priceRub*100)),
           deliveryFormat:serviceFormat,
+          rebookAfterDays:serviceRebookDays.trim()
+            ?Number(serviceRebookDays)
+            :undefined,
           groupCapacity:serviceFormat==="GROUP"?10:1
         })
       });
@@ -389,6 +393,7 @@ export default function BookingsPage() {
       setServiceName("");
       setServiceDuration("60");
       setServicePrice("0");
+      setServiceRebookDays("");
       setNotice("Услуга создана. При необходимости задайте персональную цену мастера в настройках услуг.");
       await load();
       setSelectedService(created.id);
@@ -961,6 +966,20 @@ export default function BookingsPage() {
                 <label><span>Длительность, мин</span><input type="number" min="5" max="1440" value={serviceDuration} onChange={event=>setServiceDuration(event.target.value)} /></label>
               </div>
               <label><span>Базовая цена, ₽</span><input inputMode="decimal" value={servicePrice} onChange={event=>setServicePrice(event.target.value)} /></label>
+              <label>
+                <span>Через сколько дней ждать повторный визит</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="3650"
+                  value={serviceRebookDays}
+                  onChange={event=>setServiceRebookDays(event.target.value)}
+                  placeholder="Например, 28"
+                />
+                <small>
+                  Необязательно. Используется только для умных напоминаний владельцу.
+                </small>
+              </label>
               <div className="studio-drawer-actions">
                 <button className="secondary-button" type="button" onClick={()=>setShowService(false)}>Отмена</button>
                 <button disabled={submitting} type="submit">{submitting?"Создаём…":"Создать услугу"}</button>
