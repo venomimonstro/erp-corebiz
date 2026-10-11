@@ -35,6 +35,7 @@ import { WmsModule } from "./modules/business/wms/wms.module";
 import { TasksModule } from "./modules/business/tasks/tasks.module";
 import { AuthModule } from "./modules/platform/auth/auth.module";
 import { BillingModule } from "./modules/platform/billing/billing.module";
+import { PaymentsModule } from "./modules/platform/payments/payments.module";
 import { CustomizationModule } from "./modules/platform/customization/customization.module";
 import { DataManagementModule } from "./modules/platform/data-management/data-management.module";
 import { SessionContextMiddleware } from "./modules/platform/auth/session-context.middleware";
@@ -55,6 +56,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     TenantContextModule,
     AuthModule,
     BillingModule,
+    PaymentsModule,
     CustomizationModule,
     DataManagementModule,
     AuthorizationModule,
