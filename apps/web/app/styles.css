@@ -2151,3 +2151,32 @@ button, .primary, .secondary { font: inherit; }
   .studio-economics-grid { grid-template-columns:1fr; }
 }
 
+
+
+.studio-family-switcher > div { display:grid; gap:8px; }
+.studio-filter-chips {
+  display:flex;
+  gap:5px;
+  flex-wrap:wrap;
+}
+.studio-filter-chips button {
+  min-height:28px;
+  padding:5px 9px;
+  border:1px solid #e1e4e6;
+  border-radius:999px;
+  background:#fff;
+  color:#6d747b;
+  font-size:9px;
+  font-weight:700;
+  cursor:pointer;
+}
+.studio-filter-chips button.active {
+  border-color:#c8ced2;
+  background:#202327;
+  color:#fff;
+}
+.owner-kpi-alert {
+  border-color:#eadfda !important;
+  background:linear-gradient(180deg,#fff,#fff9f7) !important;
+}
+.owner-kpi-alert strong { color:#8c493b; }
