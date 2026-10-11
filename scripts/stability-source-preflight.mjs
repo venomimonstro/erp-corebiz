@@ -247,8 +247,16 @@ async function inspectRequiredHardening(root) {
     },
     {
       path: "apps/api/src/modules/business/service-ops/booking.service.ts",
-      patterns: [/serviceScope/, /assertBookingAccess/, /assertResourceScope/, /requireServiceAll/],
-      message: "Service booking/catalog scope enforcement is missing"
+      patterns: [
+        /serviceScope/,
+        /assertBookingAccess/,
+        /assertResourceScope/,
+        /requireServiceAll/,
+        /SERVICE_BOOKING_CHARGE/,
+        /ensureBookingChargeTx/,
+        /cancelBookingChargeTx/
+      ],
+      message: "Service booking/catalog/billing hardening is missing"
     },
     {
       path: "apps/api/src/modules/business/service-ops/service-workspace.service.ts",
@@ -402,6 +410,8 @@ async function inspectRequiredHardening(root) {
     "178_trainer_payroll_export_lifecycle.sql",
     "179_trainer_payroll_tenant_integrity.sql",
     "179_trainer_payroll_adjustments.sql",
+    "180_service_booking_billing.sql",
+    "181_service_booking_billing_lifecycle.sql",
     "180_payroll_accrual_components.sql",
     "181_trainer_payroll_profile.sql",
     "182_payroll_component_guard_fix.sql"
