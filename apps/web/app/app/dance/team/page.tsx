@@ -191,6 +191,14 @@ type StatementDetail = {
     reason: string;
     created_at: string;
   }>;
+  payrollSources: Array<{
+    id: string;
+    source_type: string;
+    source_key: string;
+    gross_minor: string;
+    deduction_minor: string;
+    metadata: Record<string, unknown>;
+  }>;
 };
 
 type TrainerPayrollProfile = {
@@ -1386,6 +1394,37 @@ export default function DanceTeamPage() {
                       </article>
                     )
                   )}
+                </div>
+              </div>
+            ) : null}
+
+            {statementDetail.payrollSources?.length ? (
+              <div className="studio-form-section">
+                <header>
+                  <strong>Экспорт в payroll</strong>
+                  <span>
+                    Источники хранятся отдельно, поэтому ведомость студии не
+                    перезаписывает ручные или другие начисления сотрудника.
+                  </span>
+                </header>
+                <div className="payroll-breakdown-grid">
+                  {statementDetail.payrollSources.map((source) => (
+                    <article key={source.id}>
+                      <span>
+                        {source.source_type === "DANCE_TRAINER_STATEMENT"
+                          ? "Ведомость студии"
+                          : source.source_type === "MANUAL"
+                            ? "Ручное начисление"
+                            : source.source_type}
+                      </span>
+                      <strong>{money(source.gross_minor)}</strong>
+                      <small>
+                        {source.source_key === statementDetail.statement.id
+                          ? "эта ведомость"
+                          : "отдельный источник"}
+                      </small>
+                    </article>
+                  ))}
                 </div>
               </div>
             ) : null}
