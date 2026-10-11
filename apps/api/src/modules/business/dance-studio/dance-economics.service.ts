@@ -1568,17 +1568,30 @@ export class DanceEconomicsService {
           statement.membership_id,
           (totals.get(statement.membership_id)??0n)+BigInt(statement.total_minor)
         );
-      }
-
-      for(const [membershipId,grossMinor] of totals){
         await client.query(
-          `INSERT INTO payroll_accrual_line(
-             tenant_id,batch_id,employee_ref,gross_minor,deduction_minor
-           ) VALUES($1,$2,$3,$4,0)
-           ON CONFLICT(tenant_id,batch_id,employee_ref)
-           DO UPDATE SET gross_minor=
-             payroll_accrual_line.gross_minor+EXCLUDED.gross_minor`,
-          [context.tenantId,input.batchId,membershipId,grossMinor.toString()]
+          `INSERT INTO payroll_accrual_component(
+             tenant_id,batch_id,employee_ref,source_type,source_key,
+             gross_minor,deduction_minor,metadata
+           ) VALUES(
+             $1,$2,$3,'DANCE_TRAINER_STATEMENT',$4,$5,0,$6
+           )
+           ON CONFLICT(
+             tenant_id,batch_id,employee_ref,source_type,source_key
+           ) DO UPDATE SET
+             gross_minor=EXCLUDED.gross_minor,
+             deduction_minor=0,
+             metadata=EXCLUDED.metadata,
+             updated_at=now()`,
+          [
+            context.tenantId,input.batchId,statement.membership_id,
+            statement.id,statement.total_minor,
+            JSON.stringify({
+              statementId:statement.id,
+              trainerResourceId:statement.trainer_resource_id,
+              periodFrom,
+              periodTo
+            })
+          ]
         );
       }
 
