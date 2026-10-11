@@ -207,7 +207,12 @@ export class OmsService {
          ORDER BY s.code,
                   COALESCE(ip.sourcing_priority,100),
                   w.is_default DESC,
-                  atp_milli::bigint DESC,
+                  (CASE WHEN COALESCE(ip.enabled,true)=false THEN 0::bigint
+                    ELSE GREATEST(
+                      COALESCE(b.physical_milli,0)
+                      - COALESCE(b.reserved_milli,0)
+                      - COALESCE(ip.safety_stock_milli,0),0)
+                  END) DESC,
                   w.id`,
         [context.tenantId, skuId ?? null]
       );
