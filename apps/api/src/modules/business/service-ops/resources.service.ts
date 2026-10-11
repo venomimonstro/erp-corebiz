@@ -358,6 +358,8 @@ export class ResourcesService {
       endsAt: string;
       type?: "UNAVAILABLE" | "VACATION" | "SICK" | "MAINTENANCE" | "OTHER";
       reason?: string;
+      capacityUnits?: number;
+      zoneId?: string;
     }
   ): Promise<{ id: string }> {
     const startsAt = new Date(input.startsAt);
@@ -381,20 +383,43 @@ export class ResourcesService {
         access.scope === "all"
       );
 
+      const capacityUnits=
+        input.capacityUnits===undefined ? null : Math.floor(input.capacityUnits);
+      if(capacityUnits!==null&&(capacityUnits<1||capacityUnits>100000)){
+        throw new BadRequestException("Некорректная блокируемая вместимость");
+      }
+      if(input.zoneId){
+        const zone=await client.query<{capacity_units:number}>(
+          `SELECT capacity_units
+           FROM service_resource_zone
+           WHERE tenant_id=$1 AND id=$2 AND resource_id=$3 AND status='ACTIVE'`,
+          [context.tenantId,input.zoneId,resourceId]
+        );
+        if(!zone.rows[0]) throw new NotFoundException("Зона ресурса не найдена");
+        if(capacityUnits!==null&&capacityUnits>zone.rows[0].capacity_units){
+          throw new BadRequestException("Блокировка превышает вместимость зоны");
+        }
+      }else if(capacityUnits!==null){
+        const resource=await client.query<{capacity:number}>(
+          `SELECT capacity FROM service_resource
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,resourceId]
+        );
+        if(capacityUnits>(resource.rows[0]?.capacity??0)){
+          throw new BadRequestException("Блокировка превышает вместимость ресурса");
+        }
+      }
+
       const result = await client.query<{ id: string }>(
         `INSERT INTO service_resource_block(
-           tenant_id, resource_id, starts_at, ends_at,
-           reason, type, created_by_membership_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+           tenant_id,resource_id,starts_at,ends_at,
+           reason,type,capacity_units,zone_id,created_by_membership_id
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
          RETURNING id`,
         [
-          context.tenantId,
-          resourceId,
-          startsAt,
-          endsAt,
-          input.reason?.trim() || null,
-          input.type ?? "UNAVAILABLE",
-          context.membershipId
+          context.tenantId,resourceId,startsAt,endsAt,
+          input.reason?.trim() || null,input.type ?? "UNAVAILABLE",
+          capacityUnits,input.zoneId ?? null,context.membershipId
         ]
       );
 
@@ -424,17 +449,110 @@ export class ResourcesService {
         : new Date(fromDate.getTime() + 90 * 86400000);
 
       const result = await client.query(
-        `SELECT id, starts_at, ends_at, reason, type
-         FROM service_resource_block
-         WHERE tenant_id = $1
-           AND resource_id = $2
-           AND starts_at < $4
-           AND ends_at > $3
-         ORDER BY starts_at`,
+        `SELECT
+           rb.id,rb.starts_at,rb.ends_at,rb.reason,rb.type,
+           rb.capacity_units,rb.zone_id,z.name AS zone_name
+         FROM service_resource_block rb
+         LEFT JOIN service_resource_zone z
+           ON z.tenant_id=rb.tenant_id AND z.id=rb.zone_id
+         WHERE rb.tenant_id=$1
+           AND rb.resource_id=$2
+           AND rb.starts_at<$4
+           AND rb.ends_at>$3
+         ORDER BY rb.starts_at`,
         [context.tenantId, resourceId, fromDate, toDate]
       );
 
       return result.rows;
+    });
+  }
+
+  async zones(
+    context:TenantContext,
+    resourceId:string
+  ):Promise<Array<Record<string,unknown>>>{
+    const access=await this.serviceScope(context,"service.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertResource(
+        client,context.tenantId,resourceId,
+        access.membershipIds,true
+      );
+      const result=await client.query(
+        `SELECT id,resource_id,name,code,capacity_units,status,metadata
+         FROM service_resource_zone
+         WHERE tenant_id=$1 AND resource_id=$2 AND status='ACTIVE'
+         ORDER BY name`,
+        [context.tenantId,resourceId]
+      );
+      return result.rows;
+    });
+  }
+
+  async createZone(
+    context:TenantContext,
+    resourceId:string,
+    input:{
+      name:string;
+      code?:string;
+      capacityUnits:number;
+      metadata?:Record<string,unknown>;
+    }
+  ):Promise<{id:string}>{
+    const access=await this.serviceScope(context,"service.write");
+    const name=input.name?.trim();
+    const capacity=Math.floor(input.capacityUnits);
+    if(!name||name.length<1||name.length>120){
+      throw new BadRequestException("Некорректное название зоны");
+    }
+    if(!Number.isSafeInteger(capacity)||capacity<1||capacity>100000){
+      throw new BadRequestException("Некорректная вместимость зоны");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertResource(
+        client,context.tenantId,resourceId,
+        access.membershipIds,access.scope==="all"
+      );
+      const resource=await client.query<{capacity:number;type:string}>(
+        `SELECT capacity,type
+         FROM service_resource
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+         FOR UPDATE`,
+        [context.tenantId,resourceId]
+      );
+      const row=resource.rows[0];
+      if(!row) throw new NotFoundException("Ресурс не найден");
+      if(!["ROOM","HALL","WORKPLACE","EQUIPMENT","OTHER"].includes(row.type)){
+        throw new BadRequestException("Этот тип ресурса нельзя делить на зоны");
+      }
+      if(capacity>row.capacity){
+        throw new BadRequestException("Зона превышает вместимость ресурса");
+      }
+
+      try{
+        const result=await client.query<{id:string}>(
+          `INSERT INTO service_resource_zone(
+             tenant_id,resource_id,name,code,capacity_units,metadata
+           ) VALUES($1,$2,$3,$4,$5,$6)
+           RETURNING id`,
+          [
+            context.tenantId,resourceId,name,input.code?.trim()||null,
+            capacity,JSON.stringify(input.metadata??{})
+          ]
+        );
+        return result.rows[0]!;
+      }catch(error){
+        const message=error instanceof Error?error.message:String(error);
+        if(message.includes("SERVICE_RESOURCE_ZONE_CAPACITY_EXCEEDED")){
+          throw new ConflictException(
+            "Суммарная вместимость зон превышает вместимость ресурса"
+          );
+        }
+        if(this.isUniqueViolation(error)){
+          throw new ConflictException("Зона с таким кодом уже существует");
+        }
+        throw error;
+      }
     });
   }
 
