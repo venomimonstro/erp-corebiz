@@ -336,6 +336,17 @@ async function inspectRequiredHardening(root) {
   {
     path: "scripts/golden-business-journeys.mjs",
     patterns: [
+      /async function serviceJourney/,
+      /billing\?\.invoiceNumber/,
+      /obligationStatus/,
+      /invoiceStatus/,
+      /status: "CANCELLED"/
+    ],
+    message: "Service booking billing golden journey is missing"
+  },
+  {
+    path: "scripts/golden-business-journeys.mjs",
+    patterns: [
       /async function danceStudioJourney/,
       /DANCE_FITNESS/,
       /finance\/allocated-payment/,
