@@ -108,18 +108,36 @@ CREATE TRIGGER channel_stock_order_dirty AFTER INSERT OR UPDATE OF status,sales_
 CREATE OR REPLACE FUNCTION corebiz_mark_stock_line_dirty() RETURNS trigger
 LANGUAGE plpgsql SET search_path=public,pg_temp AS $$
 DECLARE affected record;
+DECLARE v_tenant uuid;
+DECLARE v_sku uuid;
 BEGIN
- FOR affected IN
-   SELECT DISTINCT l.warehouse_id,l.sku_id
-   FROM channel_stock_listing l
-   WHERE l.tenant_id=COALESCE(NEW.tenant_id,OLD.tenant_id)
-     AND l.sku_id IN (COALESCE(NEW.mapped_sku_id,OLD.mapped_sku_id))
- LOOP
-   INSERT INTO channel_stock_dirty(tenant_id,warehouse_id,sku_id)
-   VALUES(COALESCE(NEW.tenant_id,OLD.tenant_id),affected.warehouse_id,affected.sku_id)
-   ON CONFLICT(tenant_id,warehouse_id,sku_id) DO UPDATE SET queued_at=now();
- END LOOP;
- RETURN COALESCE(NEW,OLD);
+ IF TG_OP='DELETE' THEN
+   v_tenant:=OLD.tenant_id;
+   v_sku:=OLD.mapped_sku_id;
+ ELSE
+   v_tenant:=NEW.tenant_id;
+   v_sku:=NEW.mapped_sku_id;
+ END IF;
+ IF v_sku IS NOT NULL THEN
+   FOR affected IN SELECT DISTINCT warehouse_id,sku_id FROM channel_stock_listing
+      WHERE tenant_id=v_tenant AND sku_id=v_sku
+   LOOP
+     INSERT INTO channel_stock_dirty(tenant_id,warehouse_id,sku_id)
+     VALUES(v_tenant,affected.warehouse_id,affected.sku_id)
+     ON CONFLICT(tenant_id,warehouse_id,sku_id) DO UPDATE SET queued_at=now();
+   END LOOP;
+ END IF;
+ IF TG_OP='UPDATE' AND OLD.mapped_sku_id IS DISTINCT FROM NEW.mapped_sku_id
+    AND OLD.mapped_sku_id IS NOT NULL THEN
+   FOR affected IN SELECT DISTINCT warehouse_id,sku_id FROM channel_stock_listing
+       WHERE tenant_id=v_tenant AND sku_id=OLD.mapped_sku_id
+   LOOP
+     INSERT INTO channel_stock_dirty(tenant_id,warehouse_id,sku_id)
+     VALUES(v_tenant,affected.warehouse_id,affected.sku_id)
+     ON CONFLICT(tenant_id,warehouse_id,sku_id) DO UPDATE SET queued_at=now();
+   END LOOP;
+ END IF;
+ RETURN NULL;
 END;$$;
 CREATE TRIGGER channel_stock_line_dirty AFTER INSERT OR DELETE OR UPDATE OF mapped_sku_id,quantity_milli
  ON channel_order_line_inbox FOR EACH ROW EXECUTE FUNCTION corebiz_mark_stock_line_dirty();
