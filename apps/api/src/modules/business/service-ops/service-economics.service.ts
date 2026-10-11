@@ -585,8 +585,8 @@ export class ServiceEconomicsService {
              AND b.status='COMPLETED'
              AND s.rebook_after_days IS NOT NULL
              AND (
-               $4::uuid[] IS NULL
-               OR r.membership_id=ANY($4::uuid[])
+               $2::uuid[] IS NULL
+               OR r.membership_id=ANY($2::uuid[])
                OR r.id IS NULL
              )
            ORDER BY b.party_id,b.service_id,b.completed_at DESC,b.id DESC
@@ -635,7 +635,7 @@ export class ServiceEconomicsService {
            )
          ORDER BY overdue_days DESC,p.display_name
          LIMIT 100`,
-        [context.tenantId,from,to,scope]
+        [context.tenantId,scope]
       );
 
       return {
