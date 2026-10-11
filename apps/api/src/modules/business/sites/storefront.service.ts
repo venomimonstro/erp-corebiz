@@ -63,41 +63,78 @@ export class StorefrontService {
     });
   }
 
-  async catalog(siteCode:string):Promise<Record<string,unknown>>{
+  async catalog(
+    siteCode:string,
+    options:{cursor?:string;q?:string;limit?:number}={}
+  ):Promise<Record<string,unknown>>{
+    // Search and page BEFORE computing availability. Never aggregate the
+    // entire tenant inventory to return the first twelve storefront items.
+    if(!options || typeof options!=="object" || Array.isArray(options)){
+      throw new BadRequestException("Некорректные параметры каталога");
+    }
+    const limit=options.limit??24;
+    if(typeof limit!=="number" || !Number.isInteger(limit) || limit<1 || limit>100){
+      throw new BadRequestException("Лимит каталога от 1 до 100");
+    }
+    if(options.cursor!==undefined &&
+      (typeof options.cursor!=="string" ||
+       !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(options.cursor))){
+      throw new BadRequestException("Некорректный курсор каталога");
+    }
+    if(options.q!==undefined && (typeof options.q!=="string" || options.q.length>120)){
+      throw new BadRequestException("Поисковый запрос слишком длинный");
+    }
+    const search=options.q?.trim()||null;
+    if(search && search.length<2){
+      throw new BadRequestException("Для поиска введите минимум 2 символа");
+    }
     const sf=await this.resolveStorefront(siteCode);
-    return this.database.withTenantTransaction(
-      this.systemContext(sf.tenant_id),
-      async client=>{
-        const products=await client.query(
-          `SELECT
-             p.id AS product_id,p.name AS product_name,p.description,
+    return this.database.withTenantTransaction(this.systemContext(sf.tenant_id),async client=>{
+      const result=await client.query<{
+        sku_id:string;product_id:string;product_name:string;description:string|null;
+        sku_code:string;barcode:string|null;sale_price_minor:string;
+        currency:string;atp_milli:string;
+      }>(
+        `WITH items AS (
+           SELECT p.id AS product_id,p.name AS product_name,p.description,
              s.id AS sku_id,s.code AS sku_code,s.barcode,
-             s.sale_price_minor::text,s.currency,
-             COALESCE(sum(
-               GREATEST(
-                 COALESCE(b.physical_milli,0)-COALESCE(b.reserved_milli,0)-COALESCE(ip.safety_stock_milli,0),
-                 0
-               )
-             ),0)::text AS atp_milli
-           FROM product p
+             s.sale_price_minor::text AS sale_price_minor,s.currency
+           FROM sku s
            JOIN product_variant v
-             ON v.tenant_id=p.tenant_id AND v.product_id=p.id AND v.status='ACTIVE'
-           JOIN sku s
-             ON s.tenant_id=v.tenant_id AND s.variant_id=v.id AND s.status='ACTIVE'
-           LEFT JOIN inventory_balance b
-             ON b.tenant_id=s.tenant_id AND b.sku_id=s.id
-           LEFT JOIN inventory_policy ip
-             ON ip.tenant_id=b.tenant_id AND ip.warehouse_id=b.warehouse_id AND ip.sku_id=b.sku_id
-           WHERE p.tenant_id=$1
-             AND p.status='ACTIVE'
-           GROUP BY p.id,s.id
-           ORDER BY p.updated_at DESC,p.name,s.code
-           LIMIT 1000`,
-          [sf.tenant_id]
-        );
-        return {siteId:sf.site_id,currency:sf.currency,products:products.rows};
-      }
-    );
+             ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+           JOIN product p
+             ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+           WHERE s.tenant_id=$1 AND s.status='ACTIVE'
+             AND v.status='ACTIVE' AND p.status='ACTIVE'
+             AND s.currency=$2 AND s.sale_price_minor>0
+             AND ($3::uuid IS NULL OR s.id>$3::uuid)
+             AND ($4::text IS NULL OR p.name ILIKE '%'||$4||'%'
+               OR s.code ILIKE '%'||$4||'%')
+           ORDER BY s.id
+           LIMIT $5
+         )
+         SELECT i.product_id,i.product_name,i.description,
+           i.sku_id,i.sku_code,i.barcode,i.sale_price_minor,i.currency,
+           COALESCE(sum(GREATEST(
+             COALESCE(b.physical_milli,0)-COALESCE(b.reserved_milli,0)-
+               COALESCE(ip.safety_stock_milli,0),0
+           )),0)::text AS atp_milli
+         FROM items i
+         LEFT JOIN inventory_balance b ON b.tenant_id=$1 AND b.sku_id=i.sku_id
+         LEFT JOIN inventory_policy ip
+           ON ip.tenant_id=b.tenant_id AND ip.warehouse_id=b.warehouse_id
+           AND ip.sku_id=b.sku_id
+         GROUP BY i.product_id,i.product_name,i.description,
+           i.sku_id,i.sku_code,i.barcode,i.sale_price_minor,i.currency
+         ORDER BY i.sku_id`,
+        [sf.tenant_id,sf.currency,options.cursor??null,search,limit+1]
+      );
+      const products=result.rows.slice(0,limit);
+      return {
+        siteId:sf.site_id,currency:sf.currency,products,
+        nextCursor:result.rows.length>limit?products[products.length-1]?.sku_id??null:null
+      };
+    });
   }
 
   async createCart(siteCode:string):Promise<{cartKey:string}>{
@@ -184,9 +221,12 @@ export class StorefrontService {
           `SELECT 1 FROM sku s
            JOIN product_variant v ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
            JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+           JOIN storefront_config sc ON sc.tenant_id=s.tenant_id AND sc.site_id=$3
            WHERE s.tenant_id=$1 AND s.id=$2
-             AND s.status='ACTIVE' AND p.status='ACTIVE'`,
-          [cart.tenant_id,input.skuId]
+             AND sc.enabled=true AND s.currency=sc.currency
+             AND s.sale_price_minor>0
+             AND s.status='ACTIVE' AND v.status='ACTIVE' AND p.status='ACTIVE'`,
+          [cart.tenant_id,input.skuId,cart.site_id]
         );
         if(!sku.rowCount) throw new NotFoundException("Товар недоступен");
 
