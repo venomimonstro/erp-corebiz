@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../components/app-sidebar";
+import { DanceWorkspaceNav } from "../../../components/dance-workspace-nav";
 import { apiRequest } from "../../../lib/api";
 
 type Lesson = {
@@ -115,6 +116,8 @@ export default function DanceDashboardPage() {
             <button onClick={() => void load()} type="button">Обновить</button>
           </div>
         </header>
+
+        <DanceWorkspaceNav active="overview" />
 
         {error ? <div className="inline-error"><strong>Студия</strong><span>{error}</span></div> : null}
 
