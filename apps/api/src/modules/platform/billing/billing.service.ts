@@ -78,6 +78,12 @@ export class BillingService {
       cancelAtPeriodEnd: boolean;
     };
     entitlements: Record<string, unknown>;
+    usage: Record<string, {
+      used: number;
+      limit: number | null;
+      remaining: number | null;
+      percent: number | null;
+    }>;
   }> {
     const state = await this.evaluate(context);
 
@@ -120,6 +126,16 @@ export class BillingService {
         [row.plan_id]
       );
 
+      const entitlementMap=Object.fromEntries(
+        entitlements.rows.map((item) => [
+          item.entitlement_key,
+          item.entitlement_value
+        ])
+      );
+      const usage=await this.usageSnapshot(
+        client,context.tenantId,entitlementMap
+      );
+
       return {
         state,
         subscription: {
@@ -132,12 +148,8 @@ export class BillingService {
           graceUntil: row.grace_until?.toISOString() ?? null,
           cancelAtPeriodEnd: row.cancel_at_period_end
         },
-        entitlements: Object.fromEntries(
-          entitlements.rows.map((item) => [
-            item.entitlement_key,
-            item.entitlement_value
-          ])
-        )
+        entitlements: entitlementMap,
+        usage
       };
     });
   }
@@ -225,6 +237,50 @@ export class BillingService {
       const row = plan.rows[0];
       if (!row) throw new BadRequestException("Тариф не найден");
 
+      const targetEntitlements=await client.query<{
+        entitlement_key:string;
+        entitlement_value:unknown;
+      }>(
+        `SELECT entitlement_key,entitlement_value
+         FROM plan_entitlement
+         WHERE plan_id=$1`,
+        [row.id]
+      );
+      const targetMap=Object.fromEntries(
+        targetEntitlements.rows.map(item=>[
+          item.entitlement_key,item.entitlement_value
+        ])
+      );
+      const usage=await this.usageSnapshot(
+        client,context.tenantId,targetMap
+      );
+      const exceeded=Object.entries(usage).filter(
+        ([,value])=>value.limit!==null&&value.used>value.limit
+      );
+      if(exceeded.length){
+        await client.query(
+          `INSERT INTO billing_event(
+             tenant_id,event_type,subscription_status,payload
+           )
+           SELECT $1,'plan_change_blocked_usage',status,$2
+           FROM tenant_subscription
+           WHERE tenant_id=$1`,
+          [
+            context.tenantId,
+            JSON.stringify({
+              targetPlanCode:row.code,
+              exceeded:Object.fromEntries(exceeded)
+            })
+          ]
+        );
+        throw new BadRequestException(
+          "Новый тариф ниже текущего использования: "+
+          exceeded.map(([key,value])=>
+            key+" "+value.used+"/"+value.limit
+          ).join(", ")
+        );
+      }
+
       const subscription = await client.query<{ status: string }>(
         `SELECT status
          FROM tenant_subscription
@@ -258,6 +314,89 @@ export class BillingService {
 
       return { selected: true, planCode: row.code };
     });
+  }
+
+  private async usageSnapshot(
+    client:{
+      query:<T=any>(
+        text:string,
+        values?:unknown[]
+      )=>Promise<{rows:T[];rowCount:number|null}>;
+    },
+    tenantId:string,
+    entitlements:Record<string,unknown>
+  ):Promise<Record<string,{
+    used:number;
+    limit:number|null;
+    remaining:number|null;
+    percent:number|null;
+  }>>{
+    const counts=await client.query<{
+      users:number;
+      branches:number;
+      warehouses:number;
+      service_resources:number;
+    }>(
+      `SELECT
+         (
+           SELECT count(*)::integer
+           FROM tenant_membership
+           WHERE tenant_id=$1 AND status='ACTIVE'
+         ) AS users,
+         (
+           SELECT count(*)::integer
+           FROM branch
+           WHERE tenant_id=$1 AND status='ACTIVE'
+         ) AS branches,
+         (
+           SELECT count(*)::integer
+           FROM warehouse
+           WHERE tenant_id=$1 AND status='ACTIVE'
+         ) AS warehouses,
+         (
+           SELECT count(*)::integer
+           FROM service_resource
+           WHERE tenant_id=$1 AND status='ACTIVE'
+         ) AS service_resources`,
+      [tenantId]
+    );
+    const row=counts.rows[0]??{
+      users:0,branches:0,warehouses:0,service_resources:0
+    };
+
+    const metricMap:Record<string,number>={
+      max_users:Number(row.users??0),
+      max_branches:Number(row.branches??0),
+      max_warehouses:Number(row.warehouses??0),
+      max_service_resources:Number(row.service_resources??0)
+    };
+    const output:Record<string,{
+      used:number;
+      limit:number|null;
+      remaining:number|null;
+      percent:number|null;
+    }>={};
+
+    for(const [key,used] of Object.entries(metricMap)){
+      const raw=entitlements[key];
+      const parsed=
+        typeof raw==="number"
+          ?raw
+          :typeof raw==="string"&&/^\d+$/.test(raw)
+            ?Number(raw)
+            :null;
+      const limit=parsed!==null&&Number.isFinite(parsed)?parsed:null;
+      output[key]={
+        used,
+        limit,
+        remaining:limit===null?null:Math.max(0,limit-used),
+        percent:
+          limit===null||limit===0
+            ?null
+            :Math.min(100,Math.round(used/limit*100))
+      };
+    }
+    return output;
   }
 
   async setCancelAtPeriodEnd(
