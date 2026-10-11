@@ -178,6 +178,41 @@ export class ActionQueueService {
           }
         }
 
+        if (allowed("accounting.compliance.read")) {
+          const tax=await client.query<{
+            id:string;
+            title:string;
+            due_at:Date;
+            workflow_status:string;
+            obligation_type:string;
+          }>(
+            `SELECT id,title,due_at,workflow_status,obligation_type
+             FROM accounting_compliance_obligation
+             WHERE tenant_id=$1
+               AND workflow_status NOT IN ('ACCEPTED','PAID','CANCELLED')
+               AND due_at<now()+interval '30 days'
+             ORDER BY due_at,id
+             LIMIT 30`,
+            [context.tenantId]
+          );
+
+          for(const row of tax.rows){
+            const overdue=row.due_at.getTime()<Date.now();
+            const urgent=row.due_at.getTime()<=Date.now()+7*86400000;
+            items.push({
+              sourceKey:"tax:"+row.id,
+              domain:"ACCOUNTING",
+              severity:overdue?"CRITICAL":urgent?"WARNING":"INFO",
+              title:row.title,
+              detail:
+                (overdue?"Просрочено · ":"Срок · ")+
+                row.due_at.toLocaleDateString("ru-RU"),
+              href:"/app/accounting/taxes",
+              createdAt:row.due_at.toISOString()
+            });
+          }
+        }
+
         if (allowed("wms.read")) {
           const wms = await client.query<{
             id: string;
