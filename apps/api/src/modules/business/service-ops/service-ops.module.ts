@@ -8,24 +8,29 @@ import { BookingService } from "./booking.service";
 import { ResourcesController } from "./resources.controller";
 import { ResourcesService } from "./resources.service";
 import { ServiceWorkspaceController } from "./service-workspace.controller";
+import { ServiceEconomicsController } from "./service-economics.controller";
 import { ServiceWorkspaceService } from "./service-workspace.service";
+import { ServiceEconomicsService } from "./service-economics.service";
 
 @Module({
   imports: [AuthorizationModule, DomainEventModule, InventoryModule, GrowthModule],
   controllers: [
     ResourcesController,
     BookingController,
-    ServiceWorkspaceController
+    ServiceWorkspaceController,
+    ServiceEconomicsController
   ],
   providers: [
     ResourcesService,
     BookingService,
-    ServiceWorkspaceService
+    ServiceWorkspaceService,
+    ServiceEconomicsService
   ],
   exports: [
     ResourcesService,
     BookingService,
-    ServiceWorkspaceService
+    ServiceWorkspaceService,
+    ServiceEconomicsService
   ]
 })
 export class ServiceOpsModule {}
