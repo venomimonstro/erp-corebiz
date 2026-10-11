@@ -207,7 +207,13 @@ async function claim(pool: Pool): Promise<ExportJob | null> {
   return result.rows[0] ?? null;
 }
 
-function cleanValue(value: unknown): unknown {
+export function cleanValue(value: unknown): unknown {
+  // pg materializes timestamptz as JS Date. Treating Date as an ordinary
+  // object would silently export {} for all timestamps across verticals.
+  if(value instanceof Date)
+    return Number.isFinite(value.getTime())?value.toISOString():null;
+  if(Buffer.isBuffer(value))
+    return value.toString("base64");
   if (Array.isArray(value)) {
     return value.map(cleanValue);
   }
