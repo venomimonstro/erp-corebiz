@@ -28,14 +28,21 @@ export class AuthorizationService {
         [context.tenantId, context.membershipId, permissionCode]
       );
 
-      const wildcard = result.rows.find((row) => row.permission_code === "*");
-      if (wildcard) return "all";
-
-      const exact = result.rows.find(
-        (row) => row.permission_code === permissionCode
-      );
-
-      return exact?.scope ?? null;
+      // A user may have several roles granting the same capability with
+      // different scopes. The DB row order is not stable: pick the broadest
+      // *effective* grant deterministically, never the first returned row.
+      const priorities: Record<PermissionScope,number> = {
+        own:1,team:2,branch:3,all:4
+      };
+      let strongest:PermissionScope|null=null;
+      for(const row of result.rows){
+        if(row.permission_code==="*")return "all";
+        if(!Object.prototype.hasOwnProperty.call(priorities,row.scope))continue;
+        if(!strongest||priorities[row.scope]>priorities[strongest]){
+          strongest=row.scope;
+        }
+      }
+      return strongest;
     });
   }
 
