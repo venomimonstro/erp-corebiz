@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
 import { DanceWorkspaceNav } from "../../../../components/dance-workspace-nav";
+import { StudioModal } from "../../../../components/studio-modal";
 import { apiRequest } from "../../../../lib/api";
 
 type Customer = {
@@ -88,7 +89,20 @@ export default function DanceStudentsPage() {
   const [makeupCredits, setMakeupCredits] = useState<MakeupCredit[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [pending, setPending] = useState(false);
+  const [studentModal, setStudentModal] = useState(false);
+  const [studentPartyId, setStudentPartyId] = useState("");
+  const [studentBirthDate, setStudentBirthDate] = useState("");
+  const [studentPayerId, setStudentPayerId] = useState("");
+  const [payerModal, setPayerModal] = useState(false);
+  const [payerPartyId, setPayerPartyId] = useState("");
+  const [chargeModal, setChargeModal] = useState(false);
+  const [chargeRub, setChargeRub] = useState("");
+  const [chargeDueAt, setChargeDueAt] = useState(new Date().toISOString().slice(0,10));
+  const [chargeNote, setChargeNote] = useState("");
+  const [packageModal, setPackageModal] = useState(false);
+  const [packagePlanId, setPackagePlanId] = useState("");
 
   const load = useCallback(async () => {
     setError("");
@@ -155,88 +169,97 @@ export default function DanceStudentsPage() {
       );
   }, [charges, selected]);
 
-  async function addStudent() {
+  function openStudentModal() {
     if (!customers.length) {
       setError("Сначала создайте клиента или родителя в CRM");
       return;
     }
-    const list = customers
-      .slice(0, 60)
-      .map((item, index) => `${index + 1}. ${item.displayName}`)
-      .join("\n");
-    const index = Number(window.prompt("Выберите ученика из CRM:\n" + list, "1")) - 1;
-    const customer = customers[index];
-    if (!customer) return;
+    setStudentPartyId("");
+    setStudentBirthDate("");
+    setStudentPayerId("");
+    setStudentModal(true);
+  }
 
-    const birthDate = window.prompt("Дата рождения YYYY-MM-DD", "")?.trim() || undefined;
-    const payerIndexRaw = window.prompt(
-      "Номер родителя/плательщика из того же списка. Пусто = ученик платит сам.",
-      ""
-    );
-    const payerIndex = payerIndexRaw?.trim()
-      ? Number(payerIndexRaw) - 1
-      : -1;
-    const payer = payerIndex >= 0 ? customers[payerIndex] : undefined;
-
+  async function addStudent() {
+    if (!studentPartyId) {
+      setError("Выберите ученика из CRM");
+      return;
+    }
+    setPending(true);
+    setError("");
+    setNotice("");
     try {
       const created = await apiRequest<{ id: string }>("/dance/students", {
         method: "POST",
         body: JSON.stringify({
-          partyId: customer.id,
-          birthDate,
-          payerPartyId: payer?.id,
-          payerRelation: payer ? "PARENT" : undefined
+          partyId: studentPartyId,
+          birthDate: studentBirthDate || undefined,
+          payerPartyId: studentPayerId || undefined,
+          payerRelation: studentPayerId ? "PARENT" : undefined
         })
       });
+      setStudentModal(false);
+      setNotice("Ученик добавлен в студию.");
       await load();
       setSelectedId(created.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось добавить ученика");
+    } finally {
+      setPending(false);
     }
   }
 
-  async function addPayer() {
+  function openPayerModal() {
     if (!selected) return;
-    const list = customers
-      .slice(0, 60)
-      .map((item, index) => `${index + 1}. ${item.displayName}`)
-      .join("\n");
-    const index = Number(window.prompt("Выберите плательщика:\n" + list, "1")) - 1;
-    const payer = customers[index];
-    if (!payer) return;
+    setPayerPartyId(selected.payer_party_id ?? "");
+    setPayerModal(true);
+  }
 
+  async function addPayer() {
+    if (!selected || !payerPartyId) {
+      setError("Выберите плательщика");
+      return;
+    }
+    setPending(true);
+    setError("");
+    setNotice("");
     try {
       await apiRequest(`/dance/students/${selected.id}/relationships`, {
         method: "POST",
         body: JSON.stringify({
-          partyId: payer.id,
+          partyId: payerPartyId,
           relationType: "PAYER",
           isPrimary: true
         })
       });
+      setPayerModal(false);
+      setNotice("Плательщик назначен.");
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось назначить плательщика");
+    } finally {
+      setPending(false);
     }
+  }
+
+  function openChargeModal() {
+    if (!selected) return;
+    setChargeRub("");
+    setChargeDueAt(new Date().toISOString().slice(0,10));
+    setChargeNote("");
+    setChargeModal(true);
   }
 
   async function addCharge() {
     if (!selected) return;
-    const amountRub = Number(
-      (window.prompt("Начислить ученику, ₽", "0") ?? "0").replace(",", ".")
-    );
+    const amountRub = Number(chargeRub.replace(",", "."));
     if (!Number.isFinite(amountRub) || amountRub <= 0) {
-      setError("Некорректная сумма");
+      setError("Укажите корректную сумму начисления");
       return;
     }
-    const dueAt =
-      window.prompt(
-        "Срок оплаты YYYY-MM-DD",
-        new Date().toISOString().slice(0, 10)
-      ) || undefined;
-    const note = window.prompt("За что начисление?", "Абонемент / обучение") || undefined;
-
     setPending(true);
+    setError("");
+    setNotice("");
     try {
       await apiRequest(`/dance/students/${selected.id}/charges`, {
         method: "POST",
@@ -244,13 +267,15 @@ export default function DanceStudentsPage() {
           payerPartyId: selected.payer_party_id ?? undefined,
           sourceType: "OTHER",
           amountMinor: String(Math.round(amountRub * 100)),
-          dueAt,
-          note
+          dueAt: chargeDueAt || undefined,
+          note: chargeNote.trim() || undefined
         })
       });
+      setChargeModal(false);
+      setNotice("Начисление создано.");
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось создать долг");
+      setError(cause instanceof Error ? cause.message : "Не удалось создать начисление");
     } finally {
       setPending(false);
     }
@@ -308,31 +333,37 @@ export default function DanceStudentsPage() {
     }
   }
 
-  async function issuePackage() {
-    if (!selected || !plans.length) return;
-    const list = plans
-      .map(
-        (plan, index) =>
-          `${index + 1}. ${plan.name} · ${plan.visit_limit === null ? "∞" : plan.visit_limit} · ${money(plan.price_minor)}`
-      )
-      .join("\n");
-    const index = Number(window.prompt("Выберите тариф:\n" + list, "1")) - 1;
-    const plan = plans[index];
-    if (!plan) return;
+  function openPackageModal() {
+    if (!selected) return;
+    setPackagePlanId(plans[0]?.id ?? "");
+    setPackageModal(true);
+  }
 
+  async function issuePackage() {
+    if (!selected || !packagePlanId) {
+      setError("Выберите тариф");
+      return;
+    }
+    setPending(true);
+    setError("");
+    setNotice("");
     try {
       await apiRequest("/service/packages", {
         method: "POST",
         body: JSON.stringify({
-          planId: plan.id,
+          planId: packagePlanId,
           partyId: selected.party_id,
           payerPartyId: selected.payer_party_id ?? selected.party_id,
           startsAt: new Date().toISOString()
         })
       });
+      setPackageModal(false);
+      setNotice("Абонемент выдан ученику.");
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось выдать абонемент");
+    } finally {
+      setPending(false);
     }
   }
 
