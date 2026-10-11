@@ -394,7 +394,7 @@ async function serviceJourney() {
 }
 
 async function danceStudioJourney() {
-  await newTenant(
+  const danceTenant = await newTenant(
     "Golden Dance " + runId.slice(0, 8),
     "SERVICE"
   );
@@ -440,6 +440,7 @@ async function danceStudioJourney() {
     name: "Golden dance trainer",
     code: "DTR-" + runId.slice(0, 6).toUpperCase(),
     capacity: 1,
+    membershipId: danceTenant.membershipId,
     timezone: "Europe/Moscow"
   });
   const room = await request("POST", "/service/resources", {
@@ -571,27 +572,29 @@ async function danceStudioJourney() {
     "DANCE paid package must activate"
   );
 
+  const payrollProfile = await request(
+    "POST",
+    "/dance/payroll-profiles",
+    {
+      trainerResourceId: trainer.id,
+      monthlyBaseMinor: "100000",
+      minimumGuaranteeMinor: "150000",
+      note: "Golden salary profile"
+    }
+  );
+  assert.equal(
+    payrollProfile.trainer_resource_id,
+    trainer.id,
+    "DANCE trainer salary profile"
+  );
+
   await request("POST", "/dance/compensation-plans", {
     trainerResourceId: trainer.id,
     serviceId: service.id,
     lessonType: "GROUP",
-    calculationType: "COMPOSITE",
-    revenueBasis: "PAID",
-    minimumGuaranteeMinor: "150000",
-    guaranteePeriod: "MONTH",
-    components: [
-      {
-        componentType: "MONTHLY_BASE",
-        amountMinor: "100000",
-        priority: 100
-      },
-      {
-        componentType: "PERCENT",
-        percentBps: 4000,
-        revenueBasis: "PAID",
-        priority: 110
-      }
-    ]
+    calculationType: "PERCENT",
+    percentBps: 4000,
+    revenueBasis: "PAID"
   });
 
   await request("POST", "/dance/room-contracts", {
@@ -735,6 +738,91 @@ async function danceStudioJourney() {
     "DANCE statement total must include lesson accrual and base"
   );
 
+  const bonus = await request(
+    "POST",
+    "/dance/payroll-statements/" + trainerStatement.id + "/adjustments",
+    {
+      type: "BONUS",
+      amountMinor: "25000",
+      reason: "Golden quality bonus"
+    }
+  );
+  assert.equal(
+    bonus.amount_minor,
+    "25000",
+    "DANCE trainer bonus must be recorded separately"
+  );
+
+  const adjustedStatements = await request(
+    "GET",
+    "/dance/payroll-statements?from=" +
+      encodeURIComponent(payrollFrom.toISOString()) +
+      "&to=" +
+      encodeURIComponent(payrollTo.toISOString())
+  );
+  const adjustedStatement = adjustedStatements.find(
+    (item) => item.id === trainerStatement.id
+  );
+  assert.equal(
+    adjustedStatement?.adjustment_minor,
+    "25000",
+    "DANCE statement must preserve manual adjustment"
+  );
+
+  const legalEntity = await request(
+    "POST",
+    "/organization/legal-entities",
+    { name: "Golden Dance LLC" }
+  );
+  const payrollBatch = await request(
+    "POST",
+    "/accounting/payroll/batches",
+    {
+      legalEntityId: legalEntity.id,
+      periodFrom: payrollFrom.toISOString().slice(0, 10),
+      periodTo: new Date(
+        payrollTo.getTime() - 86400000
+      ).toISOString().slice(0, 10)
+    }
+  );
+
+  const exportedPayroll = await request(
+    "POST",
+    "/dance/compensation/export-payroll",
+    {
+      batchId: payrollBatch.id,
+      from: payrollFrom.toISOString(),
+      to: payrollTo.toISOString()
+    }
+  );
+  assert.equal(
+    exportedPayroll.statements,
+    1,
+    "DANCE finalized trainer statement must export exactly once"
+  );
+
+  const payrollLines = await request(
+    "GET",
+    "/accounting/payroll/batches/" + payrollBatch.id + "/lines"
+  );
+  const trainerLine = payrollLines.find(
+    (item) => item.employee_ref === danceTenant.membershipId
+  );
+  assert.ok(trainerLine, "DANCE payroll aggregate line");
+  assert.ok(
+    trainerLine.components.some(
+      (component) =>
+        component.sourceType === "DANCE_TRAINER_STATEMENT" &&
+        component.sourceKey === trainerStatement.id
+    ),
+    "DANCE payroll must retain trainer statement as source component"
+  );
+  assert.equal(
+    trainerLine.gross_minor,
+    adjustedStatement.total_minor,
+    "DANCE payroll aggregate must equal adjusted trainer statement"
+  );
+
   const month = startsAt.toISOString().slice(0, 7);
   const rent = await request(
     "POST",
@@ -767,7 +855,7 @@ async function danceStudioJourney() {
   return {
     profile: "DANCE_FITNESS",
     result:
-      "parent → child → group → package → payment → lesson → attendance → composite trainer payroll + room economics",
+      "parent → child → group → package → payment → lesson → attendance → salary profile + variable payroll + audited export + room economics",
     studentId: student.id,
     groupId: group.id,
     lessonId: lesson.id,
