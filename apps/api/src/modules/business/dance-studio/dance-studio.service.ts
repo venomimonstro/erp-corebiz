@@ -610,6 +610,7 @@ export class DanceStudioService {
 
   async students(context: TenantContext) {
     const scopeIds = await this.scopeIds(context, "dance.read");
+    const canViewFinancials=Boolean(await this.authorization.resolveScope(context,"finance.read"));
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `SELECT
@@ -733,7 +734,16 @@ export class DanceStudioService {
            p.display_name`,
         [context.tenantId, scopeIds]
       );
-      return result.rows;
+      if(canViewFinancials)return result.rows;
+      // Keep roster, group assignment and payer contact information visible.
+      // Never transmit family debts, overdue balances or financial prioritization to trainers.
+      return result.rows.map(row=>({
+        ...row,
+        debt_minor:null,overdue_minor:null,overdue_count:null,
+        open_charge_count:null,family_debt_minor:null,
+        family_overdue_minor:null,family_overdue_count:null,
+        family_children_count:null
+      }));
     });
   }
 
