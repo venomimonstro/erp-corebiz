@@ -1424,6 +1424,7 @@ export default function DanceGroupsPage() {
                 <span>Направление</span>
                 <select
                   value={groupProgramId}
+                  disabled={Boolean(editingGroupId)}
                   onChange={(event)=>{
                     const id=event.target.value;
                     setGroupProgramId(id);
