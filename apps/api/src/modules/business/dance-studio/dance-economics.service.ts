@@ -1867,16 +1867,23 @@ export class DanceEconomicsService {
   ):Promise<any>{
     const result=await client.query(
       `SELECT
-         l.*,g.program_id,tr.membership_id AS trainer_membership_id
+         l.*,g.program_id,b.service_id,b.branch_id,
+         tr.membership_id AS trainer_membership_id
        FROM dance_lesson l
        LEFT JOIN dance_group g
          ON g.tenant_id=l.tenant_id AND g.id=l.group_id
+       JOIN service_booking b
+         ON b.tenant_id=l.tenant_id AND b.id=l.host_booking_id
        LEFT JOIN service_resource tr
          ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
        WHERE l.tenant_id=$1 AND l.id=$2
          AND (
            $3::uuid[] IS NULL
            OR tr.membership_id = ANY($3::uuid[])
+           OR (
+             l.trainer_resource_id IS NULL
+             AND l.created_by_membership_id = ANY($3::uuid[])
+           )
          )
        FOR UPDATE OF l`,
       [tenantId,lessonId,scopeIds]
@@ -1906,11 +1913,17 @@ export class DanceEconomicsService {
              FROM dance_lesson_participant lp
              JOIN dance_lesson l
                ON l.tenant_id=lp.tenant_id AND l.id=lp.lesson_id
-             JOIN service_resource tr
+             LEFT JOIN service_resource tr
                ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
              WHERE lp.tenant_id=s.tenant_id
                AND lp.student_id=s.id
-               AND tr.membership_id = ANY($3::uuid[])
+               AND (
+                 tr.membership_id = ANY($3::uuid[])
+                 OR (
+                   l.trainer_resource_id IS NULL
+                   AND l.created_by_membership_id = ANY($3::uuid[])
+                 )
+               )
            )
          )`,
       [tenantId,studentId,scopeIds]
