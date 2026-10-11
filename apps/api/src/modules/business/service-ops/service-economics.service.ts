@@ -678,10 +678,18 @@ export class ServiceEconomicsService {
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
-           s.*,r.name AS employee_name
+           s.*,r.name AS employee_name,r.membership_id,
+           pr.id AS review_id,
+           coalesce(pr.review_status,'PENDING') AS review_status,
+           pr.employee_comment,pr.manager_comment,
+           pr.acknowledged_at,pr.disputed_at,pr.resolved_at
          FROM service_employee_payroll_statement s
          JOIN service_resource r
            ON r.tenant_id=s.tenant_id AND r.id=s.employee_resource_id
+         LEFT JOIN payroll_statement_review pr
+           ON pr.tenant_id=s.tenant_id
+          AND pr.statement_kind='SERVICE_EMPLOYEE'
+          AND pr.statement_id=s.id
          WHERE s.tenant_id=$1
            AND s.period_from=$2 AND s.period_to=$3
            AND ($4::uuid[] IS NULL OR r.membership_id=ANY($4::uuid[]))
@@ -689,6 +697,202 @@ export class ServiceEconomicsService {
         [context.tenantId,period.from,period.to,scope]
       );
       return result.rows;
+    });
+  }
+
+  async reviewPayrollStatement(
+    context:TenantContext,
+    statementId:string,
+    input:{
+      status:"ACKNOWLEDGED"|"DISPUTED";
+      comment?:string;
+    }
+  ){
+    const scope=await this.scope(context,"service.read");
+    const comment=input.comment?.trim()||null;
+    if(!["ACKNOWLEDGED","DISPUTED"].includes(input.status)){
+      throw new BadRequestException("Некорректный статус согласования");
+    }
+    if(input.status==="DISPUTED"&&(!comment||comment.length<3)){
+      throw new BadRequestException("Опишите причину несогласия");
+    }
+    if(comment&&comment.length>1000){
+      throw new BadRequestException("Комментарий слишком длинный");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const statement=await client.query<{
+        id:string;
+        employee_resource_id:string;
+        total_minor:string;
+        currency:string;
+        status:string;
+        membership_id:string|null;
+      }>(
+        `SELECT
+           s.id,s.employee_resource_id,s.total_minor::text,s.currency,
+           s.status,r.membership_id
+         FROM service_employee_payroll_statement s
+         JOIN service_resource r
+           ON r.tenant_id=s.tenant_id AND r.id=s.employee_resource_id
+         WHERE s.tenant_id=$1 AND s.id=$2
+           AND (
+             $3::uuid[] IS NULL OR
+             r.membership_id=ANY($3::uuid[])
+           )
+         FOR UPDATE OF s`,
+        [context.tenantId,statementId,scope]
+      );
+      const row=statement.rows[0];
+      if(!row) throw new NotFoundException("Ведомость не найдена");
+      if(!["FINALIZED","EXPORTED","PAID"].includes(row.status)){
+        throw new ConflictException(
+          "Согласовать можно только закрытую ведомость"
+        );
+      }
+      if(scope!==null&&row.membership_id!==context.membershipId){
+        throw new ForbiddenException(
+          "Сотрудник может согласовать только собственную ведомость"
+        );
+      }
+
+      const current=await client.query<{
+        id:string;
+        review_status:string;
+      }>(
+        `SELECT id,review_status
+         FROM payroll_statement_review
+         WHERE tenant_id=$1
+           AND statement_kind='SERVICE_EMPLOYEE'
+           AND statement_id=$2
+         FOR UPDATE`,
+        [context.tenantId,statementId]
+      );
+      const previous=current.rows[0]?.review_status??"PENDING";
+
+      const review=await client.query<{
+        id:string;
+        review_status:string;
+      }>(
+        `INSERT INTO payroll_statement_review(
+           tenant_id,statement_kind,statement_id,employee_resource_id,
+           reviewer_membership_id,review_status,
+           statement_total_minor_snapshot,currency,employee_comment,
+           acknowledged_at,disputed_at
+         ) VALUES(
+           $1,'SERVICE_EMPLOYEE',$2,$3,$4,$5,$6,$7,$8,
+           CASE WHEN $5='ACKNOWLEDGED' THEN now() ELSE NULL END,
+           CASE WHEN $5='DISPUTED' THEN now() ELSE NULL END
+         )
+         ON CONFLICT(tenant_id,statement_kind,statement_id)
+         DO UPDATE SET
+           reviewer_membership_id=EXCLUDED.reviewer_membership_id,
+           review_status=EXCLUDED.review_status,
+           statement_total_minor_snapshot=EXCLUDED.statement_total_minor_snapshot,
+           currency=EXCLUDED.currency,
+           employee_comment=EXCLUDED.employee_comment,
+           manager_comment=NULL,
+           acknowledged_at=EXCLUDED.acknowledged_at,
+           disputed_at=EXCLUDED.disputed_at,
+           resolved_at=NULL,
+           resolved_by_membership_id=NULL,
+           updated_at=now()
+         RETURNING id,review_status`,
+        [
+          context.tenantId,statementId,row.employee_resource_id,
+          context.membershipId,input.status,row.total_minor,row.currency,comment
+        ]
+      );
+      const saved=review.rows[0];
+      if(!saved) throw new Error("PAYROLL_REVIEW_SAVE_FAILED");
+
+      await client.query(
+        `INSERT INTO payroll_statement_review_event(
+           tenant_id,review_id,event_type,actor_membership_id,
+           previous_status,new_status,comment,
+           statement_total_minor_snapshot
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          context.tenantId,saved.id,input.status,context.membershipId,
+          previous,input.status,comment,row.total_minor
+        ]
+      );
+      return {id:saved.id,status:saved.review_status};
+    });
+  }
+
+  async resolvePayrollReview(
+    context:TenantContext,
+    reviewId:string,
+    input:{
+      status:"RESOLVED"|"WAIVED";
+      comment:string;
+    }
+  ){
+    await this.requireAll(context,"service.write");
+    const comment=input.comment?.trim();
+    if(!["RESOLVED","WAIVED"].includes(input.status)){
+      throw new BadRequestException("Некорректный статус решения");
+    }
+    if(!comment||comment.length<3||comment.length>1000){
+      throw new BadRequestException("Укажите решение по ведомости");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const review=await client.query<{
+        id:string;
+        statement_id:string;
+        review_status:string;
+        statement_total_minor_snapshot:string;
+      }>(
+        `SELECT
+           id,statement_id,review_status,
+           statement_total_minor_snapshot::text
+         FROM payroll_statement_review
+         WHERE tenant_id=$1
+           AND id=$2
+           AND statement_kind='SERVICE_EMPLOYEE'
+         FOR UPDATE`,
+        [context.tenantId,reviewId]
+      );
+      const row=review.rows[0];
+      if(!row) throw new NotFoundException("Согласование не найдено");
+      if(["RESOLVED","WAIVED"].includes(row.review_status)){
+        return {id:row.id,status:row.review_status,changed:false};
+      }
+      if(input.status==="RESOLVED"&&row.review_status!=="DISPUTED"){
+        throw new ConflictException(
+          "Разрешить можно только спорную ведомость"
+        );
+      }
+
+      const result=await client.query(
+        `UPDATE payroll_statement_review
+         SET review_status=$3,
+             manager_comment=$4,
+             resolved_at=now(),
+             resolved_by_membership_id=$5,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING id,review_status`,
+        [
+          context.tenantId,reviewId,input.status,comment,
+          context.membershipId
+        ]
+      );
+      await client.query(
+        `INSERT INTO payroll_statement_review_event(
+           tenant_id,review_id,event_type,actor_membership_id,
+           previous_status,new_status,comment,
+           statement_total_minor_snapshot
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          context.tenantId,reviewId,input.status,context.membershipId,
+          row.review_status,input.status,comment,
+          row.statement_total_minor_snapshot
+        ]
+      );
+      return {...result.rows[0],changed:true};
     });
   }
 
@@ -898,6 +1102,25 @@ export class ServiceEconomicsService {
       ){
         throw new ConflictException(
           "Период payroll batch не совпадает с выбранным месяцем"
+        );
+      }
+
+      const disputed=await client.query(
+        `SELECT pr.id
+         FROM payroll_statement_review pr
+         JOIN service_employee_payroll_statement st
+           ON st.tenant_id=pr.tenant_id AND st.id=pr.statement_id
+         WHERE pr.tenant_id=$1
+           AND pr.statement_kind='SERVICE_EMPLOYEE'
+           AND pr.review_status='DISPUTED'
+           AND st.period_from=$2::date
+           AND st.period_to=$3::date
+         LIMIT 1`,
+        [context.tenantId,period.from,period.to]
+      );
+      if(disputed.rowCount){
+        throw new ConflictException(
+          "Есть спорная ведомость. Сначала разрешите спор или оформите управленческое исключение."
         );
       }
 
