@@ -41,6 +41,7 @@ export type BusinessVerticalCode =
   | "WEB_STUDIO"
   | "MARKETING_AGENCY"
   | "RETAIL_STORE"
+  | "OMNICHANNEL_RETAIL"
   | "WHOLESALE_B2B"
   | "ECOMMERCE_STORE"
   | "MARKETPLACE_SELLER"
@@ -499,6 +500,44 @@ export const BUSINESS_VERTICALS: Record<
       "Out-of-stock и отрицательный доступный остаток",
       "Медленно оборачиваемый товар",
       "Просроченная поставка"
+    ]
+  },
+  OMNICHANNEL_RETAIL: {
+    code:"OMNICHANNEL_RETAIL",
+    title:"Сеть офлайн-магазинов + интернет-магазин",
+    summary:"Несколько розничных точек, один каталог, отдельные остатки по магазинам, кассовые смены, онлайн-заказы и самовывоз.",
+    profileCode:"ECOMMERCE",
+    version:1,
+    enabledCapabilities:[
+      "crm","tasks","catalog","sales","procurement","inventory","finance",
+      "accounting","channels","oms","sites","growth","workflow","support"
+    ],
+    customFields:[
+      {entityType:"PRODUCT",fieldKey:"manufacturer_warranty_months",
+        label:"Гарантия производителя, месяцев",dataType:"NUMBER"},
+      {entityType:"PRODUCT",fieldKey:"device_model",label:"Модель устройства",dataType:"TEXT"},
+      {entityType:"SALES_ORDER",fieldKey:"pickup_store_code",
+        label:"Точка самовывоза",dataType:"TEXT"}
+    ],
+    ownerQuestions:[
+      "Какие магазины и товары реально приносят прибыль после возвратов?",
+      "Где есть свободный остаток, и из какой точки можно выдать онлайн-заказ?",
+      "В каких точках зависли неоплаченные резервы и заказы без отгрузки?",
+      "Совпадают ли кассовые смены, отчёты ККТ и банковские поступления?"
+    ],
+    primaryWorkspaces:["retail","sites","oms","catalog","inventory","finance","crm"],
+    operatingFlows:[
+      "Открыть магазин → филиал и склад → приход товара → смена → резерв → оплата/ККТ → выдача",
+      "Общий каталог → сайт → корзина → заказ → OMS → склад → доставка или самовывоз",
+      "Покупатель онлайн и офлайн → единый CRM-контакт → история продаж и обращений",
+      "Склад-источник → перемещение между магазинами → остаток точки → продажа"
+    ],
+    attentionSignals:[
+      "Нет остатков товара на выбранной точке выдачи",
+      "Остаток зарезервирован, но заказ не оплачен",
+      "Смена закрыта или остаток наличных не сверен",
+      "Оплата успешна, а фискальный чек не подтверждён",
+      "Товар перемещён между точками без отражения в инвентарном журнале"
     ]
   },
   WHOLESALE_B2B: {
