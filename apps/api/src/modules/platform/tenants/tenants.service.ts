@@ -207,7 +207,10 @@ export class TenantsService {
     return this.database.withTenantTransaction(context,async client=>{
       await this.requireManageAll(client,context);
       const result=await client.query(
-        `SELECT i.id,i.email,i.status,i.expires_at,i.created_at,
+        `SELECT i.id,i.email,
+           CASE WHEN i.status='PENDING' AND i.expires_at<=now()
+             THEN 'EXPIRED' ELSE i.status END AS status,
+           i.expires_at,i.created_at,
            r.name AS role_name,r.code AS role_code
          FROM tenant_invitation i
          LEFT JOIN tenant_role r ON r.tenant_id=i.tenant_id AND r.id=i.role_id
