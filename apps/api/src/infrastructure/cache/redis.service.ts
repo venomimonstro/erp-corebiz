@@ -14,11 +14,19 @@ export class RedisService implements OnModuleDestroy {
     key: string,
     windowSeconds: number
   ): Promise<number> {
-    const value = await this.client.incr(key);
-    if (value === 1) {
-      await this.client.expire(key, windowSeconds);
-    }
-    return value;
+    if(!Number.isSafeInteger(windowSeconds)||windowSeconds<1||windowSeconds>86400)
+      throw new Error("INVALID_RATE_LIMIT_WINDOW");
+    // Atomic: process death or Redis hiccups between INCR and EXPIRE must
+    // never leave permanent keys or a never-expiring user lockout.
+    const value=await this.client.eval(
+      `local value=redis.call("INCR",KEYS[1])
+       if value==1 or redis.call("TTL",KEYS[1])<0 then
+         redis.call("EXPIRE",KEYS[1],tonumber(ARGV[1]))
+       end
+       return value`,
+      1,key,String(windowSeconds)
+    );
+    return Number(value);
   }
 
   async delete(key: string): Promise<void> {
