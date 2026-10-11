@@ -756,9 +756,15 @@ export class CrmService {
   ){
     const scope=await this.authorization.resolveScope(context,"crm.write");
     if(!scope) throw new BadRequestException("Недостаточно прав");
-    const body=input.body?.trim();
+    const scoped=await this.authorization.membershipIdsForScope(context,scope);
+    const body=input?.body?.trim();
     if(!body) throw new BadRequestException("Введите текст заметки");
     return this.database.withTenantTransaction(context,async client=>{
+      const allowed=await client.query(
+        `SELECT 1 FROM crm_deal WHERE tenant_id=$1 AND id=$2
+          AND ($3::uuid[] IS NULL OR responsible_membership_id=ANY($3::uuid[]))`,
+        [context.tenantId,dealId,scoped]);
+      if(!allowed.rowCount)throw new NotFoundException("Сделка не найдена");
       const result=await client.query(
         `INSERT INTO crm_note(
            tenant_id,deal_id,body,pinned,created_by_membership_id
@@ -791,7 +797,8 @@ export class CrmService {
   ){
     const scope=await this.authorization.resolveScope(context,"crm.write");
     if(!scope) throw new BadRequestException("Недостаточно прав");
-    if(!["CALL","EMAIL","MEETING","MESSAGE","TASK"].includes(input.activityType)){
+    const scoped=await this.authorization.membershipIdsForScope(context,scope);
+    if(!input || !["CALL","EMAIL","MEETING","MESSAGE","TASK"].includes(input.activityType)){
       throw new BadRequestException("Некорректный тип активности");
     }
     return this.database.withTenantTransaction(context,async client=>{
@@ -800,7 +807,9 @@ export class CrmService {
         [context.tenantId,dealId]
       );
       const row=deal.rows[0];
-      if(!row) throw new NotFoundException("Сделка не найдена");
+      if(!row || (scoped && (!row.responsible_membership_id ||
+          !scoped.includes(row.responsible_membership_id))))
+        throw new NotFoundException("Сделка не найдена");
       const happened=input.happenedAt?new Date(input.happenedAt):new Date();
       const due=input.dueAt?new Date(input.dueAt):null;
       if(Number.isNaN(happened.getTime())||(due&&Number.isNaN(due.getTime()))){
@@ -854,7 +863,9 @@ export class CrmService {
     context:TenantContext,
     input:{name:string;color?:string}
   ){
-    const name=input.name?.trim();
+    const scope=await this.authorization.resolveScope(context,"crm.write");
+    if(scope!=="all")throw new BadRequestException("Создавать теги может администратор CRM");
+    const name=input?.name?.trim();
     if(!name||name.length>80) throw new BadRequestException("Некорректный тег");
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
@@ -874,8 +885,19 @@ export class CrmService {
     dealId:string,
     tagIds:string[]
   ){
-    const ids=Array.from(new Set(tagIds??[])).slice(0,50);
+    const scope=await this.authorization.resolveScope(context,"crm.write");
+    if(!scope)throw new BadRequestException("Недостаточно прав");
+    const scoped=await this.authorization.membershipIdsForScope(context,scope);
+    if(!Array.isArray(tagIds)||tagIds.length>50||
+       !tagIds.every(x=>typeof x==="string"))
+      throw new BadRequestException("Некорректные теги");
+    const ids=Array.from(new Set(tagIds));
     return this.database.withTenantTransaction(context,async client=>{
+      const allowed=await client.query(
+        `SELECT 1 FROM crm_deal WHERE tenant_id=$1 AND id=$2
+         AND ($3::uuid[] IS NULL OR responsible_membership_id=ANY($3::uuid[]))`,
+        [context.tenantId,dealId,scoped]);
+      if(!allowed.rowCount)throw new NotFoundException("Сделка не найдена");
       const valid=ids.length?await client.query<{id:string}>(
         "SELECT id FROM crm_tag WHERE tenant_id=$1 AND id=ANY($2::uuid[])",
         [context.tenantId,ids]
