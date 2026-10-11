@@ -1236,6 +1236,10 @@ export class DashboardService {
            WHERE tenant_id=$1 AND type='EMPLOYEE' AND status='ACTIVE'`,
           [context.tenantId]
         );
+        const payroll=await client.query<{count:number}>(
+          `SELECT count(*)::integer AS count FROM service_employee_compensation_plan
+           WHERE tenant_id=$1 AND status='ACTIVE'`,[context.tenantId]
+        );
         definitions.SERVICE=[
           {key:"salon-master",title:"Добавьте мастера и график",
             detail:"Без мастера нельзя корректно показывать свободные окна.",
@@ -1248,7 +1252,10 @@ export class DashboardService {
             href:"/app/crm/customers",done:values.party>0},
           {key:"salon-booking",title:"Создайте первую запись",
             detail:"Убедитесь, что мастер доступен, затем подтвердите время.",
-            href:"/app/service/bookings",done:values.booking>0,firstValue:true}
+            href:"/app/service/bookings",done:values.booking>0,firstValue:true},
+          {key:"salon-salary",title:"Назначьте правило зарплаты мастеру",
+            detail:"Процент или ставка нужны для расчёта реальной маржи визита.",
+            href:"/app/service/team",done:(payroll.rows[0]?.count??0)>0}
         ];
       }
 
