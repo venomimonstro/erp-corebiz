@@ -148,6 +148,51 @@ type TrainerStatement = {
   }>;
 };
 
+type StatementDetail = {
+  statement: TrainerStatement & {
+    calculation_snapshot?: {
+      profileId?: string | null;
+      planIds?: string[];
+      lessonAccrualMinor?: string;
+      baseComponents?: Array<{
+        source?: string;
+        componentType?: string;
+        units?: number;
+        rateMinor?: string;
+        amountMinor?: string;
+      }>;
+      minimumGuaranteeMinor?: string;
+      monthlyGuaranteeMinor?: string;
+      dailyGuaranteeMinor?: string;
+      effectiveGuaranteeMinor?: string;
+    };
+  };
+  lessons: Array<{
+    accrual_id: string;
+    lesson_id: string;
+    starts_at: string;
+    ends_at: string;
+    lesson_type: string;
+    lesson_name: string;
+    program_name: string | null;
+    service_name: string | null;
+    attended_count: number;
+    eligible_revenue_minor: string;
+    amount_minor: string;
+    currency: string;
+    status: string;
+    calculation_type: string | null;
+    revenue_basis: string | null;
+  }>;
+  adjustments: Array<{
+    id: string;
+    adjustment_type: string;
+    amount_minor: string;
+    reason: string;
+    created_at: string;
+  }>;
+};
+
 type TrainerPayrollProfile = {
   id: string;
   trainer_resource_id: string;
@@ -264,6 +309,9 @@ export default function DanceTeamPage() {
   const [profileDailyRub, setProfileDailyRub] = useState("0");
   const [profileGuaranteeRub, setProfileGuaranteeRub] = useState("0");
   const [profileNote, setProfileNote] = useState("");
+  const [statementDetail, setStatementDetail] =
+    useState<StatementDetail | null>(null);
+  const [statementDetailLoading, setStatementDetailLoading] = useState(false);
   const [adjustmentModal, setAdjustmentModal] = useState(false);
   const [adjustmentStatement, setAdjustmentStatement] =
     useState<TrainerStatement | null>(null);
@@ -605,6 +653,25 @@ export default function DanceTeamPage() {
       );
     } finally {
       setPending(false);
+    }
+  }
+
+  async function openStatementDetails(statementId: string) {
+    setStatementDetailLoading(true);
+    setError("");
+    try {
+      const result=await apiRequest<StatementDetail>(
+        "/dance/payroll-statements/" + encodeURIComponent(statementId)
+      );
+      setStatementDetail(result);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось разобрать ведомость"
+      );
+    } finally {
+      setStatementDetailLoading(false);
     }
   }
 
@@ -1107,6 +1174,14 @@ export default function DanceTeamPage() {
                     ))}
                   </div>
                 ) : null}
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={statementDetailLoading}
+                  onClick={() => void openStatementDetails(statement.id)}
+                >
+                  {statementDetailLoading ? "Открываем…" : "Разобрать сумму"}
+                </button>
                 {statement.status === "FINALIZED" ? (
                   <button
                     className="secondary-button"
@@ -1225,6 +1300,154 @@ export default function DanceTeamPage() {
             </table>
           </div>
         </section>
+        {statementDetail ? (
+          <StudioModal
+            eyebrow="Расшифровка ведомости"
+            title={statementDetail.statement.trainer_name}
+            description={
+              statementDetail.statement.period_from +
+              " — " +
+              statementDetail.statement.period_to
+            }
+            onClose={() => setStatementDetail(null)}
+            footer={
+              <button
+                type="button"
+                onClick={() => setStatementDetail(null)}
+              >
+                Закрыть
+              </button>
+            }
+          >
+            <div className="studio-kpi-grid compact">
+              <article>
+                <span>Занятия</span>
+                <strong>
+                  {money(statementDetail.statement.lesson_accrual_minor)}
+                </strong>
+                <small>{statementDetail.lessons.length} начислений</small>
+              </article>
+              <article>
+                <span>Постоянная часть</span>
+                <strong>{money(statementDetail.statement.base_minor)}</strong>
+                <small>Оклад / дневная ставка</small>
+              </article>
+              <article>
+                <span>Гарантия</span>
+                <strong>
+                  {money(
+                    statementDetail.statement.guarantee_adjustment_minor
+                  )}
+                </strong>
+                <small>Доплата до минимума</small>
+              </article>
+              <article>
+                <span>Итого</span>
+                <strong>{money(statementDetail.statement.total_minor)}</strong>
+                <small>
+                  Корректировки{" "}
+                  {money(statementDetail.statement.adjustment_minor)}
+                </small>
+              </article>
+            </div>
+
+            {statementDetail.statement.calculation_snapshot?.baseComponents
+              ?.length ? (
+              <div className="studio-form-section">
+                <header>
+                  <strong>Постоянная часть</strong>
+                  <span>
+                    Применяется к периоду отдельно от ставок за занятия.
+                  </span>
+                </header>
+                <div className="payroll-breakdown-grid">
+                  {statementDetail.statement.calculation_snapshot.baseComponents.map(
+                    (component, index) => (
+                      <article key={index}>
+                        <span>
+                          {component.componentType === "MONTHLY_BASE"
+                            ? "Оклад за месяц"
+                            : "Ставка за рабочий день"}
+                        </span>
+                        <strong>
+                          {money(
+                            component.amountMinor ??
+                              String(
+                                BigInt(component.rateMinor ?? "0") *
+                                  BigInt(component.units ?? 0)
+                              )
+                          )}
+                        </strong>
+                        <small>
+                          {component.units && component.units > 1
+                            ? component.units + " дн."
+                            : component.source ?? "Профиль тренера"}
+                        </small>
+                      </article>
+                    )
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="studio-form-section">
+              <header>
+                <strong>Начисления за занятия</strong>
+                <span>
+                  Каждая строка привязана к реальному закрытому занятию.
+                </span>
+              </header>
+              <div className="payroll-lesson-list">
+                {statementDetail.lessons.map((lesson) => (
+                  <article key={lesson.accrual_id}>
+                    <div>
+                      <strong>{lesson.lesson_name}</strong>
+                      <span>
+                        {new Date(lesson.starts_at).toLocaleString("ru-RU")}
+                        {lesson.program_name
+                          ? " · " + lesson.program_name
+                          : ""}
+                      </span>
+                    </div>
+                    <div>
+                      <span>{lesson.attended_count} чел.</span>
+                      <small>
+                        База {money(lesson.eligible_revenue_minor)}
+                      </small>
+                    </div>
+                    <strong>{money(lesson.amount_minor)}</strong>
+                  </article>
+                ))}
+                {!statementDetail.lessons.length ? (
+                  <div className="studio-empty">
+                    <strong>Нет построчных начислений</strong>
+                    <p>
+                      Ведомость могла состоять только из постоянной части или
+                      гарантии.
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            {statementDetail.adjustments.length ? (
+              <div className="studio-form-section">
+                <header>
+                  <strong>Ручные корректировки</strong>
+                  <span>Сохраняются отдельно от формулы.</span>
+                </header>
+                <div className="statement-adjustments">
+                  {statementDetail.adjustments.map((item) => (
+                    <small key={item.id}>
+                      {money(item.amount_minor)} · {item.reason}
+                    </small>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </StudioModal>
+        ) : null}
+
         {profileModal ? (
           <StudioModal
             eyebrow="Условия тренера"
