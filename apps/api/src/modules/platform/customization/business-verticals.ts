@@ -259,7 +259,7 @@ export const BUSINESS_VERTICALS: Record<
       "Какие OEM и аналоги чаще всего ищут и не находят?",
       "Какая фактическая прибыль по каждому донору после разборки и списаний?"
     ],
-    primaryWorkspaces: ["automotive", "catalog", "inventory", "sales", "procurement", "finance"],
+    primaryWorkspaces: ["service", "catalog", "inventory", "sales", "procurement", "finance"],
     operatingFlows: [
       "Покупка донора → приёмка → разбор → оценка состояния → создание деталей → склад",
       "OEM/VIN клиента → подбор совместимости → резерв детали → продажа/установка",
