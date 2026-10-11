@@ -278,6 +278,45 @@ async function inspectRequiredHardening(root) {
       message: "Owner tax compliance workspace is missing"
     },
     {
+      path: "apps/api/src/modules/business/accounting/compliance.service.ts",
+      patterns: [
+        /complianceEnabled/,
+        /compliance_enabled===false/,
+        /Налоговый контур выключен/
+      ],
+      message: "Optional regulated accounting contour is incomplete"
+    },
+    {
+      path: "apps/api/src/modules/business/automotive/automotive.service.ts",
+      patterns: [
+        /automotive_work_order/,
+        /automotive_donor_vehicle/,
+        /automotive_dismantled_part/,
+        /updateWorkOrder/,
+        /updateWorkOrderLine/
+      ],
+      message: "Automotive operational backend is incomplete"
+    },
+    {
+      path: "apps/web/app/app/automotive/page.tsx",
+      patterns: [
+        /Автосервис и авторазбор/,
+        /Заказ-наряды/,
+        /Авторазбор/,
+        /Деньги в донорах/
+      ],
+      message: "Automotive owner workspace is incomplete"
+    },
+    {
+      path: "apps/api/src/modules/platform/customization/business-verticals.ts",
+      patterns: [
+        /AUTO_SERVICE/,
+        /AUTO_PARTS_DISMANTLING/,
+        /Автозапчасти \/ авторазбор/
+      ],
+      message: "Automotive vertical templates are incomplete"
+    },
+    {
       path: "apps/api/src/modules/business/service-ops/booking.service.ts",
       patterns: [
         /serviceScope/,
@@ -511,7 +550,11 @@ async function inspectRequiredHardening(root) {
       /accounting_compliance_packets/,
       /accounting_tax_payment_classifications/,
       /accounting_tax_ledger_items/,
-      /accounting_compliance_lines/
+      /accounting_compliance_lines/,
+      /automotive_vehicles/,
+      /automotive_work_orders/,
+      /automotive_donor_vehicles/,
+      /automotive_dismantled_parts/
     ],
     message: "Dance studio tenant export coverage is missing"
   }
@@ -591,7 +634,11 @@ async function inspectRequiredHardening(root) {
     "195_accounting_compliance_integrity.sql",
     "195_accounting_signature_evidence.sql",
     "196_cash_account_legal_entity.sql",
-    "197_accounting_compliance_lines.sql"
+    "197_accounting_compliance_lines.sql",
+    "198_accounting_compliance_toggle.sql",
+    "199_automotive_verticals.sql",
+    "200_automotive_integrity.sql",
+    "201_automotive_totals_trigger_fix.sql"
   ];
 
   for (const name of requiredMigrations) {
