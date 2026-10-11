@@ -1003,8 +1003,10 @@ export class BookingService {
         grace_period_days: number;
         family_eligible: boolean;
         price_minor: string;
-        currency: string;
-      }>(
+      currency: string;
+      delivery_format: "INDIVIDUAL" | "GROUP" | "SELF_PRACTICE" | "RENTAL";
+      group_capacity: number;
+    }>(
         `SELECT
            id,visit_limit,duration_days,price_minor::text,currency,
            package_kind,dance_program_id,dance_group_id,freeze_days_allowed,
@@ -2522,6 +2524,7 @@ export class BookingService {
     capacity: number;
     cost_per_hour_minor: string;
     membership_id: string | null;
+    timezone: string;
   }>> {
     const result = await client.query<{
       id: string;
@@ -2530,8 +2533,9 @@ export class BookingService {
       capacity: number;
       cost_per_hour_minor: string;
       membership_id: string | null;
+      timezone: string;
     }>(
-      `SELECT id, name, type, capacity, cost_per_hour_minor::text, membership_id
+      `SELECT id,name,type,capacity,cost_per_hour_minor::text,membership_id,timezone
        FROM service_resource
        WHERE tenant_id = $1
          AND id = ANY($2::uuid[])
@@ -2609,6 +2613,8 @@ export class BookingService {
     buffer_after_minutes: number;
     price_minor: string;
     currency: string;
+    delivery_format: "INDIVIDUAL" | "GROUP" | "SELF_PRACTICE" | "RENTAL";
+    group_capacity: number;
   }> {
     const result = await client.query<{
       id: string;
@@ -2619,7 +2625,8 @@ export class BookingService {
       currency: string;
     }>(
       `SELECT id, duration_minutes, buffer_before_minutes,
-              buffer_after_minutes, price_minor::text, currency
+               buffer_after_minutes, price_minor::text, currency,
+               delivery_format,group_capacity
        FROM service_catalog_item
        WHERE tenant_id = $1 AND id = $2 AND status = 'ACTIVE'`,
       [tenantId, serviceId]
