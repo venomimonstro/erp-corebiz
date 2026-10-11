@@ -488,7 +488,10 @@ async function inspectRequiredHardening(root) {
       /generateCalendar/,
       /autoClassify/,
       /calculateUsn/,
-      /confirmCalculation/
+      /confirmCalculation/,
+      /preparePacket/,
+      /recordSignature/,
+      /queueSubmission/
     ],
     message: "Russian tax compliance API is incomplete"
   },
@@ -499,6 +502,7 @@ async function inspectRequiredHardening(root) {
       /Налоговый помощник/,
       /Обновить календарь/,
       /Проверить операции/,
+      /Подготовить пакет/,
       /VAT_22/
     ],
     message: "Owner-first tax compliance UI is incomplete"
@@ -519,7 +523,8 @@ async function inspectRequiredHardening(root) {
       /accounting_compliance_obligations/,
       /accounting_tax_calculations/,
       /accounting_compliance_packets/,
-      /accounting_tax_payment_classifications/
+      /accounting_tax_payment_classifications/,
+      /accounting_tax_ledger_items/
     ],
     message: "Dance studio tenant export coverage is missing"
   }
