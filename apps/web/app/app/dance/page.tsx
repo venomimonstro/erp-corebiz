@@ -66,6 +66,13 @@ type Dashboard = {
     room_cost_minor: string;
     margin_minor: string;
     room_statement_adjustment_minor?: string;
+    payroll_total_minor: string;
+    payroll_extra_minor: string;
+    full_team_cost_minor: string;
+    owner_margin_minor: string;
+    payroll_statement_count: number;
+    payroll_expected_trainers: number;
+    payroll_finalized: boolean;
   };
   attention: {
     unclosed_past_lessons: number;
@@ -173,14 +180,38 @@ export default function DanceDashboardPage() {
                 <small>оказанные занятия</small>
               </article>
               <article className="owner-kpi studio-kpi">
-                <span>Маржинальный доход</span>
+                <span>Маржа до постоянной зарплаты</span>
                 <strong>{money(data.monthEconomics.margin_minor)}</strong>
                 <small>
-                  тренеры {money(data.monthEconomics.trainer_cost_minor)} · залы {money(data.monthEconomics.room_cost_minor)}
-                  {BigInt(data.monthEconomics.room_statement_adjustment_minor ?? "0") !== 0n
-                    ? " · корректировка аренды " +
-                      money(data.monthEconomics.room_statement_adjustment_minor ?? "0")
-                    : ""}
+                  занятия тренеров {money(data.monthEconomics.trainer_cost_minor)}
+                  {" · "}залы {money(data.monthEconomics.room_cost_minor)}
+                </small>
+              </article>
+              <article className="owner-kpi studio-kpi">
+                <span>Полная стоимость команды</span>
+                <strong>
+                  {money(data.monthEconomics.full_team_cost_minor)}
+                </strong>
+                <small>
+                  {data.monthEconomics.payroll_finalized
+                    ? "месячные ведомости закрыты"
+                    : "предварительно · закройте месячные ведомости"}
+                </small>
+              </article>
+              <article className={
+                "owner-kpi studio-kpi " +
+                (data.monthEconomics.payroll_finalized
+                  ? "owner-kpi-profit"
+                  : "")
+              }>
+                <span>Маржа владельца</span>
+                <strong>
+                  {money(data.monthEconomics.owner_margin_minor)}
+                </strong>
+                <small>
+                  {data.monthEconomics.payroll_finalized
+                    ? "после аренды, оклада, гарантий и корректировок"
+                    : "предварительно без незакрытой постоянной зарплаты"}
                 </small>
               </article>
               <article className="owner-kpi studio-kpi">
