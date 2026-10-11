@@ -531,6 +531,176 @@ export class BookingService {
     });
   }
 
+  async waitlist(
+    context:TenantContext,
+    input?:{status?:string}
+  ):Promise<Array<Record<string,unknown>>>{
+    const scopedMembershipIds=await this.serviceScope(context,"service.read");
+    const status=(input?.status??"WAITING").trim().toUpperCase();
+    if(!["WAITING","OFFERED","BOOKED","CANCELLED","EXPIRED","ALL"].includes(status)){
+      throw new BadRequestException("Некорректный статус листа ожидания");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      await client.query(
+        `UPDATE service_waitlist_entry
+         SET status='EXPIRED',updated_at=now()
+         WHERE tenant_id=$1
+           AND status IN ('WAITING','OFFERED')
+           AND desired_to<now()`,
+        [context.tenantId]
+      );
+      const result=await client.query(
+        `SELECT
+           w.id,w.party_id,p.display_name AS party_name,
+           w.service_id,s.name AS service_name,
+           w.preferred_employee_resource_id,r.name AS preferred_employee_name,
+           w.branch_id,b.name AS branch_name,
+           w.desired_from,w.desired_to,w.min_notice_minutes,
+           w.status,w.offered_starts_at,w.offer_expires_at,
+           w.source_booking_id,w.booked_booking_id,w.notes,w.created_at
+         FROM service_waitlist_entry w
+         JOIN party p
+           ON p.tenant_id=w.tenant_id AND p.id=w.party_id
+         JOIN service_catalog_item s
+           ON s.tenant_id=w.tenant_id AND s.id=w.service_id
+         LEFT JOIN service_resource r
+           ON r.tenant_id=w.tenant_id
+          AND r.id=w.preferred_employee_resource_id
+         LEFT JOIN branch b
+           ON b.tenant_id=w.tenant_id AND b.id=w.branch_id
+         WHERE w.tenant_id=$1
+           AND ($2='ALL' OR w.status=$2)
+           AND (
+             $3::uuid[] IS NULL
+             OR w.preferred_employee_resource_id IS NULL
+             OR r.membership_id=ANY($3::uuid[])
+           )
+         ORDER BY
+           CASE w.status WHEN 'OFFERED' THEN 0 WHEN 'WAITING' THEN 1 ELSE 2 END,
+           w.desired_from,w.created_at`,
+        [context.tenantId,status,scopedMembershipIds]
+      );
+      return result.rows;
+    });
+  }
+
+  async createWaitlistEntry(
+    context:TenantContext,
+    input:{
+      partyId:string;
+      serviceId:string;
+      preferredEmployeeResourceId?:string;
+      branchId?:string;
+      desiredFrom:string;
+      desiredTo:string;
+      minNoticeMinutes?:number;
+      notes?:string;
+    }
+  ):Promise<{id:string}>{
+    const scopedMembershipIds=await this.serviceScope(context,"service.write");
+    const from=new Date(input.desiredFrom);
+    const to=new Date(input.desiredTo);
+    if(
+      Number.isNaN(from.getTime())||
+      Number.isNaN(to.getTime())||
+      to<=from
+    ){
+      throw new BadRequestException("Некорректное окно ожидания");
+    }
+    if(to.getTime()-from.getTime()>90*86400000){
+      throw new BadRequestException(
+        "Окно ожидания не может быть длиннее 90 дней"
+      );
+    }
+    const minNotice=Math.floor(input.minNoticeMinutes??60);
+    if(minNotice<0||minNotice>43200){
+      throw new BadRequestException("Некорректное время предупреждения");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertService(client,context.tenantId,input.serviceId);
+      const party=await client.query(
+        `SELECT 1 FROM party
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+           AND (
+             $3::uuid[] IS NULL
+             OR responsible_membership_id=ANY($3::uuid[])
+             OR responsible_membership_id IS NULL
+           )`,
+        [context.tenantId,input.partyId,scopedMembershipIds]
+      );
+      if(!party.rowCount) throw new NotFoundException("Клиент не найден");
+
+      if(input.preferredEmployeeResourceId){
+        const employee=await client.query(
+          `SELECT 1 FROM service_resource
+           WHERE tenant_id=$1 AND id=$2
+             AND type='EMPLOYEE' AND status='ACTIVE'
+             AND (
+               $3::uuid[] IS NULL OR membership_id=ANY($3::uuid[])
+             )`,
+          [
+            context.tenantId,input.preferredEmployeeResourceId,
+            scopedMembershipIds
+          ]
+        );
+        if(!employee.rowCount){
+          throw new NotFoundException("Сотрудник не найден");
+        }
+      }
+
+      try{
+        const result=await client.query<{id:string}>(
+          `INSERT INTO service_waitlist_entry(
+             tenant_id,party_id,service_id,preferred_employee_resource_id,
+             branch_id,desired_from,desired_to,min_notice_minutes,
+             notes,created_by_membership_id
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           RETURNING id`,
+          [
+            context.tenantId,input.partyId,input.serviceId,
+            input.preferredEmployeeResourceId??null,input.branchId??null,
+            from,to,minNotice,input.notes?.trim()||null,context.membershipId
+          ]
+        );
+        return result.rows[0]!;
+      }catch(error){
+        if(this.isUniqueViolation(error)){
+          throw new ConflictException(
+            "Клиент уже находится в листе ожидания на это окно"
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  async cancelWaitlistEntry(
+    context:TenantContext,
+    waitlistId:string
+  ):Promise<{changed:boolean}>{
+    const scopedMembershipIds=await this.serviceScope(context,"service.write");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `UPDATE service_waitlist_entry w
+         SET status='CANCELLED',updated_at=now()
+         FROM party p
+         WHERE w.tenant_id=$1 AND w.id=$2
+           AND p.tenant_id=w.tenant_id AND p.id=w.party_id
+           AND w.status IN ('WAITING','OFFERED')
+           AND (
+             $3::uuid[] IS NULL
+             OR p.responsible_membership_id=ANY($3::uuid[])
+             OR p.responsible_membership_id IS NULL
+           )
+         RETURNING w.id`,
+        [context.tenantId,waitlistId,scopedMembershipIds]
+      );
+      return {changed:Boolean(result.rowCount)};
+    });
+  }
+
   async availability(
     context: TenantContext,
     input: {
@@ -2713,6 +2883,11 @@ export class BookingService {
       if(row.status==="CANCELLED"){
         await this.cancelBookingChargeTx(client,context,bookingId);
       }
+      if(row.status==="CANCELLED"){
+        await this.offerWaitlistForOpeningTx(
+          client,context,bookingId
+        );
+      }
 
       if (row.status === "COMPLETED") {
         const completed = await client.query<{
@@ -2753,6 +2928,100 @@ export class BookingService {
       });
 
       return row;
+    });
+  }
+
+  private async offerWaitlistForOpeningTx(
+    client:PoolClient,
+    context:TenantContext,
+    bookingId:string
+  ):Promise<void>{
+    const opening=await client.query<{
+      service_id:string;
+      branch_id:string|null;
+      starts_at:Date;
+      employee_resource_id:string|null;
+    }>(
+      `SELECT
+         b.service_id,b.branch_id,b.starts_at,
+         (
+           SELECT r.id
+           FROM service_booking_resource br
+           JOIN service_resource r
+             ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+           WHERE br.tenant_id=b.tenant_id
+             AND br.booking_id=b.id
+             AND r.type='EMPLOYEE'
+           ORDER BY r.id
+           LIMIT 1
+         ) AS employee_resource_id
+       FROM service_booking b
+       WHERE b.tenant_id=$1 AND b.id=$2`,
+      [context.tenantId,bookingId]
+    );
+    const slot=opening.rows[0];
+    if(!slot||new Date(slot.starts_at).getTime()<=Date.now()) return;
+
+    const candidate=await client.query<{id:string;party_id:string}>(
+      `SELECT w.id,w.party_id
+       FROM service_waitlist_entry w
+       WHERE w.tenant_id=$1
+         AND w.service_id=$2
+         AND w.status='WAITING'
+         AND w.desired_from<=$3
+         AND w.desired_to>$3
+         AND (
+           w.branch_id IS NULL OR w.branch_id IS NOT DISTINCT FROM $4::uuid
+         )
+         AND (
+           w.preferred_employee_resource_id IS NULL OR
+           w.preferred_employee_resource_id IS NOT DISTINCT FROM $5::uuid
+         )
+         AND $3>=now()+make_interval(mins=>w.min_notice_minutes)
+       ORDER BY
+         (w.preferred_employee_resource_id IS NOT NULL) DESC,
+         w.created_at,w.id
+       LIMIT 1
+       FOR UPDATE SKIP LOCKED`,
+      [
+        context.tenantId,slot.service_id,slot.starts_at,slot.branch_id,
+        slot.employee_resource_id
+      ]
+    );
+    const row=candidate.rows[0];
+    if(!row) return;
+
+    const expiresAt=new Date(
+      Math.min(
+        new Date(slot.starts_at).getTime()-15*60000,
+        Date.now()+30*60000
+      )
+    );
+    if(expiresAt.getTime()<=Date.now()) return;
+
+    const offered=await client.query(
+      `UPDATE service_waitlist_entry
+       SET status='OFFERED',offered_starts_at=$3,offer_expires_at=$4,
+           source_booking_id=$5,updated_at=now()
+       WHERE tenant_id=$1 AND id=$2 AND status='WAITING'
+       RETURNING id`,
+      [context.tenantId,row.id,slot.starts_at,expiresAt,bookingId]
+    );
+    if(!offered.rowCount) return;
+
+    await this.events.enqueue(client,context,{
+      eventName:"service.waitlist_offer_created",
+      entityType:"SERVICE_WAITLIST",
+      entityId:row.id,
+      payload:{
+        waitlistId:row.id,
+        partyId:row.party_id,
+        serviceId:slot.service_id,
+        employeeResourceId:slot.employee_resource_id,
+        startsAt:new Date(slot.starts_at).toISOString(),
+        offerExpiresAt:expiresAt.toISOString(),
+        sourceBookingId:bookingId
+      }
     });
   }
 
