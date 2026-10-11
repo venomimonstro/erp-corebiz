@@ -16,6 +16,7 @@ type Resource = {
   name: string;
   type: string;
   capacity: number;
+  membership_id?: string | null;
 };
 
 type Zone = {
@@ -147,6 +148,20 @@ type TrainerStatement = {
   }>;
 };
 
+type TrainerPayrollProfile = {
+  id: string;
+  trainer_resource_id: string;
+  trainer_name: string;
+  monthly_base_minor: string;
+  daily_base_minor: string;
+  minimum_guarantee_minor: string;
+  currency: string;
+  valid_from: string;
+  valid_to: string | null;
+  membership_id: string | null;
+  note: string | null;
+};
+
 function money(value: string) {
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
@@ -204,6 +219,7 @@ export default function DanceTeamPage() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [payroll, setPayroll] = useState<PayrollBatch[]>([]);
   const [trainerStatements, setTrainerStatements] = useState<TrainerStatement[]>([]);
+  const [payrollProfiles, setPayrollProfiles] = useState<TrainerPayrollProfile[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [pending, setPending] = useState(false);
@@ -242,6 +258,12 @@ export default function DanceTeamPage() {
     "PERCENT" | "HOURLY" | "PER_ATTENDEE" | "FIXED_PER_LESSON"
   >("PERCENT");
   const [planVariableRub, setPlanVariableRub] = useState("500");
+  const [profileModal, setProfileModal] = useState(false);
+  const [profileTrainerId, setProfileTrainerId] = useState("");
+  const [profileMonthlyRub, setProfileMonthlyRub] = useState("0");
+  const [profileDailyRub, setProfileDailyRub] = useState("0");
+  const [profileGuaranteeRub, setProfileGuaranteeRub] = useState("0");
+  const [profileNote, setProfileNote] = useState("");
   const [adjustmentModal, setAdjustmentModal] = useState(false);
   const [adjustmentStatement, setAdjustmentStatement] =
     useState<TrainerStatement | null>(null);
@@ -261,6 +283,7 @@ export default function DanceTeamPage() {
         resourceRows,
         serviceRows,
         planRows,
+        profileRows,
         accrualRows,
         trainerStatementRows,
         contractRows,
@@ -273,6 +296,7 @@ export default function DanceTeamPage() {
           apiRequest<Resource[]>("/service/resources"),
           apiRequest<Service[]>("/service/catalog"),
           apiRequest<Plan[]>("/dance/compensation-plans"),
+          apiRequest<TrainerPayrollProfile[]>("/dance/payroll-profiles"),
           apiRequest<Accrual[]>(
             "/dance/compensation-accruals?from=" +
               encodeURIComponent(range.from) +
@@ -307,6 +331,7 @@ export default function DanceTeamPage() {
       );
       setZones(Object.fromEntries(zoneRows));
       setPlans(planRows);
+      setPayrollProfiles(profileRows);
       setAccruals(accrualRows);
       setTrainerStatements(trainerStatementRows);
       setContracts(contractRows);
@@ -354,6 +379,78 @@ export default function DanceTeamPage() {
     }
     return [...map.entries()];
   }, [accruals]);
+
+  const profileByTrainer = useMemo(
+    () =>
+      new Map(
+        payrollProfiles.map((profile) => [
+          profile.trainer_resource_id,
+          profile
+        ])
+      ),
+    [payrollProfiles]
+  );
+
+  function openProfileModal(trainerId?: string) {
+    const id=trainerId || trainers[0]?.id || "";
+    const existing=profileByTrainer.get(id);
+    setProfileTrainerId(id);
+    setProfileMonthlyRub(
+      existing ? String(Number(existing.monthly_base_minor) / 100) : "0"
+    );
+    setProfileDailyRub(
+      existing ? String(Number(existing.daily_base_minor) / 100) : "0"
+    );
+    setProfileGuaranteeRub(
+      existing ? String(Number(existing.minimum_guarantee_minor) / 100) : "0"
+    );
+    setProfileNote(existing?.note ?? "");
+    setProfileModal(true);
+  }
+
+  async function saveProfile() {
+    if(!profileTrainerId){
+      setError("Выберите тренера");
+      return;
+    }
+    const monthly=Number(profileMonthlyRub.replace(",", "."));
+    const daily=Number(profileDailyRub.replace(",", "."));
+    const guarantee=Number(profileGuaranteeRub.replace(",", "."));
+    if(
+      !Number.isFinite(monthly)||monthly<0||
+      !Number.isFinite(daily)||daily<0||
+      !Number.isFinite(guarantee)||guarantee<0
+    ){
+      setError("Проверьте постоянные условия зарплаты");
+      return;
+    }
+
+    setPending(true);
+    setError("");
+    try{
+      await apiRequest("/dance/payroll-profiles",{
+        method:"POST",
+        body:JSON.stringify({
+          trainerResourceId:profileTrainerId,
+          monthlyBaseMinor:String(Math.round(monthly*100)),
+          dailyBaseMinor:String(Math.round(daily*100)),
+          minimumGuaranteeMinor:String(Math.round(guarantee*100)),
+          note:profileNote.trim()||undefined
+        })
+      });
+      setProfileModal(false);
+      setNotice("Постоянные условия тренера сохранены.");
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось сохранить условия тренера"
+      );
+    }finally{
+      setPending(false);
+    }
+  }
 
   function openPlanModal() {
     setPlanTrainerId((current) => current || trainers[0]?.id || "");
