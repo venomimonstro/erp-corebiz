@@ -142,6 +142,10 @@ type TrainerStatement = {
   currency: string;
   status: string;
   payroll_batch_id: string | null;
+  review_id: string | null;
+  review_status: "PENDING" | "ACKNOWLEDGED" | "DISPUTED" | "RESOLVED" | "WAIVED";
+  employee_comment: string | null;
+  manager_comment: string | null;
   adjustments: Array<{
     id: string;
     adjustmentType: string;
@@ -224,6 +228,16 @@ function money(value: string) {
     currency: "RUB",
     maximumFractionDigits: 0
   }).format(Number(value) / 100);
+}
+
+function payrollReviewLabel(value: TrainerStatement["review_status"]) {
+  return ({
+    PENDING: "Ждёт подтверждения",
+    ACKNOWLEDGED: "Согласовано",
+    DISPUTED: "Есть спор",
+    RESOLVED: "Спор решён",
+    WAIVED: "Подтверждение не требуется"
+  } as Record<string, string>)[value] ?? value;
 }
 
 function compensationLabel(value: string) {
@@ -684,6 +698,88 @@ export default function DanceTeamPage() {
     }
   }
 
+  async function reviewStatement(
+    statement: TrainerStatement,
+    status: "ACKNOWLEDGED" | "DISPUTED"
+  ) {
+    let comment = "";
+    if (status === "DISPUTED") {
+      comment =
+        window.prompt("Коротко опишите, с чем не согласны в расчёте")?.trim() ??
+        "";
+      if (comment.length < 3) return;
+    } else if (
+      !window.confirm(
+        "Подтвердить расчёт " +
+          statement.trainer_name +
+          " на сумму " +
+          money(statement.total_minor) +
+          "?"
+      )
+    ) {
+      return;
+    }
+
+    setPending(true);
+    setError("");
+    try {
+      await apiRequest(
+        "/dance/payroll-statements/" + statement.id + "/review",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            status,
+            comment: comment || undefined
+          })
+        }
+      );
+      setNotice(
+        status === "ACKNOWLEDGED"
+          ? "Ведомость подтверждена."
+          : "Спор по ведомости зафиксирован."
+      );
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось сохранить согласование"
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function resolveStatementReview(statement: TrainerStatement) {
+    if (!statement.review_id) return;
+    const comment =
+      window.prompt("Опишите решение по спорной ведомости")?.trim() ?? "";
+    if (comment.length < 3) return;
+
+    setPending(true);
+    setError("");
+    try {
+      await apiRequest(
+        "/dance/payroll-reviews/" + statement.review_id + "/resolve",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            status: "RESOLVED",
+            comment
+          })
+        }
+      );
+      setNotice("Спор по ведомости закрыт.");
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Не удалось закрыть спор"
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+
   async function openStatementDetails(statementId: string) {
     setStatementDetailLoading(true);
     setError("");
@@ -1046,7 +1142,25 @@ export default function DanceTeamPage() {
             <button className="secondary-button" onClick={openRoomModal} type="button">+ Аренда зала</button>
             <button className="secondary-button" disabled={pending} onClick={() => void finalizeRoomMonth()} type="button">Закрыть аренду месяца</button>
             <button disabled={pending} onClick={() => void approveMonth()} type="button">Рассчитать месяц</button>
-            <button disabled={pending} onClick={() => void exportPayroll()} type="button">Передать в payroll</button>
+            <button
+              disabled={
+                pending ||
+                trainerStatements.some(
+                  (item) => item.review_status === "DISPUTED"
+                )
+              }
+              onClick={() => void exportPayroll()}
+              type="button"
+              title={
+                trainerStatements.some(
+                  (item) => item.review_status === "DISPUTED"
+                )
+                  ? "Сначала закройте спорные ведомости"
+                  : undefined
+              }
+            >
+              Передать в payroll
+            </button>
             {currentPayrollBatch?.status==="DRAFT" ? (
               <button disabled={pending} onClick={() => void approvePayrollBatch()} type="button">
                 Утвердить payroll
@@ -1314,6 +1428,57 @@ export default function DanceTeamPage() {
               Оклад и гарантия добавляются здесь, а не в каждый урок.
             </span>
           </div>
+          <div className="studio-score-grid compact">
+            <article>
+              <span>К выплате</span>
+              <strong>
+                {money(
+                  trainerStatements
+                    .reduce(
+                      (sum, item) => sum + BigInt(item.total_minor ?? "0"),
+                      0n
+                    )
+                    .toString()
+                )}
+              </strong>
+              <p>{trainerStatements.length} ведомостей в выбранном месяце.</p>
+            </article>
+            <article>
+              <span>Согласовано</span>
+              <strong>
+                {
+                  trainerStatements.filter((item) =>
+                    ["ACKNOWLEDGED", "RESOLVED", "WAIVED"].includes(
+                      item.review_status
+                    )
+                  ).length
+                }
+              </strong>
+              <p>Расчёт подтверждён или спор закрыт.</p>
+            </article>
+            <article>
+              <span>Ожидают</span>
+              <strong>
+                {
+                  trainerStatements.filter(
+                    (item) => item.review_status === "PENDING"
+                  ).length
+                }
+              </strong>
+              <p>Сотрудник ещё не подтвердил сумму.</p>
+            </article>
+            <article>
+              <span>Споры</span>
+              <strong>
+                {
+                  trainerStatements.filter(
+                    (item) => item.review_status === "DISPUTED"
+                  ).length
+                }
+              </strong>
+              <p>Payroll не будет экспортирован до решения.</p>
+            </article>
+          </div>
           <div className="trainer-statement-grid">
             {trainerStatements.map((statement) => (
               <article key={statement.id}>
@@ -1322,7 +1487,17 @@ export default function DanceTeamPage() {
                     <span>Тренер</span>
                     <h3>{statement.trainer_name}</h3>
                   </div>
-                  <span className="status-pill">{statement.status}</span>
+                  <div className="statement-status-stack">
+                    <span className="status-pill">{statement.status}</span>
+                    <span
+                      className={
+                        "status-pill " +
+                        (statement.review_status === "DISPUTED" ? "danger" : "")
+                      }
+                    >
+                      {payrollReviewLabel(statement.review_status)}
+                    </span>
+                  </div>
                 </header>
                 <strong>{money(statement.total_minor)}</strong>
                 <div>
@@ -1334,6 +1509,16 @@ export default function DanceTeamPage() {
                     <b>{money(statement.adjustment_minor ?? "0")}</b>
                   </span>
                 </div>
+                {statement.employee_comment ? (
+                  <div className="statement-adjustments">
+                    <small>Комментарий сотрудника: {statement.employee_comment}</small>
+                  </div>
+                ) : null}
+                {statement.manager_comment ? (
+                  <div className="statement-adjustments">
+                    <small>Решение руководителя: {statement.manager_comment}</small>
+                  </div>
+                ) : null}
                 {statement.adjustments?.length ? (
                   <div className="statement-adjustments">
                     {statement.adjustments.map((item) => (
@@ -1359,6 +1544,39 @@ export default function DanceTeamPage() {
                     onClick={() => openAdjustment(statement)}
                   >
                     + Премия / удержание
+                  </button>
+                ) : null}
+                {statement.status === "FINALIZED" &&
+                statement.review_status === "PENDING" ? (
+                  <div className="studio-hero-actions">
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() =>
+                        void reviewStatement(statement, "ACKNOWLEDGED")
+                      }
+                    >
+                      Согласовать
+                    </button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      disabled={pending}
+                      onClick={() =>
+                        void reviewStatement(statement, "DISPUTED")
+                      }
+                    >
+                      Есть вопрос
+                    </button>
+                  </div>
+                ) : null}
+                {statement.review_status === "DISPUTED" ? (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => void resolveStatementReview(statement)}
+                  >
+                    Закрыть спор
                   </button>
                 ) : null}
               </article>
