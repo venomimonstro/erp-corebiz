@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../components/app-sidebar";
 import { apiRequest } from "../../../lib/api";
+import { TaxCompliancePanel } from "../../../components/tax-compliance-panel";
 
 type LegalEntity = {
   id: string;
@@ -110,7 +111,7 @@ export default function AccountingPage() {
   const [payroll, setPayroll] = useState<PayrollBatch[]>([]);
   const [checks, setChecks] = useState<CloseCheck[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState("");
-  const [tab, setTab] = useState<"overview"|"journal"|"vat"|"payroll">("overview");
+  const [tab, setTab] = useState<"tax"|"overview"|"journal"|"vat"|"payroll">("tax");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -357,8 +358,8 @@ export default function AccountingPage() {
             <p className="muted">Финансы / Бухгалтерия РФ</p>
             <h1>Бухгалтерия</h1>
             <p className="workspace-summary">
-              Периоды, проводки, НДС и payroll в одном рабочем месте. Закрытие
-              периода не изменяет историю задним числом.
+              Налоги, сроки, ЕНС, НДС, зарплата и регламентированный учёт в
+              одном рабочем месте. Сначала показываем владельцу, что требует действия.
             </p>
           </div>
 
@@ -427,7 +428,8 @@ export default function AccountingPage() {
 
             <div className="accounting-tabs">
               {[
-                ["overview","ОСВ и закрытие"],
+                ["tax","Налоги и отчётность"],
+                ["overview","Учёт и закрытие"],
                 ["journal","Проводки"],
                 ["vat","НДС"],
                 ["payroll","Зарплата"]
@@ -442,6 +444,10 @@ export default function AccountingPage() {
                 </button>
               ))}
             </div>
+
+            {tab === "tax" ? (
+              <TaxCompliancePanel legalEntityId={legalEntityId} />
+            ) : null}
 
             {tab === "overview" ? (
               <>
