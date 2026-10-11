@@ -5,6 +5,7 @@ import {
 import type { TenantContext } from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { GoLiveService } from "../../platform/go-live/go-live.service";
+import { VERTICAL_OPERATIONAL_RULE_BY_CODE } from "../dashboard/vertical-operational-rules";
 
 type QueueItem = {
   sourceKey: string;
@@ -158,7 +159,18 @@ export class ActionQueueService {
           };
 
           for (const row of issues.rows) {
-            const meta = issueLabels[row.issue_code] ?? {
+            const vertical=VERTICAL_OPERATIONAL_RULE_BY_CODE.get(row.issue_code);
+            if(vertical&&!allowed("dashboard.owner.read")&&!allowed(vertical.permission))
+              continue;
+            if(row.issue_code==="VAT_UNREGISTERED"&&!allowed("dashboard.owner.read")
+              &&!allowed("accounting.compliance.read"))continue;
+            if(row.issue_code==="CLOSE_BLOCKED"&&!allowed("dashboard.owner.read")
+              &&!allowed("accounting.read"))continue;
+            if(row.issue_code==="PAYROLL_DRAFT"&&!allowed("dashboard.owner.read")
+              &&!allowed("accounting.read"))continue;
+            const meta = vertical
+              ? {title:vertical.label,href:vertical.href,severity:vertical.severity}
+              : issueLabels[row.issue_code] ?? {
               title: row.issue_code,
               href: "/app/operations",
               severity: "WARNING" as const
@@ -170,8 +182,8 @@ export class ActionQueueService {
               severity: meta.severity,
               title: meta.title,
               detail:
-                "Открыто с " +
-                row.first_seen_at.toLocaleString("ru-RU"),
+                vertical?.explanation ??
+                ("Открыто с " + row.first_seen_at.toLocaleString("ru-RU")),
               href: meta.href,
               createdAt: row.first_seen_at.toISOString()
             });
