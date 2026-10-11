@@ -31,6 +31,23 @@ export class PayrollController {
   async approve(@Req() req:AuthenticatedRequest,@Param("batchId") batchId:string):Promise<ApiSuccess<unknown>> {
     return {ok:true,data:await this.payroll.approve(this.ctx(req),batchId)};
   }
+  @Post("batches/:batchId/paid")
+  @RequirePermission("accounting.period.close")
+  async markPaid(
+    @Req() req:AuthenticatedRequest,
+    @Param("batchId") batchId:string,
+    @Body() body:{
+      paidAt?:string;
+      reference?:string;
+      note?:string;
+    }
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.payroll.markPaid(this.ctx(req),batchId,body)
+    };
+  }
+
   @Get("batches/:batchId/lines")
   @RequirePermission("accounting.read")
   async lines(
