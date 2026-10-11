@@ -30,6 +30,29 @@ describe("contract-driven agency billing",()=>{
     expect(result.needsReview).toBe(true);
     expect(result.serviceRevenueMinor).toBe("8000000");
   });
+  it("does not issue backdated revenue against a contract signed later",()=>{
+    const result=calculateAgencyContractCharge("2026-06",[
+      {...base,signed_on:"2026-07-02"}
+    ]);
+    expect(result.needsReview).toBe(true);
+    expect(result.serviceRevenueMinor).toBe("0");
+  });
+  it("separates two concurrent signed contracts and still excludes both ad budgets",()=>{
+    const result=calculateAgencyContractCharge("2026-06",[
+      base,{...base,id:"seo-2",contract_number:"SEO-2",
+        service_fee_minor:"4000000",client_media_budget_minor:"5000000"}
+    ]);
+    expect(result.serviceRevenueMinor).toBe("12000000");
+    expect(result.mediaBudgetMinor).toBe("25000000");
+    expect(result.chargedContractIds).toEqual(["contract-1","seo-2"]);
+  });
+  it("prevents repeat monthly charges on an inactive contract",()=>{
+    const result=calculateAgencyContractCharge("2026-06",[
+      {...base,status:"TERMINATED"}
+    ]);
+    expect(result.serviceRevenueMinor).toBe("0");
+    expect(result.needsReview).toBe(true);
+  });
   it("does not automatically invent revenue without a contract",()=>{
     const result=calculateAgencyContractCharge("2026-06",[]);
     expect(result.serviceRevenueMinor).toBe("0");
