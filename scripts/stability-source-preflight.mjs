@@ -458,6 +458,30 @@ async function inspectRequiredHardening(root) {
     message: "Russian tax compliance automation service is incomplete"
   },
   {
+    path: "apps/api/src/modules/business/accounting/compliance.service.ts",
+    patterns: [
+      /syncTaxLedger/,
+      /assignCashAccount/,
+      /usnPreview/,
+      /preparePacket/,
+      /recordProviderSignature/,
+      /recordReceipt/,
+      /accounting_tax_ledger_item/
+    ],
+    message: "Owner accounting compliance workflow is incomplete"
+  },
+  {
+    path: "apps/web/components/accounting-compliance-center.tsx",
+    patterns: [
+      /AccountingComplianceCenter/,
+      /Счета этого юрлица/,
+      /Расчёт УСН/,
+      /Собрать из финансов/,
+      /Обновить календарь/
+    ],
+    message: "Owner accounting compliance center is incomplete"
+  },
+  {
     path: "apps/api/src/modules/business/accounting/tax-compliance.controller.ts",
     patterns: [
       /TaxComplianceController/,
@@ -571,6 +595,8 @@ async function inspectRequiredHardening(root) {
     "193_accounting_compliance_workflow.sql",
     "194_accounting_tax_payment_classification.sql",
     "194_accounting_tax_ledger.sql",
+    "194_tax_cash_basis_dimensions.sql",
+    "195_accounting_compliance_integrity.sql",
     "195_accounting_signature_evidence.sql",
     "196_cash_account_legal_entity.sql"
   ];
