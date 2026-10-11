@@ -467,7 +467,6 @@ async function inspectRequiredHardening(root) {
       /Обновить календарь/,
       /Подготовить пакет/,
       /Подтвердить КЭП/,
-      /КНД/,
       /VAT_22/
     ],
     message: "Owner accounting compliance center is incomplete"
