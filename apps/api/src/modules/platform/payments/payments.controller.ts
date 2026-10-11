@@ -14,6 +14,14 @@ export class PaymentsController {
     return {tenantId:a.tenantId,userId:a.userId,membershipId:a.membershipId};
   }
 
+  @Get("reconciliation/status")
+  @RequirePermission("billing.manage")
+  async reconciliationStatus(
+    @Req() req:AuthenticatedRequest
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.payments.reconciliationStatus(this.ctx(req))};
+  }
+
   @Post("saas/start")
   @RequirePermission("billing.manage")
   @ApiCost("EXPENSIVE")
