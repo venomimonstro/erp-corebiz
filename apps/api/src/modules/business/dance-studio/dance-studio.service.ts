@@ -97,11 +97,17 @@ export class DanceStudioService {
                FROM dance_lesson_participant lp
                JOIN dance_lesson l
                  ON l.tenant_id=lp.tenant_id AND l.id=lp.lesson_id
-               JOIN service_resource tr
+               LEFT JOIN service_resource tr
                  ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
                WHERE lp.tenant_id=s.tenant_id
                  AND lp.student_id=s.id
-                 AND tr.membership_id = ANY($2::uuid[])
+                 AND (
+                   tr.membership_id = ANY($2::uuid[])
+                   OR (
+                     l.trainer_resource_id IS NULL
+                     AND l.created_by_membership_id = ANY($2::uuid[])
+                   )
+                 )
              )
            )`,
         [context.tenantId, scopeIds]
@@ -157,11 +163,17 @@ export class DanceStudioService {
                FROM dance_lesson_participant lp
                JOIN dance_lesson l
                  ON l.tenant_id=lp.tenant_id AND l.id=lp.lesson_id
-               JOIN service_resource tr
+               LEFT JOIN service_resource tr
                  ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
                WHERE lp.tenant_id=s.tenant_id
                  AND lp.student_id=s.id
-                 AND tr.membership_id = ANY($2::uuid[])
+                 AND (
+                   tr.membership_id = ANY($2::uuid[])
+                   OR (
+                     l.trainer_resource_id IS NULL
+                     AND l.created_by_membership_id = ANY($2::uuid[])
+                   )
+                 )
              )
            )`,
         [context.tenantId, scopeIds]
@@ -203,12 +215,18 @@ export class DanceStudioService {
                FROM dance_lesson_participant lp2
                JOIN dance_lesson l2
                  ON l2.tenant_id=lp2.tenant_id AND l2.id=lp2.lesson_id
-               JOIN service_resource tr2
+               LEFT JOIN service_resource tr2
                  ON tr2.tenant_id=l2.tenant_id
                 AND tr2.id=l2.trainer_resource_id
                WHERE lp2.tenant_id=s.tenant_id
                  AND lp2.student_id=s.id
-                 AND tr2.membership_id = ANY($2::uuid[])
+                 AND (
+                   tr2.membership_id = ANY($2::uuid[])
+                   OR (
+                     l2.trainer_resource_id IS NULL
+                     AND l2.created_by_membership_id = ANY($2::uuid[])
+                   )
+                 )
              )
            )
          GROUP BY s.id,p.display_name
@@ -743,11 +761,17 @@ export class DanceStudioService {
                FROM dance_lesson_participant lp
                JOIN dance_lesson l
                  ON l.tenant_id=lp.tenant_id AND l.id=lp.lesson_id
-               JOIN service_resource tr
+               LEFT JOIN service_resource tr
                  ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
                WHERE lp.tenant_id=s.tenant_id
                  AND lp.student_id=s.id
-                 AND tr.membership_id = ANY($3::uuid[])
+                 AND (
+                   tr.membership_id = ANY($3::uuid[])
+                   OR (
+                     l.trainer_resource_id IS NULL
+                     AND l.created_by_membership_id = ANY($3::uuid[])
+                   )
+                 )
              )
            )
          ORDER BY
