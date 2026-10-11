@@ -54,6 +54,7 @@ export class SitesService {
       name: string;
       code?: string;
       publicSlug?: string;
+      template?: "WEBSITE" | "STORE";
     }
   ): Promise<{
     id: string;
@@ -62,6 +63,11 @@ export class SitesService {
     pageId: string;
     versionId: string;
   }> {
+    if (!input || typeof input !== "object" || Array.isArray(input) ||
+        (input.template !== undefined && !["WEBSITE", "STORE"].includes(input.template))) {
+      throw new BadRequestException("Некорректный шаблон сайта");
+    }
+    const isStore = input.template === "STORE";
     const name = String(input.name ?? "").trim();
     if (name.length < 2 || name.length > 160) {
       throw new BadRequestException("Некорректное название сайта");
@@ -134,7 +140,20 @@ export class SitesService {
         );
 
         const versionId = version.rows[0]!.id;
-        const defaults: Array<{ type: BlockType; config: Record<string, unknown> }> = [
+        const defaults: Array<{ type: BlockType; config: Record<string, unknown> }> = isStore ? [
+          { type: "HERO", config: {
+            heading: name,
+            text: "Добро пожаловать в наш магазин. Выберите товары из каталога.",
+            buttonLabel: "Перейти к товарам", buttonHref: "#products"
+          } },
+          { type: "PRODUCT_GRID", config: { heading: "Наши товары", limit: 12 } },
+          { type: "FEATURES", config: {
+            heading: "Почему нас выбирают", items: [
+              { title: "Актуальное наличие", text: "Остатки синхронизированы со складом." },
+              { title: "Простой заказ", text: "Выбирайте товары и оформляйте заказ." }
+            ]
+          } }
+        ] : [
           {
             type: "HERO",
             config: {
@@ -179,6 +198,16 @@ export class SitesService {
               index,
               JSON.stringify(this.validateBlock(block.type, block.config))
             ]
+          );
+        }
+
+        if (isStore) {
+          // Site and storefront appear atomically. Never publish a half-created shop.
+          await client.query(
+            `INSERT INTO storefront_config(
+               site_id,tenant_id,enabled,responsible_membership_id,currency
+             ) VALUES ($1,$2,true,$3,'RUB')`,
+            [site.id,context.tenantId,context.membershipId]
           );
         }
 
