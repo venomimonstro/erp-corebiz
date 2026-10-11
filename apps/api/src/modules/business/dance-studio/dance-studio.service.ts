@@ -2127,11 +2127,6 @@ export class DanceStudioService {
       const lesson=await this.assertLessonAccess(
         client,context.tenantId,lessonId,scopeIds,true
       );
-      const charge=
-        requestedCharge ??
-        (priceSource==="DIRECT"
-          ? String(lesson.booking_price_minor??"0")
-          : "0");
       if(!["PLANNED","OPEN_FOR_BOOKING"].includes(lesson.status)){
         throw new ConflictException("Можно изменять только будущий открытый урок");
       }
