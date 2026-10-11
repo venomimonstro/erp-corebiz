@@ -1078,9 +1078,14 @@ export class DanceStudioService {
     const scopeIds=await this.scopeIds(context,"dance.read");
     const from=input.from?new Date(input.from):new Date(Date.now()-7*86400000);
     const to=input.to?new Date(input.to):new Date(Date.now()+31*86400000);
-    if(Number.isNaN(from.getTime())||Number.isNaN(to.getTime())||to<=from||
-       to.getTime()-from.getTime()>180*86400000)
+    if(
+      Number.isNaN(from.getTime())||
+      Number.isNaN(to.getTime())||
+      to<=from||
+      to.getTime()-from.getTime()>180*86400000
+    ){
       throw new BadRequestException("Некорректный период уроков");
+    }
 
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
@@ -1097,9 +1102,13 @@ export class DanceStudioService {
            count(lp.id) FILTER (
              WHERE lp.status IN ('ATTENDED','LATE')
            )::integer AS attended_count,
-           count(lp.id) FILTER (WHERE lp.status='WAITLIST')::integer AS waitlist,
-           prof.earned_revenue_minor::text,prof.trainer_cost_minor::text,
-           prof.room_cost_minor::text,prof.contribution_margin_minor::text
+           count(lp.id) FILTER (
+             WHERE lp.status='WAITLIST'
+           )::integer AS waitlist,
+           prof.earned_revenue_minor::text,
+           prof.trainer_cost_minor::text,
+           prof.room_cost_minor::text,
+           prof.contribution_margin_minor::text
          FROM dance_lesson l
          LEFT JOIN dance_group g
            ON g.tenant_id=l.tenant_id AND g.id=l.group_id
@@ -1111,45 +1120,13 @@ export class DanceStudioService {
            ON rr.tenant_id=l.tenant_id AND rr.id=l.room_resource_id
          LEFT JOIN service_resource_zone rz
            ON rz.tenant_id=l.tenant_id AND rz.id=l.room_zone_id
-         LEFT JOIN dance_lesson_participant lp.read");
-    const from=input.from?new Date(input.from):new Date(Date.now()-7*86400000);
-    const to=input.to?new Date(input.to):new Date(Date.now()+31*86400000);
-    if(Number.isNaN(from.getTime())||Number.isNaN(to.getTime())||to<=from||
-       to.getTime()-from.getTime()>180*86400000)
-      throw new BadRequestException("Некорректный период уроков");
-
-    return this.database.withTenantTransaction(context,async client=>{
-      const result=await client.query(
-        `SELECT
-           l.id,l.group_id,g.name AS group_name,p.name AS program_name,
-           l.lesson_type,l.starts_at,l.ends_at,l.capacity,l.status,
-           l.trainer_resource_id,tr.name AS trainer_name,
-           l.room_resource_id,rr.name AS room_name,
-           l.room_zone_id,rz.name AS room_zone_name,
-           l.room_capacity_units,l.version,
-           count(lp.id) FILTER (
-             WHERE lp.status NOT IN ('WAITLIST','CANCELLED_IN_TIME')
-           )::integer AS booked_count,
-           count(lp.id) FILTER (
-             WHERE lp.status IN ('ATTENDED','LATE')
-           )::integer AS attended_count,
-           count(lp.id) FILTER (WHERE lp.status='WAITLIST')::integer AS waitlist,
-           prof.earned_revenue_minor::text,prof.trainer_cost_minor::text,
-           prof.room_cost_minor::text,prof.contribution_margin_minor::text
-         FROM dance_lesson l
-         LEFT JOIN dance_group g
-           ON g.tenant_id=l.tenant_id AND g.id=l.group_id
-         LEFT JOIN dance_program p
-           ON p.tenant_id=g.tenant_id AND p.id=g.program_id
-         LEFT JOIN service_resource tr
-           ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
-         LEFT JOIN service_resource rr
-           ON rr.tenant_id=l.tenant_id AND rr.id=l.room_resource_id
          LEFT JOIN dance_lesson_participant lp
            ON lp.tenant_id=l.tenant_id AND lp.lesson_id=l.id
          LEFT JOIN dance_lesson_profitability prof
            ON prof.tenant_id=l.tenant_id AND prof.lesson_id=l.id
-         WHERE l.tenant_id=$1 AND l.starts_at>=$2 AND l.starts_at<$3
+         WHERE l.tenant_id=$1
+           AND l.starts_at>=$2
+           AND l.starts_at<$3
            AND (
              $4::uuid[] IS NULL
              OR tr.membership_id = ANY($4::uuid[])
