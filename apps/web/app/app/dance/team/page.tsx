@@ -37,6 +37,12 @@ type Plan = {
   lesson_type: string | null;
   service_id: string | null;
   service_name: string | null;
+  dance_program_id: string | null;
+  program_name: string | null;
+  dance_group_id: string | null;
+  group_name: string | null;
+  branch_id: string | null;
+  branch_name: string | null;
   calculation_type: string;
   fixed_minor: string;
   hourly_minor: string;
@@ -107,7 +113,10 @@ type RoomStatement = {
 };
 
 type LegalEntity = { id: string; name: string };
-type Organization = { legalEntities: LegalEntity[] };
+type Branch = { id: string; name: string; legalEntityId: string | null };
+type Organization = { legalEntities: LegalEntity[]; branches: Branch[] };
+type Program = { id: string; name: string };
+type Group = { id: string; name: string; program_id: string; program_name: string };
 type PayrollBatch = {
   id: string;
   period_from: string;
@@ -190,6 +199,9 @@ export default function DanceTeamPage() {
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [roomStatements, setRoomStatements] = useState<RoomStatement[]>([]);
   const [entities, setEntities] = useState<LegalEntity[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [programs, setPrograms] = useState<Program[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [payroll, setPayroll] = useState<PayrollBatch[]>([]);
   const [trainerStatements, setTrainerStatements] = useState<TrainerStatement[]>([]);
   const [error, setError] = useState("");
@@ -215,6 +227,9 @@ export default function DanceTeamPage() {
   >("FIXED");
   const [planLessonType, setPlanLessonType] = useState("");
   const [planServiceId, setPlanServiceId] = useState("");
+  const [planProgramId, setPlanProgramId] = useState("");
+  const [planGroupId, setPlanGroupId] = useState("");
+  const [planBranchId, setPlanBranchId] = useState("");
   const [planBaseRub, setPlanBaseRub] = useState("1500");
   const [planPercent, setPlanPercent] = useState("40");
   const [planPerAttendeeRub, setPlanPerAttendeeRub] = useState("100");
@@ -250,7 +265,9 @@ export default function DanceTeamPage() {
         trainerStatementRows,
         contractRows,
         statementRows,
-        organization
+        organization,
+        programRows,
+        groupRows
       ] = await Promise.all([
           apiRequest<Customer[]>("/crm/customers"),
           apiRequest<Resource[]>("/service/resources"),
@@ -272,7 +289,9 @@ export default function DanceTeamPage() {
           apiRequest<RoomStatement[]>(
             "/dance/room-statements?month=" + encodeURIComponent(currentMonth)
           ),
-          apiRequest<Organization>("/organization")
+          apiRequest<Organization>("/organization"),
+          apiRequest<Program[]>("/dance/programs"),
+          apiRequest<Group[]>("/dance/groups")
         ]);
       setCustomers(customerRows);
       setResources(resourceRows);
@@ -293,6 +312,9 @@ export default function DanceTeamPage() {
       setContracts(contractRows);
       setRoomStatements(statementRows);
       setEntities(organization.legalEntities);
+      setBranches(organization.branches ?? []);
+      setPrograms(programRows);
+      setGroups(groupRows);
 
       if (organization.legalEntities[0]) {
         setPayroll(
@@ -337,6 +359,9 @@ export default function DanceTeamPage() {
     setPlanTrainerId((current) => current || trainers[0]?.id || "");
     setPlanServiceId("");
     setPlanLessonType("");
+    setPlanProgramId("");
+    setPlanGroupId("");
+    setPlanBranchId("");
     setPlanRevenueBasis("EARNED");
     setPlanBasePeriod("MONTH");
     setPlanVariableType("PERCENT");
@@ -401,6 +426,9 @@ export default function DanceTeamPage() {
           trainerResourceId: planTrainerId,
           serviceId: planServiceId || undefined,
           lessonType: planLessonType || undefined,
+          danceProgramId: planProgramId || undefined,
+          danceGroupId: planGroupId || undefined,
+          branchId: planBranchId || undefined,
           calculationType: planScheme,
           fixedMinor:
             planScheme === "FIXED" || planScheme === "ATTENDEE"
@@ -1239,18 +1267,6 @@ export default function DanceTeamPage() {
               </header>
               <div className="studio-form-grid">
                 <label>
-                  <span>Услуга</span>
-                  <select
-                    value={planServiceId}
-                    onChange={(event) => setPlanServiceId(event.target.value)}
-                  >
-                    <option value="">Все услуги</option>
-                    {services.map((service) => (
-                      <option key={service.id} value={service.id}>{service.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
                   <span>Тренер</span>
                   <select
                     value={planTrainerId}
@@ -1261,6 +1277,18 @@ export default function DanceTeamPage() {
                       <option key={trainer.id} value={trainer.id}>
                         {trainer.name}
                       </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Услуга</span>
+                  <select
+                    value={planServiceId}
+                    onChange={(event) => setPlanServiceId(event.target.value)}
+                  >
+                    <option value="">Все услуги</option>
+                    {services.map((service) => (
+                      <option key={service.id} value={service.id}>{service.name}</option>
                     ))}
                   </select>
                 </label>
@@ -1279,6 +1307,61 @@ export default function DanceTeamPage() {
                   </select>
                 </label>
               </div>
+              <div className="studio-form-grid">
+                <label>
+                  <span>Направление</span>
+                  <select
+                    value={planProgramId}
+                    onChange={(event) => {
+                      setPlanProgramId(event.target.value);
+                      setPlanGroupId("");
+                    }}
+                  >
+                    <option value="">Все направления</option>
+                    {programs.map((program) => (
+                      <option key={program.id} value={program.id}>
+                        {program.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Группа</span>
+                  <select
+                    value={planGroupId}
+                    onChange={(event) => setPlanGroupId(event.target.value)}
+                  >
+                    <option value="">Все группы</option>
+                    {groups
+                      .filter((group) =>
+                        !planProgramId || group.program_id === planProgramId
+                      )
+                      .map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Филиал</span>
+                  <select
+                    value={planBranchId}
+                    onChange={(event) => setPlanBranchId(event.target.value)}
+                  >
+                    <option value="">Все филиалы</option>
+                    {branches.map((branch) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <p className="studio-form-note">
+                Чем точнее правило, тем выше его приоритет: группа → направление
+                → услуга → тип занятия → общее правило тренера.
+              </p>
             </div>
 
             <div className="studio-form-section">
