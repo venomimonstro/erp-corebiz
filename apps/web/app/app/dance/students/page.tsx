@@ -500,7 +500,7 @@ export default function DanceStudentsPage() {
   return (
     <main className="app-shell">
       <AppSidebar active="dance-students" />
-      <section className="workspace workspace-wide studio-premium">
+      <section className="workspace workspace-wide studio-premium dance-detail">
         <header className="studio-hero compact">
           <div>
             <span className="studio-eyebrow">Клиенты и финансы</span>
