@@ -620,7 +620,8 @@ export class TaxComplianceService {
 
   async recordPacketSignature(
     context:TenantContext,
-    packetId:string
+    packetId:string,
+    input:{signatureReference:string;certificateFingerprint:string}
   ){
     return this.database.withTenantTransaction(context,async client=>{
       const packet=await client.query<any>(
@@ -654,13 +655,28 @@ export class TaxComplianceService {
         throw new ConflictException("Сертификат электронной подписи истек");
       }
 
+      const signatureReference=input.signatureReference?.trim();
+      const certificateFingerprint=input.certificateFingerprint?.trim();
+      if(!signatureReference||signatureReference.length>500){
+        throw new BadRequestException("Не указан идентификатор электронной подписи");
+      }
+      if(!certificateFingerprint||certificateFingerprint.length>256){
+        throw new BadRequestException("Не указан отпечаток сертификата");
+      }
+
       const result=await client.query(
         `UPDATE accounting_compliance_packet
          SET signature_status='SIGNED',signed_at=now(),
-             signed_by_membership_id=$3,updated_at=now()
+             signed_by_membership_id=$3,
+             signature_reference=$4,
+             certificate_fingerprint_snapshot=$5,
+             updated_at=now()
          WHERE tenant_id=$1 AND id=$2
          RETURNING *`,
-        [context.tenantId,packetId,context.membershipId]
+        [
+          context.tenantId,packetId,context.membershipId,
+          signatureReference,certificateFingerprint
+        ]
       );
       return result.rows[0];
     });
@@ -740,22 +756,64 @@ export class TaxComplianceService {
         );
       }
 
-      const key="tax-submit:"+obligationId+":"+row.packet_id;
+      const compliancePacket=await client.query<any>(
+        `SELECT payload,form_code,signature_reference,
+                certificate_fingerprint_snapshot
+         FROM accounting_compliance_packet
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,row.packet_id]
+      );
+      const packetPayload=compliancePacket.rows[0];
+      if(!packetPayload){
+        throw new NotFoundException("Пакет не найден");
+      }
+
+      const filing=await client.query<{id:string}>(
+        `INSERT INTO accounting_filing_package(
+           tenant_id,legal_entity_id,obligation_id,form_code,format_version,
+           payload_format,payload,validation_status,signature_status,
+           signed_by_membership_id,signed_at,status,created_by_membership_id
+         )
+         SELECT
+           o.tenant_id,o.legal_entity_id,o.id,
+           coalesce(o.form_code,'GENERIC'),
+           'COREBIZ-OPERATOR-BRIDGE-1','JSON',$3,'VALID','SIGNED',
+           $4,now(),'APPROVED',$4
+         FROM accounting_compliance_obligation o
+         WHERE o.tenant_id=$1 AND o.id=$2
+         ON CONFLICT(tenant_id,obligation_id,format_version)
+         DO UPDATE SET
+           payload=EXCLUDED.payload,
+           validation_status='VALID',
+           signature_status='SIGNED',
+           signed_by_membership_id=EXCLUDED.signed_by_membership_id,
+           signed_at=EXCLUDED.signed_at,
+           status='APPROVED',
+           updated_at=now()
+         RETURNING id`,
+        [
+          context.tenantId,obligationId,
+          JSON.stringify({
+            ...packetPayload.payload,
+            signatureReference:packetPayload.signature_reference,
+            certificateFingerprint:packetPayload.certificate_fingerprint_snapshot,
+            provider:row.provider
+          }),
+          context.membershipId
+        ]
+      );
+
+      const key="tax-submit:"+obligationId+":"+filing.rows[0].id;
       const attempt=await client.query(
         `INSERT INTO accounting_submission_attempt(
            tenant_id,filing_package_id,connector_id,idempotency_key,status,
            request_snapshot
-         )
-         SELECT $1,f.id,$3,$4,'QUEUED',$5
-         FROM accounting_filing_package f
-         WHERE f.tenant_id=$1 AND f.obligation_id=$2
-         ORDER BY f.created_at DESC
-         LIMIT 1
+         ) VALUES($1,$2,$3,$4,'QUEUED',$5)
          ON CONFLICT(tenant_id,idempotency_key)
          DO UPDATE SET idempotency_key=EXCLUDED.idempotency_key
          RETURNING *`,
         [
-          context.tenantId,obligationId,row.connector_id,key,
+          context.tenantId,filing.rows[0].id,row.connector_id,key,
           JSON.stringify({
             obligationId,
             compliancePacketId:row.packet_id,
@@ -763,12 +821,6 @@ export class TaxComplianceService {
           })
         ]
       );
-
-      if(!attempt.rows[0]){
-        throw new ConflictException(
-          "Для отправки нет provider-specific filing package. Подготовьте пакет формата оператора."
-        );
-      }
       return attempt.rows[0];
     });
   }
