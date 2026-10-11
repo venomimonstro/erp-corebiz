@@ -1211,17 +1211,17 @@ export class ProjectsService {
       billing_mode:string;monthly_retainer_minor:string;
       budget_minor:string;media_budget_minor:string;completed_at:string|null;
       target_margin_bps:number|null;
-    }>(\`SELECT id,party_id,currency,status,billing_mode,
+    }>(`SELECT id,party_id,currency,status,billing_mode,
               monthly_retainer_minor::text,budget_minor::text,
               media_budget_minor::text,completed_at::text,target_margin_bps
-         FROM work_project WHERE tenant_id=$1 AND id=$2\`,
+         FROM work_project WHERE tenant_id=$1 AND id=$2`,
       [context.tenantId,projectId]);
     const project=projectResult.rows[0];
     if(!project) throw new NotFoundException("Проект не найден");
     const totals=await client.query<{
       billable_minutes:string;billable_value_minor:string;labor_cost_minor:string;
       missing_cost_entries:string;other_cost_minor:string;milestone_revenue_minor:string;
-    }>(\`SELECT
+    }>(`SELECT
       (SELECT COALESCE(sum(e.minutes) FILTER (WHERE e.billable),0)::text
        FROM work_project_time_entry e WHERE e.tenant_id=$1 AND e.project_id=$2
        AND e.work_date >= $3::date AND e.work_date < $4::date) AS billable_minutes,
@@ -1246,7 +1246,7 @@ export class ProjectsService {
          AND e.expense_on >= $3::date AND e.expense_on < $4::date) AS other_cost_minor,
       (SELECT COALESCE(sum(m.amount_minor),0)::text FROM work_project_milestone m
        WHERE m.tenant_id=$1 AND m.project_id=$2 AND m.status='DONE'
-         AND m.completed_at >= $3::date AND m.completed_at < $4::date) AS milestone_revenue_minor\`,
+         AND m.completed_at >= $3::date AND m.completed_at < $4::date) AS milestone_revenue_minor`,
       [context.tenantId,projectId,dates.start,dates.next]);
     const stats=totals.rows[0]!;
     let revenue=0n;
@@ -1300,7 +1300,7 @@ export class ProjectsService {
     return this.database.withTenantTransaction(context,async client=>{
       await this.assertReadableProject(client,context.tenantId,projectId,scope);
       return (await client.query(
-        \`SELECT s.id,s.period_key,s.period_from,s.period_to,
+        `SELECT s.id,s.period_key,s.period_from,s.period_to,
                 s.service_revenue_minor::text,s.labor_cost_minor::text,
                 s.other_cost_minor::text,s.gross_margin_minor::text,
                 s.margin_bps,s.status,s.snapshot,s.finalized_at,
@@ -1310,7 +1310,7 @@ export class ProjectsService {
          LEFT JOIN finance_invoice i ON i.tenant_id=s.tenant_id
            AND i.source_type='AGENCY_PROJECT_STATEMENT' AND i.source_id=s.id
          WHERE s.tenant_id=$1 AND s.project_id=$2
-         ORDER BY s.period_key DESC LIMIT 36\`,
+         ORDER BY s.period_key DESC LIMIT 36`,
         [context.tenantId,projectId]
       )).rows;
     });
@@ -1329,8 +1329,8 @@ export class ProjectsService {
         [context.tenantId,projectId]);
       if(!lock.rowCount) throw new NotFoundException("Проект не найден");
       const existing=await client.query<{id:string;status:string}>(
-        \`SELECT id,status FROM work_project_monthly_statement
-         WHERE tenant_id=$1 AND project_id=$2 AND period_key=$3 FOR UPDATE\`,
+        `SELECT id,status FROM work_project_monthly_statement
+         WHERE tenant_id=$1 AND project_id=$2 AND period_key=$3 FOR UPDATE`,
         [context.tenantId,projectId,period]);
       if(existing.rows[0] && existing.rows[0].status!=="DRAFT"){
         return {id:existing.rows[0].id,status:existing.rows[0].status,alreadyFinalized:true};
@@ -1347,7 +1347,7 @@ export class ProjectsService {
         calculatedAt:new Date().toISOString()
       });
       const result=await client.query<{id:string;status:string}>(
-        \`INSERT INTO work_project_monthly_statement(
+        `INSERT INTO work_project_monthly_statement(
            tenant_id,project_id,period_key,period_from,period_to,
            service_revenue_minor,media_budget_minor,labor_cost_minor,
            other_cost_minor,gross_margin_minor,margin_bps,billable_minutes,
@@ -1364,7 +1364,7 @@ export class ProjectsService {
            snapshot=EXCLUDED.snapshot,status='FINALIZED',finalized_at=now(),
            updated_at=now()
          WHERE work_project_monthly_statement.status='DRAFT'
-         RETURNING id,status\`,
+         RETURNING id,status`,
         [context.tenantId,projectId,period,dates.start,dates.end,
          preview.serviceRevenueMinor,preview.mediaBudgetMinor,
          preview.laborCostMinor,preview.otherCostMinor,
