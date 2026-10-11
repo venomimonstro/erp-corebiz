@@ -459,7 +459,8 @@ async function inspectRequiredHardening(root) {
     "181_service_booking_billing_lifecycle.sql",
     "180_payroll_accrual_components.sql",
     "181_trainer_payroll_profile.sql",
-    "182_payroll_component_guard_fix.sql"
+    "182_payroll_component_guard_fix.sql",
+    "183_service_booking_charge_integrity.sql"
   ];
 
   for (const name of requiredMigrations) {
