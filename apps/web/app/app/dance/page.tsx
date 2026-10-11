@@ -119,17 +119,41 @@ export default function DanceDashboardPage() {
 
         <DanceWorkspaceNav active="overview" />
 
+        <section className="studio-command">
+          <div className="studio-command-copy">
+            <span className="studio-eyebrow">Операционный центр</span>
+            <h2>Всё важное по студии — на одном экране</h2>
+            <p>
+              Расписание, оплаты, загрузка групп и экономика без переходов по отчётам.
+            </p>
+          </div>
+          <div className="studio-command-actions">
+            <a className="studio-action primary-action" href="/app/dance/groups">
+              <strong>Открыть расписание</strong>
+              <span>Занятия, посещаемость, запись</span>
+            </a>
+            <a className="studio-action" href="/app/dance/students">
+              <strong>Ученики и оплаты</strong>
+              <span>Долги, абонементы, семьи</span>
+            </a>
+            <a className="studio-action" href="/app/dance/team">
+              <strong>Команда и залы</strong>
+              <span>Тренеры, зарплата, аренда</span>
+            </a>
+          </div>
+        </section>
+
         {error ? <div className="inline-error"><strong>Студия</strong><span>{error}</span></div> : null}
 
         {data ? (
           <>
-            <div className="owner-kpi-grid">
-              <article className="owner-kpi">
+            <div className="owner-kpi-grid studio-kpi-grid">
+              <article className="owner-kpi studio-kpi">
                 <span>Реализация месяца</span>
                 <strong>{money(data.monthEconomics.revenue_minor)}</strong>
                 <small>оказанные занятия</small>
               </article>
-              <article className="owner-kpi">
+              <article className="owner-kpi studio-kpi">
                 <span>Маржинальный доход</span>
                 <strong>{money(data.monthEconomics.margin_minor)}</strong>
                 <small>
@@ -140,17 +164,17 @@ export default function DanceDashboardPage() {
                     : ""}
                 </small>
               </article>
-              <article className="owner-kpi">
+              <article className="owner-kpi studio-kpi">
                 <span>Дебиторка</span>
                 <strong>{money(data.debt.open_minor)}</strong>
                 <small>{data.debt.overdue_count} просрочено</small>
               </article>
-              <article className="owner-kpi">
+              <article className="owner-kpi studio-kpi">
                 <span>Абонементы</span>
                 <strong>{data.packageAlerts.expiring + data.packageAlerts.low_visits}</strong>
                 <small>{data.packageAlerts.expiring} заканчиваются · {data.packageAlerts.low_visits} почти исчерпаны</small>
               </article>
-              <article className="owner-kpi">
+              <article className="owner-kpi studio-kpi">
                 <span>Группы ниже break-even</span>
                 <strong>{belowBreakEven.length}</strong>
                 <small>{data.groups.length} активных групп</small>
@@ -158,8 +182,8 @@ export default function DanceDashboardPage() {
             </div>
 
             {Object.values(data.attention).some((value) => Number(value) > 0) ? (
-              <div className="inline-error">
-                <strong>Операционные исключения</strong>
+              <div className="studio-alert">
+                <strong>Что требует внимания</strong>
                 <span>
                   {data.attention.unclosed_past_lessons > 0
                     ? "Незакрытых прошедших уроков: " + data.attention.unclosed_past_lessons + ". "
@@ -184,15 +208,15 @@ export default function DanceDashboardPage() {
             ) : null}
 
             {belowBreakEven.length ? (
-              <div className="inline-error">
-                <strong>Требует внимания</strong>
+              <div className="studio-alert studio-alert-warm">
+                <strong>Группы ниже окупаемости</strong>
                 <span>
                   Ниже точки безубыточности: {belowBreakEven.map((group) => group.name).join(", ")}
                 </span>
               </div>
             ) : null}
 
-            <section className="section-block">
+            <section className="section-block studio-section">
               <div className="section-heading">
                 <div>
                   <p className="muted">Сегодня</p>
@@ -241,7 +265,7 @@ export default function DanceDashboardPage() {
             </section>
 
             {data.retentionAlerts.length ? (
-              <section className="section-block">
+              <section className="section-block studio-section">
                 <div className="section-heading">
                   <div>
                     <p className="muted">Удержание</p>
@@ -278,7 +302,7 @@ export default function DanceDashboardPage() {
               </section>
             ) : null}
 
-            <section className="section-block">
+            <section className="section-block studio-section">
               <div className="section-heading">
                 <div>
                   <p className="muted">Группы</p>
