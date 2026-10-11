@@ -13,36 +13,36 @@ export class AuthorizationService {
     permissionCode: string
   ): Promise<PermissionScope | null> {
     return this.database.withTenantTransaction(context, async (client) => {
-      const result = await client.query<{
-        permission_code: string;
-        scope: PermissionScope;
-      }>(
-        `SELECT rp.permission_code, rp.scope
+      // Multiple roles are cumulative, but the effective scope must be
+      // deterministic. Wildcard permissions carry their stored scope and
+      // must NEVER silently elevate "own" or "team" to "all".
+      const result = await client.query<{ scope: PermissionScope | null }>(
+        `SELECT CASE max(
+           CASE rp.scope
+             WHEN 'all' THEN 4
+             WHEN 'branch' THEN 3
+             WHEN 'team' THEN 2
+             WHEN 'own' THEN 1
+             ELSE 0
+           END
+         )
+           WHEN 4 THEN 'all'
+           WHEN 3 THEN 'branch'
+           WHEN 2 THEN 'team'
+           WHEN 1 THEN 'own'
+           ELSE NULL
+         END::text AS scope
          FROM membership_role mr
          JOIN role_permission rp
-           ON rp.role_id = mr.role_id
-          AND rp.tenant_id = mr.tenant_id
-         WHERE mr.tenant_id = $1
-           AND mr.membership_id = $2
-           AND rp.permission_code IN ('*', $3)`,
-        [context.tenantId, context.membershipId, permissionCode]
+           ON rp.role_id=mr.role_id AND rp.tenant_id=mr.tenant_id
+         JOIN tenant_membership tm
+           ON tm.id=mr.membership_id AND tm.tenant_id=mr.tenant_id
+         WHERE mr.tenant_id=$1 AND mr.membership_id=$2
+           AND tm.user_id=$4 AND tm.status='ACTIVE'
+           AND rp.permission_code IN ('*',$3)`,
+        [context.tenantId,context.membershipId,permissionCode,context.userId]
       );
-
-      // A user may have several roles granting the same capability with
-      // different scopes. The DB row order is not stable: pick the broadest
-      // *effective* grant deterministically, never the first returned row.
-      const priorities: Record<PermissionScope,number> = {
-        own:1,team:2,branch:3,all:4
-      };
-      let strongest:PermissionScope|null=null;
-      for(const row of result.rows){
-        if(row.permission_code==="*")return "all";
-        if(!Object.prototype.hasOwnProperty.call(priorities,row.scope))continue;
-        if(!strongest||priorities[row.scope]>priorities[strongest]){
-          strongest=row.scope;
-        }
-      }
-      return strongest;
+      return result.rows[0]?.scope??null;
     });
   }
 
