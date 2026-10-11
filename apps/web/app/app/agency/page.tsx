@@ -171,8 +171,9 @@ export default function AgencyPage(){
   };
 
   const metrics=useMemo(()=>{
-    let revenue=0n,media=0n,labor=0n,other=0n,atRisk=0,approvals=0;
+    let revenue=0n,media=0n,labor=0n,other=0n,atRisk=0,approvals=0,foreign=0;
     for(const row of rows){
+      if(row.currency!=="RUB"){foreign++;continue;}
       revenue+=BigInt(
         row.billing_mode==="RETAINER"
           ?row.monthly_retainer_minor||"0"
@@ -184,7 +185,7 @@ export default function AgencyPage(){
       if(row.overdue_deliverables||row.overdue_approvals) atRisk++;
       approvals+=row.pending_approvals;
     }
-    return {revenue,media,labor,other,atRisk,approvals};
+    return {revenue,media,labor,other,atRisk,approvals,foreign};
   },[rows]);
 
   return <main className="app-shell">
@@ -216,9 +217,11 @@ export default function AgencyPage(){
         <div className="agency-score-grid">
           <article><span>Активные клиенты</span><strong>{rows.length}</strong><small>проекты в работе</small></article>
           <article><span>Плановая выручка</span><strong>{money(metrics.revenue.toString())}</strong><small>не фактические поступления</small></article>
-          <article><span>Себестоимость команды</span><strong>{money(metrics.labor.toString())}</strong><small>по фактически учтённым часам</small></article>
+          <article><span>Себестоимость команды</span><strong>{money(metrics.labor.toString())}</strong><small>по фактически учтённым часам, RUB</small></article>
           <article><span>Медиабюджеты клиентов</span><strong>{money(metrics.media.toString())}</strong><small>отдельно от выручки агентства</small></article>
           <article><span>Прямые расходы</span><strong>{money(metrics.other.toString())}</strong><small>подрядчики, ПО и прочее</small></article>
+          {metrics.foreign>0?<article><span>Иные валюты</span><strong>{metrics.foreign}</strong>
+            <small>В общей сумме показаны только рублёвые проекты</small></article>:null}
           <article className={metrics.atRisk?"is-risk":""}><span>Требуют внимания</span><strong>{metrics.atRisk}</strong><small>{metrics.approvals} согласований у клиентов</small></article>
         </div>
 

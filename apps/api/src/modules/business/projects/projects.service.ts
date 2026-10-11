@@ -940,7 +940,7 @@ export class ProjectsService {
            LEFT JOIN party ON party.tenant_id=p.tenant_id AND party.id=p.party_id
            WHERE i.tenant_id=$1 AND i.source_type='AGENCY_PROJECT_STATEMENT'
              AND o.status IN ('OPEN','PARTIALLY_SETTLED') AND o.amount_minor>o.settled_minor
-             AND i.status NOT IN ('CANCELLED','CREDITED')
+             AND i.status NOT IN ('CANCELLED','CREDITED') AND p.currency='RUB'
              AND ($2::uuid[] IS NULL OR p.responsible_membership_id=ANY($2::uuid[]))
            ORDER BY i.due_at NULLS LAST,i.issued_at DESC LIMIT 500`,
           [context.tenantId,projectScope]),
