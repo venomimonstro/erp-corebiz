@@ -487,6 +487,20 @@ export class DanceStudioController {
     };
   }
 
+  @Get("payroll-statements/:statementId")
+  @RequirePermission("dance.read")
+  async payrollStatementDetails(
+    @Req() req:AuthenticatedRequest,
+    @Param("statementId") statementId:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.economics.payrollStatementDetails(
+        this.ctx(req),statementId
+      )
+    };
+  }
+
   @Post("payroll-statements/:statementId/adjustments")
   @RequirePermission("dance.write")
   async addPayrollAdjustment(
