@@ -336,7 +336,7 @@ export class DanceStudioService {
            SELECT
              date_trunc('month',current_date)::date AS from_date,
              (
-               date_trunc('month',current_date)+interval '1 month-1 day'
+               date_trunc('month',current_date)+interval '1 month'-interval '1 day'
              )::date AS to_date
          ),
          expected AS (
