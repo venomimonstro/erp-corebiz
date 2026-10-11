@@ -1236,9 +1236,49 @@ export default function DanceGroupsPage() {
               <label><span>Вместимость</span><input type="number" min="1" max="500" value={editCapacity} onChange={(event)=>setEditCapacity(event.target.value)} /></label>
             </div>
             <div className="studio-form-grid">
-              <label><span>Тренер</span><select value={editTrainerId} onChange={(event)=>setEditTrainerId(event.target.value)}><option value="">Без тренера</option>{trainers.map((trainer)=><option key={trainer.id} value={trainer.id}>{trainer.name}</option>)}</select></label>
-              <label><span>Зал</span><select value={editRoomId} onChange={(event)=>setEditRoomId(event.target.value)}><option value="">Без зала</option>{rooms.map((room)=><option key={room.id} value={room.id}>{room.name}</option>)}</select></label>
+              <label><span>Тренер</span><select value={editTrainerId} onChange={(event)=>setEditTrainerId(event.target.value)} disabled={selectedLesson.lesson_type==="SELF_PRACTICE"}><option value="">Без тренера</option>{trainers.map((trainer)=><option key={trainer.id} value={trainer.id}>{trainer.name}</option>)}</select></label>
+              <label>
+                <span>Зал</span>
+                <select
+                  value={editRoomId}
+                  onChange={(event)=>{
+                    setEditRoomId(event.target.value);
+                    setEditRoomZoneId("");
+                    setEditRoomCapacityUnits("1");
+                  }}
+                >
+                  <option value="">Без зала</option>
+                  {rooms.map((room)=><option key={room.id} value={room.id}>{room.name} · {room.capacity} ед.</option>)}
+                </select>
+              </label>
             </div>
+            {editRoomId ? (
+              <div className="studio-form-grid">
+                <label>
+                  <span>Зона</span>
+                  <select
+                    value={editRoomZoneId}
+                    onChange={(event)=>setEditRoomZoneId(event.target.value)}
+                  >
+                    <option value="">Без зоны / общий зал</option>
+                    {(zones[editRoomId]??[]).map((zone)=>(
+                      <option key={zone.id} value={zone.id}>
+                        {zone.name} · {zone.capacity_units} ед.
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Занимаемая вместимость</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={editRoomCapacityUnits}
+                    onChange={(event)=>setEditRoomCapacityUnits(event.target.value)}
+                  />
+                </label>
+              </div>
+            ) : null}
           </StudioModal>
         ) : null}
 
@@ -1480,16 +1520,64 @@ export default function DanceGroupsPage() {
                   <span>Зал</span>
                   <select
                     value={lessonRoomId}
-                    onChange={(event) => setLessonRoomId(event.target.value)}
+                    onChange={(event) => {
+                      setLessonRoomId(event.target.value);
+                      setLessonRoomZoneId("");
+                      setLessonRoomCapacityUnits("1");
+                    }}
                   >
                     <option value="">Без зала</option>
                     {rooms.map((room) => (
                       <option key={room.id} value={room.id}>
-                        {room.name}
+                        {room.name} · {room.capacity} ед.
                       </option>
                     ))}
                   </select>
                 </label>
+
+                {lessonRoomId ? (
+                  <label>
+                    <span>Зона зала</span>
+                    <select
+                      value={lessonRoomZoneId}
+                      onChange={(event) =>
+                        setLessonRoomZoneId(event.target.value)
+                      }
+                    >
+                      <option value="">Без зоны / общий зал</option>
+                      {(zones[lessonRoomId] ?? []).map((zone) => (
+                        <option key={zone.id} value={zone.id}>
+                          {zone.name} · {zone.capacity_units} ед.
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {lessonRoomId ? (
+                  <label>
+                    <span>Сколько пространства занимает</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max={
+                        (zones[lessonRoomId] ?? []).find(
+                          (zone) => zone.id === lessonRoomZoneId
+                        )?.capacity_units ??
+                        rooms.find((room) => room.id === lessonRoomId)?.capacity ??
+                        1
+                      }
+                      value={lessonRoomCapacityUnits}
+                      onChange={(event) =>
+                        setLessonRoomCapacityUnits(event.target.value)
+                      }
+                    />
+                    <small>
+                      Остальная вместимость останется доступна для другой
+                      группы, арендатора или самостоятельной практики.
+                    </small>
+                  </label>
+                ) : null}
 
                 <label>
                   <span>Дата и время</span>
