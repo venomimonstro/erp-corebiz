@@ -1,0 +1,295 @@
+"use client";
+
+import { FormEvent,useCallback,useEffect,useMemo,useState } from "react";
+import { AppSidebar } from "../../../components/app-sidebar";
+import { apiRequest } from "../../../lib/api";
+
+type Dashboard={
+  orders:{open_orders:number;waiting_parts:number;overdue:number;delivered_revenue_minor:string};
+  donors:{active_donors:number;invested_minor:string};
+  parts:{available_parts:number;reserved_parts:number;stock_cost_minor:string;stock_asking_minor:string};
+};
+type Vehicle={
+  id:string;vin:string|null;plate_number:string|null;make:string;model:string;
+  generation:string|null;production_year:number|null;mileage_km:number|null;
+  owner_name:string|null;last_visit_at:string|null;
+};
+type WorkOrder={
+  id:string;business_number:string;status:string;complaint:string|null;
+  promised_at:string|null;estimated_total_minor:string;actual_total_minor:string;
+  vin:string|null;plate_number:string|null;make:string;model:string;
+  customer_name:string|null;line_count:number;
+};
+type Donor={
+  id:string;stock_number:string;vin:string|null;make:string;model:string;
+  production_year:number|null;status:string;purchase_price_minor:string;
+  dismantling_cost_minor:string;parts_total:number;parts_available:number;
+  allocated_cost_minor:string;remaining_asking_minor:string;
+};
+type Part={
+  id:string;part_name:string;oem_number:string|null;condition_grade:string;
+  status:string;allocated_cost_minor:string;asking_price_minor:string;
+  stock_number:string;donor_make:string;donor_model:string;sku_code:string|null;
+};
+
+function money(value:string|number|null|undefined){
+  return new Intl.NumberFormat("ru-RU",{
+    style:"currency",currency:"RUB",maximumFractionDigits:0
+  }).format(Number(value??0)/100);
+}
+function statusLabel(value:string){
+  return ({
+    DRAFT:"Черновик",DIAGNOSIS:"Диагностика",WAITING_APPROVAL:"Ждёт согласования",
+    WAITING_PARTS:"Ждёт запчасти",IN_PROGRESS:"В работе",QUALITY_CHECK:"Контроль качества",
+    READY:"Готов к выдаче",DELIVERED:"Выдан",CANCELLED:"Отменён",
+    RECEIVED:"Принят",DISMANTLING:"Разбирается",DISMANTLED:"Разобран",
+    AVAILABLE:"В продаже",RESERVED:"Резерв",SOLD:"Продано",INSTALLED:"Установлено"
+  } as Record<string,string>)[value]??value;
+}
+
+export default function AutomotivePage(){
+  const [tab,setTab]=useState<"orders"|"vehicles"|"dismantling">("orders");
+  const [dashboard,setDashboard]=useState<Dashboard|null>(null);
+  const [vehicles,setVehicles]=useState<Vehicle[]>([]);
+  const [orders,setOrders]=useState<WorkOrder[]>([]);
+  const [donors,setDonors]=useState<Donor[]>([]);
+  const [parts,setParts]=useState<Part[]>([]);
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+  const [notice,setNotice]=useState("");
+  const [showVehicleForm,setShowVehicleForm]=useState(false);
+  const [showOrderForm,setShowOrderForm]=useState(false);
+  const [showDonorForm,setShowDonorForm]=useState(false);
+
+  const [vMake,setVMake]=useState("");
+  const [vModel,setVModel]=useState("");
+  const [vVin,setVVin]=useState("");
+  const [vPlate,setVPlate]=useState("");
+  const [vYear,setVYear]=useState("");
+  const [vMileage,setVMileage]=useState("");
+
+  const [orderVehicleId,setOrderVehicleId]=useState("");
+  const [orderComplaint,setOrderComplaint]=useState("");
+  const [orderPromise,setOrderPromise]=useState("");
+  const [orderMileage,setOrderMileage]=useState("");
+
+  const [dMake,setDMake]=useState("");
+  const [dModel,setDModel]=useState("");
+  const [dVin,setDVin]=useState("");
+  const [dYear,setDYear]=useState("");
+  const [dPurchase,setDPurchase]=useState("");
+  const [dDismantling,setDDismantling]=useState("");
+
+  const load=useCallback(async()=>{
+    setBusy(true); setError("");
+    try{
+      const [d,v,o,ds,ps]=await Promise.all([
+        apiRequest<Dashboard>("/automotive/dashboard"),
+        apiRequest<Vehicle[]>("/automotive/vehicles"),
+        apiRequest<WorkOrder[]>("/automotive/work-orders"),
+        apiRequest<Donor[]>("/automotive/donors"),
+        apiRequest<Part[]>("/automotive/parts")
+      ]);
+      setDashboard(d); setVehicles(v); setOrders(o); setDonors(ds); setParts(ps);
+      if(!orderVehicleId&&v[0]) setOrderVehicleId(v[0].id);
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось загрузить автомобильный контур");
+    }finally{ setBusy(false); }
+  },[orderVehicleId]);
+
+  useEffect(()=>{void load();},[load]);
+
+  const activeOrders=useMemo(
+    ()=>orders.filter(item=>!["DELIVERED","CANCELLED"].includes(item.status)),
+    [orders]
+  );
+
+  async function createVehicle(event:FormEvent){
+    event.preventDefault(); setBusy(true); setError(""); setNotice("");
+    try{
+      await apiRequest("/automotive/vehicles",{
+        method:"POST",
+        body:JSON.stringify({
+          make:vMake,model:vModel,vin:vVin||undefined,plateNumber:vPlate||undefined,
+          productionYear:vYear?Number(vYear):undefined,
+          mileageKm:vMileage?Number(vMileage):undefined
+        })
+      });
+      setVMake("");setVModel("");setVVin("");setVPlate("");setVYear("");setVMileage("");
+      setShowVehicleForm(false);setNotice("Автомобиль добавлен.");await load();
+    }catch(cause){setError(cause instanceof Error?cause.message:"Не удалось добавить автомобиль");}
+    finally{setBusy(false);}
+  }
+
+  async function createOrder(event:FormEvent){
+    event.preventDefault(); if(!orderVehicleId)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/automotive/work-orders",{
+        method:"POST",
+        body:JSON.stringify({
+          vehicleId:orderVehicleId,complaint:orderComplaint||undefined,
+          promisedAt:orderPromise||undefined,
+          mileageInKm:orderMileage?Number(orderMileage):undefined
+        })
+      });
+      setOrderComplaint("");setOrderPromise("");setOrderMileage("");
+      setShowOrderForm(false);setNotice("Заказ-наряд создан.");await load();
+    }catch(cause){setError(cause instanceof Error?cause.message:"Не удалось создать заказ-наряд");}
+    finally{setBusy(false);}
+  }
+
+  async function createDonor(event:FormEvent){
+    event.preventDefault();setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/automotive/donors",{
+        method:"POST",
+        body:JSON.stringify({
+          make:dMake,model:dModel,vin:dVin||undefined,
+          productionYear:dYear?Number(dYear):undefined,
+          purchasePriceMinor:dPurchase?Math.round(Number(dPurchase)*100):0,
+          dismantlingCostMinor:dDismantling?Math.round(Number(dDismantling)*100):0
+        })
+      });
+      setDMake("");setDModel("");setDVin("");setDYear("");setDPurchase("");setDDismantling("");
+      setShowDonorForm(false);setNotice("Донор принят в разбор.");await load();
+    }catch(cause){setError(cause instanceof Error?cause.message:"Не удалось добавить донора");}
+    finally{setBusy(false);}
+  }
+
+  return (
+    <main className="app-shell">
+      <AppSidebar active="automotive" />
+      <section className="workspace workspace-wide studio-premium">
+        <header className="studio-hero">
+          <div>
+            <span className="studio-eyebrow">Автобизнес / единый рабочий контур</span>
+            <h1>Автосервис и авторазбор</h1>
+            <p>
+              От VIN и жалобы клиента до заказ-наряда, запчастей, донора,
+              себестоимости и фактической маржи — без разрыва между сервисом и складом.
+            </p>
+          </div>
+          <div className="studio-hero-actions">
+            <button className="secondary-button" type="button"
+              onClick={()=>setShowVehicleForm(v=>!v)}>+ Автомобиль</button>
+            <button type="button" onClick={()=>setShowOrderForm(v=>!v)}>+ Заказ-наряд</button>
+          </div>
+        </header>
+
+        {error?<div className="studio-message error"><strong>Нужно проверить</strong><span>{error}</span></div>:null}
+        {notice?<div className="studio-message success"><strong>Готово</strong><span>{notice}</span></div>:null}
+
+        <div className="studio-score-grid">
+          <article><span>Заказ-наряды</span><strong>{dashboard?.orders.open_orders??0}</strong><p>{dashboard?.orders.waiting_parts??0} ждут запчасти · {dashboard?.orders.overdue??0} просрочено</p></article>
+          <article><span>Выдано клиентам</span><strong>{money(dashboard?.orders.delivered_revenue_minor)}</strong><p>Фактическая сумма закрытых заказ-нарядов.</p></article>
+          <article><span>Деньги в донорах</span><strong>{money(dashboard?.donors.invested_minor)}</strong><p>{dashboard?.donors.active_donors??0} доноров ещё в работе.</p></article>
+          <article><span>Склад авторазбора</span><strong>{dashboard?.parts.available_parts??0}</strong><p>{money(dashboard?.parts.stock_cost_minor)} себестоимость · {money(dashboard?.parts.stock_asking_minor)} цена продажи</p></article>
+        </div>
+
+        {(showVehicleForm||showOrderForm||showDonorForm)?(
+          <section className="studio-section">
+            {showVehicleForm?(
+              <form className="studio-form-grid" onSubmit={createVehicle}>
+                <label><span>Марка</span><input value={vMake} onChange={e=>setVMake(e.target.value)} required placeholder="BMW" /></label>
+                <label><span>Модель</span><input value={vModel} onChange={e=>setVModel(e.target.value)} required placeholder="X5" /></label>
+                <label><span>VIN</span><input value={vVin} onChange={e=>setVVin(e.target.value.toUpperCase())} placeholder="17 символов" /></label>
+                <label><span>Госномер</span><input value={vPlate} onChange={e=>setVPlate(e.target.value.toUpperCase())} /></label>
+                <label><span>Год</span><input type="number" value={vYear} onChange={e=>setVYear(e.target.value)} /></label>
+                <label><span>Пробег, км</span><input type="number" value={vMileage} onChange={e=>setVMileage(e.target.value)} /></label>
+                <div className="studio-form-actions"><button type="submit" disabled={busy}>Сохранить автомобиль</button></div>
+              </form>
+            ):null}
+            {showOrderForm?(
+              <form className="studio-form-grid" onSubmit={createOrder}>
+                <label className="studio-form-wide"><span>Автомобиль</span>
+                  <select value={orderVehicleId} onChange={e=>setOrderVehicleId(e.target.value)} required>
+                    <option value="">Выберите автомобиль</option>
+                    {vehicles.map(v=><option key={v.id} value={v.id}>{v.make} {v.model}{v.plate_number?" · "+v.plate_number:""}{v.vin?" · "+v.vin:""}</option>)}
+                  </select>
+                </label>
+                <label className="studio-form-wide"><span>Что беспокоит клиента</span><input value={orderComplaint} onChange={e=>setOrderComplaint(e.target.value)} placeholder="Стук спереди, заменить масло..." /></label>
+                <label><span>Обещали к</span><input type="datetime-local" value={orderPromise} onChange={e=>setOrderPromise(e.target.value)} /></label>
+                <label><span>Пробег при приёмке</span><input type="number" value={orderMileage} onChange={e=>setOrderMileage(e.target.value)} /></label>
+                <div className="studio-form-actions"><button type="submit" disabled={busy}>Создать заказ-наряд</button></div>
+              </form>
+            ):null}
+            {showDonorForm?(
+              <form className="studio-form-grid" onSubmit={createDonor}>
+                <label><span>Марка донора</span><input value={dMake} onChange={e=>setDMake(e.target.value)} required /></label>
+                <label><span>Модель</span><input value={dModel} onChange={e=>setDModel(e.target.value)} required /></label>
+                <label><span>VIN</span><input value={dVin} onChange={e=>setDVin(e.target.value.toUpperCase())} /></label>
+                <label><span>Год</span><input type="number" value={dYear} onChange={e=>setDYear(e.target.value)} /></label>
+                <label><span>Цена покупки, ₽</span><input type="number" value={dPurchase} onChange={e=>setDPurchase(e.target.value)} /></label>
+                <label><span>Стоимость разборки, ₽</span><input type="number" value={dDismantling} onChange={e=>setDDismantling(e.target.value)} /></label>
+                <div className="studio-form-actions"><button type="submit" disabled={busy}>Принять донора</button></div>
+              </form>
+            ):null}
+          </section>
+        ):null}
+
+        <div className="studio-tabs">
+          <button className={tab==="orders"?"active":""} type="button" onClick={()=>setTab("orders")}>Заказ-наряды <span>{activeOrders.length}</span></button>
+          <button className={tab==="vehicles"?"active":""} type="button" onClick={()=>setTab("vehicles")}>Автомобили <span>{vehicles.length}</span></button>
+          <button className={tab==="dismantling"?"active":""} type="button" onClick={()=>setTab("dismantling")}>Авторазбор <span>{donors.length}</span></button>
+        </div>
+
+        {tab==="orders"?(
+          <section className="studio-section">
+            <div className="studio-section-head"><div><span>Приёмка → диагностика → ремонт → выдача</span><h2>Заказ-наряды</h2><p>Видно, где автомобиль завис и чего ждёт.</p></div></div>
+            <div className="studio-rule-grid">
+              {orders.map(o=>(
+                <article className="studio-rule-card" key={o.id}>
+                  <header><div><span className="studio-chip">{statusLabel(o.status)}</span><h3>{o.business_number} · {o.make} {o.model}</h3><p>{o.plate_number??o.vin??"Без номера"}{o.customer_name?" · "+o.customer_name:""}</p></div><strong>{money(o.estimated_total_minor)}</strong></header>
+                  <div><p>{o.complaint||"Жалоба клиента не указана"}</p><p className="muted">{o.line_count} позиций{ o.promised_at?" · обещано "+new Date(o.promised_at).toLocaleString("ru-RU"):""}</p></div>
+                </article>
+              ))}
+              {!orders.length&&!busy?<div className="studio-empty"><span>01</span><strong>Нет заказ-нарядов</strong><p>Создайте первый заказ-наряд после приёмки автомобиля.</p></div>:null}
+            </div>
+          </section>
+        ):null}
+
+        {tab==="vehicles"?(
+          <section className="studio-section">
+            <div className="studio-section-head"><div><span>История автомобиля</span><h2>Автомобили клиентов</h2><p>VIN, пробег и вся история работ в одной карточке.</p></div></div>
+            <div className="studio-rule-grid">
+              {vehicles.map(v=>(
+                <article className="studio-rule-card" key={v.id}>
+                  <header><div><span className="studio-chip">{v.production_year??"Год не указан"}</span><h3>{v.make} {v.model}</h3><p>{v.plate_number??"Без госномера"}{v.vin?" · "+v.vin:""}</p></div><strong>{v.mileage_km?new Intl.NumberFormat("ru-RU").format(v.mileage_km)+" км":"—"}</strong></header>
+                  <div><p>{v.owner_name??"Владелец не привязан"}</p><p className="muted">{v.last_visit_at?"Последний визит "+new Date(v.last_visit_at).toLocaleDateString("ru-RU"):"Истории обслуживания пока нет"}</p></div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ):null}
+
+        {tab==="dismantling"?(
+          <>
+            <section className="studio-section">
+              <div className="studio-section-head"><div><span>Донор → детали → деньги</span><h2>Авторазбор</h2><p>Каждый донор как отдельный инвестиционный объект.</p></div><button type="button" onClick={()=>setShowDonorForm(v=>!v)}>+ Принять донора</button></div>
+              <div className="studio-rule-grid">
+                {donors.map(d=>(
+                  <article className="studio-rule-card" key={d.id}>
+                    <header><div><span className="studio-chip">{statusLabel(d.status)}</span><h3>{d.stock_number} · {d.make} {d.model}</h3><p>{d.vin??"VIN не указан"}{d.production_year?" · "+d.production_year:""}</p></div><strong>{money(Number(d.purchase_price_minor)+Number(d.dismantling_cost_minor))}</strong></header>
+                    <div><p>{d.parts_available} из {d.parts_total} деталей доступны</p><p className="muted">Распределено себестоимости {money(d.allocated_cost_minor)} · цена остатка {money(d.remaining_asking_minor)}</p></div>
+                  </article>
+                ))}
+              </div>
+            </section>
+            <section className="studio-section">
+              <div className="studio-section-head"><div><span>Снятые детали</span><h2>Детали в продаже</h2><p>OEM, состояние, донор и экономика каждой позиции.</p></div></div>
+              <div className="studio-rule-grid">
+                {parts.slice(0,24).map(p=>(
+                  <article className="studio-rule-card" key={p.id}>
+                    <header><div><span className="studio-chip">{statusLabel(p.status)} · {p.condition_grade}</span><h3>{p.part_name}</h3><p>{p.oem_number?"OEM "+p.oem_number+" · ":""}{p.stock_number} · {p.donor_make} {p.donor_model}</p></div><strong>{money(p.asking_price_minor)}</strong></header>
+                    <div><p className="muted">Себестоимость {money(p.allocated_cost_minor)}{p.sku_code?" · SKU "+p.sku_code:""}</p></div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          </>
+        ):null}
+      </section>
+    </main>
+  );
+}
