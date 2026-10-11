@@ -263,7 +263,9 @@ export default function DealsPage() {
                         key={deal.id}
                         onDragStart={(event) => startDrag(event, deal)}
                       >
-                        <strong>{deal.title}</strong>
+                        <a className="deal-title-link" href={"/app/crm/deals/"+deal.id}>
+  <strong>{deal.title}</strong>
+</a>
                         <span className="deal-amount">
                           {formatMoney(deal.amountMinor, deal.currency)}
                         </span>
