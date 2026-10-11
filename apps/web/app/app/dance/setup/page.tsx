@@ -220,6 +220,54 @@ export default function DanceSetupPage(){
     );
   }
 
+  async function archiveRule(rule:DeliveryRule){
+    if(
+      !window.confirm(
+        "Отключить правило «"+rule.service_name+"»? Новые записи перестанут его использовать."
+      )
+    ) return;
+    setPending(true);
+    setError("");
+    try{
+      await apiRequest(
+        "/service/delivery-rules/"+rule.id+"/archive",
+        {method:"POST"}
+      );
+      setNotice("Правило оказания услуги отключено.");
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error?cause.message:"Не удалось отключить правило"
+      );
+    }finally{
+      setPending(false);
+    }
+  }
+
+  async function archiveCard(card:TechnologyCard){
+    if(
+      !window.confirm(
+        "Архивировать техкарту «"+card.name+"»? История визитов сохранится."
+      )
+    ) return;
+    setPending(true);
+    setError("");
+    try{
+      await apiRequest(
+        "/service/technology-cards/"+card.id+"/archive",
+        {method:"POST"}
+      );
+      setNotice("Техкарта архивирована.");
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error?cause.message:"Не удалось архивировать техкарту"
+      );
+    }finally{
+      setPending(false);
+    }
+  }
+
   async function createRule(event:FormEvent){
     event.preventDefault();
     setError("");
@@ -537,6 +585,14 @@ export default function DanceSetupPage(){
                       .map(([,label])=>label).join(" · ")}
                   </span>
                   {rule.technology_card_name?<b>Техкарта: {rule.technology_card_name}</b>:null}
+                  <button
+                    className="studio-text-button"
+                    type="button"
+                    disabled={pending}
+                    onClick={()=>void archiveRule(rule)}
+                  >
+                    Отключить
+                  </button>
                 </footer>
               </article>
             ))}
@@ -642,6 +698,14 @@ export default function DanceSetupPage(){
                 <footer>
                   <span>{card.code??"без кода"}</span>
                   <b>Автосписание при закрытии визита</b>
+                  <button
+                    className="studio-text-button"
+                    type="button"
+                    disabled={pending}
+                    onClick={()=>void archiveCard(card)}
+                  >
+                    В архив
+                  </button>
                 </footer>
               </article>
             ))}
