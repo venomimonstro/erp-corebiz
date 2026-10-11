@@ -49,6 +49,15 @@ export class CrmController {
     };
   }
 
+  @Post("deals/:id/next-action")
+  @RequirePermission("crm.write")
+  async nextAction(
+    @Req() request:AuthenticatedRequest,@Param("id") id:string,
+    @Body() body:{title:string;dueAt:string;idempotencyKey:string}
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.crm.nextAction(this.context(request),id,body)};
+  }
+
   @Get("deals/:id")
   @RequirePermission("crm.read")
   async dealDetails(
