@@ -41,7 +41,7 @@ export class BookingService {
            s.id, s.name, s.code, s.category, s.duration_minutes,
            s.buffer_before_minutes, s.buffer_after_minutes,
            s.price_minor::text, s.currency, s.delivery_format,
-           s.group_capacity, s.metadata,
+           s.group_capacity,s.rebook_after_days,s.rebook_grace_days,s.metadata,
            COALESCE(
              json_agg(
                json_build_object(
@@ -77,6 +77,8 @@ export class BookingService {
       currency?: string;
       deliveryFormat?: "INDIVIDUAL" | "GROUP" | "SELF_PRACTICE" | "RENTAL";
       groupCapacity?: number;
+      rebookAfterDays?: number;
+      rebookGraceDays?: number;
     }
   ): Promise<{ id: string }> {
     await this.requireServiceAll(context, "service.write");
@@ -109,6 +111,20 @@ export class BookingService {
     if (groupCapacity < 1 || groupCapacity > 100000) {
       throw new BadRequestException("Некорректная вместимость услуги");
     }
+    const rebookAfterDays=
+      input.rebookAfterDays===undefined
+        ?null
+        :Math.floor(input.rebookAfterDays);
+    const rebookGraceDays=Math.floor(input.rebookGraceDays??3);
+    if(
+      rebookAfterDays!==null &&
+      (rebookAfterDays<1||rebookAfterDays>3650)
+    ){
+      throw new BadRequestException("Некорректный цикл повторного визита");
+    }
+    if(rebookGraceDays<0||rebookGraceDays>365){
+      throw new BadRequestException("Некорректный допуск повторного визита");
+    }
 
     return this.database.withTenantTransaction(context, async (client) => {
       try {
@@ -116,8 +132,9 @@ export class BookingService {
           `INSERT INTO service_catalog_item(
              tenant_id, name, code, category, duration_minutes,
              buffer_before_minutes, buffer_after_minutes,
-             price_minor, currency, delivery_format, group_capacity
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+             price_minor,currency,delivery_format,group_capacity,
+             rebook_after_days,rebook_grace_days
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
            RETURNING id`,
           [
             context.tenantId,
@@ -130,7 +147,9 @@ export class BookingService {
             price,
             input.currency?.trim().toUpperCase() || "RUB",
             deliveryFormat,
-            groupCapacity
+            groupCapacity,
+            rebookAfterDays,
+            rebookGraceDays
           ]
         );
 
@@ -141,6 +160,82 @@ export class BookingService {
         }
         throw error;
       }
+    });
+  }
+
+  async updateService(
+    context:TenantContext,
+    serviceId:string,
+    input:{
+      name?:string;
+      category?:string|null;
+      durationMinutes?:number;
+      priceMinor?:string;
+      rebookAfterDays?:number|null;
+      rebookGraceDays?:number;
+    }
+  ):Promise<{updated:true}>{
+    await this.requireServiceAll(context,"service.write");
+
+    const fields:string[]=[];
+    const values:unknown[]=[context.tenantId,serviceId];
+    const add=(sql:string,value:unknown)=>{
+      values.push(value);
+      fields.push(sql.replace("?", "$"+values.length));
+    };
+
+    if(input.name!==undefined){
+      const name=input.name.trim();
+      if(name.length<2||name.length>160){
+        throw new BadRequestException("Некорректное название услуги");
+      }
+      add("name=?::text",name);
+    }
+    if(input.category!==undefined){
+      add("category=?::text",input.category?.trim()||null);
+    }
+    if(input.durationMinutes!==undefined){
+      const duration=Math.floor(input.durationMinutes);
+      if(duration<5||duration>1440){
+        throw new BadRequestException("Некорректная длительность");
+      }
+      add("duration_minutes=?::integer",duration);
+    }
+    if(input.priceMinor!==undefined){
+      if(!/^\d+$/.test(input.priceMinor)){
+        throw new BadRequestException("Некорректная цена");
+      }
+      add("price_minor=?::bigint",input.priceMinor);
+    }
+    if(input.rebookAfterDays!==undefined){
+      const days=
+        input.rebookAfterDays===null?null:Math.floor(input.rebookAfterDays);
+      if(days!==null&&(days<1||days>3650)){
+        throw new BadRequestException("Некорректный цикл повторного визита");
+      }
+      add("rebook_after_days=?::integer",days);
+    }
+    if(input.rebookGraceDays!==undefined){
+      const days=Math.floor(input.rebookGraceDays);
+      if(days<0||days>365){
+        throw new BadRequestException("Некорректный допуск повторного визита");
+      }
+      add("rebook_grace_days=?::integer",days);
+    }
+    if(!fields.length){
+      throw new BadRequestException("Нет изменений услуги");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `UPDATE service_catalog_item
+         SET ${fields.join(",")},updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+         RETURNING id`,
+        values
+      );
+      if(!result.rowCount) throw new NotFoundException("Услуга не найдена");
+      return {updated:true};
     });
   }
 
