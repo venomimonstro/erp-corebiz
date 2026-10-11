@@ -2180,3 +2180,71 @@ button, .primary, .secondary { font: inherit; }
   background:linear-gradient(180deg,#fff,#fff9f7) !important;
 }
 .owner-kpi-alert strong { color:#8c493b; }
+
+
+/* Payroll progress */
+.payroll-pipeline {
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px;
+  margin:12px 0 16px;
+}
+.payroll-pipeline-step {
+  display:flex;
+  gap:10px;
+  align-items:center;
+  min-height:72px;
+  padding:12px 13px;
+  border:1px solid #e5e7e9;
+  border-radius:14px;
+  background:#fafafa;
+}
+.payroll-pipeline-step > span {
+  display:grid;
+  place-items:center;
+  width:28px;
+  height:28px;
+  flex:0 0 28px;
+  border-radius:9px;
+  background:#eceff1;
+  color:#777f86;
+  font-size:9px;
+  font-weight:700;
+}
+.payroll-pipeline-step > div {
+  display:grid;
+  gap:3px;
+  min-width:0;
+}
+.payroll-pipeline-step strong {
+  color:#32373c;
+  font-size:10px;
+}
+.payroll-pipeline-step small {
+  color:#93999f;
+  font-size:8px;
+  line-height:1.35;
+}
+.payroll-pipeline-step.done {
+  border-color:#d8ded9;
+  background:#f7faf7;
+}
+.payroll-pipeline-step.done > span {
+  background:#e2e9e3;
+  color:#4e6653;
+}
+.payroll-pipeline-step.current {
+  border-color:#cfd4d8;
+  background:#fff;
+  box-shadow:0 8px 24px rgba(27,31,36,.04);
+}
+.payroll-pipeline-step.current > span {
+  background:#272b2f;
+  color:#fff;
+}
+@media (max-width:900px) {
+  .payroll-pipeline { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (max-width:560px) {
+  .payroll-pipeline { grid-template-columns:1fr; }
+}
