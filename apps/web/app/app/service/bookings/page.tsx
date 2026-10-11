@@ -325,13 +325,7 @@ export default function BookingsPage() {
         })
       });
 
-      setNotice(
-        selectedPackage
-          ? "Запись создана и посещение зарезервировано по абонементу."
-          : selectedCustomer && Number(activeService?.price_minor ?? "0") > 0
-            ? "Запись создана. Счёт и дебиторка сформированы автоматически."
-            : "Запись создана."
-      );
+      setNotice("Услуга создана.");
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать услугу");
@@ -514,6 +508,13 @@ export default function BookingsPage() {
       setSelectedCustomer("");
       setSelectedAsset("");
       setSelectedPackage("");
+      setNotice(
+        selectedPackage
+          ? "Запись создана и посещение зарезервировано по абонементу."
+          : selectedCustomer && Number(activeService?.price_minor ?? "0") > 0
+            ? "Запись создана. Счёт и дебиторка сформированы автоматически."
+            : "Запись создана."
+      );
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать запись");
