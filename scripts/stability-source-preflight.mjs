@@ -387,7 +387,8 @@ async function inspectRequiredHardening(root) {
     "174_composite_trainer_payroll.sql",
     "175_package_entitlement_integrity_v2.sql",
     "176_service_package_scoped_redemption.sql",
-    "177_shared_capacity_integrity.sql"
+    "177_shared_capacity_integrity.sql",
+    "178_trainer_payroll_export_lifecycle.sql"
   ];
 
   for (const name of requiredMigrations) {
