@@ -107,8 +107,8 @@ export default function CommerceDecisionsPage() {
               </a>
               <a href="/app/inventory/stock">
                 <span>Риск нехватки</span>
-                <strong>{data.replenishment.length}{data.replenishment.length===20 ? "+" : ""}</strong>
-                <small>SKU с запасом менее 14 дней →</small>
+                <strong>{data.replenishment.length}</strong>
+                <small>Показаны до 20 SKU, а не весь каталог →</small>
               </a>
             </div>
 
