@@ -1514,7 +1514,17 @@ export class DanceStudioService {
         [context.tenantId,groupId]
       );
 
-      return {members:result.rows,waitlist:waitlist.rows};
+      const financial=Boolean(
+        await this.authorization.resolveScope(context,"finance.read")
+      );
+      if(financial)return {members:result.rows,waitlist:waitlist.rows};
+      // Instructors can see the roster but not parent-payer identities
+      // or individual negotiated discounts.
+      return {
+        members:result.rows.map(row=>({...row,
+          payer_party_id:null,payer_name:null,discount_bps:null})),
+        waitlist:waitlist.rows.map(row=>({...row,discount_bps:null}))
+      };
     });
   }
 
