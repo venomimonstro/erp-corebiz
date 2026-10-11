@@ -1,4 +1,4 @@
-import {BadRequestException,ConflictException} from "@nestjs/common";
+import {ConflictException} from "@nestjs/common";
 import {DanceStudioService} from "./dance-studio.service";
 
 const context={
@@ -53,7 +53,7 @@ describe("dance studio: safe booking and attendance",()=>{
     };
     const database={withTenantTransaction:jest.fn(async(_ctx:unknown,fn:any)=>fn(client))};
     const service=new DanceStudioService(database as any,authorization as any);
-    const charge=jest.fn(async()=>undefined);
+    const charge=jest.fn(async(..._args:unknown[])=>undefined);
     (service as any).attachParticipantPaymentTx=charge;
     const booking=await service.addParticipant(context,lessonId,{studentId,priceSource:"DIRECT"});
     expect(booking.status).toBe("BOOKED");
@@ -63,10 +63,18 @@ describe("dance studio: safe booking and attendance",()=>{
   });
 
   it("rejects a missing price, never silently gives away a direct lesson",async()=>{
-    const client={query:jest.fn(async()=>({rows:[{
-      id:lessonId,group_id:null,status:"PLANNED",attendance_locked_at:null,
-      capacity:10,currency:"RUB",booking_price_minor:"0"
-    }]}))};
+    const client={query:jest.fn(async(sql:string)=>{
+      if(sql.includes("FROM dance_lesson l"))return {rows:[{
+        id:lessonId,group_id:null,status:"PLANNED",attendance_locked_at:null,
+        capacity:10,currency:"RUB",booking_price_minor:"0"
+      }]};
+      if(sql.includes("FROM dance_student s"))return {rows:[{
+        id:studentId,party_id:"66666666-6666-4666-8666-666666666666"
+      }]};
+      if(sql.includes("SELECT count(*)"))return {rows:[{count:0}]};
+      if(sql.includes("SELECT id,status,version"))return {rows:[]};
+      throw new Error("Unexpected SQL: "+sql.slice(0,80));
+    })};
     const database={withTenantTransaction:jest.fn(async(_ctx:unknown,fn:any)=>fn(client))};
     const service=new DanceStudioService(database as any,authorization as any);
     await expect(service.addParticipant(context,lessonId,{studentId,priceSource:"DIRECT"}))
