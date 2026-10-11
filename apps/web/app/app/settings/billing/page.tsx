@@ -73,6 +73,51 @@ export default function BillingPage() {
     void load();
   }, [load]);
 
+  async function payPlan(code:string){
+    setPending(true);
+    setError("");
+    try{
+      const response=await apiRequest<{
+        intentId:string;status:string;confirmationUrl?:string;
+      }>("/payments/saas/start",{
+        method:"POST",body:JSON.stringify({planCode:code})
+      });
+      if(!response.confirmationUrl)throw new Error("Платёжная форма ещё не доступна");
+      const url=new URL(response.confirmationUrl);
+      if(url.protocol!=="https:" ||
+        !["yookassa.ru","yoomoney.ru"].some(host=>
+          url.hostname===host||url.hostname.endsWith("."+host))){
+        throw new Error("Некорректная платёжная ссылка");
+      }
+      sessionStorage.setItem("corebiz_billing_payment_intent",response.intentId);
+      window.location.assign(url.href);
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось открыть оплату");
+    }finally{setPending(false);}
+  }
+
+  useEffect(()=>{
+    const intentId=sessionStorage.getItem("corebiz_billing_payment_intent");
+    if(!intentId)return;
+    let active=true;
+    void apiRequest<{status:string;fiscal_status:string}>(
+      "/payments/saas/"+encodeURIComponent(intentId)+"/status"
+    ).then(state=>{
+      if(!active)return;
+      if(state.status==="SUCCEEDED"){
+        sessionStorage.removeItem("corebiz_billing_payment_intent");
+        void load();
+      }
+      if(state.status==="CANCELED"){
+        sessionStorage.removeItem("corebiz_billing_payment_intent");
+        setError("Платёж отменён. Тариф не изменён.");
+      }
+    }).catch(()=>{
+      if(active)setError("Не удалось проверить оплату. Проверьте статус позже.");
+    });
+    return ()=>{active=false};
+  },[load]);
+
   async function selectPlan(code: string) {
     setPending(true);
     setError("");
@@ -241,14 +286,13 @@ export default function BillingPage() {
                 </ul>
 
                 <button
-                  disabled={pending || active || requiresPayment}
-                  onClick={() => void selectPlan(plan.code)}
+                  disabled={pending || active}
+                  onClick={() => void (requiresPayment
+                    ? payPlan(plan.code) : selectPlan(plan.code))}
                   type="button"
-                  title={requiresPayment
-                    ? "Платные тарифы станут доступны после подключения оплаты" : undefined}
                 >
                   {active ? "Текущий" : requiresPayment
-                    ? "Оплата пока недоступна" : "Выбрать"}
+                    ? "Перейти к безопасной оплате" : "Выбрать"}
                 </button>
               </article>
             );
