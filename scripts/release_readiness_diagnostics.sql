@@ -844,3 +844,49 @@ WHERE p.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     p.signed_by_membership_id IS NULL
     OR p.signed_at IS NULL
   );
+
+
+-- Owner accounting / tax ledger integrity.
+SELECT 'ACCOUNTING_TAX_LEDGER_PAYMENT_ENTITY_MISMATCH' AS code,count(*)::bigint AS affected
+FROM accounting_tax_ledger_item i
+JOIN payment p
+  ON p.tenant_id=i.tenant_id AND p.id=i.payment_id
+JOIN cash_account a
+  ON a.tenant_id=p.tenant_id AND a.id=p.cash_account_id
+WHERE i.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND a.legal_entity_id IS DISTINCT FROM i.legal_entity_id
+UNION ALL
+SELECT 'ACCOUNTING_TAX_LEDGER_REVIEW_AUDIT_MISSING',count(*)::bigint
+FROM accounting_tax_ledger_item i
+WHERE i.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND i.tax_treatment IN ('INCLUDED','EXCLUDED')
+  AND i.treatment_reason<>'AUTO_CUSTOMER_PAYMENT'
+  AND (
+    i.reviewed_by_membership_id IS NULL
+    OR i.reviewed_at IS NULL
+  )
+UNION ALL
+SELECT 'ACCOUNTING_SIGNED_PACKET_EVIDENCE_MISSING',count(*)::bigint
+FROM accounting_compliance_packet p
+WHERE p.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND p.signature_status='SIGNED'
+  AND (
+    p.signed_by_membership_id IS NULL
+    OR p.signed_at IS NULL
+    OR nullif(btrim(p.signature_reference),'') IS NULL
+    OR nullif(btrim(p.certificate_fingerprint_snapshot),'') IS NULL
+  )
+UNION ALL
+SELECT 'ACCOUNTING_SUBMITTED_WITHOUT_VERIFIED_CONNECTOR',count(*)::bigint
+FROM accounting_compliance_obligation o
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND o.workflow_status IN ('SUBMITTED','ACCEPTED')
+  AND NOT EXISTS(
+    SELECT 1
+    FROM accounting_reporting_connector c
+    WHERE c.tenant_id=o.tenant_id
+      AND c.legal_entity_id=o.legal_entity_id
+      AND c.provider=o.external_provider
+      AND c.status='VERIFIED'
+      AND c.supports_filing=true
+  );
