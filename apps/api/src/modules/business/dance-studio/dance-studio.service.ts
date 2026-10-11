@@ -1682,6 +1682,35 @@ export class DanceStudioService {
         const member=memberResult.rows[0];
         if(!member) throw new NotFoundException("Участник группы не найден");
 
+        // A pause or departure must atomically cancel all future booked
+        // lessons and restore their reserved package/makeup credits.
+        // Do not commit group status first and try to clean up later.
+        if(input.status!=="ACTIVE"){
+          const future=await client.query<{
+            lesson_id:string;participant_id:string;version:number;
+          }>(
+            `SELECT lp.lesson_id,lp.id AS participant_id,lp.version
+             FROM dance_lesson_participant lp
+             JOIN dance_lesson l ON l.tenant_id=lp.tenant_id AND l.id=lp.lesson_id
+             WHERE lp.tenant_id=$1 AND lp.student_id=$2 AND l.group_id=$3
+               AND l.starts_at>now()
+               AND l.status IN ('PLANNED','OPEN_FOR_BOOKING')
+               AND lp.status IN ('BOOKED','WAITLIST')
+             ORDER BY l.starts_at,lp.id LIMIT 501`,
+            [context.tenantId,member.student_id,groupId]
+          );
+          if(future.rows.length>500)
+            throw new ConflictException(
+              "Слишком много будущих уроков для одной операции. Сократите горизонт расписания"
+            );
+          for(const row of future.rows){
+            await this.markAttendanceTx(
+              client,context,scopeIds,row.lesson_id,row.participant_id,
+              {status:"CANCELLED_IN_TIME",version:row.version}
+            );
+          }
+        }
+
         const reservedPlace=
           input.status==="ACTIVE"
             ? true
@@ -1723,17 +1752,10 @@ export class DanceStudioService {
 
         return {
           member:updated.rows[0],
-          promoted,
-          removeFuture:input.status!=="ACTIVE"
+          promoted
         };
       }
     );
-
-    if(result.removeFuture){
-      await this.cancelStudentFutureGroupLessons(
-        context,groupId,String((result.member as any).student_id)
-      );
-    }
 
     await this.syncGroupRoster(context,groupId);
 
@@ -2745,7 +2767,20 @@ export class DanceStudioService {
     if(!Number.isSafeInteger(input?.version)||input.version<1)
       throw new BadRequestException("Обновите журнал: версия участника не указана");
     const scopeIds=await this.scopeIds(context,"dance.write");
-    return this.database.withTenantTransaction(context,async client=>{
+    return this.database.withTenantTransaction(context,client=>
+      this.markAttendanceTx(client,context,scopeIds,lessonId,participantId,input)
+    );
+  }
+
+  private async markAttendanceTx(
+    client:PoolClient,context:TenantContext,scopeIds:string[]|null,
+    lessonId:string,participantId:string,
+    input:{
+      status:"BOOKED"|"ATTENDED"|"LATE"|"NO_SHOW"|"EXCUSED_ABSENCE"|"CANCELLED_IN_TIME"|"CANCELLED_LATE";
+      version:number;
+    }
+  ){
+
       const lesson=await this.assertLessonAccess(
         client,context.tenantId,lessonId,scopeIds,true
       );
@@ -2846,7 +2881,6 @@ export class DanceStudioService {
         ...result.rows[0],
         promoted
       };
-    });
   }
 
   async addPackageBeneficiary(
@@ -4106,42 +4140,6 @@ export class DanceStudioService {
     return member.rows[0]??null;
   }
 
-  private async cancelStudentFutureGroupLessons(
-    context:TenantContext,
-    groupId:string,
-    studentId:string
-  ):Promise<void>{
-    const rows=await this.database.withTenantTransaction(
-      context,
-      async client=>{
-        const result=await client.query<{
-          lesson_id:string;participant_id:string;version:number;
-        }>(
-          `SELECT
-             lp.lesson_id,lp.id AS participant_id,lp.version
-           FROM dance_lesson_participant lp
-           JOIN dance_lesson l
-             ON l.tenant_id=lp.tenant_id AND l.id=lp.lesson_id
-           WHERE lp.tenant_id=$1 AND lp.student_id=$2
-             AND l.group_id=$3 AND l.starts_at>now()
-             AND l.status IN ('PLANNED','OPEN_FOR_BOOKING')
-             AND lp.status IN ('BOOKED','WAITLIST')
-           ORDER BY l.starts_at`,
-          [context.tenantId,studentId,groupId]
-        );
-        return result.rows;
-      }
-    );
-
-    for(const row of rows){
-      await this.markAttendance(
-        context,row.lesson_id,row.participant_id,{
-          status:"CANCELLED_IN_TIME",
-          version:row.version
-        }
-      );
-    }
-  }
 
   private async promoteLessonWaitlistTx(
     client:PoolClient,
