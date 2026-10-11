@@ -242,4 +242,261 @@ export class TaxComplianceService {
       return {year,created};
     });
   }
+
+  async autoClassifyPayments(context:TenantContext,legalEntityId:string){
+    return this.database.withTenantTransaction(context,async client=>{
+      const entities=await client.query<{count:number}>(
+        "SELECT count(*)::integer AS count FROM legal_entity WHERE tenant_id=$1 AND status='ACTIVE'",
+        [context.tenantId]
+      );
+      if((entities.rows[0]?.count??0)!==1){
+        throw new ConflictException(
+          "При нескольких юрлицах сначала распределите платежи по юрлицам"
+        );
+      }
+      const profile=await client.query(
+        "SELECT 1 FROM accounting_tax_profile WHERE tenant_id=$1 AND legal_entity_id=$2 AND status='ACTIVE' LIMIT 1",
+        [context.tenantId,legalEntityId]
+      );
+      if(!profile.rowCount) throw new ConflictException("Налоговый профиль не настроен");
+
+      const result=await client.query(
+        `INSERT INTO accounting_tax_payment_classification(
+           tenant_id,legal_entity_id,payment_id,treatment,source,confidence,
+           reason,rule_code,classified_by_membership_id
+         )
+         SELECT p.tenant_id,$2,p.id,
+           CASE
+             WHEN p.status<>'POSTED' THEN 'EXCLUDED'
+             WHEN p.kind='REFUND' THEN 'REVIEW_REQUIRED'
+             WHEN p.direction='IN' AND c.code='CUSTOMER_PAYMENT'
+               THEN 'TAXABLE_INCOME'
+             ELSE 'REVIEW_REQUIRED'
+           END,
+           'AUTO_RULE',
+           CASE
+             WHEN p.status<>'POSTED' THEN 100
+             WHEN p.direction='IN' AND c.code='CUSTOMER_PAYMENT' THEN 95
+             ELSE 50
+           END,
+           CASE
+             WHEN p.status<>'POSTED' THEN 'Платёж не участвует в расчёте'
+             WHEN p.kind='REFUND' THEN 'Возврат требует проверки налогового периода'
+             WHEN p.direction='IN' AND c.code='CUSTOMER_PAYMENT'
+               THEN 'Оплата клиента: кандидат в доход УСН'
+             WHEN p.direction='OUT' AND c.code='SUPPLIER_PAYMENT'
+               THEN 'Расход поставщику требует проверки налоговой допустимости'
+             ELSE 'Нет безопасного автоматического правила'
+           END,
+           CASE
+             WHEN p.direction='IN' AND c.code='CUSTOMER_PAYMENT'
+               THEN 'USN_CUSTOMER_RECEIPT'
+             ELSE 'MANUAL_REVIEW'
+           END,
+           $3
+         FROM payment p
+         LEFT JOIN cash_flow_category c
+           ON c.tenant_id=p.tenant_id AND c.id=p.category_id
+         WHERE p.tenant_id=$1
+           AND NOT EXISTS(
+             SELECT 1
+             FROM accounting_tax_payment_classification x
+             WHERE x.tenant_id=p.tenant_id
+               AND x.legal_entity_id=$2
+               AND x.payment_id=p.id
+           )
+         RETURNING treatment`,
+        [context.tenantId,legalEntityId,context.membershipId]
+      );
+      return {
+        classified:result.rowCount,
+        taxableIncome:result.rows.filter(r=>r.treatment==="TAXABLE_INCOME").length,
+        reviewRequired:result.rows.filter(r=>r.treatment==="REVIEW_REQUIRED").length
+      };
+    });
+  }
+
+  async classifications(
+    context:TenantContext,
+    legalEntityId:string,
+    from?:string,
+    to?:string
+  ){
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           x.id,x.payment_id,p.business_number,p.posted_at,p.direction,p.kind,
+           p.amount_minor::text,p.currency,c.name AS category_name,
+           x.treatment,x.source,x.confidence,x.reason,x.rule_code
+         FROM accounting_tax_payment_classification x
+         JOIN payment p
+           ON p.tenant_id=x.tenant_id AND p.id=x.payment_id
+         LEFT JOIN cash_flow_category c
+           ON c.tenant_id=p.tenant_id AND c.id=p.category_id
+         WHERE x.tenant_id=$1 AND x.legal_entity_id=$2
+           AND ($3::date IS NULL OR p.posted_at>=$3::date)
+           AND ($4::date IS NULL OR p.posted_at<$4::date+interval '1 day')
+         ORDER BY p.posted_at DESC LIMIT 1000`,
+        [context.tenantId,legalEntityId,from??null,to??null]
+      );
+      return result.rows;
+    });
+  }
+
+  async classifyPayment(context:TenantContext,input:any){
+    const allowed=[
+      "TAXABLE_INCOME","DEDUCTIBLE_EXPENSE","NON_DEDUCTIBLE_EXPENSE",
+      "EXCLUDED","REVIEW_REQUIRED"
+    ];
+    if(!allowed.includes(input.treatment))
+      throw new BadRequestException("Некорректная налоговая классификация");
+    return this.database.withTenantTransaction(context,async client=>{
+      const p=await client.query(
+        "SELECT 1 FROM payment WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,input.paymentId]
+      );
+      if(!p.rowCount) throw new NotFoundException("Платёж не найден");
+      const result=await client.query(
+        `INSERT INTO accounting_tax_payment_classification(
+           tenant_id,legal_entity_id,payment_id,treatment,source,confidence,
+           reason,rule_code,classified_by_membership_id
+         ) VALUES($1,$2,$3,$4,'MANUAL',100,$5,'MANUAL',$6)
+         ON CONFLICT(tenant_id,legal_entity_id,payment_id)
+         DO UPDATE SET treatment=EXCLUDED.treatment,source='MANUAL',
+           confidence=100,reason=EXCLUDED.reason,rule_code='MANUAL',
+           classified_by_membership_id=EXCLUDED.classified_by_membership_id,
+           classified_at=now(),updated_at=now()
+         RETURNING *`,
+        [context.tenantId,input.legalEntityId,input.paymentId,input.treatment,
+         input.reason?.trim()||null,context.membershipId]
+      );
+      return result.rows[0];
+    });
+  }
+
+  async calculateUsn(context:TenantContext,input:any){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(input.dateFrom)||
+       !/^\d{4}-\d{2}-\d{2}$/.test(input.dateTo)||
+       input.dateFrom>input.dateTo||!input.periodKey?.trim()){
+      throw new BadRequestException("Некорректный налоговый период");
+    }
+    const advances=String(input.advancesMinor??"0");
+    if(!/^\d+$/.test(advances)) throw new BadRequestException("Некорректные авансы");
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const p=await client.query<any>(
+        `SELECT * FROM accounting_tax_profile
+         WHERE tenant_id=$1 AND legal_entity_id=$2 AND status='ACTIVE'
+           AND effective_from<=$3::date
+           AND (effective_to IS NULL OR effective_to>=$4::date)
+         ORDER BY effective_from DESC LIMIT 1`,
+        [context.tenantId,input.legalEntityId,input.dateTo,input.dateFrom]
+      );
+      const profile=p.rows[0];
+      if(!profile) throw new ConflictException("Налоговый профиль не настроен");
+      if(!["USN_INCOME","USN_INCOME_EXPENSE"].includes(profile.tax_regime))
+        throw new ConflictException("Для этого режима расчёт УСН недоступен");
+
+      const totals=await client.query<any>(
+        `SELECT
+           coalesce(sum(p.amount_minor) FILTER(
+             WHERE x.treatment='TAXABLE_INCOME' AND p.status='POSTED'
+           ),0)::text AS income_minor,
+           coalesce(sum(p.amount_minor) FILTER(
+             WHERE x.treatment='DEDUCTIBLE_EXPENSE' AND p.status='POSTED'
+           ),0)::text AS expense_minor,
+           count(*) FILTER(
+             WHERE x.treatment='REVIEW_REQUIRED' AND p.status='POSTED'
+           )::integer AS review_count
+         FROM accounting_tax_payment_classification x
+         JOIN payment p ON p.tenant_id=x.tenant_id AND p.id=x.payment_id
+         WHERE x.tenant_id=$1 AND x.legal_entity_id=$2
+           AND p.posted_at>=$3::date
+           AND p.posted_at<$4::date+interval '1 day'`,
+        [context.tenantId,input.legalEntityId,input.dateFrom,input.dateTo]
+      );
+      const income=BigInt(totals.rows[0]?.income_minor??"0");
+      const expense=BigInt(totals.rows[0]?.expense_minor??"0");
+      const review=Number(totals.rows[0]?.review_count??0);
+      const base=profile.tax_regime==="USN_INCOME"
+        ?income:(income>expense?income-expense:0n);
+      const rate=BigInt(profile.usn_rate_bps??(
+        profile.tax_regime==="USN_INCOME"?600:1500
+      ));
+      const regular=(base*rate+9999n)/10000n;
+      const annual=input.dateFrom.endsWith("-01-01")&&input.dateTo.endsWith("-12-31");
+      const minimum=profile.tax_regime==="USN_INCOME_EXPENSE"&&annual
+        ?(income*BigInt(profile.usn_min_tax_bps??100)+9999n)/10000n:0n;
+      const calculated=regular>minimum?regular:minimum;
+      const advance=BigInt(advances);
+      const due=calculated>advance?calculated-advance:0n;
+
+      await client.query(
+        `UPDATE accounting_tax_calculation
+         SET status='SUPERSEDED',updated_at=now()
+         WHERE tenant_id=$1 AND legal_entity_id=$2 AND tax_code='USN'
+           AND period_key=$3 AND status IN ('DRAFT','REVIEW_REQUIRED')`,
+        [context.tenantId,input.legalEntityId,input.periodKey]
+      );
+      const result=await client.query(
+        `INSERT INTO accounting_tax_calculation(
+           tenant_id,legal_entity_id,tax_profile_id,tax_code,period_key,
+           date_from,date_to,taxable_income_minor,deductible_expense_minor,
+           taxable_base_minor,calculated_tax_minor,advances_minor,tax_due_minor,
+           calculation_method,rule_snapshot,source_snapshot,status
+         ) VALUES(
+           $1,$2,$3,'USN',$4,$5,$6,$7,$8,$9,$10,$11,$12,
+           'PAYMENT_CASH_BASIS_CLASSIFIED',$13,$14,$15
+         ) RETURNING *`,
+        [context.tenantId,input.legalEntityId,profile.id,input.periodKey,
+         input.dateFrom,input.dateTo,income.toString(),expense.toString(),
+         base.toString(),calculated.toString(),advance.toString(),due.toString(),
+         JSON.stringify({taxRegime:profile.tax_regime,rateBps:Number(rate),
+           minimumTaxApplied:minimum>regular}),
+         JSON.stringify({reviewRequiredPayments:review}),
+         review>0?"REVIEW_REQUIRED":"DRAFT"]
+      );
+      return result.rows[0];
+    });
+  }
+
+  async confirmCalculation(context:TenantContext,id:string){
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `UPDATE accounting_tax_calculation
+         SET status='CONFIRMED',confirmed_by_membership_id=$3,
+             confirmed_at=now(),updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+           AND status IN ('DRAFT','REVIEW_REQUIRED')
+         RETURNING *`,
+        [context.tenantId,id,context.membershipId]
+      );
+      if(!result.rows[0]) throw new ConflictException("Расчёт уже подтверждён");
+      return result.rows[0];
+    });
+  }
+
+  async recordEns(context:TenantContext,input:any){
+    for(const value of [
+      String(input.balanceMinor??"0"),
+      String(input.upcomingMinor??"0"),
+      String(input.overdueMinor??"0")
+    ]){
+      if(!/^-?\d+$/.test(value)) throw new BadRequestException("Некорректная сумма ЕНС");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `INSERT INTO accounting_ens_snapshot(
+           tenant_id,legal_entity_id,balance_minor,upcoming_minor,overdue_minor,
+           source,external_reference,details,created_by_membership_id
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        [context.tenantId,input.legalEntityId,String(input.balanceMinor??"0"),
+         String(input.upcomingMinor??"0"),String(input.overdueMinor??"0"),
+         input.source??"MANUAL",input.externalReference??null,
+         JSON.stringify(input.details??{}),context.membershipId]
+      );
+      return result.rows[0];
+    });
+  }
+
 }
