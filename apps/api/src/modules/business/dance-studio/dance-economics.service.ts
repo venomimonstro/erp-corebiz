@@ -434,6 +434,8 @@ export class DanceEconomicsService {
     input:{
       roomResourceId:string;
       counterpartyPartyId?:string;
+      zoneId?:string;
+      capacityUnits?:number;
       pricingType:"HOURLY"|"FIXED_MONTHLY"|"FIXED_SLOT";
       hourlyRateMinor?:string;
       monthlyMinor?:string;
@@ -465,15 +467,34 @@ export class DanceEconomicsService {
       throw new BadRequestException("Некорректные условия аренды");
     }
     const from=input.validFrom??new Date().toISOString().slice(0,10);
+    const capacityUnits=Math.floor(input.capacityUnits??1);
+    if(capacityUnits<1||capacityUnits>100000){
+      throw new BadRequestException("Некорректная доля арендуемого зала");
+    }
 
     return this.database.withTenantTransaction(context,async client=>{
-      const room=await client.query(
-        `SELECT 1 FROM service_resource
+      const room=await client.query<{capacity:number}>(
+        `SELECT capacity FROM service_resource
          WHERE tenant_id=$1 AND id=$2 AND type IN ('ROOM','HALL','WORKPLACE')
-           AND status='ACTIVE'`,
+           AND status='ACTIVE'
+         FOR UPDATE`,
         [context.tenantId,input.roomResourceId]
       );
-      if(!room.rowCount) throw new NotFoundException("Зал не найден");
+      if(!room.rows[0]) throw new NotFoundException("Зал не найден");
+      if(input.zoneId){
+        const zone=await client.query<{capacity_units:number}>(
+          `SELECT capacity_units
+           FROM service_resource_zone
+           WHERE tenant_id=$1 AND id=$2 AND resource_id=$3 AND status='ACTIVE'`,
+          [context.tenantId,input.zoneId,input.roomResourceId]
+        );
+        if(!zone.rows[0]) throw new NotFoundException("Зона зала не найдена");
+        if(capacityUnits>zone.rows[0].capacity_units){
+          throw new BadRequestException("Доля аренды превышает вместимость зоны");
+        }
+      }else if(capacityUnits>room.rows[0].capacity){
+        throw new BadRequestException("Доля аренды превышает вместимость зала");
+      }
       if(input.counterpartyPartyId){
         const party=await client.query(
           "SELECT 1 FROM party WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
@@ -483,14 +504,16 @@ export class DanceEconomicsService {
       }
       const row=await client.query(
         `INSERT INTO room_rental_contract(
-           tenant_id,room_resource_id,counterparty_party_id,pricing_type,
-           hourly_rate_minor,monthly_minor,slot_minor,minimum_billable_minutes,
-           cancellation_charge_bps,payment_term_days,valid_from,valid_to,metadata
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+           tenant_id,room_resource_id,counterparty_party_id,zone_id,
+           capacity_units,pricing_type,hourly_rate_minor,monthly_minor,
+           slot_minor,minimum_billable_minutes,cancellation_charge_bps,
+           payment_term_days,valid_from,valid_to,metadata
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          RETURNING id,status`,
         [
           context.tenantId,input.roomResourceId,input.counterpartyPartyId??null,
-          input.pricingType,input.hourlyRateMinor??"0",input.monthlyMinor??"0",
+          input.zoneId??null,capacityUnits,input.pricingType,
+          input.hourlyRateMinor??"0",input.monthlyMinor??"0",
           input.slotMinor??"0",minimum,cancelBps,paymentTermDays,
           from,input.validTo??null,JSON.stringify(input.metadata??{})
         ]
