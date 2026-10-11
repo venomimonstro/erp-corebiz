@@ -582,7 +582,8 @@ export class ComplianceService {
                calculation_snapshot=$5,updated_at=now()
            WHERE tenant_id=$1 AND id=$2 AND legal_entity_id=$3
              AND workflow_status IN ('PLANNED','READY')
-           RETURNING id`,
+           RETURNING
+             id,obligation_type,due_at,currency,payment_obligation_id`,
           [
             context.tenantId,input.obligationId,row.legal_entity_id,
             row.tax_due_minor,
@@ -595,9 +596,49 @@ export class ComplianceService {
             })
           ]
         );
-        if(!obligation.rowCount) {
+        const linked=obligation.rows[0];
+        if(!linked) {
           throw new ConflictException(
             "Не удалось связать расчёт с налоговым обязательством"
+          );
+        }
+
+        if(linked.obligation_type==="PAY"){
+          const payable=await client.query<{id:string}>(
+            `INSERT INTO financial_obligation(
+               tenant_id,direction,party_id,source_type,source_id,
+               currency,amount_minor,due_at,status
+             ) VALUES(
+               $1,'PAYABLE',NULL,'ACCOUNTING_COMPLIANCE',$2,$3,$4,$5,'OPEN'
+             )
+             ON CONFLICT(tenant_id,direction,source_type,source_id)
+             DO UPDATE SET
+               currency=EXCLUDED.currency,
+               amount_minor=EXCLUDED.amount_minor,
+               due_at=EXCLUDED.due_at,
+               status=CASE
+                 WHEN financial_obligation.settled_minor>=EXCLUDED.amount_minor
+                   THEN 'SETTLED'
+                 WHEN financial_obligation.settled_minor>0
+                   THEN 'PARTIALLY_SETTLED'
+                 ELSE 'OPEN'
+               END,
+               updated_at=now()
+             RETURNING id`,
+            [
+              context.tenantId,linked.id,linked.currency,
+              row.tax_due_minor,linked.due_at
+            ]
+          );
+          const paymentObligationId=payable.rows[0]?.id;
+          if(!paymentObligationId){
+            throw new Error("ACCOUNTING_TAX_PAYABLE_CREATE_FAILED");
+          }
+          await client.query(
+            `UPDATE accounting_compliance_obligation
+             SET payment_obligation_id=$3,updated_at=now()
+             WHERE tenant_id=$1 AND id=$2`,
+            [context.tenantId,linked.id,paymentObligationId]
           );
         }
       }
@@ -1245,6 +1286,136 @@ export class ComplianceService {
         client,context,obligationId,"APPROVED","READY","APPROVED",{}
       );
       return updated.rows[0];
+    });
+  }
+
+  async payTaxObligation(
+    context:TenantContext,
+    obligationId:string,
+    input:{cashAccountId:string;note?:string}
+  ){
+    if(!input.cashAccountId){
+      throw new BadRequestException("Выберите расчётный счёт для оплаты");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const current=await client.query<any>(
+        `SELECT
+           o.id,o.legal_entity_id,o.title,o.workflow_status,
+           o.obligation_type,o.amount_minor,o.currency,o.payment_obligation_id,
+           fo.amount_minor AS payable_amount_minor,
+           fo.settled_minor AS payable_settled_minor,
+           fo.status AS payable_status
+         FROM accounting_compliance_obligation o
+         LEFT JOIN financial_obligation fo
+           ON fo.tenant_id=o.tenant_id AND fo.id=o.payment_obligation_id
+         WHERE o.tenant_id=$1 AND o.id=$2
+         FOR UPDATE OF o,fo`,
+        [context.tenantId,obligationId]
+      );
+      const row=current.rows[0];
+      if(!row) throw new NotFoundException("Налоговое обязательство не найдено");
+      if(row.obligation_type!=="PAY"){
+        throw new BadRequestException("Эта задача не является налоговым платежом");
+      }
+      if(row.workflow_status!=="APPROVED"){
+        throw new ConflictException(
+          "Оплата доступна только после проверки и утверждения налоговой задачи"
+        );
+      }
+      if(!row.payment_obligation_id||row.payable_amount_minor===null){
+        throw new ConflictException(
+          "Сначала подтвердите расчёт налога и сформируйте обязательство к оплате"
+        );
+      }
+      if(row.payable_status==="SETTLED"){
+        return {paid:true,alreadyPaid:true};
+      }
+
+      const account=await client.query(
+        `SELECT 1
+         FROM cash_account
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+           AND legal_entity_id=$3`,
+        [context.tenantId,input.cashAccountId,row.legal_entity_id]
+      );
+      if(!account.rowCount){
+        throw new NotFoundException(
+          "Расчётный счёт не найден или относится к другому юридическому лицу"
+        );
+      }
+
+      const remaining=
+        BigInt(row.payable_amount_minor)-BigInt(row.payable_settled_minor??0);
+      if(remaining<=0n){
+        throw new ConflictException("Налоговое обязательство уже погашено");
+      }
+
+      const counter=await client.query<{value:string}>(
+        `INSERT INTO tenant_counter(tenant_id,counter_key,value)
+         VALUES($1,'payment',1)
+         ON CONFLICT(tenant_id,counter_key)
+         DO UPDATE SET value=tenant_counter.value+1,updated_at=now()
+         RETURNING value::text`,
+        [context.tenantId]
+      );
+      const number=
+        "PAY-"+new Date().getUTCFullYear()+"-"+
+        BigInt(counter.rows[0]?.value??"0").toString().padStart(6,"0");
+
+      const payment=await client.query<{id:string}>(
+        `INSERT INTO payment(
+           tenant_id,business_number,cash_account_id,party_id,obligation_id,
+           direction,kind,amount_minor,currency,status,source_type,source_id,
+           idempotency_key,note,posted_by_membership_id
+         ) VALUES(
+           $1,$2,$3,NULL,$4,'OUT','PAYMENT',$5,$6,'POSTED',
+           'ACCOUNTING_COMPLIANCE',$7,$8,$9,$10
+         )
+         ON CONFLICT(tenant_id,idempotency_key)
+         DO UPDATE SET idempotency_key=EXCLUDED.idempotency_key
+         RETURNING id`,
+        [
+          context.tenantId,number,input.cashAccountId,row.payment_obligation_id,
+          remaining.toString(),row.currency,obligationId,
+          "tax-payment:"+obligationId,
+          input.note?.trim()||("Уплата: "+row.title),
+          context.membershipId
+        ]
+      );
+      const paymentId=payment.rows[0]?.id;
+      if(!paymentId) throw new Error("ACCOUNTING_TAX_PAYMENT_CREATE_FAILED");
+
+      await client.query(
+        `UPDATE financial_obligation
+         SET settled_minor=amount_minor,status='SETTLED',updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,row.payment_obligation_id]
+      );
+      await client.query(
+        `UPDATE accounting_compliance_obligation
+         SET workflow_status='PAID',completed_at=now(),updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,obligationId]
+      );
+      await client.query(
+        `INSERT INTO accounting_compliance_receipt(
+           tenant_id,obligation_id,provider,external_reference,
+           receipt_type,payload
+         ) VALUES($1,$2,'COREBIZ_PAYMENT',$3,'PAYMENT',$4)
+         ON CONFLICT DO NOTHING`,
+        [
+          context.tenantId,obligationId,paymentId,
+          JSON.stringify({
+            paymentId,cashAccountId:input.cashAccountId,
+            amountMinor:remaining.toString()
+          })
+        ]
+      );
+      await this.event(
+        client,context,obligationId,"TAX_PAID","APPROVED","PAID",
+        {paymentId,amountMinor:remaining.toString(),cashAccountId:input.cashAccountId}
+      );
+      return {paid:true,alreadyPaid:false,paymentId,amountMinor:remaining.toString()};
     });
   }
 
