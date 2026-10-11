@@ -771,7 +771,8 @@ export class ComplianceService {
            validation_status=EXCLUDED.validation_status,
            validation_errors=EXCLUDED.validation_errors,
            signature_status='SIGNATURE_REQUIRED',signed_at=NULL,
-           signed_by_membership_id=NULL,updated_at=now()
+           signed_by_membership_id=NULL,signature_reference=NULL,
+           certificate_fingerprint_snapshot=NULL,updated_at=now()
          RETURNING *`,
         [
           context.tenantId,obligation.legal_entity_id,obligation.id,
@@ -1027,16 +1028,20 @@ export class ComplianceService {
          SET signature_status='SIGNED',
              signed_at=now(),
              signed_by_membership_id=$4,
+             signature_reference=$6,
+             certificate_fingerprint_snapshot=$7,
              payload=payload || jsonb_build_object(
                'signatureProvider',$5,
-               'signatureReference',$6
+               'signatureReference',$6,
+               'certificateFingerprint',$7
              ),
              updated_at=now()
          WHERE tenant_id=$1 AND id=$2 AND obligation_id=$3
          RETURNING *`,
         [
           context.tenantId,row.packet_id,obligationId,context.membershipId,
-          input.provider.trim(),input.providerReference.trim()
+          input.provider.trim(),input.providerReference.trim(),
+          input.certificateFingerprint.trim()
         ]
       );
       if(!packet.rows[0]) throw new NotFoundException("Пакет не найден");
