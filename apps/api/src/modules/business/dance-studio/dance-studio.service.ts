@@ -36,8 +36,12 @@ export class DanceStudioService {
       this.authorization.resolveScope(context,"finance.write"),
       this.authorization.resolveScope(context,"dance.write")
     ]);
-    return {canViewFinance:Boolean(financeRead),canManageFinance:Boolean(financeWrite),
-      canManageDance:Boolean(danceWrite)};
+    return {
+      canViewFinance:Boolean(financeRead),
+      canManageFinance:financeWrite==="all",
+      canManageDance:Boolean(danceWrite),
+      canAdministerDance:danceWrite==="all"
+    };
   }
 
 
