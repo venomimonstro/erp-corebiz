@@ -46,6 +46,13 @@ type Dashboard={
   };
 };
 type Action={id:string;title:string;description:string;count:number;href:string;kind:"urgent"|"attention"};
+type OperationsHealth={
+  status:"HEALTHY"|"REVIEW"|"ACTION_REQUIRED";checkedAt:string;totalIssues:number;
+  risks:Array<{
+    code:string;label:string;count:number;severity:"critical"|"warning";
+    href:string;explanation:string
+  }>;
+};
 
 const rub=(minor:string)=>new Intl.NumberFormat("ru-RU",{
   style:"currency",currency:"RUB",maximumFractionDigits:0
@@ -67,12 +74,21 @@ export default function DanceDashboardPage(){
   const [loading,setLoading]=useState(true);
   const [refreshing,setRefreshing]=useState(false);
   const [error,setError]=useState("");
+  const [health,setHealth]=useState<OperationsHealth|null>(null);
+  const [healthError,setHealthError]=useState(false);
   const [showAllActions,setShowAllActions]=useState(false);
   const load=useCallback(async()=>{
     setRefreshing(true);
     try{
       const response=await apiRequest<Dashboard>("/dance/dashboard");
       setData(response);setError("");
+      try{
+        setHealth(await apiRequest<OperationsHealth>("/dance/operations/health"));
+        setHealthError(false);
+      }catch{
+        setHealth(null);
+        setHealthError(true);
+      }
     }catch(e){
       setError(e instanceof Error?e.message:"Не удалось загрузить данные студии");
     }finally{setLoading(false);setRefreshing(false);}
@@ -261,6 +277,35 @@ export default function DanceDashboardPage(){
           <a href="/app/dance/groups"><span>Группы и уроки</span><small>Запись, посещения, переносы</small><b aria-hidden="true">↗</b></a>
           <a href="/app/dance/team"><span>Тренеры и зарплата</span><small>Смены, ставки, начисления</small><b aria-hidden="true">↗</b></a>
         </section>
+
+        {health?.totalIssues? <details className="dance-owner-details">
+          <summary>
+            <span><strong>Проверка целостности процессов · {health.totalIssues}</strong>
+              <small>Незакрытые ошибки между записью, абонементами, оплатой и зарплатой</small></span>
+            <span aria-hidden="true">⌄</span>
+          </summary>
+          <div className="dance-owner-details-content">
+            <div className="dance-owner-action-list">
+              {health.risks.map(risk=><a className="dance-owner-action" href={risk.href}
+                key={risk.code}>
+                <span className={"dance-owner-action-num "+(risk.severity==="critical"?"is-urgent":"")}>
+                  {risk.count}
+                </span>
+                <span className="dance-owner-action-copy">
+                  <strong>{risk.label}</strong><small>{risk.explanation}</small>
+                </span>
+                <span className="dance-owner-action-arrow" aria-hidden="true">→</span>
+              </a>)}
+            </div>
+            <p className="dance-owner-note">
+              Диагностика не меняет финансовые данные автоматически: каждую проблему
+              необходимо проверить перед исправлением.
+            </p>
+          </div>
+        </details>:null}
+        {healthError?<p className="dance-owner-note" role="status">
+          Дополнительная проверка процессов недоступна. Основное расписание продолжает работать.
+        </p>:null}
 
         {data.canViewFinancials&&month?<details className="dance-owner-details">
           <summary><span><strong>Финансы и аналитика</strong><small>Выручка, зарплата, направления и рентабельность</small></span>
