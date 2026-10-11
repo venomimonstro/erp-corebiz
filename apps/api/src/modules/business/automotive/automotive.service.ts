@@ -1,21 +1,35 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
+  Optional,
   NotFoundException
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { InventoryService } from "../inventory/inventory.service";
+import {AuthorizationService} from "../../platform/authorization/authorization.service";
 
 @Injectable()
 export class AutomotiveService {
   constructor(
     private readonly database:DatabaseService,
-    private readonly inventory:InventoryService
+    private readonly inventory:InventoryService,
+    @Optional() private readonly authorization?:AuthorizationService
   ) {}
 
+  private async canViewFinance(context:TenantContext):Promise<boolean>{
+    return Boolean(await this.authorization?.resolveScope(context,"finance.read"));
+  }
+
+  private async requireCostChange(context:TenantContext):Promise<void>{
+    if(!await this.authorization?.resolveScope(context,"finance.write"))
+      throw new ForbiddenException("Изменение себестоимости требует финансовых прав");
+  }
+
   async dashboard(context:TenantContext) {
+    const finance=await this.canViewFinance(context);
     return this.database.withTenantTransaction(context,async client=>{
       const [orders,donors,parts]=await Promise.all([
         client.query(
@@ -44,10 +58,13 @@ export class AutomotiveService {
           [context.tenantId]
         )
       ]);
+      const order=orders.rows[0]??{};
+      const donor=donors.rows[0]??{};
+      const part=parts.rows[0]??{};
       return {
-        orders:orders.rows[0]??{},
-        donors:donors.rows[0]??{},
-        parts:parts.rows[0]??{}
+        orders:finance?order:{...order,delivered_revenue_minor:null},
+        donors:finance?donor:{...donor,invested_minor:null},
+        parts:finance?part:{...part,stock_cost_minor:null,stock_asking_minor:null}
       };
     });
   }
@@ -122,6 +139,7 @@ export class AutomotiveService {
   }
 
   async workOrders(context:TenantContext) {
+    const finance=await this.canViewFinance(context);
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
@@ -142,7 +160,9 @@ export class AutomotiveService {
          LIMIT 500`,
         [context.tenantId]
       );
-      return result.rows;
+      return finance?result.rows:result.rows.map(row=>({
+        ...row,estimated_total_minor:null,actual_total_minor:null
+      }));
     });
   }
 
@@ -188,8 +208,16 @@ export class AutomotiveService {
     }
     const description=String(input.description??"").trim();
     if(!description) throw new BadRequestException("Укажите работу или деталь");
-    const quantity=BigInt(String(input.quantityMilli??"1000"));
-    if(quantity<=0n) throw new BadRequestException("Количество должно быть больше нуля");
+    const rawQuantity=String(input.quantityMilli??"1000");
+    if(!/^\d{1,15}$/.test(rawQuantity)||BigInt(rawQuantity)===0n)
+      throw new BadRequestException("Количество должно быть положительным целым числом в тысячных");
+    const quantity=BigInt(rawQuantity);
+    for(const key of ["unitPriceMinor","unitCostMinor"]){
+      const value=input[key]??0;
+      if(!/^\d{1,15}$/.test(String(value)))
+        throw new BadRequestException("Некорректная стоимость в копейках: "+key);
+    }
+    if(input.unitCostMinor!==undefined)await this.requireCostChange(context);
     return this.database.withTenantTransaction(context,async client=>{
       const order=await client.query(
         `SELECT 1 FROM automotive_work_order
@@ -217,6 +245,7 @@ export class AutomotiveService {
   }
 
   async workOrder(context:TenantContext,workOrderId:string) {
+    const finance=await this.canViewFinance(context);
     return this.database.withTenantTransaction(context,async client=>{
       const order=await client.query(
         `SELECT
@@ -248,7 +277,9 @@ export class AutomotiveService {
       );
       const row=order.rows[0];
       if(!row) throw new NotFoundException("Заказ-наряд не найден");
-      return row;
+      if(finance)return row;
+      return {...row,estimated_total_minor:null,actual_total_minor:null,
+        lines:Array.isArray(row.lines)?row.lines.map((line:any)=>({...line,unitCostMinor:null})):[]};
     });
   }
 
@@ -411,6 +442,12 @@ export class AutomotiveService {
     lineId:string,
     input:{approved?:boolean;completed?:boolean;unitPriceMinor?:number;unitCostMinor?:number}
   ) {
+    for(const key of ["unitPriceMinor","unitCostMinor"] as const){
+      const value=input[key];
+      if(value!==undefined&&(!Number.isSafeInteger(value)||value<0))
+        throw new BadRequestException("Некорректная цена или себестоимость");
+    }
+    if(input.unitCostMinor!==undefined)await this.requireCostChange(context);
     return this.database.withTenantTransaction(context,async client=>{
       const line=await client.query<any>(
         `SELECT l.*,o.status AS order_status
@@ -455,6 +492,7 @@ export class AutomotiveService {
   }
 
   async donors(context:TenantContext) {
+    const finance=await this.canViewFinance(context);
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
@@ -472,7 +510,7 @@ export class AutomotiveService {
          LIMIT 500`,
         [context.tenantId]
       );
-      return result.rows;
+      return finance?result.rows:result.rows.map(row=>({...row,purchase_price_minor:null,dismantling_cost_minor:null,allocated_cost_minor:null}));
     });
   }
 
@@ -502,6 +540,7 @@ export class AutomotiveService {
   }
 
   async parts(context:TenantContext,search?:string) {
+    const finance=await this.canViewFinance(context);
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
@@ -526,7 +565,7 @@ export class AutomotiveService {
          LIMIT 1000`,
         [context.tenantId,search?.trim()||null]
       );
-      return result.rows;
+      return finance?result.rows:result.rows.map(row=>({...row,allocated_cost_minor:null}));
     });
   }
 
