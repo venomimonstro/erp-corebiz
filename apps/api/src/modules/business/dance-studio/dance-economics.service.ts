@@ -807,6 +807,9 @@ export class DanceEconomicsService {
         }
       }
 
+      const material=await this.consumeLessonMaterials(
+        client,context,lesson.host_booking_id
+      );
       const revenue=await this.lessonRevenueBases(
         client,context.tenantId,lesson,earnedRevenue,attendedCount
       );
@@ -816,7 +819,8 @@ export class DanceEconomicsService {
       const room=await this.calculateRoomCost(
         client,context.tenantId,lesson,false
       );
-      const margin=earnedRevenue-trainer.amount-room.amount;
+      const margin=
+        earnedRevenue-trainer.amount-room.amount-material.amount;
 
       const snapshot=await client.query(
         `INSERT INTO dance_lesson_profitability(
@@ -824,16 +828,18 @@ export class DanceEconomicsService {
            earned_revenue_minor,trainer_cost_minor,room_cost_minor,
            other_cost_minor,contribution_margin_minor,currency,
            calculation_snapshot
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,0,$8,$9,$10)
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT(tenant_id,lesson_id) DO NOTHING
          RETURNING *`,
         [
           context.tenantId,lessonId,bookedCount,attendedCount,
           earnedRevenue.toString(),trainer.amount.toString(),
-          room.amount.toString(),margin.toString(),lesson.currency,
+          room.amount.toString(),material.amount.toString(),
+          margin.toString(),lesson.currency,
           JSON.stringify({
             trainer:trainer.snapshot,
             room:room.snapshot,
+            materials:material.snapshot,
             revenue
           })
         ]
@@ -874,6 +880,7 @@ export class DanceEconomicsService {
         earnedRevenueMinor:earnedRevenue.toString(),
         trainerCostMinor:trainer.amount.toString(),
         roomCostMinor:room.amount.toString(),
+        materialCostMinor:material.amount.toString(),
         marginMinor:margin.toString()
       });
       return snapshot.rows[0]??{
@@ -882,6 +889,7 @@ export class DanceEconomicsService {
         earned_revenue_minor:earnedRevenue.toString(),
         trainer_cost_minor:trainer.amount.toString(),
         room_cost_minor:room.amount.toString(),
+        other_cost_minor:material.amount.toString(),
         contribution_margin_minor:margin.toString()
       };
     });
@@ -1331,6 +1339,81 @@ export class DanceEconomicsService {
         ]
       );
     }
+  }
+
+  private async consumeLessonMaterials(
+    client:PoolClient,
+    context:TenantContext,
+    bookingId:string
+  ):Promise<{amount:bigint;snapshot:Record<string,unknown>}>{
+    const lines=await client.query<{
+      id:string;
+      warehouse_id:string;
+      sku_id:string;
+      planned_quantity_milli:string;
+      consumed_quantity_milli:string;
+      unit_cost_minor_snapshot:string;
+    }>(
+      `SELECT
+         id,warehouse_id,sku_id,planned_quantity_milli::text,
+         consumed_quantity_milli::text,unit_cost_minor_snapshot::text
+       FROM service_booking_material
+       WHERE tenant_id=$1 AND booking_id=$2
+       ORDER BY id
+       FOR UPDATE`,
+      [context.tenantId,bookingId]
+    );
+
+    const snapshot:Array<Record<string,unknown>>=[];
+    for(const line of lines.rows){
+      let consumed=BigInt(line.consumed_quantity_milli);
+      const planned=BigInt(line.planned_quantity_milli);
+      const remaining=planned-consumed;
+      if(remaining>0n){
+        const movement=await this.inventory.consumeForService(
+          client,context,{
+            bookingId,
+            warehouseId:line.warehouse_id,
+            materialLineId:line.id,
+            skuId:line.sku_id,
+            quantityMilli:remaining,
+            idempotencyKey:"dance-complete"
+          }
+        );
+        if(movement.applied){
+          const updated=await client.query<{consumed_quantity_milli:string}>(
+            `UPDATE service_booking_material
+             SET consumed_quantity_milli=consumed_quantity_milli+$3::bigint,
+                 updated_at=now()
+             WHERE tenant_id=$1 AND id=$2
+             RETURNING consumed_quantity_milli::text`,
+            [context.tenantId,line.id,remaining.toString()]
+          );
+          consumed=BigInt(
+            updated.rows[0]?.consumed_quantity_milli??consumed.toString()
+          );
+        }
+      }
+      snapshot.push({
+        materialLineId:line.id,
+        skuId:line.sku_id,
+        consumedQuantityMilli:consumed.toString(),
+        unitCostMinor:line.unit_cost_minor_snapshot
+      });
+    }
+
+    const cost=await client.query<{amount:string}>(
+      `SELECT coalesce(sum(
+         (unit_cost_minor_snapshot*consumed_quantity_milli+500)/1000
+       ),0)::text AS amount
+       FROM service_booking_material
+       WHERE tenant_id=$1 AND booking_id=$2`,
+      [context.tenantId,bookingId]
+    );
+    return {
+      amount:BigInt(cost.rows[0]?.amount??"0"),
+      snapshot:{lines:snapshot}
+    };
   }
 
   private async calculateTrainerCost(
