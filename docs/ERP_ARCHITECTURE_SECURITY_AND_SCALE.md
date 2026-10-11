@@ -132,3 +132,29 @@
 Не подтверждено в этой сессии: выполнение реального PostgreSQL/Redis/worker на production, запуск всех Jest/TypeScript проверок, результаты независимого пен-теста, реальные API-интеграции провайдеров, восстановление бэкапов и фактическая способность нынешнего сервера обслужить описанные SLO.
 
 **Согласование:** изменения бизнес-правил/БД проходят миграции с сохранением checksum, релизы — через staging / backup и ручной gate; без CI Actions согласно принятому проектному процессу.
+
+
+## 8. Безопасный перевод ключей маркетплейсов на отдельное шифрование
+
+Формат учётных данных версионирован. `v1` использует прежний производный от `SESSION_SECRET` ключ; `v2` — новый секрет из `CHANNEL_ENCRYPTION_KEY` с domain separation `|corebiz-channels-v2`. Используется AES-256-GCM с новым случайным IV для каждой записи. Бэкэнд и два worker-клиента понимают `v1` и `v2`.
+
+**Порядок rollout:** (1) сохранить защищённый backup, (2) сгенерировать независимый непредсказуемый ключ минимум 32 байта и разместить в secrets manager, (3) выставить одинаковый `CHANNEL_ENCRYPTION_KEY` на **всех** репликах API и workers, (4) обновить API и workers согласованно, (5) проверить чтение старых и создание новых подключений, (6) переносить старые `v1` записи в `v2` только отдельно, с пообъектной проверкой и аудитом, (7) **не удалять прежний SESSION_SECRET**, пока остаётся хотя бы одна `v1` запись. Простое изменение `SESSION_SECRET` не выполняет миграцию ключей и сделает legacy данные нечитаемыми.
+
+Если `CHANNEL_ENCRYPTION_KEY` не задан, система сохраняет старый формат записи `v1` ради обратной совместимости. Не считать это завершённой ротацией. Отсутствующий ключ при чтении `v2` даёт отказ, а не переход на слабый алгоритм. Ротация `v2` на новый `v3` требует отдельной процедуры re-encryption. Секреты не выводить в логи, проверки и отчёты.
+
+### Manual staging commands (no CI Actions)
+
+```bash
+# Check compile and regression tests before production deployment
+pnpm --filter @corebiz/api typecheck
+pnpm --filter @corebiz/api test --runInBand
+pnpm --filter @corebiz/worker typecheck
+# Run only on disposable PostgreSQL containing >= 1 million active SKU for the tenant
+COREBIZ_CONFIRM_DISPOSABLE_DB=YES \
+COREBIZ_BENCHMARK_DATABASE_URL='<isolated test db url>' \
+COREBIZ_BENCHMARK_TENANT_ID='<test tenant uuid>' \
+node apps/api/scripts/catalog-million-sku-readonly-gate.mjs
+# Unique 1,000-user session test: see scripts/load-1000-sessions.mjs
+```
+
+Ни один из этих прогонов здесь не был запущен на пользовательском production-сервере.
