@@ -46,7 +46,7 @@ export class DanceOperationsService {
            ) stats ON true
            LEFT JOIN dance_lesson_profitability prof
              ON prof.tenant_id=l.tenant_id AND prof.lesson_id=l.id
-           WHERE l.tenant_id=$1
+           WHERE l.tenant_id=$1 AND l.starts_at>=now()-interval '180 days'
              AND ($2::uuid[] IS NULL OR tr.membership_id=ANY($2::uuid[])
                OR (l.trainer_resource_id IS NULL AND
                  l.created_by_membership_id=ANY($2::uuid[])))`,
@@ -70,6 +70,7 @@ export class DanceOperationsService {
           LEFT JOIN service_resource tr ON tr.tenant_id=l.tenant_id
             AND tr.id=l.trainer_resource_id
           WHERE r.tenant_id=$1 AND r.state='RESERVED'
+            AND l.starts_at>=now()-interval '180 days'
             AND ($2::uuid[] IS NULL OR tr.membership_id=ANY($2::uuid[])
               OR (l.trainer_resource_id IS NULL AND
                 l.created_by_membership_id=ANY($2::uuid[])))
@@ -85,6 +86,7 @@ export class DanceOperationsService {
           LEFT JOIN service_resource tr ON tr.tenant_id=l.tenant_id
             AND tr.id=l.trainer_resource_id
           WHERE mc.tenant_id=$1 AND mc.status='RESERVED'
+            AND l.starts_at>=now()-interval '180 days'
             AND ($2::uuid[] IS NULL OR tr.membership_id=ANY($2::uuid[])
               OR (l.trainer_resource_id IS NULL AND
                 l.created_by_membership_id=ANY($2::uuid[])))
