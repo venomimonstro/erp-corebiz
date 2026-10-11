@@ -1402,6 +1402,13 @@ export class DashboardService {
         [context.tenantId]
       );
 
+      const issueTotal=await client.query<{count:number}>(
+        `SELECT count(*)::integer AS count FROM tenant_operational_issue
+         WHERE tenant_id=$1 AND state='OPEN'`,
+        [context.tenantId]
+      );
+      const incompleteScans=Array.from(truncatedRules).sort();
+
       const href: Record<string, string> = {
         BANK_UNMATCHED: "/app/finance",
         VAT_UNREGISTERED: "/app/accounting",
@@ -1414,6 +1421,9 @@ export class DashboardService {
 
       return {
         generatedAt: new Date().toISOString(),
+        issuesTotal:issueTotal.rows[0]?.count??0,
+        resultsLimited:(issueTotal.rows[0]?.count??0)>issues.rows.length,
+        incompleteScans,
         snapshots: snapshots.rows,
         issues: issues.rows.map((issue) => ({
           id: issue.id,
