@@ -969,6 +969,34 @@ export function AccountingComplianceCenter({
                 />
               </label>
             ):null}
+            <label>
+              <span>КПП</span>
+              <input
+                inputMode="numeric"
+                value={kpp}
+                onChange={event=>setKpp(event.target.value)}
+                placeholder={entityKind==="ORGANIZATION"?"9 цифр":"Для ИП не требуется"}
+                disabled={entityKind==="IP"}
+              />
+            </label>
+            <label>
+              <span>ОКТМО</span>
+              <input
+                inputMode="numeric"
+                value={oktmo}
+                onChange={event=>setOktmo(event.target.value)}
+                placeholder="8 или 11 цифр"
+              />
+            </label>
+            <label>
+              <span>Код ИФНС</span>
+              <input
+                inputMode="numeric"
+                value={taxOfficeCode}
+                onChange={event=>setTaxOfficeCode(event.target.value)}
+                placeholder="4 цифры"
+              />
+            </label>
             <label className="compliance-checkbox">
               <input
                 type="checkbox"
@@ -1076,6 +1104,108 @@ export function AccountingComplianceCenter({
                   :""}
               </p>
             </div>
+            {next.form_code==="KND_1110355" &&
+             ["PLANNED","READY","REJECTED"].includes(next.workflow_status)?(
+              <div className="compliance-document-editor">
+                <div className="compliance-document-head">
+                  <div>
+                    <span>КНД 1110355</span>
+                    <strong>Реквизиты строки уведомления</strong>
+                    <p>
+                      Заполните налоговую строку до подготовки пакета.
+                      Сумма строки станет подтверждённой суммой обязательства.
+                    </p>
+                  </div>
+                  <span
+                    className={
+                      "status-pill "+
+                      (notificationLine?.status==="CONFIRMED"
+                        ?"confirmed"
+                        :"review_required")
+                    }
+                  >
+                    {notificationLine?.status==="CONFIRMED"
+                      ?"Строка подтверждена"
+                      :"Нужно заполнить"}
+                  </span>
+                </div>
+
+                <div className="compliance-document-grid">
+                  {entityKind==="ORGANIZATION"?(
+                    <label>
+                      <span>КПП</span>
+                      <input
+                        value={lineKpp}
+                        onChange={event=>setLineKpp(event.target.value)}
+                        inputMode="numeric"
+                        placeholder="9 цифр"
+                      />
+                    </label>
+                  ):null}
+                  <label>
+                    <span>ОКТМО</span>
+                    <input
+                      value={lineOktmo}
+                      onChange={event=>setLineOktmo(event.target.value)}
+                      inputMode="numeric"
+                      placeholder="8 или 11 цифр"
+                    />
+                  </label>
+                  <label>
+                    <span>КБК</span>
+                    <input
+                      value={lineKbk}
+                      onChange={event=>setLineKbk(event.target.value)}
+                      inputMode="numeric"
+                      placeholder="20 цифр"
+                    />
+                  </label>
+                  <label>
+                    <span>Код периода</span>
+                    <input
+                      value={linePeriodCode}
+                      onChange={event=>setLinePeriodCode(event.target.value)}
+                      placeholder="Например 34/01"
+                    />
+                  </label>
+                  <label>
+                    <span>Отчётный год</span>
+                    <input
+                      value={lineYear}
+                      onChange={event=>setLineYear(event.target.value)}
+                      inputMode="numeric"
+                    />
+                  </label>
+                  <label>
+                    <span>Сумма, ₽</span>
+                    <input
+                      value={lineAmountRub}
+                      onChange={event=>setLineAmountRub(event.target.value)}
+                      inputMode="decimal"
+                      placeholder="0"
+                    />
+                  </label>
+                </div>
+
+                <div className="compliance-document-footer">
+                  <p>
+                    КБК и код периода должны соответствовать конкретному
+                    обязательству. CoreBiz сохраняет их в аудируемой строке,
+                    а не только внутри PDF/JSON.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={()=>void saveNotificationLine(next)}
+                  >
+                    {notificationLine?.status==="CONFIRMED"
+                      ?"Обновить подтверждённую строку"
+                      :"Сохранить и подтвердить"}
+                  </button>
+                </div>
+              </div>
+            ):null}
+
             <div className="table-actions">
               {["PLANNED","REJECTED"].includes(
                 next.workflow_status
