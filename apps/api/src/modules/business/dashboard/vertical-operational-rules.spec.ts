@@ -60,7 +60,11 @@ describe("cross-vertical operational scenarios",()=>{
     ["WMS_TASK_FAILED","FAILED","CLAIMED"],
     ["CRM_ACTION_OVERDUE","next_action_at","NORMAL"],
     ["FINANCE_OVERDUE","settled_minor","due_at"],
-    ["SUPPORT_ESCALATED","URGENT","WAITING_SUPPORT"]
+    ["SUPPORT_ESCALATED","URGENT","WAITING_SUPPORT"],
+    ["OMS_BACKORDER_OVERDUE","PARTIALLY_ALLOCATED","expected_at"],
+    ["DANCE_STRANDED_VISIT","RESERVED","CANCELLED_BY_STUDIO"],
+    ["PAYROLL_REVIEW_DISPUTED","DISPUTED","review_status"],
+    ["PROJECT_CLIENT_APPROVAL_OVERDUE","PENDING","due_at"]
   ])("%s distinguishes actionable and completed/false-positive cases",(
     code,condition,exclusion
   )=>{

@@ -17,7 +17,7 @@ describe("cross-vertical personal action queues",()=>{
   it("marketplace operators can act on stale feed and failed stock but not on VAT",()=>{
     const result=visible("channels.read");
     expect(result).toEqual(expect.arrayContaining([
-      "MARKETPLACE_UNMAPPED","MARKETPLACE_STOCK_BLOCKED","MARKETPLACE_FEED_STALE"
+      "MARKETPLACE_UNMAPPED","MARKETPLACE_STOCK_BLOCKED","MARKETPLACE_ORDER_FEED_STALE"
     ]));
     expect(result).not.toContain("VAT_UNREGISTERED");
     expect(result).not.toContain("BANK_UNMATCHED");
