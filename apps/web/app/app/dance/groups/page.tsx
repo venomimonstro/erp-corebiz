@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
 import { DanceWorkspaceNav } from "../../../../components/dance-workspace-nav";
+import { StudioModal } from "../../../../components/studio-modal";
 import { apiRequest } from "../../../../lib/api";
 
 type Program = {
@@ -154,6 +155,16 @@ export default function DanceGroupsPage() {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [lessonModal, setLessonModal] = useState<
+    "INDIVIDUAL" | "SELF_PRACTICE" | null
+  >(null);
+  const [lessonStudentId, setLessonStudentId] = useState("");
+  const [lessonServiceId, setLessonServiceId] = useState("");
+  const [lessonTrainerId, setLessonTrainerId] = useState("");
+  const [lessonRoomId, setLessonRoomId] = useState("");
+  const [lessonStartsAt, setLessonStartsAt] = useState(new Date(Date.now() + 86400000).toISOString().slice(0, 16));
+  const [lessonChargeRub, setLessonChargeRub] = useState("2500");
+  const [lessonPackageId, setLessonPackageId] = useState("");
 
   const load = useCallback(async () => {
     setError("");
@@ -550,124 +561,89 @@ export default function DanceGroupsPage() {
     }
   }
 
-  async function createIndividualLesson() {
-    if (!services.length || !trainers.length || !students.length) return;
-    const service = services[
-      Number(window.prompt(
-        "Услуга:\n" + services.map((item, i) => `${i + 1}. ${item.name}`).join("\n"),
-        "1"
-      )) - 1
-    ];
-    const trainer = trainers[
-      Number(window.prompt(
-        "Тренер:\n" + trainers.map((item, i) => `${i + 1}. ${item.name}`).join("\n"),
-        "1"
-      )) - 1
-    ];
-    const student = students[
-      Number(window.prompt(
-        "Ученик:\n" + students.map((item, i) => `${i + 1}. ${item.display_name}`).join("\n"),
-        "1"
-      )) - 1
-    ];
-    if (!service || !trainer || !student) return;
-
-    const startsAt = window.prompt(
-      "Начало ISO или YYYY-MM-DDTHH:MM",
-      new Date(Date.now() + 86400000).toISOString().slice(0, 16)
+  function openLessonModal(
+    type: "INDIVIDUAL" | "SELF_PRACTICE"
+  ) {
+    setLessonModal(type);
+    setLessonStudentId((current) => current || students[0]?.id || "");
+    setLessonServiceId((current) => current || services[0]?.id || "");
+    setLessonTrainerId(
+      type === "SELF_PRACTICE"
+        ? ""
+        : (current) => current || trainers[0]?.id || ""
     );
-    if (!startsAt) return;
-    const room = rooms.length
-      ? rooms[Number(window.prompt(
-          "Зал:\n" + rooms.map((item, i) => `${i + 1}. ${item.name}`).join("\n"),
-          "1"
-        )) - 1]
-      : undefined;
-    const chargeRub = Number((window.prompt("Стоимость урока, ₽", "2500") ?? "0").replace(",", "."));
+    setLessonRoomId((current) => current || rooms[0]?.id || "");
+    setLessonPackageId("");
+    setLessonChargeRub(type === "SELF_PRACTICE" ? "500" : "2500");
+  }
 
-    try {
-      const lesson = await apiRequest<{ id: string }>("/dance/lessons", {
-        method: "POST",
-        body: JSON.stringify({
-          lessonType: "INDIVIDUAL",
-          serviceId: service.id,
-          trainerResourceId: trainer.id,
-          roomResourceId: room?.id,
-          startsAt: new Date(startsAt).toISOString(),
-          durationMinutes: service.duration_minutes,
-          capacity: 1,
-          idempotencyKey: crypto.randomUUID()
+  async function createStandaloneLesson() {
+    const student=students.find((item)=>item.id===lessonStudentId);
+    const service=services.find((item)=>item.id===lessonServiceId);
+    const trainer=trainers.find((item)=>item.id===lessonTrainerId);
+    const room=rooms.find((item)=>item.id===lessonRoomId);
+    if(!lessonModal||!student||!service){
+      setError("Выберите ученика и услугу");
+      return;
+    }
+    if(lessonModal==="INDIVIDUAL"&&!trainer){
+      setError("Для индивидуального занятия выберите тренера");
+      return;
+    }
+    if(lessonModal==="SELF_PRACTICE"&&!room){
+      setError("Для самостоятельной практики выберите зал");
+      return;
+    }
+    const startDate=new Date(lessonStartsAt);
+    if(Number.isNaN(startDate.getTime())){
+      setError("Проверьте дату и время");
+      return;
+    }
+    const chargeRub=Number(lessonChargeRub.replace(",","."));
+    if(!Number.isFinite(chargeRub)||chargeRub<0){
+      setError("Проверьте стоимость занятия");
+      return;
+    }
+
+    setPending(true);
+    setError("");
+    try{
+      const lesson=await apiRequest<{id:string}>("/dance/lessons",{
+        method:"POST",
+        body:JSON.stringify({
+          lessonType:lessonModal,
+          serviceId:service.id,
+          trainerResourceId:lessonModal==="INDIVIDUAL"?trainer?.id:undefined,
+          roomResourceId:room?.id,
+          startsAt:startDate.toISOString(),
+          durationMinutes:service.duration_minutes,
+          capacity:1,
+          idempotencyKey:crypto.randomUUID()
         })
       });
-      const studentPackages = packages.filter(
-        (pack) =>
-          pack.status === "ACTIVE" &&
-          (
-            pack.party_id === student.party_id ||
-            pack.beneficiary_party_ids?.includes(student.party_id)
-          )
-      );
-      const studentMakeups = makeupCredits.filter(
-        (credit) =>
-          credit.student_id === student.id &&
-          credit.status === "AVAILABLE" &&
-          new Date(credit.expires_at).getTime() >=
-            new Date(startsAt).getTime()
-      );
-      let makeupCreditId: string | undefined;
-      if (
-        studentMakeups.length &&
-        window.confirm("Использовать доступную отработку?")
-      ) {
-        const credit = studentMakeups[
-          Number(
-            window.prompt(
-              "Отработка:\n" +
-                studentMakeups
-                  .map(
-                    (item, i) =>
-                      `${i + 1}. до ${new Date(item.expires_at).toLocaleDateString("ru-RU")} · ${item.program_name ?? "любое направление"}`
-                  )
-                  .join("\n"),
-              "1"
-            )
-          ) - 1
-        ];
-        makeupCreditId = credit?.id;
-      }
 
-      let packageId: string | undefined;
-      if (
-        !makeupCreditId &&
-        studentPackages.length &&
-        window.confirm("Использовать абонемент ученика?")
-      ) {
-        const pack = studentPackages[
-          Number(window.prompt(
-            "Абонемент:\n" + studentPackages.map((item, i) =>
-              `${i + 1}. ${item.plan_name} · осталось ${item.available_visits === null ? "∞" : item.available_visits}`
-            ).join("\n"),
-            "1"
-          )) - 1
-        ];
-        packageId = pack?.id;
-      }
-      await apiRequest(`/dance/lessons/${lesson.id}/participants`, {
-        method: "POST",
-        body: JSON.stringify({
-          studentId: student.id,
-          packageId,
-          makeupCreditId,
-          chargeMinor:
-            packageId || makeupCreditId
-              ? "0"
-              : String(Math.round(chargeRub * 100))
+      await apiRequest(`/dance/lessons/${lesson.id}/participants`,{
+        method:"POST",
+        body:JSON.stringify({
+          studentId:student.id,
+          packageId:lessonPackageId||undefined,
+          chargeMinor:lessonPackageId
+            ?"0"
+            :String(Math.round(chargeRub*100))
         })
       });
+
+      setLessonModal(null);
       await load();
       setSelectedLessonId(lesson.id);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось создать индивидуальный урок");
+    }catch(cause){
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось создать занятие"
+      );
+    }finally{
+      setPending(false);
     }
   }
 
@@ -896,7 +872,8 @@ export default function DanceGroupsPage() {
           <div className="header-actions">
             <button className="secondary-button" onClick={() => void createProgram()} type="button">+ Направление</button>
             <button className="secondary-button" onClick={() => void createGroup()} type="button">+ Группа</button>
-            <button onClick={() => void createIndividualLesson()} type="button">+ Индивидуальный урок</button>
+            <button className="secondary-button" onClick={() => openLessonModal("SELF_PRACTICE")} type="button">+ Самостоятельная практика</button>
+            <button onClick={() => openLessonModal("INDIVIDUAL")} type="button">+ Индивидуальное занятие</button>
           </div>
         </header>
 
@@ -1040,6 +1017,182 @@ export default function DanceGroupsPage() {
             </div>
           </section>
         ) : null}
+        {lessonModal ? (
+          <StudioModal
+            eyebrow={lessonModal === "SELF_PRACTICE" ? "Зал без тренера" : "Персональное занятие"}
+            title={
+              lessonModal === "SELF_PRACTICE"
+                ? "Самостоятельная практика"
+                : "Индивидуальное занятие"
+            }
+            description={
+              lessonModal === "SELF_PRACTICE"
+                ? "Ученик оплачивает время в зале отдельно или использует подходящий абонемент."
+                : "Цена и длительность будут уточнены правилами выбранного тренера, если они настроены."
+            }
+            onClose={() => setLessonModal(null)}
+            footer={
+              <>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setLessonModal(null)}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => void createStandaloneLesson()}
+                >
+                  {pending ? "Создаём…" : "Создать занятие"}
+                </button>
+              </>
+            }
+          >
+            <div className="studio-form-section">
+              <header>
+                <strong>Кто и что бронирует</strong>
+                <span>Показываем только понятные бизнес-поля.</span>
+              </header>
+              <div className="studio-form-grid">
+                <label>
+                  <span>Ученик</span>
+                  <select
+                    value={lessonStudentId}
+                    onChange={(event) => {
+                      setLessonStudentId(event.target.value);
+                      setLessonPackageId("");
+                    }}
+                  >
+                    <option value="">Выберите ученика</option>
+                    {students.map((student) => (
+                      <option key={student.id} value={student.id}>
+                        {student.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  <span>Услуга</span>
+                  <select
+                    value={lessonServiceId}
+                    onChange={(event) => setLessonServiceId(event.target.value)}
+                  >
+                    <option value="">Выберите услугу</option>
+                    {services.map((service) => (
+                      <option key={service.id} value={service.id}>
+                        {service.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {lessonModal === "INDIVIDUAL" ? (
+                  <label>
+                    <span>Тренер</span>
+                    <select
+                      value={lessonTrainerId}
+                      onChange={(event) => setLessonTrainerId(event.target.value)}
+                    >
+                      <option value="">Выберите тренера</option>
+                      {trainers.map((trainer) => (
+                        <option key={trainer.id} value={trainer.id}>
+                          {trainer.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                <label>
+                  <span>Зал</span>
+                  <select
+                    value={lessonRoomId}
+                    onChange={(event) => setLessonRoomId(event.target.value)}
+                  >
+                    <option value="">Без зала</option>
+                    {rooms.map((room) => (
+                      <option key={room.id} value={room.id}>
+                        {room.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  <span>Дата и время</span>
+                  <input
+                    type="datetime-local"
+                    value={lessonStartsAt}
+                    onChange={(event) => setLessonStartsAt(event.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="studio-form-section">
+              <header>
+                <strong>Как оплатить</strong>
+                <span>
+                  Если выбран абонемент, CoreBiz сам проверит услугу, тренера,
+                  день и время.
+                </span>
+              </header>
+              <div className="studio-form-grid">
+                <label>
+                  <span>Источник оплаты</span>
+                  <select
+                    value={lessonPackageId}
+                    onChange={(event) => setLessonPackageId(event.target.value)}
+                  >
+                    <option value="">Разовое занятие</option>
+                    {packages
+                      .filter((pack) => {
+                        const student=students.find(
+                          (item)=>item.id===lessonStudentId
+                        );
+                        return Boolean(
+                          student &&
+                          pack.status==="ACTIVE" &&
+                          (
+                            pack.party_id===student.party_id ||
+                            pack.beneficiary_party_ids?.includes(student.party_id)
+                          )
+                        );
+                      })
+                      .map((pack) => (
+                        <option key={pack.id} value={pack.id}>
+                          {pack.plan_name} · осталось {
+                            pack.available_visits===null
+                              ? "∞"
+                              : pack.available_visits
+                          }
+                        </option>
+                      ))}
+                  </select>
+                </label>
+
+                {!lessonPackageId ? (
+                  <label>
+                    <span>Цена разового занятия, ₽</span>
+                    <input
+                      inputMode="decimal"
+                      value={lessonChargeRub}
+                      onChange={(event) => setLessonChargeRub(event.target.value)}
+                    />
+                  </label>
+                ) : null}
+              </div>
+              <span className="studio-helper">
+                Персональная цена тренера хранится в услуге. Здесь сумма нужна
+                только как ручная цена разового посещения.
+              </span>
+            </div>
+          </StudioModal>
+        ) : null}
+
       </section>
     </main>
   );
