@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
+import { DanceWorkspaceNav } from "../../../../components/dance-workspace-nav";
 import { apiRequest } from "../../../../lib/api";
 
 type Customer = {
@@ -466,6 +467,8 @@ export default function DanceTeamPage() {
             <button disabled={pending} onClick={() => void exportPayroll()} type="button">В payroll</button>
           </div>
         </header>
+
+        <DanceWorkspaceNav active="team" />
 
         {error ? <div className="inline-error"><strong>Тренеры и залы</strong><span>{error}</span></div> : null}
 
