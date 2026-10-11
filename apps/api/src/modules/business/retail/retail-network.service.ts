@@ -190,6 +190,20 @@ export class RetailNetworkService {
       return r.rows[0];
     });
     if(!loc)throw new NotFoundException("Торговая точка недоступна");
+    const validPrices=await this.db.withTenantTransaction(ctx,async client=>
+      client.query<{count:number}>(
+        `SELECT count(DISTINCT s.id)::integer AS count
+         FROM sku s JOIN product_variant v
+           ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+         JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+         WHERE s.tenant_id=$1 AND s.id=ANY($2::uuid[])
+           AND s.status='ACTIVE' AND v.status='ACTIVE' AND p.status='ACTIVE'
+           AND s.currency='RUB' AND s.sale_price_minor>0`,
+        [ctx.tenantId,Array.from(new Set(input.lines.map(l=>l.skuId)))]
+      ));
+    if((validPrices.rows[0]?.count??0)!==
+       new Set(input.lines.map(l=>l.skuId)).size)
+      throw new ConflictException("Найдены товары без действующей цены или снятые с продажи");
     if(input.channel==="CLICK_COLLECT"&&!loc.pickup_enabled)
       throw new ConflictException("Самовывоз из этой точки недоступен");
     if(input.channel==="COUNTER"){
@@ -270,6 +284,11 @@ export class RetailNetworkService {
         [ctx.tenantId,locationId]);
       if(!loc.rowCount)throw new NotFoundException("Точка недоступна");
       if(action==="OPEN"){
+        const prior=await client.query(
+          `SELECT 1 FROM retail_cash_shift WHERE tenant_id=$1
+           AND location_id=$2 AND status='OPEN' FOR UPDATE`,
+          [ctx.tenantId,locationId]);
+        if(prior.rowCount)throw new ConflictException("В этой точке уже открыта смена");
         const r=await client.query(
           `INSERT INTO retail_cash_shift(
              tenant_id,location_id,opened_by_membership_id,opening_cash_minor
