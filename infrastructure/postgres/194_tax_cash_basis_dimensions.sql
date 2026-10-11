@@ -31,9 +31,35 @@ $$;
 
 ALTER TABLE cash_account
   ADD CONSTRAINT cash_account_legal_entity_fk
-  FOREIGN KEY(tenant_id,legal_entity_id)
-  REFERENCES legal_entity(tenant_id,id)
+  FOREIGN KEY(legal_entity_id)
+  REFERENCES legal_entity(id)
   ON DELETE RESTRICT;
+
+CREATE OR REPLACE FUNCTION corebiz_cash_account_legal_entity_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path=public,pg_temp
+AS $
+BEGIN
+  IF NEW.legal_entity_id IS NOT NULL AND NOT EXISTS(
+    SELECT 1
+    FROM legal_entity e
+    WHERE e.id=NEW.legal_entity_id
+      AND e.tenant_id=NEW.tenant_id
+  ) THEN
+    RAISE EXCEPTION 'CASH_ACCOUNT_LEGAL_ENTITY_TENANT_MISMATCH'
+      USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END;
+$;
+
+DROP TRIGGER IF EXISTS cash_account_legal_entity_guard_v1 ON cash_account;
+CREATE TRIGGER cash_account_legal_entity_guard_v1
+BEFORE INSERT OR UPDATE OF tenant_id,legal_entity_id
+ON cash_account
+FOR EACH ROW
+EXECUTE FUNCTION corebiz_cash_account_legal_entity_guard();
 
 ALTER TABLE cash_flow_category
   ADD COLUMN IF NOT EXISTS tax_treatment text NOT NULL DEFAULT 'REVIEW';
