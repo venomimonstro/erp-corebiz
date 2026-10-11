@@ -293,7 +293,9 @@ async function inspectRequiredHardening(root) {
         /automotive_donor_vehicle/,
         /automotive_dismantled_part/,
         /updateWorkOrder/,
-        /updateWorkOrderLine/
+        /updateWorkOrderLine/,
+        /compatibleParts/,
+        /linkPartToInventory/
       ],
       message: "Automotive operational backend is incomplete"
     },
@@ -506,6 +508,8 @@ async function inspectRequiredHardening(root) {
       /Обновить календарь/,
       /Подготовить пакет/,
       /Подтвердить КЭП/,
+      /Зарегистрировать оплату/,
+      /Регламентированный контур/,
       /VAT_22/
     ],
     message: "Owner accounting compliance center is incomplete"
