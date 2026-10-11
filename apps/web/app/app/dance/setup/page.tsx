@@ -604,6 +604,59 @@ export default function DanceSetupPage(){
           </div>
         </section>
 
+        <section className="studio-section">
+          <div className="studio-section-head">
+            <div>
+              <span>Расходники и себестоимость</span>
+              <h2>Технологические карты</h2>
+              <p>
+                Опишите норму материалов один раз. При завершении визита
+                CoreBiz спишет расход со склада и сохранит фактическую
+                себестоимость услуги.
+              </p>
+            </div>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={openCardDrawer}
+            >
+              + Техкарта
+            </button>
+          </div>
+
+          <div className="studio-rule-grid">
+            {cards.map((card)=>(
+              <article className="studio-rule-card" key={card.id}>
+                <header>
+                  <div>
+                    <span className="studio-chip">BOM</span>
+                    <h3>{card.name}</h3>
+                    <p>{card.description??"Норматив расхода материалов"}</p>
+                  </div>
+                  <strong>{card.lines.length}<small> поз.</small></strong>
+                </header>
+                <footer>
+                  <span>{card.code??"без кода"}</span>
+                  <b>Автосписание при закрытии визита</b>
+                </footer>
+              </article>
+            ))}
+            {!cards.length?(
+              <div className="studio-empty">
+                <span>03</span>
+                <strong>Добавьте первую техкарту</strong>
+                <p>
+                  Например: «Окрашивание волос» — краска, оксид, перчатки и
+                  расходные материалы с нормой на один визит.
+                </p>
+                <button type="button" onClick={openCardDrawer}>
+                  Создать техкарту
+                </button>
+              </div>
+            ):null}
+          </div>
+        </section>
+
         <section className="studio-section studio-next-grid">
           <a href="/app/service/packages">
             <span>Абонементы</span>
@@ -706,6 +759,169 @@ export default function DanceSetupPage(){
                 <div className="studio-drawer-actions">
                   <button type="button" className="secondary-button" onClick={()=>setShowRule(false)}>Отмена</button>
                   <button disabled={pending} type="submit">{pending?"Сохраняем…":"Сохранить правило"}</button>
+                </div>
+              </form>
+            </aside>
+          </div>
+        ):null}
+
+        {showCard?(
+          <div
+            className="studio-drawer-backdrop"
+            onMouseDown={()=>setShowCard(false)}
+          >
+            <aside
+              className="studio-drawer"
+              onMouseDown={event=>event.stopPropagation()}
+            >
+              <header>
+                <div>
+                  <span>Технологическая карта</span>
+                  <h2>Нормы расхода услуги</h2>
+                </div>
+                <button
+                  type="button"
+                  className="studio-close"
+                  onClick={()=>setShowCard(false)}
+                >
+                  ×
+                </button>
+              </header>
+              <form onSubmit={createTechnologyCard}>
+                <div className="studio-form-grid">
+                  <label>
+                    <span>Название</span>
+                    <input
+                      value={cardName}
+                      placeholder="Например, Окрашивание · стандарт"
+                      onChange={event=>setCardName(event.target.value)}
+                      required
+                    />
+                  </label>
+                  <label>
+                    <span>Код · необязательно</span>
+                    <input
+                      value={cardCode}
+                      placeholder="COLOR-STD"
+                      onChange={event=>setCardCode(event.target.value)}
+                    />
+                  </label>
+                </div>
+                <label>
+                  <span>Описание</span>
+                  <input
+                    value={cardDescription}
+                    placeholder="Когда применяется эта норма"
+                    onChange={event=>setCardDescription(event.target.value)}
+                  />
+                </label>
+
+                <div className="studio-material-lines">
+                  <div className="studio-section-head compact">
+                    <div>
+                      <span>Материалы</span>
+                      <h3>Что списывать за один визит</h3>
+                    </div>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={addCardLine}
+                    >
+                      + Материал
+                    </button>
+                  </div>
+                  {cardLines.map((line,index)=>(
+                    <div className="studio-material-line" key={index}>
+                      <label>
+                        <span>Склад</span>
+                        <select
+                          value={line.warehouseId}
+                          onChange={event=>
+                            updateCardLine(index,{
+                              warehouseId:event.target.value
+                            })
+                          }
+                          required
+                        >
+                          {warehouses.map(warehouse=>(
+                            <option key={warehouse.id} value={warehouse.id}>
+                              {warehouse.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Материал</span>
+                        <select
+                          value={line.skuId}
+                          onChange={event=>
+                            updateCardLine(index,{skuId:event.target.value})
+                          }
+                          required
+                        >
+                          {products.map(product=>(
+                            <option key={product.skuId} value={product.skuId}>
+                              {product.productName} · {product.sku}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Количество</span>
+                        <input
+                          inputMode="decimal"
+                          value={line.quantity}
+                          onChange={event=>
+                            updateCardLine(index,{quantity:event.target.value})
+                          }
+                          required
+                        />
+                      </label>
+                      <label>
+                        <span>Потери, %</span>
+                        <input
+                          inputMode="decimal"
+                          value={line.wastePercent}
+                          onChange={event=>
+                            updateCardLine(index,{
+                              wastePercent:event.target.value
+                            })
+                          }
+                        />
+                      </label>
+                      <button
+                        className="studio-close"
+                        type="button"
+                        aria-label="Удалить материал"
+                        disabled={cardLines.length===1}
+                        onClick={()=>
+                          setCardLines(current=>
+                            current.filter((_,lineIndex)=>lineIndex!==index)
+                          )
+                        }
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <span className="studio-helper">
+                    Количество хранится с точностью до тысячных. Например,
+                    15,5 можно использовать для 15,5 мл, г или другой базовой
+                    единицы SKU.
+                  </span>
+                </div>
+
+                <div className="studio-drawer-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={()=>setShowCard(false)}
+                  >
+                    Отмена
+                  </button>
+                  <button disabled={pending} type="submit">
+                    {pending?"Сохраняем…":"Создать техкарту"}
+                  </button>
                 </div>
               </form>
             </aside>
