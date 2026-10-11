@@ -26,6 +26,7 @@ export class CrmService {
       name: string;
       kind: string;
       position: number;
+      probability: number | null;
       color: string | null;
       deals: Array<{
         id: string;
@@ -69,9 +70,10 @@ export class CrmService {
         name: string;
         kind: string;
         position: number;
+        probability: number | null;
         color: string | null;
       }>(
-        `SELECT id, name, kind, position, color
+        `SELECT id, name, kind, position, probability, color
          FROM crm_stage
          WHERE tenant_id = $1 AND pipeline_id = $2
          ORDER BY position ASC`,
@@ -139,6 +141,7 @@ export class CrmService {
           name: stage.name,
           kind: stage.kind,
           position: stage.position,
+          probability: stage.probability,
           color: stage.color,
           deals: dealsResult.rows
             .filter((deal) => deal.stage_id === stage.id)
