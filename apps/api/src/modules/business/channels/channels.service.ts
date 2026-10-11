@@ -127,6 +127,13 @@ export class ChannelsService {
           name: string;
           apiToken: string;
         }
+      | {
+          provider: "YANDEX_MARKET";
+          name: string;
+          apiKey: string;
+          businessId: string;
+          hasWarehouseGroups?: boolean;
+        }
   ): Promise<{ id: string }> {
     const name = input.name.trim();
     if (name.length < 2 || name.length > 160) {
@@ -152,6 +159,14 @@ export class ChannelsService {
         apiVersion: "v4",
         ordersEndpoint: "/v4/posting/fbs/list"
       };
+    } else if(input.provider==="YANDEX_MARKET") {
+      const apiKey=input.apiKey.trim();
+      const businessId=input.businessId.trim();
+      if(apiKey.length<16||apiKey.length>4096||!/^[1-9][0-9]{0,14}$/.test(businessId))
+        throw new BadRequestException("Некорректные настройки API Яндекс Маркета");
+      credentials={apiKey,businessId};
+      config={mode:"FBS",apiVersion:"v1",ordersEndpoint:"/v1/businesses/{businessId}/orders",
+        stockWarehouseGroups:input.hasWarehouseGroups===true};
     } else {
       const apiToken = input.apiToken.trim();
       if (apiToken.length < 32 || apiToken.length > 8192) {
@@ -239,7 +254,7 @@ export class ChannelsService {
 
       const row = connection.rows[0];
       if (!row) throw new NotFoundException("Канал не найден");
-      if (!["OZON","WILDBERRIES"].includes(row.provider)) {
+      if (!["OZON","WILDBERRIES","YANDEX_MARKET"].includes(row.provider)) {
         throw new BadRequestException(
           "Ручная синхронизация доступна только marketplace-коннекторам"
         );

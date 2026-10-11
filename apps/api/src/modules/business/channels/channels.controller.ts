@@ -111,6 +111,19 @@ export class ChannelsController {
     };
   }
 
+  @Post("connections/yandex-market")
+  @RequirePermission("channels.manage")
+  async createYandexMarket(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:{name:string;apiKey:string;businessId:string;hasWarehouseGroups?:boolean}
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.channels.createMarketplaceConnection(
+      this.context(request),{
+        provider:"YANDEX_MARKET",name:body.name,apiKey:body.apiKey,
+        businessId:body.businessId,hasWarehouseGroups:body.hasWarehouseGroups
+      })};
+  }
+
   @Post("connections/:id/sync")
   @ApiCost("EXPENSIVE")
   @RequirePermission("channels.manage")
