@@ -4,7 +4,18 @@ import { resolve, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = process.cwd();
-const findings = [];
+const findings = [  {
+    path: "apps/web/components/service-business-setup.tsx",
+    patterns: [
+      /mode==="dance"/,
+      /technology-cards/,
+      /delivery-rules/,
+      /service\/resources/,
+      /ruleBranch/
+    ],
+    message: "Shared service setup workspace is missing"
+  },
+];
 
 function add(severity, file, message) {
   findings.push({
@@ -474,6 +485,7 @@ async function inspectRequiredHardening(root) {
     "182_payroll_component_guard_fix.sql",
     "183_service_booking_charge_integrity.sql",
     "184_service_booking_charge_deferred_fix.sql",
+    "185_dance_group_room_allocation.sql",
     "185_payroll_payment_lifecycle.sql"
   ];
 
