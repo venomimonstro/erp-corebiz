@@ -24,7 +24,7 @@ export class ServiceEconomicsService {
   ) {}
 
   async compensationPlans(context:TenantContext){
-    const scope=await this.scope(context,"service.read");
+    const scope=await this.payrollReadScope(context);
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
@@ -81,6 +81,7 @@ export class ServiceEconomicsService {
     }
   ){
     await this.requireAll(context,"service.write");
+    await this.requireFinance(context,"finance.write");
     if(!input.employeeResourceId){
       throw new BadRequestException("Выберите сотрудника");
     }
@@ -189,7 +190,7 @@ export class ServiceEconomicsService {
   }
 
   async payrollProfiles(context:TenantContext){
-    const scope=await this.scope(context,"service.read");
+    const scope=await this.payrollReadScope(context);
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
@@ -224,6 +225,7 @@ export class ServiceEconomicsService {
     }
   ){
     await this.requireAll(context,"service.write");
+    await this.requireFinance(context,"finance.write");
     const monthly=String(input.monthlyBaseMinor??"0");
     const daily=String(input.dailyBaseMinor??"0");
     const guarantee=String(input.minimumGuaranteeMinor??"0");
@@ -504,6 +506,7 @@ export class ServiceEconomicsService {
     fromInput?:string,
     toInput?:string
   ){
+    await this.requireFinance(context,"finance.read");
     const scope=await this.scope(context,"service.read");
     const to=toInput?new Date(toInput):new Date();
     const from=fromInput
@@ -652,6 +655,7 @@ export class ServiceEconomicsService {
     month?:string
   ){
     await this.requireAll(context,"service.read");
+    await this.requireFinance(context,"finance.read");
     const period=this.monthBounds(month);
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
@@ -673,7 +677,7 @@ export class ServiceEconomicsService {
   }
 
   async payrollStatements(context:TenantContext,month?:string){
-    const scope=await this.scope(context,"service.read");
+    const scope=await this.payrollReadScope(context);
     const period=this.monthBounds(month);
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
@@ -830,6 +834,7 @@ export class ServiceEconomicsService {
     }
   ){
     await this.requireAll(context,"service.write");
+    await this.requireFinance(context,"finance.write");
     const comment=input.comment?.trim();
     if(!["RESOLVED","WAIVED"].includes(input.status)){
       throw new BadRequestException("Некорректный статус решения");
@@ -898,6 +903,7 @@ export class ServiceEconomicsService {
 
   async finalizePayroll(context:TenantContext,month?:string){
     await this.requireAll(context,"service.write");
+    await this.requireFinance(context,"finance.write");
     const period=this.monthBounds(month);
     return this.database.withTenantTransaction(context,async client=>{
       const employees=await client.query<{id:string}>(
@@ -1075,6 +1081,7 @@ export class ServiceEconomicsService {
     input:{batchId:string;month?:string}
   ){
     await this.requireAll(context,"service.write");
+    await this.requireFinance(context,"finance.write");
     if(!input.batchId){
       throw new BadRequestException("Выберите payroll batch");
     }
@@ -1229,6 +1236,20 @@ export class ServiceEconomicsService {
       from:start.toISOString().slice(0,10),
       to:end.toISOString().slice(0,10)
     };
+  }
+
+  private async requireFinance(
+    context:TenantContext, permission:"finance.read"|"finance.write"
+  ):Promise<void>{
+    if(!await this.authorization.resolveScope(context,permission))
+      throw new ForbiddenException("Необходим доступ к финансовым данным");
+  }
+
+  private async payrollReadScope(context:TenantContext):Promise<string[]|null>{
+    const scope=await this.scope(context,"service.read");
+    if(await this.authorization.resolveScope(context,"finance.read"))return scope;
+    return scope===null||scope.includes(context.membershipId)
+      ?[context.membershipId]:[];
   }
 
   private async scope(
