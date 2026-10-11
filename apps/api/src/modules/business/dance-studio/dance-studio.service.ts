@@ -97,9 +97,8 @@ export class DanceStudioService {
   async dashboard(context: TenantContext) {
     const scopeIds = await this.scopeIds(context, "dance.read");
     // Trainers need their roster and lessons, not the company's unit economics.
-    const canViewFinancials=Boolean(
-      await this.authorization.resolveScope(context,"finance.read")
-    );
+    const canViewFinancials=
+      await this.authorization.resolveScope(context,"finance.read")==="all";
     return this.database.withTenantTransaction(context, async (client) => {
       const today = await client.query(
         `SELECT
@@ -696,7 +695,8 @@ export class DanceStudioService {
 
   async students(context: TenantContext) {
     const scopeIds = await this.scopeIds(context, "dance.read");
-    const canViewFinancials=Boolean(await this.authorization.resolveScope(context,"finance.read"));
+    const canViewFinancials=
+      await this.authorization.resolveScope(context,"finance.read")==="all";
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `SELECT
@@ -1518,9 +1518,8 @@ export class DanceStudioService {
         [context.tenantId,groupId]
       );
 
-      const financial=Boolean(
-        await this.authorization.resolveScope(context,"finance.read")
-      );
+      const financial=
+        await this.authorization.resolveScope(context,"finance.read")==="all";
       if(financial)return {members:result.rows,waitlist:waitlist.rows};
       // Instructors can see the roster but not parent-payer identities
       // or individual negotiated discounts.
