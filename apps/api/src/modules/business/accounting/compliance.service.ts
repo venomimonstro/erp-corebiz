@@ -295,6 +295,7 @@ export class ComplianceService {
       periodTo:string;
       calculationType:"USN_ADVANCE"|"USN_ANNUAL";
       reductionsMinor?:string;
+      obligationId?:string;
     }
   ) {
     if(!/^\d{4}-\d{2}-\d{2}$/.test(input.periodFrom) ||
@@ -328,8 +329,24 @@ export class ComplianceService {
         );
       }
 
+      if(input.obligationId) {
+        const obligation=await client.query(
+          `SELECT 1
+           FROM accounting_compliance_obligation
+           WHERE tenant_id=$1 AND id=$2 AND legal_entity_id=$3
+             AND obligation_type IN ('PAY','NOTIFY')
+             AND workflow_status IN ('PLANNED','READY')`,
+          [context.tenantId,input.obligationId,input.legalEntityId]
+        );
+        if(!obligation.rowCount) {
+          throw new ConflictException("Налоговое обязательство недоступно для расчёта");
+        }
+      }
+
       const totals=await client.query<{
-        income:string;expense:string;review_count:number;
+        income:string;
+        expense:string;
+        review_count:number;
       }>(
         `SELECT
            coalesce(sum(amount_minor) FILTER(
@@ -355,7 +372,7 @@ export class ComplianceService {
       const base=profile.tax_regime==="USN_INCOME"
         ?income
         :(income>expense?income-expense:0n);
-      const mainTax=base*BigInt(profile.usn_rate_bps)/10000n;
+      const mainTax=(base*BigInt(profile.usn_rate_bps)+9999n)/10000n;
       let calculated=mainTax;
       let minimumTax=0n;
 
@@ -363,67 +380,63 @@ export class ComplianceService {
         profile.tax_regime==="USN_INCOME_EXPENSE" &&
         input.calculationType==="USN_ANNUAL"
       ) {
-        if(!profile.usn_min_tax_bps) {
-          throw new ConflictException(
-            "Укажите подтверждённую ставку минимального налога УСН"
-          );
-        }
-        minimumTax=
-          income*BigInt(profile.usn_min_tax_bps)/10000n;
+        const minimumRate=BigInt(
+          profile.usn_min_tax_bps ?? profile.usn_min_rate_bps ?? 100
+        );
+        minimumTax=(income*minimumRate+9999n)/10000n;
         if(minimumTax>calculated) calculated=minimumTax;
       }
 
       const finalPreview=calculated>reductions?calculated-reductions:0n;
-      const confidence=totalsRow.review_count>0
-        ?"REVIEW_REQUIRED"
-        :"PREVIEW";
+      const status=totalsRow.review_count>0?"REVIEW_REQUIRED":"DRAFT";
+      const periodKey=
+        input.calculationType==="USN_ANNUAL"
+          ?input.periodFrom.slice(0,4)
+          :input.periodFrom+"_"+input.periodTo;
 
-      const snapshot={
-        includedIncomeMinor:income.toString(),
-        includedExpenseMinor:expense.toString(),
-        reviewRequiredCount:totalsRow.review_count,
-        note:"Предварительный расчёт. Не учитывает все специальные уменьшения, перенос убытков и региональные особенности без отдельного подтверждения."
-      };
-      const formula={
-        regime:profile.tax_regime,
-        rateBps:profile.usn_rate_bps,
-        minimumTaxBps:profile.usn_min_tax_bps,
-        minimumTaxMinor:minimumTax.toString()
-      };
+      await client.query(
+        `UPDATE accounting_tax_calculation
+         SET status='SUPERSEDED',updated_at=now()
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+           AND tax_code='USN' AND period_key=$3
+           AND status IN ('DRAFT','REVIEW_REQUIRED')`,
+        [context.tenantId,input.legalEntityId,periodKey]
+      );
 
-      const result=await client.query(
+      const result=await client.query<any>(
         `INSERT INTO accounting_tax_calculation(
-           tenant_id,legal_entity_id,tax_profile_id,calculation_type,
-           period_from,period_to,income_minor,expense_minor,tax_base_minor,
-           calculated_minor,reductions_minor,final_preview_minor,
-           confidence,source_snapshot,formula_snapshot
+           tenant_id,legal_entity_id,tax_profile_id,tax_code,period_key,
+           date_from,date_to,taxable_income_minor,deductible_expense_minor,
+           taxable_base_minor,calculated_tax_minor,advances_minor,tax_due_minor,
+           calculation_method,rule_snapshot,source_snapshot,status
          ) VALUES(
-           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
+           $1,$2,$3,'USN',$4,$5,$6,$7,$8,$9,$10,$11,$12,
+           'AUDITED_TAX_LEDGER',$13,$14,$15
          )
-         ON CONFLICT(
-           tenant_id,legal_entity_id,calculation_type,period_from,period_to
-         ) DO UPDATE SET
-           tax_profile_id=EXCLUDED.tax_profile_id,
-           income_minor=EXCLUDED.income_minor,
-           expense_minor=EXCLUDED.expense_minor,
-           tax_base_minor=EXCLUDED.tax_base_minor,
-           calculated_minor=EXCLUDED.calculated_minor,
-           reductions_minor=EXCLUDED.reductions_minor,
-           final_preview_minor=EXCLUDED.final_preview_minor,
-           confidence=EXCLUDED.confidence,
-           source_snapshot=EXCLUDED.source_snapshot,
-           formula_snapshot=EXCLUDED.formula_snapshot,
-           verified_by_membership_id=NULL,verified_at=NULL,updated_at=now()
          RETURNING *`,
         [
-          context.tenantId,input.legalEntityId,profile.id,
-          input.calculationType,input.periodFrom,input.periodTo,
-          income.toString(),expense.toString(),base.toString(),
-          calculated.toString(),reductions.toString(),finalPreview.toString(),
-          confidence,JSON.stringify(snapshot),JSON.stringify(formula)
+          context.tenantId,input.legalEntityId,profile.id,periodKey,
+          input.periodFrom,input.periodTo,income.toString(),expense.toString(),
+          base.toString(),calculated.toString(),reductions.toString(),
+          finalPreview.toString(),
+          JSON.stringify({
+            taxRegime:profile.tax_regime,
+            rateBps:profile.usn_rate_bps,
+            minimumTaxMinor:minimumTax.toString()
+          }),
+          JSON.stringify({
+            reviewRequiredCount:totalsRow.review_count,
+            obligationId:input.obligationId??null,
+            note:
+              "Предварительный расчёт до подтверждения налоговой книги, льгот, переносов убытков и специальных уменьшений."
+          }),
+          status
         ]
       );
-      return result.rows[0];
+      return {
+        ...result.rows[0],
+        obligation_id:input.obligationId??null
+      };
     });
   }
 
@@ -436,38 +449,68 @@ export class ComplianceService {
       throw new BadRequestException("Укажите основание проверки расчёта");
     }
     return this.database.withTenantTransaction(context,async client=>{
-      const result=await client.query<any>(
+      const calculation=await client.query<any>(
+        `SELECT *
+         FROM accounting_tax_calculation
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,calculationId]
+      );
+      const current=calculation.rows[0];
+      if(!current) throw new NotFoundException("Расчёт не найден");
+      if(!["DRAFT","REVIEW_REQUIRED"].includes(current.status)) {
+        throw new ConflictException("Расчёт уже подтверждён или заменён");
+      }
+      const reviewCount=Number(
+        current.source_snapshot?.reviewRequiredCount??0
+      );
+      if(reviewCount>0) {
+        throw new ConflictException(
+          "В налоговой книге остались операции, требующие проверки"
+        );
+      }
+
+      const updated=await client.query<any>(
         `UPDATE accounting_tax_calculation
-         SET confidence='VERIFIED',verified_by_membership_id=$3,
-             verified_at=now(),obligation_id=coalesce($4::uuid,obligation_id),
+         SET status='CONFIRMED',confirmed_by_membership_id=$3,
+             confirmed_at=now(),
              source_snapshot=source_snapshot ||
-               jsonb_build_object('verificationNote',$5),
+               jsonb_build_object('verificationNote',$4),
              updated_at=now()
          WHERE tenant_id=$1 AND id=$2
          RETURNING *`,
         [
           context.tenantId,calculationId,context.membershipId,
-          input.obligationId??null,input.note.trim()
+          input.note.trim()
         ]
       );
-      const row=result.rows[0];
-      if(!row) throw new NotFoundException("Расчёт не найден");
+      const row=updated.rows[0];
 
-      if(row.obligation_id) {
-        await client.query(
+      if(input.obligationId) {
+        const obligation=await client.query<any>(
           `UPDATE accounting_compliance_obligation
-           SET amount_minor=$3,calculation_status='CONFIRMED',
-               calculation_snapshot=$4,updated_at=now()
-           WHERE tenant_id=$1 AND id=$2`,
+           SET amount_minor=$4,calculation_status='CONFIRMED',
+               calculation_snapshot=$5,updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND legal_entity_id=$3
+             AND workflow_status IN ('PLANNED','READY')
+           RETURNING id`,
           [
-            context.tenantId,row.obligation_id,row.final_preview_minor,
+            context.tenantId,input.obligationId,row.legal_entity_id,
+            row.tax_due_minor,
             JSON.stringify({
               taxCalculationId:row.id,
+              taxCode:row.tax_code,
+              periodKey:row.period_key,
               verifiedBy:context.membershipId,
               verifiedAt:new Date().toISOString()
             })
           ]
         );
+        if(!obligation.rowCount) {
+          throw new ConflictException(
+            "Не удалось связать расчёт с налоговым обязательством"
+          );
+        }
       }
       return row;
     });
