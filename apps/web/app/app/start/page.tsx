@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { AppSidebar } from "../../../components/app-sidebar";
 import { apiRequest } from "../../../lib/api";
 
@@ -49,7 +48,6 @@ const niches: Record<string,string> = {
 };
 
 export default function FirstDayPage(){
-  const query=useSearchParams();
   const [verticals,setVerticals]=useState<Vertical[]>([]);
   const [profile,setProfile]=useState<BusinessProfile|null>(null);
   const [activation,setActivation]=useState<Activation|null>(null);
@@ -71,7 +69,8 @@ export default function FirstDayPage(){
       setVerticals(options);
       setProfile(current);
       setActivation(progress);
-      const requested=query.get("vertical");
+      const requested=typeof window==="undefined" ? null :
+        new URLSearchParams(window.location.search).get("vertical");
       setChosen(prev=>prev ||
         (requested && options.some(x=>x.code===requested)?requested:
           current.verticalCode??"GENERAL"));
@@ -79,7 +78,7 @@ export default function FirstDayPage(){
     }catch(cause){
       setError(cause instanceof Error?cause.message:"Не удалось открыть настройку компании");
     }finally{setLoading(false);}
-  },[query]);
+  },[]);
   useEffect(()=>{void reload();},[reload]);
 
   const selected=verticals.find(x=>x.code===chosen);
