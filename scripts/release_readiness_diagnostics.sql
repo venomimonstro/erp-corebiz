@@ -217,7 +217,11 @@ FROM trainer_compensation_plan a
 JOIN trainer_compensation_plan b
   ON b.tenant_id=a.tenant_id
  AND b.trainer_resource_id=a.trainer_resource_id
+ AND b.service_id IS NOT DISTINCT FROM a.service_id
  AND b.lesson_type IS NOT DISTINCT FROM a.lesson_type
+ AND b.dance_program_id IS NOT DISTINCT FROM a.dance_program_id
+ AND b.dance_group_id IS NOT DISTINCT FROM a.dance_group_id
+ AND b.branch_id IS NOT DISTINCT FROM a.branch_id
  AND b.priority=a.priority
  AND b.id>a.id
  AND b.status='ACTIVE'
@@ -227,27 +231,39 @@ JOIN trainer_compensation_plan b
 WHERE a.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
 UNION ALL
 SELECT 'DANCE_PACKAGE_ENTITLEMENT_DUPLICATE',count(*)::bigint
-FROM (
-  SELECT
-    tenant_id,plan_id,lesson_type,dance_program_id,dance_group_id,priority
-  FROM service_package_plan_entitlement
-  WHERE tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
-  GROUP BY
-    tenant_id,plan_id,lesson_type,dance_program_id,dance_group_id,priority
-  HAVING count(*)>1
-) q
-UNION ALL
-SELECT 'DANCE_ROOM_RENT_CONTRACT_OVERLAP',count(*)::bigint
-FROM room_rental_contract a
-JOIN room_rental_contract b
+FROM service_package_plan_entitlement a
+JOIN service_package_plan_entitlement b
   ON b.tenant_id=a.tenant_id
- AND b.room_resource_id=a.room_resource_id
+ AND b.plan_id=a.plan_id
+ AND b.service_id IS NOT DISTINCT FROM a.service_id
+ AND b.trainer_resource_id IS NOT DISTINCT FROM a.trainer_resource_id
+ AND b.lesson_type IS NOT DISTINCT FROM a.lesson_type
+ AND b.dance_program_id IS NOT DISTINCT FROM a.dance_program_id
+ AND b.dance_group_id IS NOT DISTINCT FROM a.dance_group_id
+ AND b.priority=a.priority
  AND b.id>a.id
- AND b.status='ACTIVE'
- AND a.status='ACTIVE'
- AND daterange(a.valid_from,a.valid_to,'[]')
-     && daterange(b.valid_from,b.valid_to,'[]')
+ AND b.weekdays && a.weekdays
+ AND int4range(b.start_minute::int,b.end_minute::int,'[)')
+     && int4range(a.start_minute::int,a.end_minute::int,'[)')
 WHERE a.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+UNION ALL
+SELECT 'DANCE_ROOM_RENT_CAPACITY_EXCEEDED',count(*)::bigint
+FROM room_rental_contract anchor
+JOIN service_resource r
+  ON r.tenant_id=anchor.tenant_id AND r.id=anchor.room_resource_id
+LEFT JOIN service_resource_zone z
+  ON z.tenant_id=anchor.tenant_id AND z.id=anchor.zone_id
+WHERE anchor.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND anchor.status='ACTIVE'
+  AND (
+    SELECT coalesce(sum(c.capacity_units),0)
+    FROM room_rental_contract c
+    WHERE c.tenant_id=anchor.tenant_id
+      AND c.room_resource_id=anchor.room_resource_id
+      AND c.zone_id IS NOT DISTINCT FROM anchor.zone_id
+      AND c.status='ACTIVE'
+      AND anchor.valid_from BETWEEN c.valid_from AND coalesce(c.valid_to,'infinity'::date)
+  ) > coalesce(z.capacity_units,r.capacity)
 UNION ALL
 SELECT 'DANCE_RENT_STATEMENT_AMOUNT_MISMATCH',count(*)::bigint
 FROM room_rental_statement s
@@ -261,4 +277,35 @@ WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     OR o.source_id<>s.id
     OR o.currency<>s.currency
     OR o.amount_minor<>s.amount_minor
-  );
+  )
+UNION ALL
+SELECT 'SERVICE_DELIVERY_RULE_OVERLAP',count(*)::bigint
+FROM service_delivery_rule a
+JOIN service_delivery_rule b
+  ON b.tenant_id=a.tenant_id
+ AND b.service_id=a.service_id
+ AND b.delivery_format=a.delivery_format
+ AND b.employee_resource_id IS NOT DISTINCT FROM a.employee_resource_id
+ AND b.branch_id IS NOT DISTINCT FROM a.branch_id
+ AND b.priority=a.priority
+ AND b.id>a.id
+ AND a.status='ACTIVE'
+ AND b.status='ACTIVE'
+ AND daterange(a.valid_from,a.valid_to,'[]')
+     && daterange(b.valid_from,b.valid_to,'[]')
+ AND a.weekdays && b.weekdays
+ AND int4range(a.start_minute::int,a.end_minute::int,'[)')
+     && int4range(b.start_minute::int,b.end_minute::int,'[)')
+WHERE a.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+UNION ALL
+SELECT 'SERVICE_ZONE_CAPACITY_EXCEEDED',count(*)::bigint
+FROM (
+  SELECT z.tenant_id,z.resource_id,sum(z.capacity_units) AS configured,r.capacity
+  FROM service_resource_zone z
+  JOIN service_resource r
+    ON r.tenant_id=z.tenant_id AND r.id=z.resource_id
+  WHERE z.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+    AND z.status='ACTIVE'
+  GROUP BY z.tenant_id,z.resource_id,r.capacity
+  HAVING sum(z.capacity_units)>r.capacity
+) q;
