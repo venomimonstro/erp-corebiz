@@ -2453,9 +2453,6 @@ export class DanceStudioService {
         :priceSource==="TRIAL"?(requestedCharge??"0"):"0";
       if(!/^\d{1,15}$/.test(charge))
         throw new BadRequestException("Не задана допустимая цена занятия");
-      if(priceSource==="DIRECT"&&BigInt(charge)===0n&&requestedCharge===null)
-        throw new ConflictException("Стоимость занятия не настроена. Укажите цену либо выберите бесплатное или пробное занятие");
-
       const student=await this.assertStudentAccess(
         client,context.tenantId,input.studentId,scopeIds
       );
@@ -2495,6 +2492,9 @@ export class DanceStudioService {
         }
         return previous;
       }
+
+      if(priceSource==="DIRECT"&&BigInt(charge)===0n&&requestedCharge===null)
+        throw new ConflictException("Стоимость занятия не настроена. Укажите цену либо выберите бесплатное или пробное занятие");
 
       if(previous?.status==="CANCELLED_IN_TIME"){
         if(full){
