@@ -2395,9 +2395,17 @@ export class DanceStudioService {
     const scopeIds=await this.scopeIds(context,"dance.write");
     const requestedCharge=
       input.chargeMinor===undefined ? null : String(input.chargeMinor);
-    if(requestedCharge!==null&&!/^\d+$/.test(requestedCharge)){
+    if(requestedCharge!==null&&!/^\d{1,15}$/.test(requestedCharge)){
       throw new BadRequestException("Некорректная стоимость");
     }
+    if(input.priceSource&&!["DIRECT","TRIAL","FREE","MAKEUP"].includes(input.priceSource))
+      throw new BadRequestException("Некорректный способ оплаты занятия");
+    if(input.priceSource==="MAKEUP"&&!input.makeupCreditId)
+      throw new BadRequestException("Для отработки выберите доступное право на занятие");
+    if(input.priceSource==="FREE"&&requestedCharge!==null&&BigInt(requestedCharge)>0n)
+      throw new BadRequestException("Бесплатное занятие не должно создавать начисление");
+    if(input.packageId&&requestedCharge!==null&&BigInt(requestedCharge)>0n)
+      throw new BadRequestException("При использовании абонемента цена отдельного занятия должна быть нулевой");
     if(input.packageId&&input.makeupCreditId){
       throw new BadRequestException(
         "Нельзя одновременно использовать абонемент и отработку"
@@ -2429,6 +2437,14 @@ export class DanceStudioService {
       ){
         throw new ConflictException("Урок закрыт для записи");
       }
+
+      const charge=priceSource==="DIRECT"
+        ?(requestedCharge??String(lesson.booking_price_minor??"0"))
+        :priceSource==="TRIAL"?(requestedCharge??"0"):"0";
+      if(!/^\d{1,15}$/.test(charge))
+        throw new BadRequestException("Не задана допустимая цена занятия");
+      if(priceSource==="DIRECT"&&BigInt(charge)===0n&&requestedCharge===null)
+        throw new ConflictException("Стоимость занятия не настроена. Укажите цену либо выберите бесплатное или пробное занятие");
 
       const student=await this.assertStudentAccess(
         client,context.tenantId,input.studentId,scopeIds
@@ -2570,6 +2586,11 @@ export class DanceStudioService {
       version:number;
     }
   ){
+    if(!input||!["BOOKED","ATTENDED","LATE","NO_SHOW","EXCUSED_ABSENCE",
+      "CANCELLED_IN_TIME","CANCELLED_LATE"].includes(input.status))
+      throw new BadRequestException("Некорректная отметка посещения");
+    if(!Number.isSafeInteger(input.version)||input.version<1)
+      throw new BadRequestException("Некорректная версия записи");
     const scopeIds=await this.scopeIds(context,"dance.write");
     return this.database.withTenantTransaction(context,async client=>{
       const lesson=await this.assertLessonAccess(
