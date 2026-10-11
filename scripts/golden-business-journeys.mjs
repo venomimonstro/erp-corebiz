@@ -512,6 +512,25 @@ async function danceStudioJourney() {
     schedule: []
   });
 
+  const initialReadiness=await request("GET","/dance/readiness");
+  assert.equal(initialReadiness.steps.find(s=>s.id==="trainer")?.done,true);
+  assert.equal(initialReadiness.steps.find(s=>s.id==="program")?.done,true);
+  assert.equal(initialReadiness.steps.find(s=>s.id==="group")?.done,true);
+  assert.equal(initialReadiness.canLaunch,false,
+    "DANCE readiness cannot call a studio ready before lessons exist");
+
+  const invalidCalendar=await request(
+    "POST","/dance/groups/"+group.id+"/lessons/generate",
+    {from:"2026-02-31",to:"2026-03-31"},{expectedStatus:400}
+  );
+  assert.equal(invalidCalendar.ok,false,"DANCE impossible calendar date is rejected");
+
+  const unboundedCalendar=await request(
+    "POST","/dance/groups/"+group.id+"/lessons/generate",
+    {from:"2026-01-01",to:"2027-01-01"},{expectedStatus:400}
+  );
+  assert.equal(unboundedCalendar.ok,false,"DANCE unbounded lesson generation is rejected");
+
   const membership = await request(
     "POST",
     "/dance/groups/" + group.id + "/members",
@@ -661,6 +680,11 @@ async function danceStudioJourney() {
     capacity: 8,
     idempotencyKey: "golden-dance-lesson-" + randomUUID()
   });
+
+  const launchReadiness=await request("GET","/dance/readiness");
+  assert.equal(launchReadiness.canLaunch,true,
+    "DANCE studio can launch after trainer, program, group and lesson are configured");
+  assert.equal(launchReadiness.steps.find(s=>s.id==="lesson")?.done,true);
 
   const synced = await request(
     "POST",
