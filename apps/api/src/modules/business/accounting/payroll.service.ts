@@ -157,6 +157,85 @@ export class PayrollService {
     });
   }
 
+  async markPaid(
+    ctx:TenantContext,
+    batchId:string,
+    input:{
+      paidAt?:string;
+      reference?:string;
+      note?:string;
+    }
+  ) {
+    const paidAt=input.paidAt?new Date(input.paidAt):new Date();
+    if(Number.isNaN(paidAt.getTime())){
+      throw new BadRequestException("Invalid payroll payment date");
+    }
+    const reference=input.reference?.trim()||null;
+    const note=input.note?.trim()||null;
+    if(reference&&reference.length>180){
+      throw new BadRequestException("Payroll payment reference is too long");
+    }
+    if(note&&note.length>500){
+      throw new BadRequestException("Payroll payment note is too long");
+    }
+
+    return this.db.withTenantTransaction(ctx,async client=>{
+      const batch=await client.query<{
+        status:string;
+        paid_at:Date|null;
+        payment_reference:string|null;
+      }>(
+        `SELECT status,paid_at,payment_reference
+         FROM payroll_accrual_batch
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [ctx.tenantId,batchId]
+      );
+      const row=batch.rows[0];
+      if(!row) throw new NotFoundException("Payroll batch not found");
+      if(row.status==="PAID"){
+        return {
+          status:"PAID",
+          changed:false,
+          paidAt:row.paid_at,
+          reference:row.payment_reference
+        };
+      }
+      if(row.status!=="APPROVED"){
+        throw new ConflictException(
+          "Payroll batch must be approved before payment"
+        );
+      }
+
+      const result=await client.query<{
+        paid_at:Date;
+        payment_reference:string|null;
+      }>(
+        `UPDATE payroll_accrual_batch
+         SET status='PAID',
+             paid_at=$3,
+             paid_by_membership_id=$4,
+             payment_reference=$5,
+             payment_note=$6
+         WHERE tenant_id=$1 AND id=$2 AND status='APPROVED'
+         RETURNING paid_at,payment_reference`,
+        [
+          ctx.tenantId,batchId,paidAt,ctx.membershipId,
+          reference,note
+        ]
+      );
+      if(!result.rows[0]){
+        throw new ConflictException("Payroll batch changed concurrently");
+      }
+      return {
+        status:"PAID",
+        changed:true,
+        paidAt:result.rows[0].paid_at,
+        reference:result.rows[0].payment_reference
+      };
+    });
+  }
+
   async approve(ctx:TenantContext,batchId:string) {
     return this.db.withTenantTransaction(ctx,async client=>{
       const b=await client.query<{status:string}>(
