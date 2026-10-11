@@ -4,6 +4,7 @@ import {
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import { CustomizationService } from "./customization.service";
+import { CustomizationController } from "./customization.controller";
 
 describe("CustomizationService validation boundaries", () => {
   const context: TenantContext = {
@@ -30,6 +31,16 @@ describe("CustomizationService validation boundaries", () => {
       authorization
     };
   }
+
+  it("rejects string-valued feature flags rather than turning 'false' on", async () => {
+    const service={setCapability:jest.fn()};
+    const controller=new CustomizationController(service as any);
+    const request={auth:context};
+    await expect(controller.setCapability(request as any,"dance",{
+      enabled:"false" as any
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(service.setCapability).not.toHaveBeenCalled();
+  });
 
   it("rejects malformed industry and generic-profile values without database writes", async () => {
     const test=subject();
