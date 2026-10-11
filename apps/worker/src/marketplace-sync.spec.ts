@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeOzonPosting, normalizeWbOrder, normalizeYandexOrder } from "./marketplace-sync.js";
+import { normalizeOzonPosting, normalizeWbOrder, normalizeYandexOrder, isFinalMarketplaceCancellation } from "./marketplace-sync.js";
 
 test("Wildberries FBS: raw finalPrice is already expressed in kopecks",()=>{
   const order=normalizeWbOrder({
@@ -57,4 +57,13 @@ test("Ozon empty order cannot generate a phantom reservation",()=>{
   assert.equal(normalizeOzonPosting({
     posting_number:"P-EMPTY",products:[]
   }),null);
+});
+
+test("marketplace final cancellation frees unimported shadow stock only after final status",()=>{
+  assert.equal(isFinalMarketplaceCancellation("CANCELLED"),true);
+  assert.equal(isFinalMarketplaceCancellation("canceled"),true);
+  assert.equal(isFinalMarketplaceCancellation("cancel/WB_CANCELLED"),true);
+  assert.equal(isFinalMarketplaceCancellation("CANCEL_REQUESTED"),false);
+  assert.equal(isFinalMarketplaceCancellation("cancelRequested"),false);
+  assert.equal(isFinalMarketplaceCancellation("PROCESSING"),false);
 });
