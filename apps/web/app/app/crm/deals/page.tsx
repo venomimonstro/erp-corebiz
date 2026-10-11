@@ -31,6 +31,7 @@ type Stage = {
   deals: Deal[];
 };
 
+type Pipeline={id:string;name:string;is_default:boolean};
 type Board = {
   pipeline: { id: string; name: string };
   stages: Stage[];
@@ -55,18 +56,34 @@ export default function DealsPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [moving, setMoving] = useState<string | null>(null);
+  const [pipelines,setPipelines]=useState<Pipeline[]>([]);
+  const [pipelineId,setPipelineId]=useState("");
+  const [filter,setFilter]=useState("");
+  const [onlyNeedsAction,setOnlyNeedsAction]=useState(false);
+  const [actionDeal,setActionDeal]=useState<Deal|null>(null);
+  const [actionTitle,setActionTitle]=useState("");
+  const [actionDue,setActionDue]=useState("");
+  const [actionKey,setActionKey]=useState("");
+  const [savingAction,setSavingAction]=useState(false);
+  const [notice,setNotice]=useState("");
 
   const load = useCallback(async () => {
     setError("");
     try {
-      const data = await apiRequest<Board>("/crm/board");
+      const data = await apiRequest<Board>(
+        "/crm/board"+(pipelineId?"?pipelineId="+encodeURIComponent(pipelineId):""));
       setBoard(data);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить CRM");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [pipelineId]);
+
+  useEffect(()=>{
+    void apiRequest<Pipeline[]>("/crm/pipelines")
+      .then(setPipelines).catch(()=>setPipelines([]));
+  },[]);
 
   useEffect(() => {
     void load();
@@ -86,9 +103,57 @@ export default function DealsPage() {
     void quickCreate();
   }, []);
 
+  async function createPipeline(){
+    const name=window.prompt("Название новой воронки");
+    if(!name?.trim())return;
+    try{
+      const result=await apiRequest<{id:string}>("/crm/pipelines",{
+        method:"POST",body:JSON.stringify({name:name.trim()})
+      });
+      const list=await apiRequest<Pipeline[]>("/crm/pipelines");
+      setPipelines(list);setPipelineId(result.id);
+    }catch(cause){setError(cause instanceof Error?cause.message:"Не удалось создать воронку");}
+  }
+
+  function openNextAction(deal:Deal){
+    setActionDeal(deal);setActionTitle("Связаться с клиентом");
+    const date=new Date(Date.now()+86400000);
+    setActionDue(
+      new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16)
+    );
+    setActionKey(typeof crypto!=="undefined"&&crypto.randomUUID?
+      crypto.randomUUID():String(Date.now())+"-next-action");
+  }
+  async function saveNextAction(){
+    if(!actionDeal||!actionTitle.trim()||!actionDue)return;
+    const date=new Date(actionDue);
+    if(!Number.isFinite(date.getTime())){setError("Некорректный срок задачи");return;}
+    setSavingAction(true);setError("");
+    try{
+      await apiRequest("/crm/deals/"+actionDeal.id+"/next-action",{
+        method:"POST",body:JSON.stringify({
+          title:actionTitle.trim(),dueAt:date.toISOString(),idempotencyKey:actionKey
+        })
+      });
+      setNotice("Задача поставлена, ответственный назначен.");
+      setActionDeal(null);await load();
+    }catch(cause){setError(cause instanceof Error?cause.message:"Задача не сохранена");}
+    finally{setSavingAction(false);}
+  }
+
+  const visibleStages=useMemo(()=>board?.stages.map(stage=>({
+    ...stage,
+    deals:stage.deals.filter(deal=>{
+      if(onlyNeedsAction && deal.hasNextAction && deal.overdueTasks===0)return false;
+      const term=filter.trim().toLowerCase();
+      return !term || deal.title.toLowerCase().includes(term) ||
+        (deal.partyName??"").toLowerCase().includes(term);
+    })
+  }))??[],[board,filter,onlyNeedsAction]);
+
   const totals = useMemo(() => {
     if (!board) return { deals: 0, amountMinor: 0 };
-    return board.stages.reduce(
+    return visibleStages.reduce(
       (acc, stage) => {
         acc.deals += stage.deals.length;
         acc.amountMinor += stage.deals.reduce(
@@ -99,7 +164,7 @@ export default function DealsPage() {
       },
       { deals: 0, amountMinor: 0 }
     );
-  }, [board]);
+  }, [board, visibleStages]);
 
   function startDrag(event: DragEvent, deal: Deal) {
     const payload: DragPayload = {
@@ -210,9 +275,52 @@ export default function DealsPage() {
             ) : null}
           </div>
 
-          <button onClick={quickCreate} type="button">+ Сделка</button>
+          <div className="studio-hero-actions">
+            <button className="secondary-button" type="button"
+              onClick={()=>void createPipeline()}>+ Воронка</button>
+            <button onClick={quickCreate} type="button">+ Сделка</button>
+          </div>
         </header>
 
+        <section className="crm-workspace-controls">
+          <label>Воронка
+            <select value={pipelineId} onChange={e=>setPipelineId(e.target.value)}>
+              <option value="">Основная</option>
+              {pipelines.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+          <label>Найти сделку
+            <input value={filter} onChange={e=>setFilter(e.target.value)}
+              placeholder="Название сделки или клиент"/>
+          </label>
+          <label className="crm-check">
+            <input type="checkbox" checked={onlyNeedsAction}
+              onChange={e=>setOnlyNeedsAction(e.target.checked)}/>
+            Только без следующего действия или с просрочкой
+          </label>
+        </section>
+        {notice?<p role="status">{notice}</p>:null}
+        {actionDeal?<section className="studio-section crm-next-action">
+          <h2>Следующее действие · {actionDeal.title}</h2>
+          <p>Задача попадёт в общий список и историю сделки.</p>
+          <div className="studio-form-grid">
+            <label>Что нужно сделать
+              <input value={actionTitle} onChange={e=>setActionTitle(e.target.value)}/>
+            </label>
+            <label>Срок
+              <input type="datetime-local" value={actionDue}
+                onChange={e=>setActionDue(e.target.value)}/>
+            </label>
+          </div>
+          <div className="studio-hero-actions">
+            <button type="button" disabled={savingAction||!actionTitle.trim()||!actionDue}
+              onClick={()=>void saveNextAction()}>
+              {savingAction?"Сохраняем…":"Назначить задачу"}
+            </button>
+            <button type="button" className="secondary-button"
+              onClick={()=>setActionDeal(null)}>Отмена</button>
+          </div>
+        </section>:null}
         {error ? (
           <div className="inline-error">
             <strong>Не удалось выполнить действие</strong>
@@ -226,7 +334,7 @@ export default function DealsPage() {
 
         {!loading && board ? (
           <div className="kanban">
-            {board.stages.map((stage) => {
+            {visibleStages.map((stage) => {
               const stageAmount = stage.deals.reduce(
                 (sum, deal) => sum + Number(deal.amountMinor),
                 0
@@ -274,6 +382,11 @@ export default function DealsPage() {
                         </span>
 
                         <footer>
+                          {stage.kind==="NORMAL"?<button type="button"
+                            className="secondary-button" disabled={Boolean(moving)}
+                            onClick={()=>openNextAction(deal)}>
+                            + Задача
+                          </button>:null}
                           {deal.overdueTasks > 0 ? (
                             <span className="deal-alert danger">
                               Просрочено: {deal.overdueTasks}
