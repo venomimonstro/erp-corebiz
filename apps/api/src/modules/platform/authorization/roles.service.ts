@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
@@ -91,18 +92,57 @@ export class RolesService {
         throw new NotFoundException("Роль не найдена");
       }
 
-      const ownerMembership = await client.query<{ is_owner: boolean }>(
-        `SELECT is_owner
-         FROM tenant_membership
-         WHERE id = $1 AND tenant_id = $2`,
-        [membershipId, context.tenantId]
+      const ownerMembership = await client.query<{is_owner:boolean}>(
+        `SELECT is_owner FROM tenant_membership
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,membershipId]
       );
-
-      if (
-        ownerMembership.rows[0]?.is_owner &&
-        roleRow.code !== "OWNER"
-      ) {
+      const isTargetOwner=ownerMembership.rows[0]?.is_owner===true;
+      if(isTargetOwner&&roleRow.code!=="OWNER")
         throw new BadRequestException("Роль владельца нельзя заменить");
+      // OWNER is a legal/business ownership flag, not merely a role row.
+      // Never let a roles.manage administrator mint an OWNER identity.
+      const actor=await client.query<{is_owner:boolean}>(
+        `SELECT is_owner FROM tenant_membership
+         WHERE tenant_id=$1 AND id=$2 AND user_id=$3 AND status='ACTIVE'`,
+        [context.tenantId,context.membershipId,context.userId]
+      );
+      if(!actor.rows[0])throw new ForbiddenException("Сотрудник не активен");
+      if(roleRow.code==="OWNER"&&(!isTargetOwner||!actor.rows[0].is_owner))
+        throw new ForbiddenException(
+          "Назначение владельца не является операцией управления ролями"
+        );
+      if(!actor.rows[0].is_owner){
+        // An administrator can delegate no more than the permissions and
+        // object scopes they themselves hold. Compare EVERY permission in
+        // the assigned role; permission_code='*' must match an actor wildcard.
+        const elevated=await client.query<{permission_code:string;scope:string}>(
+          `SELECT target.permission_code,target.scope
+           FROM role_permission target
+           WHERE target.tenant_id=$1 AND target.role_id=$2
+             AND NOT EXISTS (
+               SELECT 1
+               FROM membership_role actor_role
+               JOIN role_permission own_grant
+                 ON own_grant.tenant_id=actor_role.tenant_id
+                AND own_grant.role_id=actor_role.role_id
+               WHERE actor_role.tenant_id=$1
+                 AND actor_role.membership_id=$3
+                 AND own_grant.permission_code IN ('*',target.permission_code)
+                 AND (CASE own_grant.scope
+                        WHEN 'all' THEN 4 WHEN 'branch' THEN 3
+                        WHEN 'team' THEN 2 WHEN 'own' THEN 1 ELSE 0 END)
+                     >= (CASE target.scope
+                        WHEN 'all' THEN 4 WHEN 'branch' THEN 3
+                        WHEN 'team' THEN 2 WHEN 'own' THEN 1 ELSE 0 END)
+             )
+           LIMIT 1`,
+          [context.tenantId,roleId,context.membershipId]
+        );
+        if(elevated.rows.length)
+          throw new ForbiddenException(
+            "Нельзя назначить роль с правами выше собственных полномочий"
+          );
       }
 
       await client.query(
