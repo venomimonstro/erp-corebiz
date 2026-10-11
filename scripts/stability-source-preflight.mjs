@@ -370,6 +370,8 @@ async function inspectRequiredHardening(root) {
       /dance\/lessons\//,
       /dance\/payroll-profiles/,
       /DANCE_TRAINER_STATEMENT/,
+      /payroll-statements\/.*\/review/,
+      /ACKNOWLEDGED/,
       /accounting\/payroll\/batches\//,
       /dance\/room-statements\/finalize/
     ],
