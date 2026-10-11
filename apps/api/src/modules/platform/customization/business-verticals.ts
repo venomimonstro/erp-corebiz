@@ -38,6 +38,8 @@ export type BusinessVerticalCode =
   | "DANCE_FITNESS"
   | "PROFESSIONAL_SERVICES"
   | "WEB_MARKETING_AGENCY"
+  | "WEB_STUDIO"
+  | "MARKETING_AGENCY"
   | "RETAIL_STORE"
   | "WHOLESALE_B2B"
   | "ECOMMERCE_STORE"
@@ -392,6 +394,82 @@ export const BUSINESS_VERTICALS: Record<
     ]
   },
 
+  WEB_STUDIO: {
+    code: "WEB_STUDIO",
+    title: "Веб-студия / разработка сайтов",
+    summary: "Продажи разработки, техническое задание, дизайн, этапы, QA, публикация, поддержка, учёт времени и прибыльность.",
+    profileCode: "SERVICE",
+    version: 1,
+    enabledCapabilities: ["crm","tasks","sales","finance","accounting","service","projects","sites","growth","workflow","support"],
+    customFields: [
+      { entityType: "DEAL", fieldKey: "website_platform", label: "Платформа сайта", dataType: "SELECT", options: ["1C_BITRIX","WORDPRESS","TILDA","CUSTOM","OTHER"] },
+      { entityType: "DEAL", fieldKey: "technical_scope", label: "Объём работ / ТЗ", dataType: "TEXT" },
+      { entityType: "DEAL", fieldKey: "delivery_deadline", label: "Срок запуска", dataType: "DATE" },
+      { entityType: "DEAL", fieldKey: "support_contract", label: "Поддержка после запуска", dataType: "BOOLEAN" },
+      { entityType: "PARTY", fieldKey: "technical_contact", label: "Технический контакт клиента", dataType: "TEXT" }
+    ],
+    ownerQuestions: [
+      "Сколько сделок находится на оценке и когда отправить коммерческое предложение?",
+      "Какие проекты превысили согласованный объём работ и план часов?",
+      "Какие макеты, релизы и этапы ждут согласования клиента?",
+      "Сколько денег будет получено после приёмки и какие этапы не оплачены?",
+      "Как загружены дизайнеры, разработчики, тестировщики и менеджеры проектов?"
+    ],
+    primaryWorkspaces: ["crm","agency","projects","tasks","finance","support"],
+    operatingFlows: [
+      "Заявка → бриф → оценка часов → КП → договор → проект",
+      "Проект → ТЗ → прототип → дизайн → разработка → QA → приёмка → релиз",
+      "Изменение требований → оценка → согласование → дополнительный бюджет",
+      "Этап → результат → согласование → акт → счёт → поступление",
+      "Запуск сайта → гарантийные задачи → техподдержка / SLA / продление"
+    ],
+    attentionSignals: [
+      "Сделка без следующего контакта или просроченный follow-up",
+      "Проект без назначенного исполнителя или без срока",
+      "Этап готов, но клиент не принял результат",
+      "Фактические часы выше оценки и маржа ниже целевой",
+      "Релиз запланирован без QA и согласования клиента",
+      "Просроченный платёж по закрытому этапу"
+    ]
+  },
+  MARKETING_AGENCY: {
+    code: "MARKETING_AGENCY",
+    title: "Маркетинговое / рекламное агентство",
+    summary: "Лиды, договоры, абонентское обслуживание, SEO/SMM/PPC, медиабюджеты, KPI, согласования, отчёты и юнит-экономика клиентов.",
+    profileCode: "SERVICE",
+    version: 1,
+    enabledCapabilities: ["crm","tasks","sales","finance","accounting","service","projects","sites","growth","workflow","support"],
+    customFields: [
+      { entityType: "DEAL", fieldKey: "marketing_channels", label: "Каналы продвижения", dataType: "MULTISELECT", options: ["SEO","YANDEX_DIRECT","VK_ADS","TELEGRAM","SMM","CONTENT","MARKETPLACES","OTHER"] },
+      { entityType: "DEAL", fieldKey: "contract_retainer", label: "Ежемесячный гонорар", dataType: "NUMBER" },
+      { entityType: "DEAL", fieldKey: "advertising_budget", label: "Рекламный бюджет клиента", dataType: "NUMBER" },
+      { entityType: "DEAL", fieldKey: "target_kpi", label: "Целевые показатели / KPI", dataType: "TEXT" },
+      { entityType: "DEAL", fieldKey: "contract_renewal_on", label: "Дата продления договора", dataType: "DATE" }
+    ],
+    ownerQuestions: [
+      "Какие клиенты прибыльны после фактических часов и подрядчиков?",
+      "Какие рекламные бюджеты принадлежат клиенту, а какие являются выручкой агентства?",
+      "По каким клиентам KPI, лиды, CPL, CAC или ROMI отклоняются от плана?",
+      "Какие месячные отчёты и медиапланы ждут согласования?",
+      "Кто рискует не продлить договор и какую выручку потеряем?"
+    ],
+    primaryWorkspaces: ["crm","agency","projects","tasks","finance","growth"],
+    operatingFlows: [
+      "Входящий лид → аудит → стратегия → КП → договор → onboarding клиента",
+      "Ретейнер → медиаплан → задачи SEO/SMM/PPC → согласование → запуск",
+      "Кампании → рекламный расход → заявки → сделки клиента → KPI и отчёт",
+      "Фактические часы + подрядчики → себестоимость → прибыль по клиенту",
+      "Месячный отчёт → счёт и акт → оплата → план следующего периода"
+    ],
+    attentionSignals: [
+      "Сделка без следующего контакта или назначенного ответственного",
+      "У клиента заканчивается бюджет или договор без плана продления",
+      "Кампании расходуют бюджет без измеряемых конверсий",
+      "Клиент не согласовал креатив или медиаплан к сроку",
+      "Маржинальность договора падает из-за незапланированных работ",
+      "Месячный отчёт или оплата просрочены"
+    ]
+  },
   RETAIL_STORE: {
     code: "RETAIL_STORE",
     title: "Розничная торговля",
