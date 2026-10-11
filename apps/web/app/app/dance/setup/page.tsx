@@ -61,6 +61,28 @@ type TechnologyCard = {
   lines:Array<unknown>;
 };
 
+type Warehouse = {
+  id:string;
+  name:string;
+  code:string;
+};
+
+type Product = {
+  productId:string;
+  productName:string;
+  kind:"STOCKABLE"|"NON_STOCK";
+  skuId:string;
+  sku:string;
+  trackInventory:boolean;
+};
+
+type CardLineDraft = {
+  warehouseId:string;
+  skuId:string;
+  quantity:string;
+  wastePercent:string;
+};
+
 const DAY_LABELS = [
   ["1","Пн"],["2","Вт"],["3","Ср"],["4","Чт"],
   ["5","Пт"],["6","Сб"],["7","Вс"]
@@ -95,12 +117,15 @@ export default function DanceSetupPage(){
   const [resources,setResources]=useState<Resource[]>([]);
   const [rules,setRules]=useState<DeliveryRule[]>([]);
   const [cards,setCards]=useState<TechnologyCard[]>([]);
+  const [warehouses,setWarehouses]=useState<Warehouse[]>([]);
+  const [products,setProducts]=useState<Product[]>([]);
   const [zones,setZones]=useState<Record<string,Zone[]>>({});
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [pending,setPending]=useState(false);
   const [showRule,setShowRule]=useState(false);
   const [showZone,setShowZone]=useState(false);
+  const [showCard,setShowCard]=useState(false);
 
   const [ruleService,setRuleService]=useState("");
   const [ruleEmployee,setRuleEmployee]=useState("");
@@ -117,19 +142,34 @@ export default function DanceSetupPage(){
   const [zoneName,setZoneName]=useState("");
   const [zoneCapacity,setZoneCapacity]=useState("1");
 
+  const [cardName,setCardName]=useState("");
+  const [cardCode,setCardCode]=useState("");
+  const [cardDescription,setCardDescription]=useState("");
+  const [cardLines,setCardLines]=useState<CardLineDraft[]>([]);
+
   const load=useCallback(async()=>{
     setError("");
     try{
-      const [serviceRows,resourceRows,ruleRows,cardRows]=await Promise.all([
+      const [
+        serviceRows,resourceRows,ruleRows,cardRows,warehouseRows,productRows
+      ]=await Promise.all([
         apiRequest<Service[]>("/service/catalog"),
         apiRequest<Resource[]>("/service/resources"),
         apiRequest<DeliveryRule[]>("/service/delivery-rules"),
-        apiRequest<TechnologyCard[]>("/service/technology-cards")
+        apiRequest<TechnologyCard[]>("/service/technology-cards"),
+        apiRequest<Warehouse[]>("/inventory/warehouses"),
+        apiRequest<Product[]>("/catalog/products")
       ]);
       setServices(serviceRows);
       setResources(resourceRows);
       setRules(ruleRows);
       setCards(cardRows);
+      setWarehouses(warehouseRows);
+      setProducts(
+        productRows.filter(
+          (item)=>item.kind==="STOCKABLE"&&item.trackInventory
+        )
+      );
 
       const rooms=resourceRows.filter(item=>
         ["ROOM","HALL","WORKPLACE","EQUIPMENT","OTHER"].includes(item.type)
@@ -239,6 +279,108 @@ export default function DanceSetupPage(){
       await load();
     }catch(cause){
       setError(cause instanceof Error?cause.message:"Не удалось сохранить правило");
+    }finally{
+      setPending(false);
+    }
+  }
+
+  function openCardDrawer(){
+    if(!warehouses.length){
+      setError("Сначала создайте склад для расходников");
+      return;
+    }
+    if(!products.length){
+      setError("Сначала добавьте хотя бы один складской материал");
+      return;
+    }
+    setCardName("");
+    setCardCode("");
+    setCardDescription("");
+    setCardLines([
+      {
+        warehouseId:warehouses[0]?.id??"",
+        skuId:products[0]?.skuId??"",
+        quantity:"1",
+        wastePercent:"0"
+      }
+    ]);
+    setShowCard(true);
+  }
+
+  function updateCardLine(
+    index:number,
+    patch:Partial<CardLineDraft>
+  ){
+    setCardLines(current=>
+      current.map((line,lineIndex)=>
+        lineIndex===index?{...line,...patch}:line
+      )
+    );
+  }
+
+  function addCardLine(){
+    setCardLines(current=>[
+      ...current,
+      {
+        warehouseId:warehouses[0]?.id??"",
+        skuId:products[0]?.skuId??"",
+        quantity:"1",
+        wastePercent:"0"
+      }
+    ]);
+  }
+
+  async function createTechnologyCard(event:FormEvent){
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    if(!cardName.trim()){
+      setError("Укажите название техкарты");
+      return;
+    }
+    if(!cardLines.length){
+      setError("Добавьте хотя бы один расходник");
+      return;
+    }
+
+    const lines=cardLines.map((line)=>{
+      const quantity=Number(line.quantity.replace(",","."));
+      const waste=Number(line.wastePercent.replace(",","."));
+      if(
+        !line.warehouseId||!line.skuId||
+        !Number.isFinite(quantity)||quantity<=0||
+        !Number.isFinite(waste)||waste<0||waste>100
+      ){
+        throw new Error("Проверьте материалы, количество и технологические потери");
+      }
+      return {
+        warehouseId:line.warehouseId,
+        skuId:line.skuId,
+        quantityMilli:String(Math.round(quantity*1000)),
+        wasteBps:Math.round(waste*100)
+      };
+    });
+
+    setPending(true);
+    try{
+      await apiRequest("/service/technology-cards",{
+        method:"POST",
+        body:JSON.stringify({
+          name:cardName.trim(),
+          code:cardCode.trim()||undefined,
+          description:cardDescription.trim()||undefined,
+          lines
+        })
+      });
+      setShowCard(false);
+      setNotice(
+        "Техкарта создана. Теперь её можно привязать к услуге или сотруднику."
+      );
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error?cause.message:"Не удалось создать техкарту"
+      );
     }finally{
       setPending(false);
     }
