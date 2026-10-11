@@ -95,6 +95,7 @@ export function PublicStorefront({
   const [deliveryMethodId, setDeliveryMethodId] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [paymentCartKey, setPaymentCartKey] = useState("");
+  const [paymentStatus, setPaymentStatus] = useState("NOT_STARTED");
 
 
   const storageKey = "corebiz_cart_" + publicSlug;
@@ -159,6 +160,20 @@ export function PublicStorefront({
       if(result.methods.length===1)setDeliveryMethodId(result.methods[0]!.id);
     }).catch(()=>setDelivery([]));
   },[publicSlug]);
+
+  useEffect(()=>{
+    const key=paymentCartKey || (cart?.status==="CHECKED_OUT"?cart.cartKey:"");
+    if(!key)return;
+    void request<{status:string;fiscalStatus?:string}>(
+      "/payments/storefront/carts/"+encodeURIComponent(key)+"/status"
+    ).then(state=>{
+      setPaymentStatus(state.status);
+      if(state.status==="SUCCEEDED"){
+        setSuccess("Оплата подтверждена платёжным провайдером. Спасибо за заказ.");
+        setCheckoutOpen(false);
+      }
+    }).catch(()=>setError("Не удалось проверить статус оплаты. Проверьте позже."));
+  },[paymentCartKey,cart?.cartKey,cart?.status]);
 
   const pageSize = Math.max(1, Math.min(100, Math.floor(limit) || 12));
   useEffect(() => {
@@ -457,11 +472,13 @@ export function PublicStorefront({
 
       {paymentCartKey || cart?.status==="CHECKED_OUT" ? (
         <div className="public-checkout">
-          <strong>Заказ оформлен · ожидает оплаты</strong>
+          <strong>{paymentStatus==="SUCCEEDED"?"Заказ оплачен":
+            "Заказ оформлен · ожидает оплаты"}</strong>
           <p>Оплата не подтверждается возвращением на сайт.
             Статус обновляется только после проверки платёжного провайдера.</p>
           <button type="button" className="public-primary-button"
-            disabled={Boolean(busy)} onClick={()=>void payOnline()}>
+            disabled={Boolean(busy)||paymentStatus==="SUCCEEDED"}
+            onClick={()=>void payOnline()}>
             {busy==="payment"?"Подключаем оплату…":"Оплатить через YooKassa"}
           </button>
         </div>
