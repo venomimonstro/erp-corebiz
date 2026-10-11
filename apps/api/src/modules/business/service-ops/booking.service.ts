@@ -1766,6 +1766,15 @@ export class BookingService {
            b.currency,b.version,b.notes,b.delivery_format_snapshot,
            p.display_name AS party_name,
            s.name AS service_name,
+           charge.status AS billing_status,
+           fo.status AS obligation_status,
+           fi.status AS invoice_status,
+           coalesce(fo.settled_minor,0)::text AS settled_minor,
+           CASE WHEN refund.id IS NULL THEN NULL ELSE json_build_object(
+             'status',refund.status,
+             'amountMinor',refund.amount_minor::text,
+             'settledMinor',refund.settled_minor::text
+           ) END AS refund,
            CASE WHEN a.id IS NULL THEN NULL ELSE json_build_object(
              'id',a.id,
              'assetType',a.asset_type,
@@ -1793,6 +1802,17 @@ export class BookingService {
            ON p.tenant_id = b.tenant_id AND p.id = b.party_id
          LEFT JOIN service_asset a
            ON a.tenant_id=b.tenant_id AND a.id=b.asset_id
+         LEFT JOIN service_booking_charge charge
+           ON charge.tenant_id=b.tenant_id AND charge.booking_id=b.id
+         LEFT JOIN financial_obligation fo
+           ON fo.tenant_id=charge.tenant_id AND fo.id=charge.obligation_id
+         LEFT JOIN finance_invoice fi
+           ON fi.tenant_id=charge.tenant_id AND fi.id=charge.invoice_id
+         LEFT JOIN financial_obligation refund
+           ON refund.tenant_id=b.tenant_id
+          AND refund.direction='PAYABLE'
+          AND refund.source_type='SERVICE_BOOKING_REFUND'
+          AND refund.source_id=b.id
          LEFT JOIN service_booking_resource br
            ON br.tenant_id = b.tenant_id AND br.booking_id = b.id
          LEFT JOIN service_resource r
@@ -1815,7 +1835,9 @@ export class BookingService {
                  AND scope_r.membership_id = ANY($4::uuid[])
              )
            )
-         GROUP BY b.id, p.display_name, s.name, a.id
+         GROUP BY
+           b.id,p.display_name,s.name,a.id,
+           charge.id,fo.id,fi.id,refund.id
          ORDER BY b.starts_at`,
         [context.tenantId, fromDate, toDate, scopedMembershipIds]
       );
@@ -1862,6 +1884,13 @@ export class BookingService {
              'invoiceNumber',fi.business_number,
              'invoiceStatus',fi.status
            ) END AS billing,
+           CASE WHEN refund.id IS NULL THEN NULL ELSE json_build_object(
+             'id',refund.id,
+             'status',refund.status,
+             'amountMinor',refund.amount_minor::text,
+             'settledMinor',refund.settled_minor::text,
+             'dueAt',refund.due_at
+           ) END AS refund,
            COALESCE(
              json_agg(json_build_object(
                'resourceId',r.id,
@@ -1887,6 +1916,11 @@ export class BookingService {
            ON fo.tenant_id=charge.tenant_id AND fo.id=charge.obligation_id
          LEFT JOIN finance_invoice fi
            ON fi.tenant_id=charge.tenant_id AND fi.id=charge.invoice_id
+         LEFT JOIN financial_obligation refund
+           ON refund.tenant_id=b.tenant_id
+          AND refund.direction='PAYABLE'
+          AND refund.source_type='SERVICE_BOOKING_REFUND'
+          AND refund.source_id=b.id
          LEFT JOIN service_booking_resource br
            ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
          LEFT JOIN service_resource r
@@ -1896,7 +1930,7 @@ export class BookingService {
          WHERE b.tenant_id=$1 AND b.id=$2
          GROUP BY
            b.id,p.display_name,s.name,a.id,
-           charge.id,fo.id,fi.id`,
+           charge.id,fo.id,fi.id,refund.id`,
         [context.tenantId, bookingId]
       );
       if (!result.rows[0]) throw new NotFoundException("Запись не найдена");
