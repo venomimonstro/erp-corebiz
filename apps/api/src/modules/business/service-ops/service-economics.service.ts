@@ -303,8 +303,9 @@ export class ServiceEconomicsService {
     const employeeResult=await client.query<{
       id:string;
       cost_per_hour_minor:string;
+      timezone:string;
     }>(
-      `SELECT r.id,r.cost_per_hour_minor::text
+      `SELECT r.id,r.cost_per_hour_minor::text,r.timezone
        FROM service_booking_resource br
        JOIN service_resource r
          ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
@@ -331,7 +332,7 @@ export class ServiceEconomicsService {
            extract(epoch FROM (b.ends_at-b.starts_at))::bigint*
            br.cost_per_hour_minor_snapshot::bigint*
            greatest(br.capacity_units,1)::bigint
-         )/3600
+         )/(3600*greatest(r.capacity,1)::bigint)
        ),0)::text AS cost_minor
        FROM service_booking b
        JOIN service_booking_resource br
@@ -363,8 +364,11 @@ export class ServiceEconomicsService {
            AND (p.service_id IS NULL OR p.service_id=$3)
            AND (p.delivery_format IS NULL OR p.delivery_format=$4)
            AND (p.branch_id IS NULL OR p.branch_id=$5::uuid)
-           AND p.valid_from<=($6::timestamptz)::date
-           AND (p.valid_to IS NULL OR p.valid_to>=($6::timestamptz)::date)
+           AND p.valid_from<=($6::timestamptz AT TIME ZONE $7)::date
+           AND (
+             p.valid_to IS NULL OR
+             p.valid_to>=($6::timestamptz AT TIME ZONE $7)::date
+           )
          ORDER BY
            (
              CASE WHEN p.service_id IS NULL THEN 0 ELSE 4 END+
@@ -375,7 +379,8 @@ export class ServiceEconomicsService {
          LIMIT 1`,
         [
           context.tenantId,employee.id,booking.service_id,
-          booking.delivery_format_snapshot,booking.branch_id,booking.starts_at
+          booking.delivery_format_snapshot,booking.branch_id,booking.starts_at,
+          employee.timezone
         ]
       );
       planId=plan.rows[0]?.id??null;
@@ -609,13 +614,19 @@ export class ServiceEconomicsService {
         }>(
           `SELECT
              coalesce(sum(a.amount_minor),0)::text AS variable_minor,
-             count(DISTINCT b.starts_at::date)::integer AS work_days
+             count(DISTINCT (
+               b.starts_at AT TIME ZONE r.timezone
+             )::date)::integer AS work_days
            FROM service_employee_booking_accrual a
            JOIN service_booking b
              ON b.tenant_id=a.tenant_id AND b.id=a.booking_id
+           JOIN service_resource r
+             ON r.tenant_id=a.tenant_id AND r.id=a.employee_resource_id
            WHERE a.tenant_id=$1
              AND a.employee_resource_id=$2
-             AND b.starts_at::date BETWEEN $3 AND $4
+             AND (
+               b.starts_at AT TIME ZONE r.timezone
+             )::date BETWEEN $3 AND $4
              AND a.status<>'REVERSED'`,
           [context.tenantId,employee.id,period.from,period.to]
         );
