@@ -203,6 +203,36 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"apps/api/src/modules/platform/auth/auth.service.ts",
+      patterns:[/async registerInvited\(/, /corebiz_auth_accept_invitation/,
+        /argon2id/, /createSession/],
+      message:"Invited registration no longer atomically accepts the token without creating a new tenant"
+    },
+    {
+      path:"apps/api/src/modules/platform/tenants/tenants.service.ts",
+      patterns:[/requireManageAll/, /async revokeInvitation/,
+        /token_hash/, /roleId/, /membershipIds/],
+      message:"Invitation owner/role restrictions or secret hashing may have regressed"
+    },
+    {
+      path:"infrastructure/postgres/233_invitation_roles_and_accept.sql",
+      patterns:[/role_id/, /v_role_code='OWNER'/, /FOR UPDATE OF i/,
+        /REVOKE ALL ON FUNCTION public.corebiz_auth_accept_invitation/],
+      message:"One-time invited-member role bootstrap or SQL privilege safeguards missing"
+    },
+    {
+      path:"apps/web/app/invite/page.tsx",
+      patterns:[/corebiz.pending_invite/, /register-invited/,
+        /accept-invitation/, /auth\/switch-tenant/],
+      message:"Invited users cannot accept by existing login or new account"
+    },
+    {
+      path:"apps/web/app/app/settings/integrations/page.tsx",
+      patterns:[/АТОЛ Онлайн/, /Честный ЗНАК/, /СДЭК/, /Почта России/,
+        /ADAPTER_REQUIRED/],
+      message:"Integration readiness wrongly reports unsupported providers as available"
+    },
+    {
       path:"apps/api/src/modules/platform/customization/business-verticals.ts",
       patterns:[/OMNICHANNEL_RETAIL/, /retail/, /sites/, /oms/],
       message:"The full offline-online business profile disappeared"
