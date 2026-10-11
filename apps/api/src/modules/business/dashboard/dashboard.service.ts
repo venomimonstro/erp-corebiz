@@ -439,8 +439,12 @@ export class DashboardService {
              WHERE b.tenant_id=$1
                AND r.membership_id=$2
                AND b.status NOT IN ('CANCELLED','NO_SHOW')
-               AND b.starts_at >= date_trunc('day',now())
-               AND b.starts_at < date_trunc('day',now()) + interval '1 day'`,
+               AND (b.starts_at AT TIME ZONE coalesce(r.timezone,'Europe/Moscow'))::date
+                 = (now() AT TIME ZONE coalesce(r.timezone,'Europe/Moscow'))::date
+               AND NOT EXISTS(
+                 SELECT 1 FROM dance_lesson l
+                 WHERE l.tenant_id=b.tenant_id AND l.host_booking_id=b.id
+               )`,
             [context.tenantId, context.membershipId]
           ),
           client.query<{ count: string }>(
@@ -466,6 +470,39 @@ export class DashboardService {
           }
         );
 
+        const overdue=await client.query<{
+          id:string;service:string;ends_at:Date;
+        }>(
+          `SELECT DISTINCT b.id,s.name AS service,b.ends_at
+           FROM service_booking b
+           JOIN service_booking_resource br
+             ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
+           JOIN service_resource r
+             ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+           JOIN service_catalog_item s
+             ON s.tenant_id=b.tenant_id AND s.id=b.service_id
+           WHERE b.tenant_id=$1 AND r.membership_id=$2
+             AND b.status IN ('CONFIRMED','ARRIVED','IN_SERVICE')
+             AND b.ends_at<now()-interval '15 minutes'
+             AND NOT EXISTS(SELECT 1 FROM dance_lesson l
+               WHERE l.tenant_id=b.tenant_id AND l.host_booking_id=b.id)
+           ORDER BY b.ends_at,b.id LIMIT 10`,
+          [context.tenantId,context.membershipId]
+        );
+        metrics.push({
+          label:"Незакрытые визиты",
+          value:String(overdue.rows.length),
+          detail:overdue.rows.length===10?"Не менее десяти визитов":"Нужна отметка завершения"
+        });
+        for(const row of overdue.rows){
+          actions.push({
+            id:"booking-overdue:"+row.id,
+            title:"Закрыть визит · "+row.service,
+            detail:"Завершён по времени: "+row.ends_at.toLocaleString("ru-RU"),
+            href:"/app/service/bookings",
+            severity:"WARNING"
+          });
+        }
         const upcoming = await client.query<{
           id: string;
           business_number: string;
@@ -490,6 +527,8 @@ export class DashboardService {
              AND r.membership_id=$2
              AND b.status IN ('CONFIRMED','ARRIVED','IN_SERVICE')
              AND b.starts_at >= now()
+             AND NOT EXISTS(SELECT 1 FROM dance_lesson l
+               WHERE l.tenant_id=b.tenant_id AND l.host_booking_id=b.id)
            ORDER BY b.starts_at
            LIMIT 20`,
           [context.tenantId, context.membershipId]
