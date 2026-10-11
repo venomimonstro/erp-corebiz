@@ -16,8 +16,8 @@ type Organization={
 
 type TaxProfile={
   id:string;
-  entity_kind:"ORGANIZATION"|"IP";
-  tax_regime:"USN_INCOME"|"USN_INCOME_EXPENSE"|"OSNO"|"AUSN"|"OTHER";
+  entity_kind:"ORGANIZATION"|"IP"|"INDIVIDUAL";
+  tax_regime:"NPD"|"USN_INCOME"|"USN_INCOME_EXPENSE"|"OSNO"|"AUSN"|"OTHER";
   vat_mode:"NO_VAT"|"VAT_5"|"VAT_7"|"VAT_22"|"VAT_MIXED";
   has_employees:boolean;
   ens_enabled:boolean;
@@ -52,6 +52,43 @@ type Obligation={
   packet_validation_status:string|null;
   packet_signature_status:string|null;
   urgency:"DONE"|"OVERDUE"|"URGENT"|"UPCOMING"|"LATER";
+};
+
+type NpdOverview={
+  profile:TaxProfile;
+  totals:{
+    person_income_minor:string;
+    business_income_minor:string;
+    year_income_minor:string;
+    estimated_tax_minor:string;
+    draft_receipts:number;
+    error_receipts:number;
+    annual_limit_minor:string;
+    remaining_limit_minor:string;
+  };
+  months:Array<{
+    period_key:string;
+    gross_income_minor:string;
+    estimated_tax_minor:string;
+    official_tax_minor:string|null;
+    payable_minor:string;
+    source:string;
+    status:string;
+  }>;
+  receipts:Array<{
+    id:string;
+    operation_date:string;
+    buyer_kind:"PERSON"|"ORGANIZATION"|"IP";
+    buyer_name:string|null;
+    description:string;
+    amount_minor:string;
+    tax_rate_bps:number;
+    calculated_tax_minor:string;
+    fiscal_status:string;
+    external_receipt_id:string|null;
+    external_receipt_url:string|null;
+    registered_at:string|null;
+  }>;
 };
 
 type ComplianceOverview={
@@ -125,8 +162,9 @@ export default function AccountingTaxesPage(){
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
   const [showProfile,setShowProfile]=useState(false);
+  const [npd,setNpd]=useState<NpdOverview|null>(null);
 
-  const [entityKind,setEntityKind]=useState<"ORGANIZATION"|"IP">("ORGANIZATION");
+  const [entityKind,setEntityKind]=useState<"ORGANIZATION"|"IP"|"INDIVIDUAL">("ORGANIZATION");
   const [taxRegime,setTaxRegime]=useState<TaxProfile["tax_regime"]>("USN_INCOME");
   const [vatMode,setVatMode]=useState<TaxProfile["vat_mode"]>("NO_VAT");
   const [hasEmployees,setHasEmployees]=useState(false);
@@ -158,6 +196,18 @@ export default function AccountingTaxesPage(){
         "/accounting/compliance?legalEntityId="+encodeURIComponent(legalEntityId)
       );
       setOverview(data);
+      if(data.profile?.tax_regime==="NPD"){
+        try{
+          setNpd(await apiRequest<NpdOverview>(
+            "/accounting/compliance/npd?legalEntityId="+
+            encodeURIComponent(legalEntityId)+"&year="+year
+          ));
+        }catch{
+          setNpd(null);
+        }
+      }else{
+        setNpd(null);
+      }
       if(data.profile){
         setEntityKind(data.profile.entity_kind);
         setTaxRegime(data.profile.tax_regime);
@@ -250,6 +300,75 @@ export default function AccountingTaxesPage(){
     }finally{
       setBusy(false);
     }
+  }
+
+  async function createNpdReceipt(){
+    if(!legalEntityId) return;
+    const amountRub=window.prompt("Сумма дохода, ₽");
+    if(!amountRub) return;
+    const amount=Number(amountRub.replace(",","."));
+    if(!Number.isFinite(amount)||amount<=0){
+      setError("Некорректная сумма дохода");
+      return;
+    }
+    const buyer=window.prompt(
+      "Покупатель: PERSON, ORGANIZATION или IP",
+      "PERSON"
+    )?.trim().toUpperCase();
+    if(!buyer||!["PERSON","ORGANIZATION","IP"].includes(buyer)){
+      setError("Укажите PERSON, ORGANIZATION или IP");
+      return;
+    }
+    const description=window.prompt("Что продано / какая услуга оказана?");
+    if(!description?.trim()) return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/accounting/compliance/npd/receipts",{
+        method:"POST",
+        body:JSON.stringify({
+          legalEntityId,
+          operationDate:new Date().toISOString(),
+          buyerKind:buyer,
+          description:description.trim(),
+          amountMinor:String(Math.round(amount*100))
+        })
+      });
+      await apiRequest("/accounting/compliance/npd/months/rebuild",{
+        method:"POST",
+        body:JSON.stringify({legalEntityId,year})
+      });
+      setNotice(
+        "Доход сохранён как черновик. После формирования чека в «Мой налог» подтвердите его номер."
+      );
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось добавить доход НПД");
+    }finally{setBusy(false);}
+  }
+
+  async function confirmNpdReceipt(id:string){
+    const number=window.prompt("Номер чека из «Мой налог»");
+    if(!number?.trim()) return;
+    const url=window.prompt("Ссылка на чек, если есть")??"";
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/accounting/compliance/npd/receipts/"+id+"/confirm",{
+        method:"POST",
+        body:JSON.stringify({
+          externalReceiptId:number.trim(),
+          externalReceiptUrl:url.trim()||undefined,
+          connectorProvider:"MANUAL"
+        })
+      });
+      await apiRequest("/accounting/compliance/npd/months/rebuild",{
+        method:"POST",
+        body:JSON.stringify({legalEntityId,year})
+      });
+      setNotice("Чек подтверждён данными из «Мой налог».");
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось подтвердить чек");
+    }finally{setBusy(false);}
   }
 
   async function prepare(item:Obligation){
@@ -413,11 +532,13 @@ export default function AccountingTaxesPage(){
                 <select value={entityKind} onChange={e=>setEntityKind(e.target.value as any)}>
                   <option value="ORGANIZATION">ООО / организация</option>
                   <option value="IP">ИП</option>
+                  <option value="INDIVIDUAL">Физлицо / самозанятый</option>
                 </select>
               </label>
               <label>
                 <span>Налоговый режим</span>
                 <select value={taxRegime} onChange={e=>setTaxRegime(e.target.value as any)}>
+                  <option value="NPD">НПД / самозанятость</option>
                   <option value="USN_INCOME">УСН Доходы</option>
                   <option value="USN_INCOME_EXPENSE">УСН Доходы минус расходы</option>
                   <option value="AUSN">АвтоУСН</option>
@@ -487,6 +608,96 @@ export default function AccountingTaxesPage(){
                 <button type="submit" disabled={busy}>Сохранить и собрать календарь</button>
               </div>
             </form>
+          </section>
+        ):null}
+
+        {overview?.profile?.tax_regime==="NPD"&&npd?(
+          <section className="studio-section npd-center">
+            <div className="studio-section-head">
+              <div>
+                <span>Самозанятость / «Мой налог»</span>
+                <h2>НПД без бухгалтера</h2>
+                <p>
+                  CoreBiz считает ожидаемый налог и контролирует чеки.
+                  Фискализированным считается только чек с подтверждённым номером
+                  из «Мой налог» или подключённого провайдера.
+                </p>
+              </div>
+              <button type="button" onClick={()=>void createNpdReceipt()} disabled={busy}>
+                + Доход / чек
+              </button>
+            </div>
+
+            <div className="studio-score-grid">
+              <article>
+                <span>Доход за {year}</span>
+                <strong>{money(npd.totals.year_income_minor)}</strong>
+                <p>Только зарегистрированные чеки.</p>
+              </article>
+              <article>
+                <span>До лимита НПД</span>
+                <strong>{money(npd.totals.remaining_limit_minor)}</strong>
+                <p>Годовой лимит {money(npd.totals.annual_limit_minor)}.</p>
+              </article>
+              <article>
+                <span>Ожидаемый налог</span>
+                <strong>{money(npd.totals.estimated_tax_minor)}</strong>
+                <p>4% физлица · 6% организации и ИП.</p>
+              </article>
+              <article>
+                <span>Нужно оформить</span>
+                <strong>{npd.totals.draft_receipts}</strong>
+                <p>Доходы без подтверждённого чека.</p>
+              </article>
+            </div>
+
+            <div className="data-table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Дата</th><th>Покупатель</th><th>Описание</th>
+                    <th>Доход</th><th>Налог</th><th>Чек</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {npd.receipts.map(item=>(
+                    <tr key={item.id}>
+                      <td>{new Date(item.operation_date).toLocaleDateString("ru-RU")}</td>
+                      <td>{item.buyer_name??(item.buyer_kind==="PERSON"?"Физлицо":item.buyer_kind)}</td>
+                      <td>{item.description}</td>
+                      <td><strong>{money(item.amount_minor)}</strong></td>
+                      <td>{money(item.calculated_tax_minor)} · {item.tax_rate_bps/100}%</td>
+                      <td>
+                        <span className="status-pill">
+                          {item.fiscal_status==="REGISTERED"?"Зарегистрирован":"Черновик"}
+                        </span>
+                        {item.external_receipt_id?<small>{item.external_receipt_id}</small>:null}
+                      </td>
+                      <td>
+                        {item.fiscal_status!=="REGISTERED"?(
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={()=>void confirmNpdReceipt(item.id)}
+                            disabled={busy}
+                          >
+                            Подтвердить чек
+                          </button>
+                        ):null}
+                      </td>
+                    </tr>
+                  ))}
+                  {!npd.receipts.length?(
+                    <tr><td colSpan={7}>
+                      <div className="table-empty">
+                        <strong>Доходов НПД пока нет</strong>
+                        <span>Добавьте первый доход после оплаты клиентом.</span>
+                      </div>
+                    </td></tr>
+                  ):null}
+                </tbody>
+              </table>
+            </div>
           </section>
         ):null}
 
