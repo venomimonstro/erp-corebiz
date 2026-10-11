@@ -162,18 +162,18 @@ export class PayrollService {
   async markPaid(
     ctx:TenantContext,
     batchId:string,
-    input:{
+    input?:{
       paidAt?:string;
       reference?:string;
       note?:string;
     }
   ) {
-    const paidAt=input.paidAt?new Date(input.paidAt):new Date();
+    const paidAt=input?.paidAt?new Date(input.paidAt):new Date();
     if(Number.isNaN(paidAt.getTime())){
       throw new BadRequestException("Invalid payroll payment date");
     }
-    const reference=input.reference?.trim()||null;
-    const note=input.note?.trim()||null;
+    const reference=input?.reference?.trim()||null;
+    const note=input?.note?.trim()||null;
     if(reference&&reference.length>180){
       throw new BadRequestException("Payroll payment reference is too long");
     }
@@ -283,4 +283,5 @@ export class PayrollService {
       }
       return {status:"APPROVED",changed:true};
     });
-  }}
+  }
+}
