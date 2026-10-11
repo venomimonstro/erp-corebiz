@@ -35,6 +35,22 @@ type Calculation={
   status:string;
 };
 
+type TaxOperation={
+  id:string;
+  payment_id:string;
+  business_number:string;
+  posted_at:string;
+  direction:"IN"|"OUT";
+  kind:string;
+  amount_minor:string;
+  currency:string;
+  category_name:string|null;
+  treatment:string;
+  source:string;
+  confidence:number;
+  reason:string|null;
+};
+
 type Dashboard={
   profile:Profile|null;
   counts:{
@@ -67,6 +83,7 @@ export function TaxCompliancePanel({
   legalEntityId
 }:{legalEntityId:string}){
   const [data,setData]=useState<Dashboard|null>(null);
+  const [operations,setOperations]=useState<TaxOperation[]>([]);
   const [regime,setRegime]=useState("USN_INCOME");
   const [vat,setVat]=useState("NO_VAT");
   const [kind,setKind]=useState<"ORGANIZATION"|"IP">("ORGANIZATION");
@@ -80,10 +97,17 @@ export function TaxCompliancePanel({
     setBusy(true);
     setError("");
     try{
-      const result=await apiRequest<Dashboard>(
-        "/accounting/tax/dashboard?legalEntityId="+encodeURIComponent(legalEntityId)
-      );
+      const [result,operationRows]=await Promise.all([
+        apiRequest<Dashboard>(
+          "/accounting/tax/dashboard?legalEntityId="+encodeURIComponent(legalEntityId)
+        ),
+        apiRequest<TaxOperation[]>(
+          "/accounting/tax/payments/classifications?legalEntityId="+
+          encodeURIComponent(legalEntityId)
+        )
+      ]);
       setData(result);
+      setOperations(operationRows);
       if(result.profile){
         setRegime(result.profile.tax_regime);
         setVat(result.profile.vat_mode);
@@ -155,6 +179,31 @@ export function TaxCompliancePanel({
       await load();
     }catch(cause){
       setError(cause instanceof Error?cause.message:"Не удалось проверить операции");
+    }
+  }
+
+  async function decideOperation(
+    paymentId:string,
+    treatment:"TAXABLE_INCOME"|"DEDUCTIBLE_EXPENSE"|"NON_DEDUCTIBLE_EXPENSE"|"EXCLUDED"
+  ){
+    try{
+      await apiRequest(
+        "/accounting/tax/payments/"+encodeURIComponent(paymentId)+"/classification",
+        {
+          method:"PATCH",
+          body:JSON.stringify({
+            legalEntityId,
+            treatment,
+            reason:"Подтверждено владельцем в налоговом помощнике CoreBiz"
+          })
+        }
+      );
+      setMessage("Операция классифицирована");
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error?cause.message:"Не удалось сохранить решение"
+      );
     }
   }
 
@@ -294,6 +343,67 @@ export function TaxCompliancePanel({
           <strong>Календарь ещё не создан</strong>
           <span>Настройте профиль и нажмите «Обновить календарь».</span>
         </div>:null}
+      </div>
+    </section>
+
+    <section className="section-block">
+      <div className="section-heading">
+        <div>
+          <p className="muted">Контроль налоговой базы</p>
+          <h2>Операции, которые нужно разобрать</h2>
+        </div>
+        <span className="tax-safety-chip">
+          {(operations.filter(x=>x.treatment==="REVIEW_REQUIRED").length)} требуют решения
+        </span>
+      </div>
+      <div className="tax-review-list">
+        {operations.filter(x=>x.treatment==="REVIEW_REQUIRED").slice(0,12).map(op=>
+          <article className="tax-review-row" key={op.id}>
+            <div className="tax-review-money">
+              <strong>{rub(op.amount_minor)}</strong>
+              <span>{new Date(op.posted_at).toLocaleDateString("ru-RU")}</span>
+            </div>
+            <div className="tax-review-copy">
+              <small>{op.business_number} · {op.category_name??"Без категории"}</small>
+              <strong>
+                {op.direction==="IN"?"Поступление":"Списание"} требует проверки
+              </strong>
+              <span>{op.reason??"Система не нашла безопасного налогового правила."}</span>
+            </div>
+            <div className="tax-review-actions">
+              {op.direction==="IN"?
+                <button onClick={()=>void decideOperation(op.payment_id,"TAXABLE_INCOME")}>
+                  Доход
+                </button>:
+                <>
+                  <button onClick={()=>void decideOperation(op.payment_id,"DEDUCTIBLE_EXPENSE")}>
+                    Принять расход
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={()=>void decideOperation(op.payment_id,"NON_DEDUCTIBLE_EXPENSE")}
+                  >
+                    Не принимать
+                  </button>
+                </>
+              }
+              <button
+                className="secondary-button"
+                onClick={()=>void decideOperation(op.payment_id,"EXCLUDED")}
+              >
+                Не учитывать
+              </button>
+            </div>
+          </article>
+        )}
+        {!operations.some(x=>x.treatment==="REVIEW_REQUIRED")?
+          <div className="tax-review-clear">
+            <span>✓</span>
+            <div>
+              <strong>Спорных операций сейчас нет</strong>
+              <small>Налоговая база собрана только из классифицированных операций.</small>
+            </div>
+          </div>:null}
       </div>
     </section>
 
