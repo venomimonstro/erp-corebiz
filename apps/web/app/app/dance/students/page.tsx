@@ -187,15 +187,12 @@ export default function DanceStudentsPage() {
   },[students,financeFilter,studentSearch,access?.canViewFinance]);
 
   useEffect(() => {
-    if (
-      filteredStudents.length &&
-      !filteredStudents.some((student) => student.id === selectedId)
-    ) {
-      setSelectedId(filteredStudents[0]!.id);
+    if(!filteredStudents.some(student=>student.id===selectedId)){
+      setSelectedId(filteredStudents[0]?.id??"");
     }
   },[filteredStudents,selectedId]);
 
-  const selected = students.find((item) => item.id === selectedId) ?? null;
+  const selected=filteredStudents.find(item=>item.id===selectedId)??null;
   const selectedCharges = charges.filter((item) => item.student_id === selectedId);
   const selectedPackages = packages.filter(
     (item) =>
@@ -714,7 +711,9 @@ export default function DanceStudentsPage() {
                       </tr>
                     ))}
                     {!selectedPackages.length ? (
-                      <tr><td colSpan={6}><div className="table-empty"><strong>Абонементов нет</strong></div></td></tr>
+                      <tr><td colSpan={6}><div className="table-empty"><strong>{
+                        access?.canManageDance?"Абонементов нет":"Данные абонементов доступны администратору"
+                      }</strong></div></td></tr>
                     ) : null}
                   </tbody>
                 </table>
@@ -723,8 +722,8 @@ export default function DanceStudentsPage() {
           </>
         ) : (
           <div className="table-empty">
-            <strong>Учеников пока нет</strong>
-            <span>Создайте клиента в CRM и добавьте его как ученика студии.</span>
+            <strong>{students.length?"Ничего не найдено":"Учеников пока нет"}</strong>
+            <span>{students.length?"Измените поиск или фильтр.":"Создайте клиента в CRM и добавьте его как ученика студии."}</span>
           </div>
         )}
         {studentModal ? (
