@@ -3566,3 +3566,118 @@ button, .primary, .secondary { font: inherit; }
     padding:18px;
   }
 }
+
+
+/* Dance workspace — calm, high-contrast, role-aware operator layout. */
+.dance-overview{color:#202327}
+.dance-head{display:flex;align-items:flex-end;justify-content:space-between;gap:22px;
+  margin-bottom:22px;padding:12px 0 4px}
+.dance-head h1{font-size:clamp(30px,4vw,47px);line-height:1.06;letter-spacing:-.055em;
+  font-weight:650;margin:8px 0}
+.dance-head p{font-size:14px;color:#737a82;margin:0;line-height:1.6}
+.dance-head-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.dance-overview .studio-nav{grid-template-columns:repeat(5,minmax(0,1fr));margin:0 0 21px;
+  background:#fff;border:1px solid #e7e8ea;box-shadow:none;padding:5px}
+.dance-overview .studio-nav a{padding:13px;gap:5px}
+.dance-overview .studio-nav strong{font-size:13px}
+.dance-overview .studio-nav span{font-size:11px}
+.dance-pulse{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:22px}
+.dance-pulse article{display:flex;flex-direction:column;align-items:flex-start;gap:9px;min-width:0;
+  padding:20px;border:1px solid #e6e8eb;border-radius:17px;background:#fff}
+.dance-pulse article>span{color:#717781;font-size:12px;font-weight:550}
+.dance-pulse strong{color:#202327;font-size:clamp(24px,2.7vw,33px);
+  font-weight:650;letter-spacing:-.045em;line-height:1.08;overflow-wrap:anywhere}
+.dance-pulse small{font-size:11px;color:#838a93;line-height:1.5}
+.dance-text-attention{color:#a2532a!important}
+.dance-focus{background:#fff;border:1px solid #e5e7ea;border-radius:20px;
+  padding:22px;margin-bottom:16px;min-width:0}
+.dance-panel-head{display:flex;justify-content:space-between;align-items:center;
+  flex-wrap:wrap;gap:10px;margin-bottom:17px}
+.dance-panel-head h2{font-size:21px;letter-spacing:-.038em;font-weight:650;margin:5px 0 0}
+.dance-panel-head>a{font-size:12px;color:#626972;font-weight:600;text-decoration:none}
+.dance-panel-head>a:hover{text-decoration:underline;color:#202327}
+.dance-muted,.dance-footnote{font-size:12px;line-height:1.65;color:#868d95}
+.dance-alert-list{display:grid;gap:4px}
+.dance-alert-line{display:grid;grid-template-columns:8px minmax(0,1fr) auto 12px;
+  gap:13px;align-items:center;padding:13px 10px;border-radius:11px;
+  color:#262c32;text-decoration:none;transition:background .15s}
+.dance-alert-line:hover{background:#f6f7f8}
+.dance-alert-line>strong{font-size:13px;font-weight:650}
+.dance-alert-copy{font-size:13px;line-height:1.5}
+.dance-alert-indicator{width:7px;height:7px;border-radius:50%;background:#c49a57}
+.dance-alert-indicator.danger{background:#c96552}
+.dance-positive,.dance-empty{padding:22px;background:#f8f9fa;border-radius:12px;
+  display:grid;gap:6px}
+.dance-positive strong,.dance-empty strong{font-size:14px}
+.dance-positive span,.dance-empty p{font-size:12px;color:#7d858e;margin:0}
+.dance-empty a{font-size:12px;font-weight:600;margin-top:6px}
+.dance-lesson-list{display:grid;gap:0}
+.dance-lesson{display:grid;grid-template-columns:66px minmax(180px,1fr) 145px 122px 26px;
+  align-items:center;gap:15px;padding:16px 0;border-top:1px solid #eff0f2}
+.dance-lesson:first-child{border-top:0}
+.dance-lesson-time,.dance-lesson-main,.dance-lesson-occupancy{display:grid;gap:4px;min-width:0}
+.dance-lesson-time strong{font-size:16px;letter-spacing:-.025em}
+.dance-lesson-time span,.dance-lesson-main span,.dance-lesson-occupancy span{font-size:11px;
+  color:#848b94;line-height:1.5}
+.dance-lesson-main strong{font-size:13px;overflow-wrap:anywhere}
+.dance-lesson-occupancy strong{font-size:14px}
+.dance-status{font-size:11px;color:#626a72;background:#f3f4f5;
+  padding:7px 9px;border-radius:8px;text-align:center;white-space:normal}
+.dance-row-link{font-size:18px;text-decoration:none;color:#8d939a;text-align:right}
+.dance-row-link:hover{color:#171a1d}
+.dance-two-col{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+.dance-two-col>.dance-focus{height:100%}
+.dance-compact-list{display:grid;gap:0}
+.dance-compact-list>a{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:12px 0;border-top:1px solid #eff0f2;text-decoration:none;color:inherit}
+.dance-compact-list>a:first-child{border-top:0}
+.dance-compact-list>a:hover strong{text-decoration:underline}
+.dance-compact-list strong{font-size:12px;line-height:1.5}
+.dance-compact-list span{font-size:11px;color:#858c94;text-align:right}
+.dance-compact-list p{font-size:12px;color:#858c94}
+.dance-finance-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.dance-finance-grid>div{display:grid;gap:8px;padding:15px 12px;background:#f8f9fa;
+  border-radius:12px;min-width:0}
+.dance-finance-grid span{font-size:11px;color:#7b838c}
+.dance-finance-grid strong{font-size:19px;letter-spacing:-.04em;overflow-wrap:anywhere}
+.dance-disclosure{width:100%;padding:15px 0 0;margin-top:14px;display:flex;
+  align-items:center;justify-content:space-between;gap:12px;
+  font-size:12px;font-weight:650;background:transparent;color:#32373d;
+  border:0;border-top:1px solid #eceef0;cursor:pointer;text-align:left}
+.dance-disclosure span{font-size:20px;color:#7b8188}
+.dance-detail-grid{margin-top:20px}
+.dance-breakdown{border:1px solid #eceef0;border-radius:14px;padding:16px}
+.dance-breakdown h3{font-size:14px;margin:0 0 12px}
+.dance-breakdown>div{display:flex;justify-content:space-between;gap:16px;
+  padding:11px 0;border-top:1px solid #f0f1f2}
+.dance-breakdown>div>div{display:grid;gap:5px;min-width:0}
+.dance-breakdown strong{font-size:12px;overflow-wrap:anywhere}
+.dance-breakdown small,.dance-breakdown p{font-size:11px;color:#8b929b}
+.dance-workspace-footer{display:flex;justify-content:space-between;gap:16px;
+  flex-wrap:wrap;padding:12px 0 28px;font-size:11px;color:#8e959d}
+.dance-workspace-footer a{color:#555d66}
+.dance-loading{padding:25px;color:#69717a;font-size:13px}
+@media(max-width:1000px){
+  .dance-lesson{grid-template-columns:65px minmax(160px,1fr) 95px 95px 22px;gap:10px}
+  .dance-finance-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .dance-overview .studio-nav span{display:none}
+}
+@media(max-width:720px){
+  .dance-head{align-items:flex-start;flex-direction:column}
+  .dance-pulse,.dance-two-col{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .dance-overview .studio-nav{display:flex;overflow-x:auto;scroll-snap-type:x mandatory}
+  .dance-overview .studio-nav a{flex:0 0 auto;scroll-snap-align:start;white-space:nowrap}
+  .dance-focus{padding:16px}
+  .dance-lesson{grid-template-columns:60px minmax(0,1fr) auto;gap:7px 12px}
+  .dance-lesson-occupancy{grid-column:2;grid-row:2}
+  .dance-status{grid-column:3;grid-row:1}
+  .dance-row-link{grid-column:3;grid-row:2}
+}
+@media(max-width:480px){
+  .dance-pulse,.dance-two-col,.dance-finance-grid{grid-template-columns:1fr 1fr;gap:8px}
+  .dance-pulse article{padding:14px}
+  .dance-pulse strong{font-size:23px}
+  .dance-two-col{grid-template-columns:1fr}
+  .dance-lesson-time strong{font-size:13px}
+  .dance-status{font-size:10px;max-width:90px}
+}
