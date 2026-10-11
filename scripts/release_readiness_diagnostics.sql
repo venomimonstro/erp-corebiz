@@ -338,3 +338,65 @@ FROM trainer_payroll_statement s
 JOIN payroll_accrual_batch b ON b.id=s.payroll_batch_id
 WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
   AND b.tenant_id<>s.tenant_id;
+
+-- Payroll source isolation / trainer salary invariants.
+SELECT 'PAYROLL_COMPONENT_AGGREGATE_MISMATCH' AS code,count(*)::bigint AS affected
+FROM payroll_accrual_line l
+WHERE l.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND (
+    l.gross_minor <> (
+      SELECT coalesce(sum(c.gross_minor),0)
+      FROM payroll_accrual_component c
+      WHERE c.tenant_id=l.tenant_id
+        AND c.batch_id=l.batch_id
+        AND c.employee_ref=l.employee_ref
+    )
+    OR l.deduction_minor <> (
+      SELECT coalesce(sum(c.deduction_minor),0)
+      FROM payroll_accrual_component c
+      WHERE c.tenant_id=l.tenant_id
+        AND c.batch_id=l.batch_id
+        AND c.employee_ref=l.employee_ref
+    )
+  )
+UNION ALL
+SELECT 'TRAINER_PAYROLL_PROFILE_OVERLAP',count(*)::bigint
+FROM trainer_payroll_profile a
+JOIN trainer_payroll_profile b
+  ON b.tenant_id=a.tenant_id
+ AND b.trainer_resource_id=a.trainer_resource_id
+ AND b.id>a.id
+ AND a.status='ACTIVE'
+ AND b.status='ACTIVE'
+ AND daterange(a.valid_from,a.valid_to,'[]')
+     && daterange(b.valid_from,b.valid_to,'[]')
+WHERE a.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+UNION ALL
+SELECT 'TRAINER_PAYROLL_STATEMENT_TOTAL_MISMATCH',count(*)::bigint
+FROM trainer_payroll_statement s
+WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND s.status<>'CANCELLED'
+  AND s.total_minor <>
+      s.lesson_accrual_minor+
+      s.base_minor+
+      s.guarantee_adjustment_minor+
+      s.adjustment_minor
+UNION ALL
+SELECT 'TRAINER_PAYROLL_EXPORTED_SOURCE_MISSING',count(*)::bigint
+FROM trainer_payroll_statement s
+JOIN service_resource r
+  ON r.tenant_id=s.tenant_id AND r.id=s.trainer_resource_id
+WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND s.status IN ('EXPORTED','PAID')
+  AND s.payroll_batch_id IS NOT NULL
+  AND r.membership_id IS NOT NULL
+  AND NOT EXISTS(
+    SELECT 1
+    FROM payroll_accrual_component c
+    WHERE c.tenant_id=s.tenant_id
+      AND c.batch_id=s.payroll_batch_id
+      AND c.employee_ref=r.membership_id::text
+      AND c.source_type='DANCE_TRAINER_STATEMENT'
+      AND c.source_key=s.id::text
+      AND c.gross_minor=s.total_minor
+  );
