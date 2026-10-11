@@ -155,19 +155,39 @@ export class GoLiveService {
         href: "/app/channels"
       });
 
-      const evidence = await client.query<{
-        component_code: string;
-        verification_kind: string;
-        outcome: string;
-        executed_at: Date;
-      }>(
-        `SELECT DISTINCT ON (component_code,verification_kind)
-           component_code,verification_kind,outcome,executed_at
-         FROM release_verification_record
-         WHERE tenant_id=$1
-         ORDER BY component_code,verification_kind,executed_at DESC`,
+      // Never accept a passing test from an older code version as proof of
+      // the currently approved release. An unapproved candidate cannot GO.
+      const approvedRelease=await client.query<{target_version:string}>(
+        `SELECT target_version FROM release_candidate
+         WHERE tenant_id=$1 AND status='APPROVED'
+         ORDER BY reviewed_at DESC NULLS LAST,created_at DESC LIMIT 1`,
         [context.tenantId]
       );
+      const approvedVersion=approvedRelease.rows[0]?.target_version??null;
+      checks.push({
+        code:"RELEASE_APPROVED",title:"Утверждённая версия к запуску",
+        ok:Boolean(approvedVersion),blocking:true,
+        detail:approvedVersion
+          ?"Проверки привязаны к утверждённой версии "+approvedVersion
+          :"Нет утверждённой версии с подтверждёнными тестами.",
+        href:"/app/settings/release"
+      });
+      const evidence=approvedVersion
+        ?await client.query<{
+          component_code:string;verification_kind:string;
+          outcome:string;executed_at:Date;
+        }>(
+          `SELECT DISTINCT ON (component_code,verification_kind)
+             component_code,verification_kind,outcome,executed_at
+           FROM release_verification_record
+           WHERE tenant_id=$1 AND target_version=$2
+           ORDER BY component_code,verification_kind,executed_at DESC`,
+          [context.tenantId,approvedVersion]
+        )
+        :{rows:[] as Array<{
+          component_code:string;verification_kind:string;
+          outcome:string;executed_at:Date;
+        }>};
 
       const evidenceMap = new Map(
         evidence.rows.map((row) => [
