@@ -1,6 +1,6 @@
 import {
-  BadRequestException, ConflictException, Injectable,
-  NotFoundException, ServiceUnavailableException
+  BadRequestException, ConflictException, Injectable, OnModuleInit,
+  OnModuleDestroy, NotFoundException, ServiceUnavailableException
 } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import type { TenantContext } from "@corebiz/contracts";
@@ -30,7 +30,122 @@ const isUuid=(value:unknown):value is string=>
   typeof value==="string" && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value);
 
 @Injectable()
-export class CommercePaymentsService {
+export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
+  private recoveryTimer?: ReturnType<typeof setInterval>;
+  private recoveryActive=false;
+
+  onModuleInit():void {
+    if(process.env.COREBIZ_PAYMENT_RECONCILE_ENABLED!=="true")return;
+    const every=Number(process.env.COREBIZ_PAYMENT_RECONCILE_INTERVAL_MS??"60000");
+    if(!Number.isSafeInteger(every)||every<30000||every>300000)
+      throw new Error("INVALID_PAYMENT_RECONCILE_INTERVAL");
+    this.recoveryTimer=setInterval(()=>{
+      void this.reconcileDueBatch().catch(()=>{
+        // Do not log provider credentials, response bodies or buyer PII.
+        console.error("[commerce-payment-reconcile] batch failed; will retry");
+      });
+    },every);
+    this.recoveryTimer.unref();
+    void this.reconcileDueBatch().catch(()=>{
+      console.error("[commerce-payment-reconcile] initial batch failed; will retry");
+    });
+  }
+  onModuleDestroy():void {
+    if(this.recoveryTimer)clearInterval(this.recoveryTimer);
+  }
+
+  async reconciliationStatus(context:TenantContext){
+    return this.database.withTenantTransaction(context,async client=>{
+      const r=await client.query<{
+        state:string;count:string;oldest_due:Date|null
+      }>(
+        `SELECT state,count(*)::text AS count,min(next_attempt_at) AS oldest_due
+         FROM commerce_reconcile_task WHERE tenant_id=$1
+         GROUP BY state ORDER BY state`,[context.tenantId]);
+      return {
+        jobs:r.rows.map(x=>({
+          state:x.state,count:Number(x.count),
+          oldestDue:x.oldest_due?.toISOString()??null
+        })),
+        enabled:process.env.COREBIZ_PAYMENT_RECONCILE_ENABLED==="true"
+      };
+    });
+  }
+
+  async reconcileDueBatch():Promise<number>{
+    if(this.recoveryActive)return 0;
+    this.recoveryActive=true;
+    try{
+      const jobs=await this.database.query<{
+        tenant_id:string;task_id:string;intent_id:string|null;
+        refund_id:string|null;lease_id:string
+      }>(
+        "SELECT * FROM corebiz_claim_commerce_reconciliation($1)",[5]
+      );
+      for(const job of jobs.rows){
+        const context=this.context(job.tenant_id);
+        try{
+          if(job.intent_id){
+            const intent=await this.database.withTenantTransaction(context,
+              async client=>{
+                const r=await client.query<Intent>(
+                  "SELECT * FROM commerce_payment_intent WHERE tenant_id=$1 AND id=$2",
+                  [job.tenant_id,job.intent_id]);
+                return r.rows[0]??null;
+              });
+            if(intent?.provider_payment_id)await this.reconcileIntent(intent);
+          }else if(job.refund_id){
+            const refund=await this.database.withTenantTransaction(context,
+              async client=>{
+                const r=await client.query<{provider_refund_id:string|null}>(
+                  "SELECT provider_refund_id FROM commerce_refund WHERE tenant_id=$1 AND id=$2",
+                  [job.tenant_id,job.refund_id]);
+                return r.rows[0]??null;
+              });
+            if(refund?.provider_refund_id)
+              await this.reconcileRefund(job.tenant_id,refund.provider_refund_id);
+          }
+          await this.database.withTenantTransaction(context,async client=>{
+            const state=job.intent_id
+              ?await client.query<{status:string;fiscal_status:string}>(
+                "SELECT status,fiscal_status FROM commerce_payment_intent WHERE tenant_id=$1 AND id=$2",
+                [job.tenant_id,job.intent_id])
+              :await client.query<{status:string;fiscal_status:string}>(
+                "SELECT status,fiscal_status FROM commerce_refund WHERE tenant_id=$1 AND id=$2",
+                [job.tenant_id,job.refund_id]);
+            const row=state.rows[0];
+            const done=!row || ["CANCELED","FAILED"].includes(row.status) ||
+              (row.status==="SUCCEEDED" && row.fiscal_status!=="PENDING");
+            await client.query(
+              `UPDATE commerce_reconcile_task
+               SET state=$4,lease_id=NULL,lease_until=NULL,
+                   next_attempt_at=CASE WHEN $4='DONE' THEN now()
+                                      ELSE now()+interval '5 minutes' END,
+                   last_error_code=NULL,updated_at=now()
+               WHERE tenant_id=$1 AND id=$2 AND lease_id=$3`,
+              [job.tenant_id,job.task_id,job.lease_id,done?"DONE":"DUE"]);
+          });
+        }catch{
+          // Runtime error is summarized, not interpolated: PSP errors may
+          // contain bank IDs, access tokens, emails and phone numbers.
+          await this.database.withTenantTransaction(context,async client=>{
+            await client.query(
+              `UPDATE commerce_reconcile_task
+               SET state=CASE WHEN attempts>=60 THEN 'EXHAUSTED' ELSE 'DUE' END,
+                 lease_id=NULL,lease_until=NULL,
+                 next_attempt_at=now()+(
+                   LEAST(21600,30*power(2,LEAST(attempts,10)))::text
+                   ||' seconds')::interval,
+                 last_error_code='PROVIDER_OR_LEDGER_ERROR',updated_at=now()
+               WHERE tenant_id=$1 AND id=$2 AND lease_id=$3`,
+              [job.tenant_id,job.task_id,job.lease_id]);
+          });
+        }
+      }
+      return jobs.rowCount??jobs.rows.length;
+    }finally{this.recoveryActive=false;}
+  }
+
   private readonly gateway=new YooKassaGateway();
   constructor(
     private readonly database:DatabaseService,
@@ -408,6 +523,10 @@ export class CommercePaymentsService {
          WHERE tenant_id=$1 AND id=$2 AND status IN ('NEW','PENDING')
            AND (provider_payment_id IS NULL OR provider_payment_id=$3)`,
         [intent.tenant_id,intent.id,response.id,trustedLink?link:null]);
+      await client.query(
+        `INSERT INTO commerce_reconcile_task(tenant_id,intent_id)
+         VALUES($1,$2) ON CONFLICT DO NOTHING`,
+        [intent.tenant_id,intent.id]);
     });
     if(response.status==="succeeded" && response.paid===true){
       await this.reconcileIntent({...intent,provider_payment_id:response.id});
