@@ -27,6 +27,7 @@ type WorkOrderLine={
 };
 type WorkOrderDetail=WorkOrder&{
   diagnosis:string|null;mileage_in_km:number|null;mileage_out_km:number|null;
+  authorization_limit_minor:string|null;approved_total_minor:string;
   lines:WorkOrderLine[];
 };
 
@@ -402,12 +403,24 @@ export default function AutomotivePage(){
             </div>
 
             <div className="studio-score-grid">
-              <article><span>Согласовано</span><strong>{money(selectedOrder.estimated_total_minor)}</strong><p>Подтверждённые клиентом работы и детали.</p></article>
+              <article><span>Согласовано</span><strong>{money(selectedOrder.approved_total_minor)}</strong>
+                <p>Сумма утверждённых работ и деталей.</p></article>
               <article><span>Выполнено</span><strong>{money(selectedOrder.actual_total_minor)}</strong><p>Фактически выполненные позиции.</p></article>
               <article><span>Приёмка</span><strong>{selectedOrder.mileage_in_km??"—"}</strong><p>Пробег при заезде, км.</p></article>
               <article><span>Позиций</span><strong>{selectedOrder.lines.length}</strong><p>Работы, детали и расходные материалы.</p></article>
             </div>
 
+            <div className="studio-message" role="status">
+              <strong>Лимит согласования клиента</strong>
+              <span>{selectedOrder.authorization_limit_minor!==null
+                ?money(selectedOrder.authorization_limit_minor)
+                :"Не указан — необходимо зафиксировать согласованный бюджет"}
+                {selectedOrder.authorization_limit_minor!==null
+                  ?" · Доступно ещё "+money(Math.max(0,Number(selectedOrder.authorization_limit_minor)-
+                    Number(selectedOrder.approved_total_minor)))
+                  :""}
+              </span>
+            </div>
             <div className="studio-rule-grid">
               {selectedOrder.lines.map(line=>(
                 <article className="studio-rule-card" key={line.id}>
