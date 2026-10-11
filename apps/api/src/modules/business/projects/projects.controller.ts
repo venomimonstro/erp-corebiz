@@ -138,8 +138,8 @@ export class ProjectsController {
   @Post(":id/statements/finalize")
   @RequirePermission("projects.write")
   async finalizeAgencyStatement(@Req() request:AuthenticatedRequest,@Param("id") id:string,
-    @Body() body:{period:string}):Promise<ApiSuccess<unknown>> {
-    return {ok:true,data:await this.projects.finalizeAgencyStatement(this.context(request),id,body?.period)};
+    @Body() body:{period:string;serviceRevenueOverrideMinor?:string;adjustmentReason?:string}):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.finalizeAgencyStatement(this.context(request),id,body?.period,body)};
   }
 
   @Get(":id/deliverables")

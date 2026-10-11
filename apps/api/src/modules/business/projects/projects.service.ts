@@ -7,6 +7,7 @@ import {
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import { AGENCY_DELIVERY_TEMPLATES } from "./agency-delivery-templates";
+import { calculateAgencyContractCharge, type AgencyBillingContract } from "./agency-contract-billing";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
@@ -1407,6 +1408,19 @@ export class ProjectsService {
       [context.tenantId,projectId]);
     const project=projectResult.rows[0];
     if(!project) throw new NotFoundException("Проект не найден");
+    let contractBilling:ReturnType<typeof calculateAgencyContractCharge>|null=null;
+    if(project.billing_mode==="RETAINER"){
+      const signed=await client.query<AgencyBillingContract>(
+        `SELECT id::text,contract_number,billing_cycle,service_fee_minor::text,
+                 client_media_budget_minor::text,starts_on::text,ends_on::text,
+                 status,signed_on::text
+         FROM agency_client_contract
+         WHERE tenant_id=$1 AND project_id=$2 AND starts_on<=$3::date
+           AND (ends_on IS NULL OR ends_on>=$4::date)
+         ORDER BY starts_on,id`,
+        [context.tenantId,projectId,dates.end,dates.start]);
+      contractBilling=calculateAgencyContractCharge(period,signed.rows);
+    }
     const totals=await client.query<{
       billable_minutes:string;billable_value_minor:string;labor_cost_minor:string;
       missing_cost_entries:string;other_cost_minor:string;milestone_revenue_minor:string;
@@ -1439,7 +1453,7 @@ export class ProjectsService {
       [context.tenantId,projectId,dates.start,dates.next]);
     const stats=totals.rows[0]!;
     let revenue=0n;
-    if(project.billing_mode==="RETAINER") revenue=BigInt(project.monthly_retainer_minor);
+    if(project.billing_mode==="RETAINER") revenue=BigInt(contractBilling?.serviceRevenueMinor??"0");
     if(project.billing_mode==="TIME_AND_MATERIAL") revenue=BigInt(stats.billable_value_minor);
     if(project.billing_mode==="MILESTONE") revenue=BigInt(stats.milestone_revenue_minor);
     if(project.billing_mode==="FIXED" && project.status==="COMPLETED" &&
@@ -1452,13 +1466,14 @@ export class ProjectsService {
     const rawMargin=revenue>0n ? gross*10000n/revenue : null;
     const margin=rawMargin!==null && rawMargin>=-100000n && rawMargin<=10000n
       ? Number(rawMargin):null;
-    const warnings:string[]=[];
+    const warnings:string[]=[...(contractBilling?.warnings??[])];
     if(!project.party_id) warnings.push("К проекту не привязан клиент");
     if(BigInt(stats.missing_cost_entries)>0n)
       warnings.push("Для части записей времени не указана себестоимость сотрудника");
     if(revenue<=0n) warnings.push("Нет выручки за выбранный период");
-    if(project.media_budget_minor!=="0")
-      warnings.push("Клиентский медиабюджет указан отдельно и не входит в себестоимость");
+    const mediaBudgetMinor=contractBilling?.mediaBudgetMinor??project.media_budget_minor;
+    if(mediaBudgetMinor!=="0")
+      warnings.push("Клиентский медиабюджет не входит в выручку или себестоимость агентства");
     if(rawMargin!==null && margin===null) warnings.push("Маржа за пределами допустимого диапазона");
     if(project.target_margin_bps!==null && rawMargin!==null &&
        rawMargin<BigInt(project.target_margin_bps)) warnings.push("Маржа ниже целевой");
@@ -1467,7 +1482,10 @@ export class ProjectsService {
       currency:project.currency,billingMode:project.billing_mode,
       partyId:project.party_id,
       serviceRevenueMinor:revenue.toString(),
-      mediaBudgetMinor:project.media_budget_minor,
+      mediaBudgetMinor,
+      contractBillingNeedsReview:contractBilling?.needsReview??false,
+      sourceContractIds:contractBilling?.chargedContractIds??[],
+      billingSource:contractBilling?"SIGNED_CONTRACTS":"PROJECT_MILESTONES_OR_TIME",
       laborCostMinor:labor.toString(),
       otherCostMinor:other.toString(),
       grossMarginMinor:gross.toString(),marginBps:margin,
@@ -1505,7 +1523,9 @@ export class ProjectsService {
     });
   }
 
-  async finalizeAgencyStatement(context:TenantContext,projectId:string,period:string) {
+  async finalizeAgencyStatement(context:TenantContext,projectId:string,period:string,
+    input?:{serviceRevenueOverrideMinor?:string;adjustmentReason?:string}
+  ) {
     const dates=this.agencyPeriod(period);
     const today=new Date().toISOString().slice(0,7);
     if(period>=today)
@@ -1525,6 +1545,26 @@ export class ProjectsService {
         return {id:existing.rows[0].id,status:existing.rows[0].status,alreadyFinalized:true};
       }
       const preview=await this.calculateAgencyStatement(client,context,projectId,period);
+      const manualAmount=input?.serviceRevenueOverrideMinor;
+      const manualReason=input?.adjustmentReason?.trim();
+      if(preview.contractBillingNeedsReview && manualAmount===undefined)
+        throw new ConflictException("Договор требует ручного расчёта суммы: укажите корректировку и основание");
+      let effective=preview;
+      if(manualAmount!==undefined){
+        if(!/^\d{1,15}$/.test(manualAmount) || !manualReason ||
+           manualReason.length<12 || manualReason.length>1000)
+          throw new BadRequestException("Укажите сумму в копейках и основание корректировки (от 12 до 1000 символов)");
+        if(!await this.authorization.resolveScope(context,"finance.invoice.manage"))
+          throw new ForbiddenException("Ручное изменение суммы требует прав управления счетами");
+        const revenue=BigInt(manualAmount);
+        const gross=revenue-BigInt(preview.laborCostMinor)-BigInt(preview.otherCostMinor);
+        const rawMargin=revenue>0n?gross*10000n/revenue:null;
+        const marginBps=rawMargin!==null&&rawMargin>=-100000n&&rawMargin<=10000n
+          ?Number(rawMargin):null;
+        effective={...preview,serviceRevenueMinor:revenue.toString(),
+          grossMarginMinor:gross.toString(),marginBps,
+          warnings:preview.warnings.filter(w=>!w.includes("Нет выручки за выбранный период"))};
+      }
       // Missing cost rates cannot be silently treated as actual profit.
       if(preview.warnings.some(w=>w.includes("себестоимость сотрудника")))
         throw new ConflictException("Укажите себестоимость сотрудников перед закрытием периода");
@@ -1533,6 +1573,11 @@ export class ProjectsService {
       const snapshot=JSON.stringify({
         period,model:preview.billingMode,mediaBudgetExcluded:true,
         missingCostEntries:0,warnings:preview.warnings,
+        contractIds:preview.sourceContractIds,billingSource:preview.billingSource,
+        manualOverride:manualAmount===undefined?null:{
+          amountMinor:manualAmount,reason:manualReason,
+          approvedByMembershipId:context.membershipId
+        },
         calculatedAt:new Date().toISOString()
       });
       const result=await client.query<{id:string;status:string}>(
@@ -1555,12 +1600,12 @@ export class ProjectsService {
          WHERE work_project_monthly_statement.status='DRAFT'
          RETURNING id,status`,
         [context.tenantId,projectId,period,dates.start,dates.end,
-         preview.serviceRevenueMinor,preview.mediaBudgetMinor,
-         preview.laborCostMinor,preview.otherCostMinor,
-         preview.grossMarginMinor,preview.marginBps,
-         preview.billableMinutes,snapshot]);
+         effective.serviceRevenueMinor,effective.mediaBudgetMinor,
+         effective.laborCostMinor,effective.otherCostMinor,
+         effective.grossMarginMinor,effective.marginBps,
+         effective.billableMinutes,snapshot]);
       if(!result.rows[0]) throw new ConflictException("Период уже закрыт");
-      return {...result.rows[0],alreadyFinalized:false,preview};
+      return {...result.rows[0],alreadyFinalized:false,preview:effective};
     });
   }
 

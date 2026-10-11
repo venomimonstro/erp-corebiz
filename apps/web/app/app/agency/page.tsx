@@ -45,6 +45,8 @@ type StatementPreview={
   projectId:string; period:string; currency:string; billingMode:string;
   serviceRevenueMinor:string; laborCostMinor:string; otherCostMinor:string;
   grossMarginMinor:string; marginBps:number|null; billableMinutes:number;
+  contractBillingNeedsReview:boolean;sourceContractIds:string[];
+  billingSource:string;
   warnings:string[];
 };
 type StatementRow={
@@ -80,6 +82,8 @@ export default function AgencyPage(){
   const [billPreview,setBillPreview]=useState<StatementPreview|null>(null);
   const [billRows,setBillRows]=useState<StatementRow[]>([]);
   const [billBusy,setBillBusy]=useState(false);
+  const [billOverride,setBillOverride]=useState("");
+  const [billReason,setBillReason]=useState("");
   const [billError,setBillError]=useState("");
   const [billNotice,setBillNotice]=useState("");
 
@@ -147,11 +151,22 @@ export default function AgencyPage(){
     if(!billProject||!billPreview||billPreview.period!==billPeriod)return;
     setBillError("");setBillBusy(true);
     try{
+      let adjustment:{serviceRevenueOverrideMinor:string;adjustmentReason:string}|undefined;
+      if(billOverride.trim()){
+        const value=billOverride.trim().replace(",",".");
+        if(!/^\d{1,12}(?:\.\d{1,2})?$/.test(value))throw new Error("Некорректная сумма корректировки");
+        if(billReason.trim().length<12)throw new Error("Укажите основание корректировки (от 12 символов)");
+        const [whole,fraction=""]=value.split(".");
+        adjustment={
+          serviceRevenueOverrideMinor:(BigInt(whole)*100n+BigInt(fraction.padEnd(2,"0"))).toString(),
+          adjustmentReason:billReason.trim()
+        };
+      }
       await apiRequest("/projects/"+billProject+"/statements/finalize",{
-        method:"POST",body:JSON.stringify({period:billPeriod})
+        method:"POST",body:JSON.stringify({period:billPeriod,...adjustment})
       });
       await refreshStatements(billProject);
-      setBillPreview(null);
+      setBillPreview(null);setBillOverride("");setBillReason("");
       setBillNotice("Месяц закрыт. Можно выставить счёт.");
     }catch(e){setBillError(e instanceof Error?e.message:"Не удалось закрыть месяц");}
     finally{setBillBusy(false);}
@@ -309,9 +324,22 @@ export default function AgencyPage(){
           {billPreview?<div>
             {billPreview.warnings.length>0?
               <ul>{billPreview.warnings.map(w=><li key={w}>{w}</li>)}</ul>:null}
-            <p>Модель: {billPreview.billingMode}, учтено часов: {Math.round(billPreview.billableMinutes/60*10)/10}.</p>
+            <p>Источник начисления: {billPreview.billingSource}. Модель: {billPreview.billingMode}, учтено часов: {Math.round(billPreview.billableMinutes/60*10)/10}.</p>
+                        <div className="agency-hero-actions">
+              <label>Ручная корректировка выручки, ₽ (необязательно)
+                <input inputMode="decimal" placeholder="Например, 50000.00"
+                  value={billOverride} onChange={e=>setBillOverride(e.target.value)}/>
+              </label>
+              {billOverride||billPreview.contractBillingNeedsReview?<label>Основание корректировки
+                <input maxLength={1000} placeholder="Причина, документ, согласование (от 12 символов)"
+                  value={billReason} onChange={e=>setBillReason(e.target.value)}/>
+              </label>:null}
+            </div>
+            {billPreview.contractBillingNeedsReview?
+              <p role="alert">Договоры требуют ручной проверки. Для закрытия укажите согласованную сумму и основание.</p>:null}
             <button disabled={billBusy||billPreview.period!==billPeriod||
-              billPreview.warnings.some(w=>w.includes("себестоимость сотрудника")||w.includes("не привязан клиент"))}
+              billPreview.warnings.some(w=>w.includes("себестоимость сотрудника")||w.includes("не привязан клиент"))||
+              (billPreview.contractBillingNeedsReview&&(!billOverride.trim()||billReason.trim().length<12))}
               onClick={()=>void finalizeMonth()}>Зафиксировать месяц</button>
           </div>:null}
           {billProject?<div className="agency-project-grid">
