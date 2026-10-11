@@ -52,21 +52,64 @@ export class GlobalSearchService {
     try {
       return await this.database.withTenantTransaction(context, async (client) => {
       const permissionRows = await client.query<{
-        permission_code: string;
+        permission_code:string;scope:"own"|"team"|"branch"|"all";
       }>(
-        `SELECT DISTINCT rp.permission_code
+        `SELECT rp.permission_code,rp.scope
          FROM membership_role mr
          JOIN role_permission rp
            ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
-         WHERE mr.tenant_id=$1 AND mr.membership_id=$2`,
-        [context.tenantId, context.membershipId]
+         JOIN tenant_membership tm
+           ON tm.tenant_id=mr.tenant_id AND tm.id=mr.membership_id
+         WHERE mr.tenant_id=$1 AND mr.membership_id=$2
+           AND tm.user_id=$3 AND tm.status='ACTIVE'`,
+        [context.tenantId,context.membershipId,context.userId]
       );
-
-      const permissions = new Set(
-        permissionRows.rows.map((row) => row.permission_code)
-      );
-      const allowed = (code: string) =>
-        permissions.has("*") || permissions.has(code);
+      const rank:Record<string,number>={own:1,team:2,branch:3,all:4};
+      const effective=new Map<string,string>();
+      for(const row of permissionRows.rows){
+        if((rank[row.scope]??0)>(rank[effective.get(row.permission_code)??""]??0))
+          effective.set(row.permission_code,row.scope);
+      }
+      const scope=(code:string):string|null=>{
+        const exact=effective.get(code);
+        const wildcard=effective.get("*");
+        if(!exact)return wildcard??null;
+        if(!wildcard)return exact;
+        return rank[exact]>=rank[wildcard]?exact:wildcard;
+      };
+      const allowed=(code:string)=>scope(code)!==null;
+      const scopedMembers=async(code:string):Promise<string[]|null>=>{
+        const permissionScope=scope(code);
+        if(permissionScope==="all")return null;
+        if(!permissionScope)return [];
+        if(permissionScope==="own")return [context.membershipId];
+        const [team,branch]=await Promise.all([
+          client.query<{membership_id:string}>(`
+            SELECT DISTINCT members.membership_id FROM team_membership actor
+            JOIN team_membership members
+              ON members.tenant_id=actor.tenant_id AND members.team_id=actor.team_id
+            WHERE actor.tenant_id=$1 AND actor.membership_id=$2
+          `,[context.tenantId,context.membershipId]),
+          permissionScope==="branch"?
+            client.query<{membership_id:string}>(`
+              SELECT DISTINCT peers.membership_id
+              FROM team_membership actor
+              JOIN team teams ON teams.tenant_id=actor.tenant_id AND teams.id=actor.team_id
+              JOIN team peers_teams ON peers_teams.tenant_id=teams.tenant_id
+                AND peers_teams.branch_id=teams.branch_id
+              JOIN team_membership peers ON peers.tenant_id=peers_teams.tenant_id
+                AND peers.team_id=peers_teams.id
+              WHERE actor.tenant_id=$1 AND actor.membership_id=$2
+                AND teams.branch_id IS NOT NULL
+            `,[context.tenantId,context.membershipId])
+            :Promise.resolve({rows:[] as Array<{membership_id:string}>})
+        ]);
+        return [...new Set([context.membershipId,
+          ...team.rows.map(r=>r.membership_id),...branch.rows.map(r=>r.membership_id)])];
+      };
+      const crmIds=await scopedMembers("crm.read");
+      const salesIds=await scopedMembers("sales.read");
+      const procurementIds=await scopedMembers("procurement.read");
 
       const pattern = "%" + query.replace(/[\\%_]/g,"\\$&") + "%";
       const items: SearchItem[] = [];
@@ -83,21 +126,11 @@ export class GlobalSearchService {
              WHERE p.tenant_id=$1
                AND p.status='ACTIVE'
                AND p.display_name ILIKE $2
-               AND (
-                 p.responsible_membership_id=$3
-                 OR EXISTS(
-                   SELECT 1 FROM membership_role mr
-                   JOIN role_permission rp
-                     ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
-                   WHERE mr.tenant_id=p.tenant_id
-                     AND mr.membership_id=$3
-                     AND rp.permission_code IN ('*','crm.read')
-                     AND (rp.scope='all' OR rp.permission_code='*')
-                 )
-               )
+               AND ($4::uuid[] IS NULL
+                 OR p.responsible_membership_id=ANY($4::uuid[]))
              ORDER BY p.display_name
              LIMIT 5`,
-            [context.tenantId, pattern, context.membershipId]
+            [context.tenantId, pattern, context.membershipId, crmIds]
           ),
           client.query<{
             id: string;
@@ -113,22 +146,11 @@ export class GlobalSearchService {
                  d.title ILIKE $2
                  OR p.display_name ILIKE $2
                )
-               AND (
-                 d.responsible_membership_id=$3
-                 OR EXISTS(
-                   SELECT 1
-                   FROM membership_role mr
-                   JOIN role_permission rp
-                     ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
-                   WHERE mr.tenant_id=d.tenant_id
-                     AND mr.membership_id=$3
-                     AND rp.permission_code IN ('*','crm.read')
-                     AND rp.scope='all'
-                 )
-               )
+               AND ($4::uuid[] IS NULL
+                 OR d.responsible_membership_id=ANY($4::uuid[]))
              ORDER BY d.updated_at DESC
              LIMIT 5`,
-            [context.tenantId, pattern, context.membershipId]
+            [context.tenantId, pattern, context.membershipId, crmIds]
           )
         ]);
 
@@ -168,22 +190,11 @@ export class GlobalSearchService {
                o.business_number ILIKE $2
                OR p.display_name ILIKE $2
              )
-             AND (
-               o.responsible_membership_id=$3
-               OR EXISTS(
-                 SELECT 1
-                 FROM membership_role mr
-                 JOIN role_permission rp
-                   ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
-                 WHERE mr.tenant_id=o.tenant_id
-                   AND mr.membership_id=$3
-                   AND rp.permission_code IN ('*','sales.read')
-                   AND rp.scope='all'
-               )
-             )
+             AND ($4::uuid[] IS NULL
+               OR o.responsible_membership_id=ANY($4::uuid[]))
            ORDER BY o.created_at DESC
            LIMIT 5`,
-          [context.tenantId, pattern, context.membershipId]
+          [context.tenantId,pattern,context.membershipId,salesIds]
         );
 
         for (const row of orders.rows) {
@@ -197,7 +208,7 @@ export class GlobalSearchService {
         }
       }
 
-      if (allowed("catalog.read")) {
+      if (scope("catalog.read")==="all") {
         const sku = await client.query<{
           sku_id: string;
           sku_code: string;
@@ -248,22 +259,11 @@ export class GlobalSearchService {
                po.business_number ILIKE $2
                OR p.display_name ILIKE $2
              )
-             AND (
-               po.responsible_membership_id=$3
-               OR EXISTS(
-                 SELECT 1
-                 FROM membership_role mr
-                 JOIN role_permission rp
-                   ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
-                 WHERE mr.tenant_id=po.tenant_id
-                   AND mr.membership_id=$3
-                   AND rp.permission_code IN ('*','procurement.read')
-                   AND rp.scope='all'
-               )
-             )
+             AND ($4::uuid[] IS NULL
+               OR po.responsible_membership_id=ANY($4::uuid[]))
            ORDER BY po.created_at DESC
            LIMIT 5`,
-          [context.tenantId, pattern, context.membershipId]
+          [context.tenantId,pattern,context.membershipId,procurementIds]
         );
 
         for (const row of purchases.rows) {
