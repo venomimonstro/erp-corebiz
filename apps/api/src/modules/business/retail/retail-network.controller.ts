@@ -30,6 +30,21 @@ export class RetailNetworkController{
   ):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.service.locationStock(this.ctx(req),id,q??"")};
   }
+  @Get("locations/:id/serialized")
+  @RequirePermission("inventory.read")
+  async serialized(@Req() req:AuthenticatedRequest,@Param("id") id:string)
+  :Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.service.serialized(this.ctx(req),id)};
+  }
+  @Post("locations/:id/serialized")
+  @RequirePermission("inventory.write")
+  async registerSerialized(@Req() req:AuthenticatedRequest,@Param("id") id:string,
+    @Body() body:{
+      skuId:string;serialNumber:string;imei?:string;gtin?:string;
+      markingProductGroup?:string;markingCode?:string
+    }):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.service.registerSerialized(this.ctx(req),id,body)};
+  }
   @Get("locations/:id/orders")
   @RequirePermission("sales.read")
   async orders(@Req() req:AuthenticatedRequest,@Param("id") id:string)
