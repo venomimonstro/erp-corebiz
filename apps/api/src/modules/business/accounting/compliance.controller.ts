@@ -16,6 +16,18 @@ import { ComplianceService } from "./compliance.service";
 export class ComplianceController {
   constructor(private readonly compliance:ComplianceService) {}
 
+  @Get()
+  @RequirePermission("accounting.compliance.read")
+  async overview(
+    @Req() req:AuthenticatedRequest,
+    @Query("legalEntityId") legalEntityId:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.overview(this.context(req),legalEntityId)
+    };
+  }
+
   @Get("profile")
   @RequirePermission("accounting.compliance.read")
   async profile(
