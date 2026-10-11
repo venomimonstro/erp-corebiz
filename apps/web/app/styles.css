@@ -3490,3 +3490,79 @@ button, .primary, .secondary { font: inherit; }
   }
 }
 
+
+
+.compliance-dialog-backdrop {
+  position:fixed;
+  inset:0;
+  z-index:90;
+  display:grid;
+  place-items:center;
+  padding:20px;
+  background:rgba(23,27,30,.38);
+  backdrop-filter:blur(10px);
+}
+.compliance-dialog {
+  width:min(560px,100%);
+  display:grid;
+  gap:15px;
+  padding:20px;
+  border:1px solid rgba(255,255,255,.72);
+  border-radius:20px;
+  background:rgba(255,255,255,.98);
+  box-shadow:0 30px 100px rgba(23,27,30,.22);
+}
+.compliance-dialog-head {
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:18px;
+}
+.compliance-dialog-head > div {
+  display:grid;
+  gap:7px;
+}
+.compliance-dialog-head h3 {
+  margin:0;
+  color:#2d3338;
+  font-size:19px;
+  line-height:1.15;
+  letter-spacing:-.035em;
+}
+.compliance-dialog > p {
+  margin:0;
+  color:#798188;
+  font-size:9px;
+  line-height:1.6;
+}
+.compliance-dialog label {
+  display:grid;
+  gap:6px;
+}
+.compliance-dialog label > span {
+  color:#70787f;
+  font-size:9px;
+  font-weight:750;
+}
+.compliance-dialog textarea {
+  width:100%;
+  resize:vertical;
+  min-height:88px;
+}
+.compliance-dialog-actions {
+  display:flex;
+  justify-content:flex-end;
+  gap:8px;
+  padding-top:5px;
+}
+@media (max-width:620px) {
+  .compliance-dialog-backdrop {
+    align-items:end;
+    padding:0;
+  }
+  .compliance-dialog {
+    width:100%;
+    border-radius:20px 20px 0 0;
+    padding:18px;
+  }
+}
