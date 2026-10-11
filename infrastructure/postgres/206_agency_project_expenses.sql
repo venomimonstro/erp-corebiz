@@ -1,4 +1,5 @@
 BEGIN;
+ALTER TABLE work_project ADD CONSTRAINT work_project_expense_scope_key UNIQUE (tenant_id,id);
 CREATE TABLE IF NOT EXISTS work_project_expense (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
