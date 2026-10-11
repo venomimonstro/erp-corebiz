@@ -37,8 +37,8 @@ describe("dance studio: operational reconciliation",()=>{
     const result=await service.health(ctx);
     expect(result.status).toBe("ACTION_REQUIRED");
     expect(result.risks.map(r=>r.code)).toEqual([
-      "STRANDED_PACKAGES","PAYROLL_DISPUTES","MISSING_PROFITABILITY",
-      "OVERBOOKED_LESSONS","UNLINKED_CHARGES"
+      "STRANDED_PACKAGES","OVERBOOKED_LESSONS","UNLINKED_CHARGES",
+      "MISSING_PROFITABILITY","PAYROLL_DISPUTES"
     ]);
     expect(result.totalIssues).toBe(9);
   });
