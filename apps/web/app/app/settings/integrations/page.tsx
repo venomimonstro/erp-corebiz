@@ -65,6 +65,15 @@ export default function IntegrationsPage(){
         </div>
       </header>
       <section className="studio-section">
+        <h2>Подключить СДЭК или АТОЛ Онлайн</h2>
+        <p>Можно сохранить реквизиты отдельного продавца, проверить
+          авторизацию у провайдера и рассчитать тариф доставки СДЭК.</p>
+        <a className="secondary-button"
+          href="/app/settings/integrations/connect">
+          Открыть подключения продавца →
+        </a>
+      </section>
+      <section className="studio-section">
         <h2>Один заказ — несколько независимых подтверждений</h2>
         <div className="first-day-steps">
           {[
