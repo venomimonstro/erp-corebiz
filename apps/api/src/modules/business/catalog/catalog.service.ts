@@ -157,10 +157,8 @@ export class CatalogService {
         SELECT 1 FROM membership_role mr
         JOIN role_permission rp ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
         WHERE mr.tenant_id=$1 AND mr.membership_id=$2
-          AND (
-            rp.permission_code='*'
-            OR (rp.scope='all' AND rp.permission_code IN ('finance.read','catalog.cost.read'))
-          )
+          AND rp.scope='all'
+          AND rp.permission_code IN ('*','finance.read','catalog.cost.read')
       ) AS allowed`,
       [context.tenantId,context.membershipId]
     );
