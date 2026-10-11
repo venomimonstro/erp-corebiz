@@ -18,7 +18,7 @@ export class MarketplaceHubService {
     const limit=input.limit??50;
     if(!Number.isSafeInteger(limit)||limit<1||limit>100)
       throw new BadRequestException("Размер выдачи: от 1 до 100");
-    const pattern=query.replace(/[\\%_]/g,"\\  async overview(context:TenantContext) {");
+    const pattern=query.replace(/[\\%_]/g,"\\$&");
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT m.id,m.connection_id,m.external_offer_id,m.sku_id,
