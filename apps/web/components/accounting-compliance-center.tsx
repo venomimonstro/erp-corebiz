@@ -91,6 +91,27 @@ type TaxCalculation = {
   obligation_id?:string|null;
 };
 
+type AutopilotTask = {
+  id:string;
+  task_key:string;
+  category:string;
+  severity:"INFO"|"WARNING"|"CRITICAL";
+  status:"OPEN"|"IN_PROGRESS"|"DISMISSED";
+  title:string;
+  description:string;
+  action_code:string|null;
+  action_href:string|null;
+  due_at:string|null;
+  amount_minor:string|null;
+  currency:string;
+  payload:Record<string,unknown>;
+};
+
+type Autopilot = {
+  summary:{critical:number;warning:number;info:number};
+  tasks:AutopilotTask[];
+};
+
 type ComplianceLine = {
   id:string;
   line_number:number;
@@ -164,6 +185,7 @@ export function AccountingComplianceCenter({
   inn
 }:Props) {
   const [profile,setProfile]=useState<TaxProfile|null>(null);
+  const [autopilot,setAutopilot]=useState<Autopilot|null>(null);
   const [obligations,setObligations]=useState<Obligation[]>([]);
   const [ledger,setLedger]=useState<LedgerItem[]>([]);
   const [ens,setEns]=useState<EnsSnapshot[]>([]);
@@ -213,6 +235,7 @@ export function AccountingComplianceCenter({
 
       const [
         profileRow,
+        autopilotRow,
         obligationRows,
         ledgerRows,
         ensRows,
@@ -222,6 +245,10 @@ export function AccountingComplianceCenter({
       ]=await Promise.all([
         apiRequest<TaxProfile|null>(
           "/accounting/compliance/profile?legalEntityId="+
+          encodeURIComponent(legalEntityId)
+        ),
+        apiRequest<Autopilot>(
+          "/accounting/compliance/autopilot?legalEntityId="+
           encodeURIComponent(legalEntityId)
         ),
         apiRequest<Obligation[]>(
@@ -253,6 +280,7 @@ export function AccountingComplianceCenter({
       ]);
 
       setProfile(profileRow);
+      setAutopilot(autopilotRow);
       setObligations(obligationRows);
       setLedger(ledgerRows);
       setEns(ensRows);
@@ -365,6 +393,37 @@ export function AccountingComplianceCenter({
     profile?.kpp,
     profile?.oktmo
   ]);
+
+  async function updateAutopilotTask(
+    task:AutopilotTask,
+    status:"OPEN"|"IN_PROGRESS"|"DISMISSED"
+  ){
+    setBusy(true);
+    setError("");
+    try{
+      await apiRequest(
+        "/accounting/compliance/autopilot/"+task.id+"/status",
+        {
+          method:"POST",
+          body:JSON.stringify({status})
+        }
+      );
+      setNotice(
+        status==="DISMISSED"
+          ?"Задача скрыта. Автопилот продолжит следить за риском."
+          :"Задача взята в работу."
+      );
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось обновить задачу автопилота"
+      );
+    }finally{
+      setBusy(false);
+    }
+  }
 
   async function saveProfile() {
     const rate=Number(usnRate.replace(",","."));
@@ -967,6 +1026,109 @@ export function AccountingComplianceCenter({
           </button>
         </div>
       </section>
+
+      {autopilot?(
+        <section className="accounting-autopilot">
+          <div className="accounting-autopilot-head">
+            <div>
+              <span className="compliance-eyebrow">Бухгалтерский автопилот</span>
+              <h3>
+                {autopilot.summary.critical>0
+                  ?"Есть риски, которые нельзя откладывать"
+                  :autopilot.summary.warning>0
+                    ?"Есть задачи, которые лучше закрыть заранее"
+                    :"Критичных бухгалтерских задач нет"}
+              </h3>
+              <p>
+                Проверяем ФНС-календарь, ЕНС, налоговую книгу, банковскую
+                сверку, НПД и закрытие периода. Здесь только действия,
+                которые действительно требуют решения.
+              </p>
+            </div>
+            <div className="accounting-autopilot-score">
+              <span><strong>{autopilot.summary.critical}</strong> критично</span>
+              <span><strong>{autopilot.summary.warning}</strong> проверить</span>
+            </div>
+          </div>
+
+          <div className="accounting-autopilot-grid">
+            {autopilot.tasks
+              .filter(task=>task.status!=="DISMISSED")
+              .slice(0,6)
+              .map(task=>(
+              <article
+                key={task.id}
+                className={
+                  "accounting-autopilot-card severity-"+
+                  task.severity.toLowerCase()
+                }
+              >
+                <div className="accounting-autopilot-card-head">
+                  <span className="status-pill">
+                    {task.severity==="CRITICAL"
+                      ?"Срочно"
+                      :task.severity==="WARNING"
+                        ?"Проверить"
+                        :"На контроле"}
+                    {" · "}
+                    {task.category.replaceAll("_"," ")}
+                  </span>
+                  {task.amount_minor?(
+                    <strong>{rub(task.amount_minor)}</strong>
+                  ):null}
+                </div>
+                <h4>{task.title}</h4>
+                <p>{task.description}</p>
+                <div className="accounting-autopilot-card-footer">
+                  <span className="muted">
+                    {task.due_at
+                      ?"Срок: "+date(task.due_at)
+                      :"Автоматическая проверка"}
+                  </span>
+                  <div className="studio-card-actions">
+                    {task.action_href?(
+                      <a className="primary-button" href={task.action_href}>
+                        Исправить
+                      </a>
+                    ):null}
+                    {task.status==="OPEN"?(
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={busy}
+                        onClick={()=>void updateAutopilotTask(
+                          task,"IN_PROGRESS"
+                        )}
+                      >
+                        В работу
+                      </button>
+                    ):null}
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={busy}
+                      onClick={()=>void updateAutopilotTask(
+                        task,"DISMISSED"
+                      )}
+                    >
+                      Скрыть
+                    </button>
+                  </div>
+                </div>
+              </article>
+            ))}
+            {!autopilot.tasks.some(task=>task.status!=="DISMISSED")?(
+              <div className="accounting-autopilot-empty">
+                <strong>✓ Всё под контролем</strong>
+                <span>
+                  Открытых рисков нет. Автопилот пересчитает состояние после
+                  изменений в банке, налогах, ЕНС и закрытии периода.
+                </span>
+              </div>
+            ):null}
+          </div>
+        </section>
+      ):null}
 
       {error?(
         <div className="inline-error">
