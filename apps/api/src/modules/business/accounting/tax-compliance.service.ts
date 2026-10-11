@@ -29,13 +29,18 @@ export class TaxComplianceService {
         [context.tenantId,legalEntityId]
       );
       const obligations=await client.query(
-        `SELECT id,authority,obligation_type,code,title,period_key,due_at,
-                amount_minor::text,currency,calculation_status,workflow_status,
-                form_code,source_url,review_note,rejection_reason
-         FROM accounting_compliance_obligation
-         WHERE tenant_id=$1 AND legal_entity_id=$2
-           AND workflow_status<>'CANCELLED'
-         ORDER BY due_at LIMIT 100`,
+        `SELECT
+           o.id,o.authority,o.obligation_type,o.code,o.title,o.period_key,
+           o.due_at,o.amount_minor::text,o.currency,o.calculation_status,
+           o.workflow_status,o.form_code,o.source_url,o.review_note,
+           o.rejection_reason,p.id AS packet_id,p.validation_status,
+           p.signature_status,p.packet_kind,p.schema_version
+         FROM accounting_compliance_obligation o
+         LEFT JOIN accounting_compliance_packet p
+           ON p.tenant_id=o.tenant_id AND p.id=o.packet_id
+         WHERE o.tenant_id=$1 AND o.legal_entity_id=$2
+           AND o.workflow_status<>'CANCELLED'
+         ORDER BY o.due_at LIMIT 100`,
         [context.tenantId,legalEntityId]
       );
       const counts=await client.query(
