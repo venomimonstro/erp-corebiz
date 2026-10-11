@@ -638,7 +638,8 @@ async function inspectRequiredHardening(root) {
     "198_accounting_compliance_toggle.sql",
     "199_automotive_verticals.sql",
     "200_automotive_integrity.sql",
-    "201_automotive_totals_trigger_fix.sql"
+    "201_automotive_totals_trigger_fix.sql",
+    "202_automotive_workflow_integrity.sql"
   ];
 
   for (const name of requiredMigrations) {
