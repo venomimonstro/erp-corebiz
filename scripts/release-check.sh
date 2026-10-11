@@ -48,6 +48,10 @@ fi
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" \
   -X -q -v ON_ERROR_STOP=1 \
   -f scripts/security_runtime_function_gate.sql
+echo "[release] verified OWNER-role authority and escalation protection"
+psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" \
+  -X -q -v ON_ERROR_STOP=1 \
+  -f scripts/security_rbac_owner_gate.sql
 
 echo "[release] automated source checks finished"
 echo "[release] NOT PRODUCTION APPROVED: still require DB role/RLS, load, security, tenant, business workflow and backup/restore validation"

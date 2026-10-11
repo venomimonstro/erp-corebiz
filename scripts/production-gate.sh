@@ -120,6 +120,10 @@ psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/security_runtime_function_gate.sql
 pass_step "CORE:SECURITY"
 
+echo "[production-gate] OWNER-role integrity and RBAC escalation gate"
+psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
+  -f scripts/security_rbac_owner_gate.sql
+
 echo "[production-gate] 4/13 API business journey"
 node scripts/smoke-user-journey.mjs
 pass_step "API:INTEGRATION"
@@ -171,7 +175,7 @@ DATABASE_URL="${COREBIZ_RESTORE_DATABASE_URL}" \
   bash scripts/restore-postgres.sh
 
 RESTORED_MIGRATIONS="$(psql "${COREBIZ_RESTORE_DATABASE_URL}" -X -q -t -A -v ON_ERROR_STOP=1 \
-  -c "SELECT count(*) FROM schema_migrations;")"
+  -c "SELECT count(*) FROM schema_migration;")"
 if [[ -z "$RESTORED_MIGRATIONS" || "$RESTORED_MIGRATIONS" -le 0 ]]; then
   echo "[production-gate] BLOCKED: restored DB has no schema_migrations" >&2
   exit 1
