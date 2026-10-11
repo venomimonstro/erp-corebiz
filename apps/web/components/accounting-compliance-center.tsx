@@ -16,6 +16,8 @@ type TaxProfile = {
   kpp:string|null;
   oktmo:string|null;
   tax_office_code:string|null;
+  compliance_enabled:boolean;
+  compliance_disabled_reason:string|null;
 };
 
 type Obligation = {
@@ -176,6 +178,9 @@ export function AccountingComplianceCenter({
   const [taxRegime,setTaxRegime]=useState<TaxProfile["tax_regime"]>("USN_INCOME");
   const [vatMode,setVatMode]=useState<TaxProfile["vat_mode"]>("NO_VAT");
   const [hasEmployees,setHasEmployees]=useState(false);
+  const [complianceEnabled,setComplianceEnabled]=useState(true);
+  const [complianceDisabledReason,setComplianceDisabledReason]=useState("");
+  const [taxPayAccountId,setTaxPayAccountId]=useState("");
   const [usnRate,setUsnRate]=useState("6");
   const [usnMinRate,setUsnMinRate]=useState("1");
   const [kpp,setKpp]=useState("");
@@ -252,6 +257,12 @@ export function AccountingComplianceCenter({
       setLedger(ledgerRows);
       setEns(ensRows);
       setCashAccounts(accountRows);
+      const firstAssigned=accountRows.find(
+        account=>account.assignment_state==="THIS_ENTITY"
+      );
+      if(firstAssigned){
+        setTaxPayAccountId(current=>current||firstAssigned.id);
+      }
       setConnectors(connectorRows);
       setCalculation(calculationRows[0]??null);
 
@@ -260,6 +271,8 @@ export function AccountingComplianceCenter({
         setTaxRegime(profileRow.tax_regime);
         setVatMode(profileRow.vat_mode);
         setHasEmployees(profileRow.has_employees);
+        setComplianceEnabled(profileRow.compliance_enabled!==false);
+        setComplianceDisabledReason(profileRow.compliance_disabled_reason??"");
         if(profileRow.usn_rate_bps){
           setUsnRate(String(profileRow.usn_rate_bps/100));
         }
@@ -382,6 +395,11 @@ export function AccountingComplianceCenter({
           taxRegime,
           vatMode,
           hasEmployees,
+          complianceEnabled,
+          complianceDisabledReason:complianceEnabled
+            ?undefined
+            :(complianceDisabledReason.trim()||
+              "Регламентированный налоговый контур отключён владельцем"),
           ensEnabled:true,
           reportingMode:"ASSISTED",
           riskTolerance:"CONSERVATIVE",
@@ -404,6 +422,49 @@ export function AccountingComplianceCenter({
         cause instanceof Error
           ?cause.message
           :"Не удалось сохранить налоговый профиль"
+      );
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  async function payTax(item:Obligation) {
+    const cashAccountId=taxPayAccountId||assignedAccounts[0]?.id||"";
+    if(!cashAccountId){
+      setError(
+        "Сначала привяжите банковский или кассовый счёт к этому юридическому лицу"
+      );
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try{
+      const result=await apiRequest<{
+        paid:boolean;
+        alreadyPaid:boolean;
+        paymentId:string|null;
+        amountMinor:string;
+      }>(
+        "/accounting/compliance/obligations/"+item.id+"/pay",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            cashAccountId,
+            note:"Налоговый платёж зарегистрирован в CoreBiz"
+          })
+        }
+      );
+      setNotice(
+        result.alreadyPaid
+          ?"Налоговый платёж уже зарегистрирован."
+          :"Платёж зарегистрирован в финансах и налоговая задача закрыта."
+      );
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось зарегистрировать налоговый платёж"
       );
     }finally{
       setBusy(false);
@@ -894,7 +955,12 @@ export function AccountingComplianceCenter({
           </button>
           <button
             type="button"
-            disabled={busy||!profile}
+            disabled={busy||!profile||profile.compliance_enabled===false}
+            title={
+              profile?.compliance_enabled===false
+                ?"Налоговый контур выключен в профиле"
+                :undefined
+            }
             onClick={()=>void generateCalendar()}
           >
             Обновить календарь
@@ -912,6 +978,16 @@ export function AccountingComplianceCenter({
         <div className="compliance-notice">
           <strong>Готово</strong>
           <span>{notice}</span>
+        </div>
+      ):null}
+
+      {profile?.compliance_enabled===false?(
+        <div className="compliance-notice">
+          <strong>Налоговый контур выключен</strong>
+          <span>
+            Внутренний бухгалтерский и управленческий учёт продолжает работать.
+            CoreBiz не создаёт новые регламентные задачи ФНС и не готовит их к отправке.
+          </span>
         </div>
       ):null}
 
@@ -1034,6 +1110,30 @@ export function AccountingComplianceCenter({
               />
               <span>Есть сотрудники / выплаты физлицам</span>
             </label>
+            <label>
+              <span>Регламентированный контур</span>
+              <select
+                value={complianceEnabled?"ENABLED":"DISABLED"}
+                onChange={event=>
+                  setComplianceEnabled(event.target.value==="ENABLED")
+                }
+              >
+                <option value="ENABLED">Включён · ФНС, сроки, платежи</option>
+                <option value="DISABLED">Выключен · только внутренний учёт</option>
+              </select>
+            </label>
+            {!complianceEnabled?(
+              <label>
+                <span>Причина отключения</span>
+                <input
+                  value={complianceDisabledReason}
+                  onChange={event=>
+                    setComplianceDisabledReason(event.target.value)
+                  }
+                  placeholder="Например: отчётность ведёт внешний бухгалтер"
+                />
+              </label>
+            ):null}
           </div>
 
           <div className="compliance-profile-footer">
@@ -1286,12 +1386,34 @@ export function AccountingComplianceCenter({
               ):null}
               {next.workflow_status==="APPROVED" &&
                next.obligation_type==="PAY"?(
-                <button
-                  type="button"
-                  onClick={()=>void recordReceipt(next,"PAYMENT")}
-                >
-                  Подтвердить оплату
-                </button>
+                <>
+                  <select
+                    aria-label="Счёт для налогового платежа"
+                    value={taxPayAccountId}
+                    onChange={event=>setTaxPayAccountId(event.target.value)}
+                  >
+                    <option value="">Выберите счёт</option>
+                    {assignedAccounts.map(account=>(
+                      <option key={account.id} value={account.id}>
+                        {account.name} · {account.currency}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={busy||!assignedAccounts.length}
+                    onClick={()=>void payTax(next)}
+                  >
+                    Зарегистрировать оплату
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={()=>void recordReceipt(next,"PAYMENT")}
+                  >
+                    Оплачено вне CoreBiz
+                  </button>
+                </>
               ):null}
               {next.workflow_status==="SUBMITTED"?(
                 <>
