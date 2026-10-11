@@ -118,6 +118,8 @@ export class DanceStudioController {
       branchId?:string;
       trainerResourceId:string;
       roomResourceId?:string;
+      roomZoneId?:string;
+      roomCapacityUnits?:number;
       capacity:number;
       breakEvenMembers?:number;
       startsOn?:string;
@@ -130,6 +132,36 @@ export class DanceStudioController {
     }
   ):Promise<ApiSuccess<unknown>> {
     return {ok:true,data:await this.studio.createGroup(this.ctx(req),body)};
+  }
+
+  @Patch("groups/:groupId")
+  @RequirePermission("dance.write")
+  async updateGroup(
+    @Req() req:AuthenticatedRequest,
+    @Param("groupId") groupId:string,
+    @Body() body:{
+      name?:string;
+      branchId?:string|null;
+      trainerResourceId?:string;
+      roomResourceId?:string|null;
+      roomZoneId?:string|null;
+      roomCapacityUnits?:number;
+      capacity?:number;
+      breakEvenMembers?:number;
+      startsOn?:string;
+      endsOn?:string|null;
+      schedule?:Array<{
+        weekday:number;
+        startMinute:number;
+        durationMinutes?:number;
+      }>;
+      version:number;
+    }
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.studio.updateGroup(this.ctx(req),groupId,body)
+    };
   }
 
   @Get("groups/:groupId/members")
