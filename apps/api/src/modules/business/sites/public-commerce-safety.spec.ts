@@ -169,7 +169,8 @@ describe("public commerce safeguards", () => {
         return {
           rows: [{
             sku_id: "66666666-6666-4666-8666-666666666666",
-            quantity_milli: "1000"
+            quantity_milli: "1000",
+            is_available: true
           }],
           rowCount: 1
         };
