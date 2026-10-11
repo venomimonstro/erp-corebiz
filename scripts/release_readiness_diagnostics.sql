@@ -802,3 +802,45 @@ JOIN accounting_compliance_obligation o
   ON o.tenant_id=p.tenant_id AND o.id=p.obligation_id
 WHERE p.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
   AND p.legal_entity_id<>o.legal_entity_id;
+
+
+-- Tax calculation / classification integrity.
+SELECT 'ACCOUNTING_TAX_CONFIRMED_WITHOUT_AUDIT' AS code,count(*)::bigint AS affected
+FROM accounting_tax_calculation c
+WHERE c.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND c.status='CONFIRMED'
+  AND (
+    c.confirmed_by_membership_id IS NULL
+    OR c.confirmed_at IS NULL
+  )
+UNION ALL
+SELECT 'ACCOUNTING_TAX_CLASSIFICATION_PAYMENT_MISSING',count(*)::bigint
+FROM accounting_tax_payment_classification x
+LEFT JOIN payment p
+  ON p.tenant_id=x.tenant_id AND p.id=x.payment_id
+WHERE x.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND p.id IS NULL
+UNION ALL
+SELECT 'ACCOUNTING_TAX_AUTO_DEDUCTIBLE_UNSAFE',count(*)::bigint
+FROM accounting_tax_payment_classification x
+WHERE x.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND x.source='AUTO_RULE'
+  AND x.treatment='DEDUCTIBLE_EXPENSE'
+UNION ALL
+SELECT 'ACCOUNTING_TAX_ADVANCED_STATUS_WITHOUT_APPROVAL',count(*)::bigint
+FROM accounting_compliance_obligation o
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND o.workflow_status IN ('APPROVED','SUBMITTED','ACCEPTED','PAID')
+  AND (
+    o.approved_by_membership_id IS NULL
+    OR o.approved_at IS NULL
+  )
+UNION ALL
+SELECT 'ACCOUNTING_TAX_SIGNED_PACKET_WITHOUT_AUDIT',count(*)::bigint
+FROM accounting_compliance_packet p
+WHERE p.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND p.signature_status='SIGNED'
+  AND (
+    p.signed_by_membership_id IS NULL
+    OR p.signed_at IS NULL
+  );
