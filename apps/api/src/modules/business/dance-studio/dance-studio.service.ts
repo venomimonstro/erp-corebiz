@@ -51,8 +51,12 @@ export class DanceStudioService {
       const result=await client.query<{
         trainers:number;rooms:number;programs:number;groups:number;
         scheduled:number;plans:number;payroll_profiles:number;
-        branches:number;
+        branches:number;services:number;students:number;
       }>(`SELECT
+        (SELECT count(*)::integer FROM service_catalog_item
+         WHERE tenant_id=$1 AND status='ACTIVE') AS services,
+        (SELECT count(*)::integer FROM dance_student
+         WHERE tenant_id=$1 AND status IN ('LEAD','TRIAL','ACTIVE')) AS students,
         (SELECT count(*)::integer FROM service_resource
          WHERE tenant_id=$1 AND type='EMPLOYEE' AND status='ACTIVE') AS trainers,
         (SELECT count(*)::integer FROM service_resource
@@ -72,7 +76,11 @@ export class DanceStudioService {
          WHERE tenant_id=$1 AND status='ACTIVE') AS branches`,[context.tenantId]);
       const counts=result.rows[0]!;
       const steps=[
-        {id:"trainer",title:"Добавьте тренера",subtitle:"Укажите расписание работы и ресурсы",
+        {id:"service",title:"Создайте услугу тренировки",
+          subtitle:"Стоимость и длительность нужны, чтобы создать направление танцев",
+          href:"/app/dance/setup",count:counts.services,required:true},
+        {id:"trainer",title:"Добавьте тренера",
+          subtitle:"Свяжите тренера с расписанием и направлениями",
           href:"/app/dance/setup",count:counts.trainers,required:true},
         {id:"program",title:"Создайте направление",subtitle:"Название, стоимость, длительность и возраст",
           href:"/app/dance/groups",count:counts.programs,required:true},
@@ -80,6 +88,9 @@ export class DanceStudioService {
           href:"/app/dance/groups",count:counts.groups,required:true},
         {id:"lesson",title:"Сформируйте расписание",subtitle:"Проверьте будущие уроки и запись",
           href:"/app/dance/groups",count:counts.scheduled,required:true},
+        {id:"student",title:"Добавьте первого ученика",
+          subtitle:"Свяжите ученика и плательщика, чтобы проводить занятия и оплаты",
+          href:"/app/dance/students",count:counts.students,required:false},
         {id:"package",title:"Настройте абонемент",subtitle:"Количество занятий, срок, цена и заморозка",
           href:"/app/service/packages",count:counts.plans,required:false},
         {id:"payroll",title:"Установите оплату тренерам",subtitle:"Оклад, ставка, процент и гарантии",
