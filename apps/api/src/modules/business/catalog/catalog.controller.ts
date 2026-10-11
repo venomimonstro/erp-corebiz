@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req } from "@nestjs/common";
+import { Body, Controller, Get, Post, Query, Req } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
@@ -7,6 +7,19 @@ import { CatalogService } from "./catalog.service";
 @Controller("catalog/products")
 export class CatalogController {
   constructor(private readonly catalog: CatalogService) {}
+
+  @Get("page")
+  @RequirePermission("catalog.read")
+  async page(
+    @Req() request:AuthenticatedRequest,
+    @Query("limit") limit?:string,
+    @Query("cursor") cursor?:string,
+    @Query("q") query?:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.catalog.page(this.context(request),{
+      limit:limit===undefined?100:Number(limit),cursor,query
+    })};
+  }
 
   @Get()
   @RequirePermission("catalog.read")
