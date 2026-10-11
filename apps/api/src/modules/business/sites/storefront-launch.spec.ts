@@ -49,6 +49,8 @@ describe("ecommerce launch safety", () => {
     const [sql,params]=pageQuery.mock.calls[0] as [string,unknown[]];
     expect(sql).toContain("WITH items AS");
     expect(sql).toContain("AND s.currency=$2");
+    expect(sql).toContain("w.status='ACTIVE'");
+    expect(sql).toContain("COALESCE(ip.enabled,true)");
     expect(sql).toContain("ORDER BY s.id");
     expect(sql).not.toContain("cost_price_minor");
     expect(params).toEqual([context.tenantId,"RUB",null,"Prod",3]);
@@ -69,6 +71,7 @@ describe("ecommerce launch safety", () => {
     expect(result.canLaunchWithOnlinePayments).toBe(false);
     expect(result.checks).toHaveLength(6);
     expect(result.externalBlockers).toHaveLength(4);
+    // No PSP is inferred from published pages or a verified domain.
   });
 
   it("builds a store catalog and storefront config in the same transaction",async()=>{
