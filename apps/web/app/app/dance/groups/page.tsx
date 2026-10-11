@@ -99,8 +99,8 @@ type Participant = {
   package_id: string | null;
   status: string;
   price_source: string;
-  charge_minor: string;
-  currency: string;
+  charge_minor: string | null;
+  currency: string | null;
   version: number;
   package_name: string | null;
 };
@@ -146,6 +146,7 @@ type Pack = {
 };
 
 function money(value: string | null) {
+  if(value===null)return "—";
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
     currency: "RUB",
@@ -179,6 +180,8 @@ export default function DanceGroupsPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [pending, setPending] = useState(false);
+  const [canManageDance,setCanManageDance]=useState(false);
+  const [canViewFinance,setCanViewFinance]=useState(false);
   const [attendancePending,setAttendancePending]=useState<string|null>(null);
   const [programModal, setProgramModal] = useState(false);
   const [programName, setProgramName] = useState("Hip-Hop");
@@ -248,32 +251,41 @@ export default function DanceGroupsPage() {
     const from = new Date(Date.now() - 7 * 86400000).toISOString();
     const to = new Date(Date.now() + 45 * 86400000).toISOString();
     try {
-      const [programRows, groupRows, lessonRows, studentRows, resourceRows, serviceRows, packageRows, makeupRows] =
+      // A read-only trainer should be able to open their journal even when
+      // service, package and resource administration are not permitted.
+      const rights=await apiRequest<{
+        canManageDance:boolean;canViewFinance:boolean
+      }>("/dance/access");
+      setCanManageDance(rights.canManageDance);
+      setCanViewFinance(rights.canViewFinance);
+      const [programRows,groupRows,lessonRows,studentRows,resourceRows,serviceRows,packageRows,makeupRows]=
         await Promise.all([
           apiRequest<Program[]>("/dance/programs"),
           apiRequest<Group[]>("/dance/groups"),
           apiRequest<Lesson[]>(
-            "/dance/lessons?from=" + encodeURIComponent(from) + "&to=" + encodeURIComponent(to)
+            "/dance/lessons?from="+encodeURIComponent(from)+"&to="+encodeURIComponent(to)
           ),
-          apiRequest<Student[]>("/dance/students"),
-          apiRequest<Resource[]>("/service/resources"),
-          apiRequest<Service[]>("/service/catalog"),
-          apiRequest<Pack[]>("/service/packages"),
-          apiRequest<MakeupCredit[]>("/dance/makeup-credits")
+          apiRequest<Student[]>("/dance/students").catch(()=>[] as Student[]),
+          rights.canManageDance
+            ?apiRequest<Resource[]>("/service/resources").catch(()=>[] as Resource[])
+            :Promise.resolve([] as Resource[]),
+          rights.canManageDance
+            ?apiRequest<Service[]>("/service/catalog").catch(()=>[] as Service[])
+            :Promise.resolve([] as Service[]),
+          rights.canManageDance
+            ?apiRequest<Pack[]>("/service/packages").catch(()=>[] as Pack[])
+            :Promise.resolve([] as Pack[]),
+          rights.canManageDance
+            ?apiRequest<MakeupCredit[]>("/dance/makeup-credits").catch(()=>[] as MakeupCredit[])
+            :Promise.resolve([] as MakeupCredit[])
         ]);
-      setPrograms(programRows);
-      setGroups(groupRows);
-      setLessons(lessonRows);
-      setStudents(studentRows);
-      setResources(resourceRows);
-      setServices(serviceRows);
-      setPackages(packageRows);
-      setMakeupCredits(makeupRows);
-      setSelectedGroupId((current) =>
-        groupRows.some((item) => item.id === current) ? current : groupRows[0]?.id ?? ""
-      );
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось загрузить группы");
+      setPrograms(programRows);setGroups(groupRows);setLessons(lessonRows);
+      setStudents(studentRows);setResources(resourceRows);setServices(serviceRows);
+      setPackages(packageRows);setMakeupCredits(makeupRows);
+      setSelectedGroupId(current=>
+        groupRows.some(group=>group.id===current)?current:groupRows[0]?.id??"");
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось загрузить расписание");
     }
   }, []);
 
@@ -1046,13 +1058,13 @@ export default function DanceGroupsPage() {
             </p>
           </div>
           <div className="studio-hero-actions">
-            {sectionView==="GROUPS"?<>
+            {canManageDance&&sectionView==="GROUPS"?<>
               <button className="secondary-button" onClick={openProgramModal} type="button">Направление</button>
               <button onClick={openGroupModal} type="button">Новая группа</button>
-            </>:<>
+            </>:canManageDance?<>
               <button className="secondary-button" onClick={()=>openLessonModal("SELF_PRACTICE")} type="button">Практика</button>
               <button onClick={()=>openLessonModal("INDIVIDUAL")} type="button">Индивидуально</button>
-            </>}
+            </>:null}
           </div>
         </header>
 
@@ -1104,13 +1116,13 @@ export default function DanceGroupsPage() {
           <section className="settings-card" style={{display:sectionView==="GROUPS"?"":"none"}}>
             <div className="section-heading">
               <div><p className="muted">Состав группы</p><h2>{selectedGroup.name}</h2></div>
-              <div className="header-actions">
+              {canManageDance?<div className="header-actions">
                 <button className="secondary-button" onClick={openEditGroupModal} type="button">Настройки группы</button>
                 <button className="secondary-button" onClick={openMemberModal} type="button">+ Ученик</button>
                 <button className="secondary-button" onClick={openGroupPackageModal} type="button">+ Тариф группы</button>
                 <button className="secondary-button" disabled={pending} onClick={() => void syncRoster()} type="button">Синхронизировать состав</button>
                 <button disabled={pending} onClick={openGenerateModal} type="button">Создать занятия</button>
-              </div>
+              </div>:null}
             </div>
             <div className="data-table-wrap">
               <table className="data-table">
@@ -1173,7 +1185,8 @@ export default function DanceGroupsPage() {
                     <td>{lesson.group_name ?? lesson.lesson_type}<small>{lesson.status}</small></td>
                     <td>{lesson.trainer_name ?? "—"}<small>{lesson.room_name ?? "без зала"}</small></td>
                     <td>{lesson.booked_count}/{lesson.capacity}<small>пришло {lesson.attended_count} · wait {lesson.waitlist}</small></td>
-                    <td>{lesson.contribution_margin_minor !== null ? money(lesson.contribution_margin_minor) : "После закрытия"}</td>
+                    <td>{!canViewFinance?"—":lesson.contribution_margin_minor !== null
+                      ?money(lesson.contribution_margin_minor):"После закрытия"}</td>
                     <td><button className="secondary-button" onClick={() => setSelectedLessonId(lesson.id)} type="button">Журнал</button></td>
                   </tr>
                 ))}
@@ -1194,8 +1207,8 @@ export default function DanceGroupsPage() {
                 <h2>{selectedLesson.group_name ?? selectedLesson.lesson_type} · {new Date(selectedLesson.starts_at).toLocaleString("ru-RU")}</h2>
               </div>
               <div className="header-actions">
-                <button className="secondary-button" onClick={openParticipantModal} type="button">+ Ученик</button>
-                {!["COMPLETED","CANCELLED_BY_STUDIO","CANCELLED_BY_TRAINER"].includes(selectedLesson.status) ? (
+                {canManageDance?<button className="secondary-button" onClick={openParticipantModal} type="button">+ Ученик</button>:null}
+                {canManageDance&&!["COMPLETED","CANCELLED_BY_STUDIO","CANCELLED_BY_TRAINER"].includes(selectedLesson.status) ? (
                   <>
                     <button className="secondary-button" onClick={openEditLessonModal} type="button">Перенести / заменить</button>
                     <button className="secondary-button" onClick={openCancelLessonModal} type="button">Отменить</button>
@@ -1214,7 +1227,7 @@ export default function DanceGroupsPage() {
                       <td>{participant.package_name ?? money(participant.charge_minor)}<small>{participant.price_source}</small></td>
                       <td><span className="status-pill">{participant.status}</span></td>
                       <td className="table-actions">
-                        {!["COMPLETED","CANCELLED_BY_STUDIO","CANCELLED_BY_TRAINER"]
+                        {canManageDance&&!["COMPLETED","CANCELLED_BY_STUDIO","CANCELLED_BY_TRAINER"]
                           .includes(selectedLesson.status) ? (
                           participant.status==="WAITLIST" ? (
                             <button className="secondary-button" disabled={Boolean(attendancePending)||pending}
