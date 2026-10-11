@@ -9,6 +9,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
+import {isValidDanceDate,assertDanceLessonWindow,validCapacity} from "./dance-validation";
 
 type DanceScopePermission = "dance.read" | "dance.write";
 type LessonType =
@@ -1046,9 +1047,14 @@ export class DanceStudioService {
     await this.requireAll(context,"dance.write");
     const name=input.name?.trim();
     if(!name||name.length>180) throw new BadRequestException("Некорректное название группы");
-    const capacity=Math.floor(input.capacity);
-    const breakEven=Math.floor(input.breakEvenMembers ?? 1);
-    const roomCapacityUnits=Math.floor(input.roomCapacityUnits ?? 1);
+    if(!validCapacity(input.capacity,1,500)||
+       !validCapacity(input.breakEvenMembers??1,1,input.capacity))
+      throw new BadRequestException("Вместимость и точка окупаемости должны быть целыми числами");
+    if(!validCapacity(input.roomCapacityUnits??1,1,100000))
+      throw new BadRequestException("Некорректная доля зала");
+    const capacity=input.capacity;
+    const breakEven=input.breakEvenMembers??1;
+    const roomCapacityUnits=input.roomCapacityUnits??1;
     if(capacity<1||capacity>500||breakEven<1||breakEven>capacity)
       throw new BadRequestException("Некорректная вместимость группы");
     if(roomCapacityUnits<1||roomCapacityUnits>100000)
@@ -1056,9 +1062,11 @@ export class DanceStudioService {
     if(input.roomZoneId&&!input.roomResourceId)
       throw new BadRequestException("Зона указана без зала");
     const schedule=this.normalizeSchedule(input.schedule ?? []);
-    if(input.startsOn && !/^\d{4}-\d{2}-\d{2}$/.test(input.startsOn))
+    if(input.startsOn&&input.endsOn&&input.endsOn<input.startsOn)
+      throw new BadRequestException("Дата окончания не может быть раньше начала");
+    if(input.startsOn && !isValidDanceDate(input.startsOn))
       throw new BadRequestException("Некорректная дата старта");
-    if(input.endsOn && !/^\d{4}-\d{2}-\d{2}$/.test(input.endsOn))
+    if(input.endsOn && !isValidDanceDate(input.endsOn))
       throw new BadRequestException("Некорректная дата окончания");
 
     return this.database.withTenantTransaction(context,async client=>{
@@ -1693,10 +1701,8 @@ export class DanceStudioService {
     input: { from: string; to: string }
   ) {
     const scopeIds=await this.scopeIds(context,"dance.write");
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(input.from)||
-       !/^\d{4}-\d{2}-\d{2}$/.test(input.to)||
-       input.from>input.to)
-      throw new BadRequestException("Некорректный период генерации");
+    try{assertDanceLessonWindow(input?.from,input?.to);}
+    catch{throw new BadRequestException("Укажите реальные календарные даты, максимум 120 дней за раз");}
 
     const source=await this.database.withTenantTransaction(context,async client=>{
       const group=await this.assertGroupAccess(
