@@ -108,6 +108,16 @@ export default function EcommerceHubPage(){
     }catch(e){setError(e instanceof Error?e.message:"Ошибка пересчёта");}
     finally{setBusy(false);}
   }
+  async function retryListing(id:string){
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/channels/stock-hub/listings/"+id+"/retry",{method:"POST",body:"{}"});
+      setNotice("Отправка добавлена в очередь повторно.");
+      await load();
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось повторить передачу");}
+    finally{setBusy(false);}
+  }
+
   const edit=(l:StockListing)=>{
     setForm({connectionId:l.connection_id,mappingId:l.mapping_id,warehouseId:l.warehouse_id,
       externalWarehouseId:l.external_warehouse_id??"",externalStockId:l.external_stock_id??"",
@@ -225,7 +235,9 @@ export default function EcommerceHubPage(){
                 <td><span className="status-pill">{l.sync_status??"SETUP"}</span>
                   <small>{timestamp(l.last_published_at)}</small>
                   {l.last_error?<small role="alert">{l.last_error}</small>:null}</td>
-                <td><button className="secondary-button" onClick={()=>edit(l)}>Изменить</button></td>
+                <td><button className="secondary-button" onClick={()=>edit(l)}>Изменить</button>
+                  {["RETRY","BLOCKED"].includes(l.sync_status??"")?
+                    <button disabled={busy} onClick={()=>void retryListing(l.id)}>Повторить</button>:null}</td>
               </tr>)}
               {!hub?.listings.length?<tr><td colSpan={7}>Пока нет настроенных SKU. Сначала подключите маркетплейс и свяжите товар.</td></tr>:null}
             </tbody>

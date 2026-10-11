@@ -676,12 +676,10 @@ export class ChannelsService {
       if(mapping.rows[0]&&mapping.rows[0].sku_id!==input.skuId){
         const protectedListing=await client.query(
           `SELECT 1 FROM channel_stock_listing l
-           LEFT JOIN channel_stock_target t ON t.tenant_id=l.tenant_id AND t.listing_id=l.id
-           WHERE l.tenant_id=$1 AND l.mapping_id=$2
-             AND (l.publish_enabled OR coalesce(t.published_units,0)>0) LIMIT 1`,
+           WHERE l.tenant_id=$1 AND l.mapping_id=$2 LIMIT 1`,
           [context.tenantId,mapping.rows[0].id]);
         if(protectedListing.rowCount)
-          throw new ConflictException("Нельзя менять SKU активной витрины. Сначала выключите публикацию и дождитесь нулевого остатка");
+          throw new ConflictException("SKU уже закреплён за витриной. Создайте новое сопоставление вместо переназначения товара");
       }
       await client.query(
         "INSERT INTO channel_product_mapping(" +

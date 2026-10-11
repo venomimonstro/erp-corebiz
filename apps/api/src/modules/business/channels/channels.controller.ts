@@ -33,6 +33,13 @@ export class ChannelsController {
     return {ok:true,data:await this.hub.upsertListing(this.context(request),body)};
   }
 
+  @Post("stock-hub/listings/:listingId/retry")
+  @RequirePermission("channels.manage")
+  async retryStockListing(@Req() request:AuthenticatedRequest,
+    @Param("listingId") listingId:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.hub.retryListing(this.context(request),listingId)};
+  }
+
   @Post("stock-hub/reconcile")
   @RequirePermission("channels.manage")
   async stockHubReconcile(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {

@@ -103,6 +103,13 @@ export class MarketplaceHubService {
          WHERE l.tenant_id=$1 AND l.connection_id=$2 AND l.mapping_id=$3 AND l.warehouse_id=$4
          FOR UPDATE OF l`,
         [context.tenantId,connectionId,mappingId,warehouseId]);
+      if(existing.rows[0]){
+        const ownSku=await client.query<{sku_id:string}>(
+          `SELECT sku_id FROM channel_stock_listing WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,existing.rows[0].id]);
+        if(ownSku.rows[0]?.sku_id!==row.sku_id)
+          throw new ConflictException("SKU витрины отличается от каталога. Остановите публикацию и исправьте сопоставление");
+      }
       if(existing.rows[0]?.published_units!==null && existing.rows[0]?.published_units!==undefined &&
          existing.rows[0].published_units>0 &&
          (existing.rows[0].external_warehouse_id!==external ||
@@ -131,6 +138,28 @@ export class MarketplaceHubService {
         DO UPDATE SET queued_at=now()`,[context.tenantId,warehouseId,row.sku_id]);
       return {listingId:listing.rows[0]!.id,publishEnabled:input.publishEnabled===true,
         warning:"После публикации проверьте фактические остатки в кабинете площадки. API может применять изменения с задержкой."};
+    });
+  }
+
+  async retryListing(context:TenantContext,listingId:string){
+    return this.database.withTenantTransaction(context,async client=>{
+      const row=await client.query<{id:string;publish_enabled:boolean;target_units:number;status:string}>(
+        `SELECT l.id,l.publish_enabled,t.target_units,t.status
+         FROM channel_stock_listing l JOIN channel_stock_target t
+           ON t.tenant_id=l.tenant_id AND t.listing_id=l.id
+         WHERE l.tenant_id=$1 AND l.id=$2 FOR UPDATE OF l,t`,
+        [context.tenantId,listingId]);
+      if(!row.rows[0])throw new NotFoundException("Витрина не найдена");
+      if(!row.rows[0].publish_enabled && row.rows[0].target_units>0)
+        throw new ConflictException("Нельзя отправлять положительный остаток отключённой витрины");
+      if(row.rows[0].status==="SENDING")
+        throw new ConflictException("Передача уже выполняется");
+      await client.query(
+        `UPDATE channel_stock_target SET status='PENDING',attempts=0,
+         next_attempt_at=now(),lease_until=NULL,last_error=NULL,updated_at=now()
+         WHERE tenant_id=$1 AND listing_id=$2`,
+        [context.tenantId,listingId]);
+      return {queued:true};
     });
   }
 
