@@ -241,6 +241,19 @@ export function AppSidebar({ active }: { active: string }) {
             Object.fromEntries(rows.map((item) => [item.key,item.enabled]))
           );
           setWorkspaceContext(context);
+          // Show the few relevant business areas on first login.
+          // Explicit personal menu settings always win.
+          try {
+            if (!window.localStorage.getItem("corebiz.menu.profile")) {
+              const preset: MenuProfile =
+                context.profileCode === "ECOMMERCE" || context.profileCode === "TRADE"
+                  ? "commerce"
+                  : context.profileCode === "SERVICE" ? "service"
+                  : context.profileCode === "WAREHOUSE_3PL" ? "warehouse"
+                  : "all";
+              setProfile(preset);
+            }
+          } catch { /* private mode */ }
         }
       } catch {
         // Fail open for navigation only. Backend guards remain authoritative.
