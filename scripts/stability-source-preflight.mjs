@@ -276,7 +276,10 @@ async function inspectRequiredHardening(root) {
       /syncGroupRosterToLesson/,
       /promoteLessonWaitlistTx/,
       /service_package_entitlement/,
-      /activation_policy_snapshot/
+      /activation_policy_snapshot/,
+      /resolveDanceDeliveryRule/,
+      /room_capacity_units/,
+      /SELF_PRACTICE/
     ],
     message: "Dance studio operational hardening is missing"
   },
@@ -288,7 +291,9 @@ async function inspectRequiredHardening(root) {
       /room_rental_contract/,
       /room_rental_statement/,
       /DANCE_ROOM_RENT_STATEMENT/,
-      /package_entitlement_id/
+      /package_entitlement_id/,
+      /trainer_compensation_component/,
+      /service_booking_material/
     ],
     message: "Dance studio economics hardening is missing"
   },
@@ -376,7 +381,13 @@ async function inspectRequiredHardening(root) {
     "168_dance_rule_ambiguity_guards.sql",
     "169_dance_group_waitlist_terms.sql",
     "170_sales_order_package_activation.sql",
-
+    "171_service_delivery_rules.sql",
+    "172_shared_resource_capacity.sql",
+    "173_package_time_trainer_entitlements.sql",
+    "174_composite_trainer_payroll.sql",
+    "175_package_entitlement_integrity_v2.sql",
+    "176_service_package_scoped_redemption.sql",
+    "177_shared_capacity_integrity.sql"
   ];
 
   for (const name of requiredMigrations) {
