@@ -14,7 +14,7 @@ export class ChannelCryptoService {
     .digest();
   private readonly separatedKey=process.env.CHANNEL_ENCRYPTION_KEY?.trim()
     ?createHash("sha256")
-       .update(process.env.CHANNEL_ENCRYPTION_KEY.trim()+"|corebiz-channels-v2")
+       .update(process.env.CHANNEL_ENCRYPTION_KEY!.trim()+"|corebiz-channels-v2")
        .digest()
     :null;
 
