@@ -7,7 +7,7 @@ const context={
 };
 describe("global search cannot bypass branch/employee data access",()=>{
   it("requires a responsible CRM employee or an explicit all-scope permission",async()=>{
-    const queries:Array<{sql:string;args:unknown[]} >=[];
+    const queries: Array<{sql:string;args:unknown[]}> = [];
     const client={query:jest.fn(async(sql:string,args:unknown[]=[])=>{
       queries.push({sql,args});
       if(sql.includes("SELECT DISTINCT rp.permission_code"))

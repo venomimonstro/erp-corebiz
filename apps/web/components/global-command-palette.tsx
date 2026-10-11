@@ -195,7 +195,7 @@ export function GlobalCommandPalette() {
             </div>
 
             <div className="command-results">
-              {query.trim().length < 2 ? (
+              {query.trim().length < 3 ? (
                 <div className="command-empty">
                   <strong>Начните вводить</strong>
                   <span>
