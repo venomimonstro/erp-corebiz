@@ -1802,3 +1802,9 @@ button, .primary, .secondary { font: inherit; }
   .studio-client-switcher { align-items:stretch; flex-direction:column; }
   .studio-client-switcher select { width:100%; min-width:0; }
 }
+
+
+/* Studio compact form controls */
+.studio-check-row { min-height:44px; display:flex !important; grid-template-columns:none !important; flex-direction:row; align-items:center; gap:9px !important; padding:9px 11px; border:1px solid #e2e5e7; border-radius:10px; background:#f8f9fa; }
+.studio-check-row input[type="checkbox"] { width:16px !important; min-height:16px !important; height:16px; margin:0; accent-color:#202327; }
+.studio-check-row span { color:#5f656c !important; font-size:9px !important; line-height:1.35; }
