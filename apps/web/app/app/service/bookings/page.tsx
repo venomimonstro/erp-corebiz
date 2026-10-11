@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
 import { StudioModal } from "../../../../components/studio-modal";
 import { apiRequest } from "../../../../lib/api";
@@ -48,6 +48,10 @@ type ServiceAsset = {
   model: string | null;
   usage_value: string;
   usage_unit: string;
+};
+
+type BusinessProfile = {
+  verticalCode?:string|null;
 };
 
 type ServicePackage = {
@@ -159,6 +163,25 @@ export default function BookingsPage() {
   const [details, setDetails] = useState<Booking | null>(null);
   const [rescheduling, setRescheduling] = useState<Booking | null>(null);
   const [rescheduleStart, setRescheduleStart] = useState("");
+  const [profile,setProfile]=useState<BusinessProfile|null>(null);
+
+  const [showService,setShowService]=useState(false);
+  const [serviceName,setServiceName]=useState("");
+  const [serviceDuration,setServiceDuration]=useState("60");
+  const [servicePrice,setServicePrice]=useState("0");
+  const [serviceFormat,setServiceFormat]=useState<Service["delivery_format"]>("INDIVIDUAL");
+
+  const [showCustomer,setShowCustomer]=useState(false);
+  const [customerName,setCustomerName]=useState("");
+  const [customerPhone,setCustomerPhone]=useState("");
+  const [customerEmail,setCustomerEmail]=useState("");
+
+  const [showAsset,setShowAsset]=useState(false);
+  const [assetType,setAssetType]=useState("VEHICLE");
+  const [assetName,setAssetName]=useState("");
+  const [assetExternalKey,setAssetExternalKey]=useState("");
+  const [assetRegistration,setAssetRegistration]=useState("");
+  const [assetUsage,setAssetUsage]=useState("0");
 
   const load = useCallback(async () => {
     setError("");
@@ -179,13 +202,15 @@ export default function BookingsPage() {
             encodeURIComponent(from.toISOString()) +
             "&to=" +
             encodeURIComponent(to.toISOString())
-        )
+        ),
+        apiRequest<BusinessProfile>("/customization/business-profile")
       ]);
 
       setServices(data[0]);
       setResources(data[1]);
       setCustomers(data[2]);
       setBookings(data[3]);
+      setProfile(data[4]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить записи");
     }
@@ -307,144 +332,135 @@ export default function BookingsPage() {
     return Array.from(map.entries());
   }, [bookings, resourceFilter]);
 
-  async function createService() {
-    const name = window.prompt("Название услуги");
-    if (!name?.trim()) return;
-
-    const duration = Number(window.prompt("Длительность, минут", "60") ?? "60");
-    const priceRub = Number(
-      (window.prompt("Цена, ₽", "0") ?? "0").replace(",", ".")
-    );
-
-    if (
-      !Number.isFinite(duration) ||
-      duration < 5 ||
-      !Number.isFinite(priceRub) ||
-      priceRub < 0
-    ) {
-      setError("Некорректная длительность или цена");
+  async function createService(event:FormEvent){
+    event.preventDefault();
+    const duration=Number(serviceDuration);
+    const priceRub=Number(servicePrice.replace(",","."));
+    if(!serviceName.trim()){
+      setError("Укажите название услуги");
       return;
     }
-
-    try {
-      await apiRequest("/service/catalog", {
-        method: "POST",
-        body: JSON.stringify({
-          name: name.trim(),
-          durationMinutes: Math.round(duration),
-          priceMinor: String(Math.round(priceRub * 100))
+    if(
+      !Number.isSafeInteger(duration)||duration<5||duration>1440||
+      !Number.isFinite(priceRub)||priceRub<0
+    ){
+      setError("Проверьте длительность и цену");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try{
+      const created=await apiRequest<{id:string}>("/service/catalog",{
+        method:"POST",
+        body:JSON.stringify({
+          name:serviceName.trim(),
+          durationMinutes:duration,
+          priceMinor:String(Math.round(priceRub*100)),
+          deliveryFormat:serviceFormat,
+          groupCapacity:serviceFormat==="GROUP"?10:1
         })
       });
-
-      setNotice("Услуга создана.");
+      setShowService(false);
+      setServiceName("");
+      setServiceDuration("60");
+      setServicePrice("0");
+      setNotice("Услуга создана. При необходимости задайте персональную цену мастера в настройках услуг.");
       await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось создать услугу");
+      setSelectedService(created.id);
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось создать услугу");
+    }finally{
+      setSubmitting(false);
     }
   }
 
-  async function createCustomer() {
-    const name = window.prompt("Имя клиента");
-    if (!name?.trim()) return;
-
-    const phone = window.prompt("Телефон", "")?.trim() || undefined;
-    const email = window.prompt("Email", "")?.trim() || undefined;
-
-    if (!phone && !email) {
-      setError("Укажите телефон или email, чтобы не создавать обезличенную карточку.");
+  async function createCustomer(event:FormEvent){
+    event.preventDefault();
+    const name=customerName.trim();
+    const phone=customerPhone.trim()||undefined;
+    const email=customerEmail.trim()||undefined;
+    if(!name){
+      setError("Укажите имя клиента");
       return;
     }
-
-    try {
-      const customer = await apiRequest<{ id: string; displayName: string }>(
+    if(!phone&&!email){
+      setError("Укажите телефон или email");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try{
+      const customer=await apiRequest<{id:string;displayName:string}>(
         "/crm/customers",
         {
-          method: "POST",
-          body: JSON.stringify({
-            type: "PERSON",
-            displayName: name.trim(),
-            phone,
-            email
+          method:"POST",
+          body:JSON.stringify({
+            type:"PERSON",displayName:name,phone,email
           })
         }
       );
-
-      const refreshed = await apiRequest<Customer[]>("/crm/customers");
-      setCustomers(refreshed);
+      setCustomers(await apiRequest<Customer[]>("/crm/customers"));
       setSelectedCustomer(customer.id);
-      setError("");
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Не удалось создать клиента"
-      );
+      setShowCustomer(false);
+      setCustomerName("");
+      setCustomerPhone("");
+      setCustomerEmail("");
+      setNotice("Клиент создан и выбран для записи.");
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось создать клиента");
+    }finally{
+      setSubmitting(false);
     }
   }
 
-  async function createAsset() {
-    if (!selectedCustomer) {
-      setError("Сначала выберите клиента.");
+  async function createAsset(event:FormEvent){
+    event.preventDefault();
+    if(!selectedCustomer){
+      setError("Сначала выберите клиента");
       return;
     }
-
-    const typeRaw = (
-      window.prompt(
-        "Тип объекта: VEHICLE / EQUIPMENT / DEVICE / OTHER",
-        "VEHICLE"
-      ) ?? ""
-    ).trim().toUpperCase();
-    if (!["VEHICLE", "EQUIPMENT", "DEVICE", "OTHER"].includes(typeRaw)) {
-      setError("Некорректный тип объекта.");
+    if(!assetName.trim()){
+      setError("Укажите название объекта");
       return;
     }
-
-    const displayName = window.prompt(
-      typeRaw === "VEHICLE"
-        ? "Автомобиль, например BMW X5"
-        : "Название объекта обслуживания"
-    );
-    if (!displayName?.trim()) return;
-
-    const externalKey = window.prompt(
-      typeRaw === "VEHICLE" ? "VIN (необязательно)" : "Серийный номер (необязательно)",
-      ""
-    )?.trim() || undefined;
-    const registrationNumber =
-      typeRaw === "VEHICLE"
-        ? window.prompt("Госномер (необязательно)", "")?.trim() || undefined
-        : undefined;
-    const usageValue = window.prompt(
-      typeRaw === "VEHICLE" ? "Текущий пробег, км" : "Наработка (необязательно)",
-      "0"
-    )?.trim() || "0";
-
-    try {
-      const created = await apiRequest<{ id: string }>("/service/assets", {
-        method: "POST",
-        body: JSON.stringify({
-          partyId: selectedCustomer,
-          assetType: typeRaw,
-          displayName: displayName.trim(),
-          externalKey,
-          registrationNumber,
-          usageValue,
-          usageUnit: typeRaw === "VEHICLE" ? "KM" : "UNIT"
+    if(!/^\d+$/.test(assetUsage.trim()||"0")){
+      setError("Пробег / наработка должны быть целым числом");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try{
+      const created=await apiRequest<{id:string}>("/service/assets",{
+        method:"POST",
+        body:JSON.stringify({
+          partyId:selectedCustomer,
+          assetType,
+          displayName:assetName.trim(),
+          externalKey:assetExternalKey.trim()||undefined,
+          registrationNumber:
+            assetType==="VEHICLE"
+              ?assetRegistration.trim()||undefined
+              :undefined,
+          usageValue:assetUsage.trim()||"0",
+          usageUnit:assetType==="VEHICLE"?"KM":"UNIT"
         })
       });
-
-      const assets = await apiRequest<ServiceAsset[]>(
-        "/service/assets?partyId=" + encodeURIComponent(selectedCustomer)
+      setCustomerAssets(
+        await apiRequest<ServiceAsset[]>(
+          "/service/assets?partyId="+encodeURIComponent(selectedCustomer)
+        )
       );
-      setCustomerAssets(assets);
       setSelectedAsset(created.id);
-      setError("");
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Не удалось добавить объект клиента"
-      );
+      setShowAsset(false);
+      setAssetName("");
+      setAssetExternalKey("");
+      setAssetRegistration("");
+      setAssetUsage("0");
+      setNotice("Объект клиента добавлен и выбран.");
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось добавить объект");
+    }finally{
+      setSubmitting(false);
     }
   }
 
@@ -611,7 +627,7 @@ export default function BookingsPage() {
           </div>
 
           <div className="header-actions">
-            <button className="secondary-button" onClick={() => void createService()} type="button">
+            <button className="secondary-button" onClick={() => setShowService(true)} type="button">
               + Услуга
             </button>
             <button onClick={() => { setShowCreate((v) => !v); setError(""); }} type="button">
@@ -717,7 +733,7 @@ export default function BookingsPage() {
               <button
                 type="button"
                 className="secondary-button"
-                onClick={() => void createCustomer()}
+                onClick={() => setShowCustomer(true)}
               >
                 + Новый клиент
               </button>
@@ -740,13 +756,15 @@ export default function BookingsPage() {
                       ))}
                     </select>
                   </label>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => void createAsset()}
-                  >
-                    + Авто / объект
-                  </button>
+                  {profile?.verticalCode==="AUTO_SERVICE"?(
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => setShowAsset(true)}
+                    >
+                      + Автомобиль / объект
+                    </button>
+                  ):null}
                   {customerPackages.length ? (
                     <label>Абонемент{" "}
                       <select
@@ -837,6 +855,82 @@ export default function BookingsPage() {
             <span>Выберите другой период, ресурс или создайте новую запись.</span>
           </div>
         ) : null}
+        {showService?(
+          <StudioModal
+            eyebrow="Новая услуга"
+            title="Добавить в прайс"
+            description="Создайте базовую услугу. Персональные цены и длительность по мастерам задаются отдельными правилами без дублей."
+            onClose={()=>setShowService(false)}
+          >
+            <form className="studio-modal-form" onSubmit={createService}>
+              <label><span>Название</span><input autoFocus required value={serviceName} onChange={event=>setServiceName(event.target.value)} placeholder="Например, Стрижка + борода" /></label>
+              <div className="studio-form-grid">
+                <label><span>Формат</span><select value={serviceFormat} onChange={event=>setServiceFormat(event.target.value as Service["delivery_format"])}>
+                  <option value="INDIVIDUAL">Индивидуальная услуга</option>
+                  <option value="GROUP">Групповая услуга</option>
+                  <option value="SELF_PRACTICE">Самостоятельное использование</option>
+                  <option value="RENTAL">Аренда ресурса</option>
+                </select></label>
+                <label><span>Длительность, мин</span><input type="number" min="5" max="1440" value={serviceDuration} onChange={event=>setServiceDuration(event.target.value)} /></label>
+              </div>
+              <label><span>Базовая цена, ₽</span><input inputMode="decimal" value={servicePrice} onChange={event=>setServicePrice(event.target.value)} /></label>
+              <div className="studio-drawer-actions">
+                <button className="secondary-button" type="button" onClick={()=>setShowService(false)}>Отмена</button>
+                <button disabled={submitting} type="submit">{submitting?"Создаём…":"Создать услугу"}</button>
+              </div>
+            </form>
+          </StudioModal>
+        ):null}
+
+        {showCustomer?(
+          <StudioModal
+            eyebrow="Новый клиент"
+            title="Добавить клиента"
+            description="Минимум данных для записи. Остальное можно заполнить позже в карточке клиента."
+            onClose={()=>setShowCustomer(false)}
+          >
+            <form className="studio-modal-form" onSubmit={createCustomer}>
+              <label><span>Имя</span><input autoFocus required value={customerName} onChange={event=>setCustomerName(event.target.value)} /></label>
+              <div className="studio-form-grid">
+                <label><span>Телефон</span><input type="tel" value={customerPhone} onChange={event=>setCustomerPhone(event.target.value)} placeholder="+7…" /></label>
+                <label><span>Email</span><input type="email" value={customerEmail} onChange={event=>setCustomerEmail(event.target.value)} /></label>
+              </div>
+              <div className="studio-drawer-actions">
+                <button className="secondary-button" type="button" onClick={()=>setShowCustomer(false)}>Отмена</button>
+                <button disabled={submitting} type="submit">{submitting?"Создаём…":"Добавить клиента"}</button>
+              </div>
+            </form>
+          </StudioModal>
+        ):null}
+
+        {showAsset&&profile?.verticalCode==="AUTO_SERVICE"?(
+          <StudioModal
+            eyebrow="Объект обслуживания"
+            title="Добавить автомобиль или оборудование"
+            description="Объекты нужны автосервису и сервисному ремонту. Салонные вертикали не показывают этот шаг."
+            onClose={()=>setShowAsset(false)}
+          >
+            <form className="studio-modal-form" onSubmit={createAsset}>
+              <label><span>Тип</span><select value={assetType} onChange={event=>setAssetType(event.target.value)}>
+                <option value="VEHICLE">Автомобиль</option>
+                <option value="EQUIPMENT">Оборудование</option>
+                <option value="DEVICE">Устройство</option>
+                <option value="OTHER">Другой объект</option>
+              </select></label>
+              <label><span>Название</span><input required value={assetName} onChange={event=>setAssetName(event.target.value)} placeholder={assetType==="VEHICLE"?"Например, BMW X5":"Название объекта"} /></label>
+              <div className="studio-form-grid">
+                <label><span>{assetType==="VEHICLE"?"VIN":"Серийный номер"}</span><input value={assetExternalKey} onChange={event=>setAssetExternalKey(event.target.value)} /></label>
+                {assetType==="VEHICLE"?<label><span>Госномер</span><input value={assetRegistration} onChange={event=>setAssetRegistration(event.target.value)} /></label>:null}
+              </div>
+              <label><span>{assetType==="VEHICLE"?"Пробег, км":"Наработка"}</span><input inputMode="numeric" value={assetUsage} onChange={event=>setAssetUsage(event.target.value)} /></label>
+              <div className="studio-drawer-actions">
+                <button className="secondary-button" type="button" onClick={()=>setShowAsset(false)}>Отмена</button>
+                <button disabled={submitting} type="submit">{submitting?"Сохраняем…":"Добавить объект"}</button>
+              </div>
+            </form>
+          </StudioModal>
+        ):null}
+
         {details ? (
           <StudioModal
             eyebrow="Карточка визита"
