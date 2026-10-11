@@ -29,6 +29,7 @@ type MonthEconomics={
 };
 type Dashboard={
   canViewFinancials:boolean;
+  setup:{programs:number;groups:number;trainers:number;students:number;plans:number;lessons:number}|null;
   todayLessons:Lesson[];
   debt:{open_count:number;open_minor:string;overdue_count:number}|null;
   groups:Group[];
@@ -122,6 +123,16 @@ export default function DanceDashboardPage(){
   const attending=sum(scheduled.map(l=>l.booked_count));
   const capacity=sum(scheduled.map(l=>l.capacity));
   const month=data?.monthEconomics;
+  const setupSteps=data?.setup?[
+    {key:"trainer",ready:data.setup.trainers>0,label:"Добавить тренера",href:"/app/dance/setup"},
+    {key:"program",ready:data.setup.programs>0,label:"Настроить направление",href:"/app/dance/groups"},
+    {key:"group",ready:data.setup.groups>0,label:"Создать группу",href:"/app/dance/groups"},
+    {key:"student",ready:data.setup.students>0,label:"Добавить ученика",href:"/app/dance/students"},
+    {key:"plan",ready:data.setup.plans>0,label:"Создать абонемент",href:"/app/dance/students"},
+    {key:"lesson",ready:data.setup.lessons>0,label:"Составить расписание",href:"/app/dance/groups"}
+  ]:[];
+  const doneSteps=setupSteps.filter(step=>step.ready).length;
+
 
   return <main className="app-shell">
     <AppSidebar active="dance"/>
@@ -147,6 +158,21 @@ export default function DanceDashboardPage(){
       </div>:null}
       {loading?<div className="dance-owner-loading" role="status" aria-live="polite">Загружаем расписание и показатели…</div>:null}
       {data?<>
+        {setupSteps.length&&doneSteps<setupSteps.length?
+          <section className="dance-first-day" aria-label="Первоначальная настройка">
+            <div className="dance-first-day-header">
+              <div><span>Первый запуск</span><h2>Подготовьте студию к работе</h2>
+                <p>Настройка только один раз. После этого останутся расписание и ежедневные задачи.</p></div>
+              <strong>{doneSteps} / {setupSteps.length}</strong>
+            </div>
+            <div className="dance-first-steps">
+              {setupSteps.map(step=><a href={step.href} key={step.key} className={step.ready?"done":""}>
+                <span aria-hidden="true">{step.ready?"✓":"○"}</span>
+                <span>{step.label}</span>
+                {!step.ready?<span aria-hidden="true">→</span>:null}
+              </a>)}
+            </div>
+          </section>:null}
         <section className="dance-owner-stats" aria-label="Ключевые показатели">
           <article className="dance-owner-stat"><span>Занятий сегодня</span>
             <strong>{scheduled.length}</strong>
