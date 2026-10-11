@@ -1808,3 +1808,34 @@ button, .primary, .secondary { font: inherit; }
 .studio-check-row { min-height:44px; display:flex !important; grid-template-columns:none !important; flex-direction:row; align-items:center; gap:9px !important; padding:9px 11px; border:1px solid #e2e5e7; border-radius:10px; background:#f8f9fa; }
 .studio-check-row input[type="checkbox"] { width:16px !important; min-height:16px !important; height:16px; margin:0; accent-color:#202327; }
 .studio-check-row span { color:#5f656c !important; font-size:9px !important; line-height:1.35; }
+
+
+/* Payroll explanation and adjustment layer */
+.statement-adjustments {
+  display:grid;
+  gap:6px;
+  margin-top:12px;
+  padding:10px 12px;
+  border:1px solid rgba(20,24,28,.08);
+  border-radius:12px;
+  background:rgba(255,255,255,.62);
+}
+.statement-adjustments small {
+  display:block;
+  color:#5d646c;
+  line-height:1.35;
+}
+.trainer-statement-grid article > .secondary-button {
+  width:100%;
+  margin-top:12px;
+  border-radius:12px;
+}
+.studio-form-note {
+  margin:10px 0 0;
+  padding:10px 12px;
+  border-radius:12px;
+  background:rgba(20,24,28,.045);
+  color:#626a73;
+  font-size:13px;
+  line-height:1.45;
+}
