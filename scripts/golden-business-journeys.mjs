@@ -332,6 +332,12 @@ async function serviceJourney() {
     }
   );
 
+  const customer = await request("POST", "/crm/customers", {
+    type: "PERSON",
+    displayName: "Golden service client",
+    phone: "+7999000" + runId.slice(0, 4)
+  });
+
   const windows = Array.from({ length: 7 }, (_, index) => ({
     weekday: index + 1,
     startMinute: 0,
@@ -354,6 +360,7 @@ async function serviceJourney() {
     serviceId: service.id,
     resourceIds: [resource.id],
     startsAt: startsAt.toISOString(),
+    partyId: customer.id,
     source: "API",
     idempotencyKey: key
   };
@@ -369,6 +376,19 @@ async function serviceJourney() {
     bookingInput
   );
   assert.equal(retry.id, booking.id);
+
+  const details = await request(
+    "GET",
+    "/service/bookings/" + booking.id
+  );
+  assert.equal(details.party_id, customer.id);
+  assert.equal(details.billing?.amountMinor, "350000");
+  assert.equal(details.billing?.obligationStatus, "OPEN");
+  assert.equal(details.billing?.invoiceStatus, "ISSUED");
+  assert.ok(
+    details.billing?.invoiceNumber,
+    "SERVICE paid booking must create invoice"
+  );
 
   const rows = await request(
     "GET",
@@ -386,10 +406,34 @@ async function serviceJourney() {
     "SERVICE booking must appear in schedule"
   );
 
+  const cancelled = await request(
+    "PATCH",
+    "/service/bookings/" + booking.id + "/status",
+    {
+      status: "CANCELLED",
+      version: booking.version
+    }
+  );
+  assert.equal(cancelled.status, "CANCELLED");
+
+  const cancelledDetails = await request(
+    "GET",
+    "/service/bookings/" + booking.id
+  );
+  assert.equal(cancelledDetails.status, "CANCELLED");
+  assert.equal(cancelledDetails.billing?.status, "CANCELLED");
+  assert.equal(
+    cancelledDetails.billing?.obligationStatus,
+    "CANCELLED"
+  );
+  assert.equal(cancelledDetails.billing?.invoiceStatus, "CANCELLED");
+
   return {
     profile: "SERVICE",
-    result: "service + resource + schedule → idempotent booking",
-    bookingId: booking.id
+    result:
+      "service + client + resource → invoice/receivable → safe cancellation",
+    bookingId: booking.id,
+    invoiceId: details.billing?.invoiceId
   };
 }
 
