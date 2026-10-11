@@ -2,10 +2,14 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
+  Param,
   Post,
-  Req
+  Req,
+  Res
 } from "@nestjs/common";
 import type { ApiSuccess } from "@corebiz/contracts";
+import type { Response } from "express";
 import { RequirePermission } from "../authorization/require-permission.decorator";
 import { AuthService } from "../auth/auth.service";
 import type { AuthenticatedRequest } from "../auth/auth.types";
@@ -50,15 +54,44 @@ export class TenantsController {
     return { ok: true, data: created };
   }
 
+  @Get("invitations")
+  @RequirePermission("users.manage")
+  async invitations(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>>{
+    const a=request.auth!;
+    return {ok:true,data:await this.tenants.invitations({
+      tenantId:a.tenantId,userId:a.userId,membershipId:a.membershipId
+    })};
+  }
+
+  @Get("team")
+  @RequirePermission("users.manage")
+  async team(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>>{
+    const a=request.auth!;
+    return {ok:true,data:await this.tenants.team({
+      tenantId:a.tenantId,userId:a.userId,membershipId:a.membershipId
+    })};
+  }
+
+  @Post("invitations/:id/revoke")
+  @RequirePermission("users.manage")
+  async revoke(@Req() request:AuthenticatedRequest,@Param("id") id:string)
+  :Promise<ApiSuccess<unknown>>{
+    const a=request.auth!;
+    return {ok:true,data:await this.tenants.revokeInvitation({
+      tenantId:a.tenantId,userId:a.userId,membershipId:a.membershipId
+    },id)};
+  }
+
   @Post("invite")
   @RequirePermission("users.manage")
   async invite(
     @Req() request: AuthenticatedRequest,
-    @Body() body: unknown
+    @Body() body: unknown,
+    @Res({passthrough:true}) response:Response
   ): Promise<ApiSuccess<{
     invitationId: string;
     expiresAt: string;
-    developmentToken?: string;
+    oneTimeToken: string;
   }>> {
     const current = request.auth!;
 
@@ -68,17 +101,21 @@ export class TenantsController {
         userId: current.userId,
         membershipId: current.membershipId
       },
-      requiredField(body, "email", 3, 254)
+      requiredField(body, "email", 3, 254),
+      body && typeof body==="object" && !Array.isArray(body) &&
+        (body as Record<string,unknown>).roleId !== undefined
+        ? requiredField(body,"roleId",36,36) : undefined
     );
 
+    // Authorized user receives the secret once for manual sharing.
+    // Never include it in listings or logs; do not let a proxy cache it.
+    response.setHeader("Cache-Control","no-store, private");
     return {
-      ok: true,
-      data: {
-        invitationId: invitation.invitationId,
-        expiresAt: invitation.expiresAt,
-        ...(process.env.NODE_ENV !== "production"
-          ? { developmentToken: invitation.token }
-          : {})
+      ok:true,
+      data:{
+        invitationId:invitation.invitationId,
+        expiresAt:invitation.expiresAt,
+        oneTimeToken:invitation.token
       }
     };
   }
