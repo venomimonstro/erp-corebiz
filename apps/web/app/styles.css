@@ -4192,3 +4192,11 @@ button, .primary, .secondary { font: inherit; }
   .first-day-step{gap:11px;padding:12px}
   .first-day-choice{min-height:58px}
 }
+
+
+.first-day-direct{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:0 0 18px;border:1px solid var(--border,#dededb);background:var(--surface,#fff);border-radius:14px;padding:16px 18px}
+.first-day-direct>div{flex:1;min-width:180px}
+.first-day-direct strong{font-size:15px}
+.first-day-direct p{margin:5px 0 0;font-size:12px;color:var(--muted,#747474);line-height:1.5}
+.first-day-direct>a{display:inline-flex;align-items:center;justify-content:center;min-height:39px}
+@media(max-width:650px){.first-day-direct>a{flex:1;min-width:125px;text-align:center}}
