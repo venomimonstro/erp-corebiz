@@ -1055,6 +1055,21 @@ export class ProjectsService {
       await this.assertWritableProject(
         client,context.tenantId,projectId,scoped
       );
+      if(input.status==="APPROVED"){
+        const d=await client.query<{client_approval_required:boolean}>(
+          `SELECT client_approval_required FROM work_project_deliverable
+           WHERE tenant_id=$1 AND project_id=$2 AND id=$3`,
+          [context.tenantId,projectId,deliverableId]);
+        if(!d.rows[0])throw new NotFoundException("Результат не найден");
+        if(d.rows[0].client_approval_required){
+          const accepted=await client.query(
+            `SELECT 1 FROM work_project_client_approval
+             WHERE tenant_id=$1 AND project_id=$2 AND deliverable_id=$3
+               AND request_type='DELIVERABLE' AND status='APPROVED' LIMIT 1`,
+            [context.tenantId,projectId,deliverableId]);
+          if(!accepted.rowCount)throw new ConflictException("Требуется подтверждённое согласование клиента");
+        }
+      }
       const result=await client.query(
         `UPDATE work_project_deliverable
          SET status=$4,
@@ -1114,11 +1129,21 @@ export class ProjectsService {
   ){
     const scoped=await this.membershipIdsForScope(context,"projects.write");
     const title=input.title?.trim();
-    if(!title) throw new BadRequestException("Укажите предмет согласования");
+    if(!title||title.length>240)throw new BadRequestException("Некорректный предмет согласования");
+    if(input.requestType&&!["DELIVERABLE","BUDGET","SCOPE_CHANGE","CAMPAIGN_LAUNCH","OTHER"].includes(input.requestType))
+      throw new BadRequestException("Некорректный тип согласования");
+    if(input.dueAt&&!Number.isFinite(Date.parse(input.dueAt)))
+      throw new BadRequestException("Некорректный срок");
     return this.database.withTenantTransaction(context,async client=>{
       await this.assertWritableProject(
         client,context.tenantId,projectId,scoped
       );
+      if(input.deliverableId){
+        const match=await client.query(
+          `SELECT 1 FROM work_project_deliverable WHERE tenant_id=$1 AND project_id=$2 AND id=$3`,
+          [context.tenantId,projectId,input.deliverableId]);
+        if(!match.rowCount)throw new NotFoundException("Результат не принадлежит проекту");
+      }
       const result=await client.query(
         `INSERT INTO work_project_client_approval(
            tenant_id,project_id,deliverable_id,request_type,title,
@@ -1481,6 +1506,51 @@ export class ProjectsService {
         [context.tenantId,projectId,membershipId,role,allocation,
          cost,billable,status]
       )).rows[0];
+    });
+  }
+
+  async decideAgencyApproval(context:TenantContext,projectId:string,approvalId:string,
+    input:{decision?:"APPROVED"|"REJECTED";responseNote?:string;evidenceReference?:string}
+  ){
+    if(!["APPROVED","REJECTED"].includes(input?.decision??""))
+      throw new BadRequestException("Решение должно быть APPROVED или REJECTED");
+    const note=input?.responseNote?.trim();
+    const reference=input?.evidenceReference?.trim();
+    if(!note||note.length<5||note.length>2000)
+      throw new BadRequestException("Необходим комментарий к решению");
+    if(input.decision==="APPROVED"&&(!reference||reference.length<5||reference.length>500))
+      throw new BadRequestException("Необходимо подтверждение согласия клиента: ссылка или номер письма");
+    if(reference&&reference.length>500)
+      throw new BadRequestException("Некорректная ссылка на подтверждение");
+    const scoped=await this.membershipIdsForScope(context,"projects.write");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertWritableProject(client,context.tenantId,projectId,scoped);
+      const q=await client.query<{deliverable_id:string|null;request_type:string}>(
+        `SELECT deliverable_id,request_type FROM work_project_client_approval
+         WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND status='PENDING'
+         FOR UPDATE`,[context.tenantId,projectId,approvalId]);
+      const row=q.rows[0];
+      if(!row)throw new ConflictException("Согласование уже закрыто или не найдено");
+      const res=await client.query(
+        `UPDATE work_project_client_approval SET status=$4,response_note=$5,
+         evidence_reference=$6,responded_at=now(),recorded_by_membership_id=$7
+         WHERE tenant_id=$1 AND project_id=$2 AND id=$3
+         RETURNING id,status,responded_at`,
+        [context.tenantId,projectId,approvalId,input.decision,note,
+         reference??null,context.membershipId]);
+      if(row.deliverable_id&&row.request_type==="DELIVERABLE"){
+        await client.query(
+          `UPDATE work_project_deliverable
+           SET status=$4,approved_at=CASE WHEN $4='APPROVED' THEN now() ELSE NULL END,
+               approval_note=$5,version=version+1,updated_at=now()
+           WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND status='CLIENT_REVIEW'`,
+          [context.tenantId,projectId,row.deliverable_id,
+           input.decision==="APPROVED"?"APPROVED":"REWORK",note]);
+      }
+      await this.audit(client,context,"project.approval_decision_recorded",
+        "work_project_client_approval",approvalId,
+        {decision:input.decision,evidenceReference:reference??null});
+      return res.rows[0];
     });
   }
 
