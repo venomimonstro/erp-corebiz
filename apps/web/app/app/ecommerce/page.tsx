@@ -204,7 +204,7 @@ export default function EcommerceHubPage(){
         </div>
         {stockConnection && !stockConnection.last_synced_at?
           <p>Сначала запустите первичную загрузку заказов в разделе «Каналы продаж».</p>:null}
-        {provider==="YANDEX_MARKET"?<p>Яндекс Маркет пока работает в режиме подготовки подключения: без загрузки заказов публикация не включается.</p>:null}
+        {provider==="YANDEX_MARKET"?<p>Для Яндекс Маркета поддерживаются склады без групп. Сначала синхронизируйте заказы, затем включите публикацию.</p>:null}
       </section>
       <section className="agency-board">
         <div className="studio-section-head"><div>

@@ -72,8 +72,8 @@ export class MarketplaceHubService {
     if(externalStock!==null&&!/^[1-9][0-9]{0,15}$/.test(externalStock))
       throw new BadRequestException("Неверный Wildberries chrtId");
     return this.database.withTenantTransaction(context,async client=>{
-      const mapped=await client.query<{sku_id:string;provider:string;credential_ready:boolean}>(
-        `SELECT m.sku_id,c.provider,c.credentials_ciphertext IS NOT NULL AS credential_ready
+      const mapped=await client.query<{sku_id:string;provider:string;credential_ready:boolean;config:{stockWarehouseGroups?:boolean}}>(
+        `SELECT m.sku_id,c.provider,c.config,c.credentials_ciphertext IS NOT NULL AS credential_ready
          FROM channel_product_mapping m
          JOIN channel_connection c ON c.tenant_id=m.tenant_id AND c.id=m.connection_id
          JOIN warehouse w ON w.tenant_id=m.tenant_id AND w.id=$4 AND w.status='ACTIVE'
@@ -83,8 +83,8 @@ export class MarketplaceHubService {
       if(!row)throw new NotFoundException("Не найдено активное сопоставление товара и склада");
       if(!["OZON","WILDBERRIES","YANDEX_MARKET"].includes(row.provider))
         throw new BadRequestException("Автопубликация разрешена только для поддерживаемых маркетплейсов");
-      if(input.publishEnabled&&row.provider==="YANDEX_MARKET")
-        throw new ConflictException("Yandex Market: публикация запрещена до подключения импорта заказов; иначе возможна двойная продажа");
+      if(input.publishEnabled&&row.provider==="YANDEX_MARKET"&&row.config?.stockWarehouseGroups)
+        throw new ConflictException("Для кабинета Яндекс Маркета с группами складов требуется отдельный метод API. Публикация пока запрещена");
       if(input.publishEnabled&&row.provider==="WILDBERRIES"&&!externalStock)
         throw new BadRequestException("Для Wildberries нужен chrtId размера товара, не артикул и не штрихкод");
       if(input.publishEnabled&&!row.credential_ready)
