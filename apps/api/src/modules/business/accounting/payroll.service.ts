@@ -241,14 +241,46 @@ export class PayrollService {
   async approve(ctx:TenantContext,batchId:string) {
     return this.db.withTenantTransaction(ctx,async client=>{
       const b=await client.query<{status:string}>(
-        "SELECT status FROM payroll_accrual_batch WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
-        [ctx.tenantId,batchId]);
-      if(!b.rows[0]) throw new NotFoundException("Payroll batch not found");
-      if(b.rows[0].status==="APPROVED") return {status:"APPROVED",changed:false};
-      await client.query(
-        `UPDATE payroll_accrual_batch SET status='APPROVED',approved_by_membership_id=$3,approved_at=now()
-         WHERE tenant_id=$1 AND id=$2`,[ctx.tenantId,batchId,ctx.membershipId]);
+        `SELECT status
+         FROM payroll_accrual_batch
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [ctx.tenantId,batchId]
+      );
+      const row=b.rows[0];
+      if(!row) throw new NotFoundException("Payroll batch not found");
+      if(row.status==="APPROVED"){
+        return {status:"APPROVED",changed:false};
+      }
+      if(row.status==="PAID"){
+        throw new ConflictException("Paid payroll batch cannot be reopened");
+      }
+      if(row.status!=="DRAFT"){
+        throw new ConflictException("Payroll batch cannot be approved");
+      }
+
+      const lines=await client.query<{count:number}>(
+        `SELECT count(*)::integer AS count
+         FROM payroll_accrual_line
+         WHERE tenant_id=$1 AND batch_id=$2`,
+        [ctx.tenantId,batchId]
+      );
+      if((lines.rows[0]?.count??0)<1){
+        throw new ConflictException("Cannot approve empty payroll batch");
+      }
+
+      const updated=await client.query(
+        `UPDATE payroll_accrual_batch
+         SET status='APPROVED',
+             approved_by_membership_id=$3,
+             approved_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='DRAFT'
+         RETURNING id`,
+        [ctx.tenantId,batchId,ctx.membershipId]
+      );
+      if(!updated.rowCount){
+        throw new ConflictException("Payroll batch changed concurrently");
+      }
       return {status:"APPROVED",changed:true};
     });
-  }
-}
+  }}
