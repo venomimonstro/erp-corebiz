@@ -290,6 +290,7 @@ export default function DanceTeamPage() {
   const [payroll, setPayroll] = useState<PayrollBatch[]>([]);
   const [trainerStatements, setTrainerStatements] = useState<TrainerStatement[]>([]);
   const [payrollProfiles, setPayrollProfiles] = useState<TrainerPayrollProfile[]>([]);
+  const [area,setArea]=useState<"PAYROLL"|"TRAINERS"|"ROOMS">("PAYROLL");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [pending, setPending] = useState(false);
@@ -1137,49 +1138,41 @@ export default function DanceTeamPage() {
             </p>
           </div>
           <div className="studio-hero-actions">
-            <button className="secondary-button" onClick={() => openProfileModal()} type="button">+ Условия тренера</button>
-            <button className="secondary-button" onClick={openPlanModal} type="button">+ Правило доплаты</button>
-            <button className="secondary-button" onClick={openRoomModal} type="button">+ Аренда зала</button>
-            <button className="secondary-button" disabled={pending} onClick={() => void finalizeRoomMonth()} type="button">Закрыть аренду месяца</button>
-            <button disabled={pending} onClick={() => void approveMonth()} type="button">Рассчитать месяц</button>
-            <button
-              disabled={
-                pending ||
-                trainerStatements.some(
-                  (item) => item.review_status === "DISPUTED"
-                )
-              }
-              onClick={() => void exportPayroll()}
-              type="button"
-              title={
-                trainerStatements.some(
-                  (item) => item.review_status === "DISPUTED"
-                )
-                  ? "Сначала закройте спорные ведомости"
-                  : undefined
-              }
-            >
-              Передать в payroll
-            </button>
-            {currentPayrollBatch?.status==="DRAFT" ? (
-              <button disabled={pending} onClick={() => void approvePayrollBatch()} type="button">
-                Утвердить payroll
-              </button>
-            ) : null}
-            {currentPayrollBatch?.status==="APPROVED" ? (
-              <button disabled={pending} onClick={openPaymentModal} type="button">
-                Зарегистрировать выплату
-              </button>
-            ) : null}
-            {currentPayrollBatch?.status==="PAID" ? (
-              <span className="status-pill">ВЫПЛАЧЕНО</span>
-            ) : null}
+            {area==="TRAINERS"?<>
+              <button type="button" className="secondary-button" onClick={()=>openProfileModal()}>Условия тренера</button>
+              <button type="button" onClick={openPlanModal}>Правило доплаты</button>
+            </>:null}
+            {area==="ROOMS"?<>
+              <button type="button" className="secondary-button" onClick={openRoomModal}>Договор аренды</button>
+              <button type="button" disabled={pending} onClick={()=>void finalizeRoomMonth()}>Закрыть аренду</button>
+            </>:null}
+            {area==="PAYROLL"?<>
+              <button type="button" disabled={pending} onClick={()=>void approveMonth()}>Рассчитать месяц</button>
+              <button type="button" className="secondary-button"
+                disabled={pending||trainerStatements.some(s=>s.review_status==="DISPUTED")}
+                onClick={()=>void exportPayroll()}>Передать в зарплату</button>
+              {currentPayrollBatch?.status==="DRAFT"?
+                <button type="button" disabled={pending} onClick={()=>void approvePayrollBatch()}>Утвердить ведомость</button>:null}
+              {currentPayrollBatch?.status==="APPROVED"?
+                <button type="button" disabled={pending} onClick={openPaymentModal}>Зарегистрировать выплату</button>:null}
+              {currentPayrollBatch?.status==="PAID"?<span className="status-pill">Выплачено</span>:null}
+            </>:null}
           </div>
         </header>
 
         <DanceWorkspaceNav active="team" />
+        <nav className="dance-segment-nav" aria-label="Рабочие режимы команды">
+          {([
+            ["PAYROLL","Зарплата и выплаты"],
+            ["TRAINERS","Условия тренеров"],
+            ["ROOMS","Аренда залов"]
+          ] as const).map(([key,label])=>
+            <button key={key} type="button" className={area===key?"active":""}
+              aria-pressed={area===key} onClick={()=>setArea(key)}>{label}</button>
+          )}
+        </nav>
 
-        <section className="payroll-pipeline" aria-label="Статус зарплаты месяца">
+        <section style={{display:area==="PAYROLL"?"":"none"}} className="payroll-pipeline" aria-label="Статус зарплаты месяца">
           {[
             {
               key:"CALCULATED",
@@ -1237,7 +1230,7 @@ export default function DanceTeamPage() {
         {error ? <div className="studio-message error"><strong>Тренеры и залы</strong><span>{error}</span></div> : null}
         {notice ? <div className="studio-message success"><strong>Готово</strong><span>{notice}</span></div> : null}
 
-        <div className="owner-kpi-grid studio-kpi-grid">
+        <div className="owner-kpi-grid studio-kpi-grid" style={{display:area==="PAYROLL"?"":"none"}}>
           {trainerTotals.map(([id, total]) => (
             <article className="owner-kpi studio-kpi" key={id}>
               <span>{total.name}</span>
@@ -1254,7 +1247,7 @@ export default function DanceTeamPage() {
           ) : null}
         </div>
 
-        <section className="section-block studio-section">
+        <section className="section-block studio-section" style={{display:area==="TRAINERS"?"":"none"}}>
           <div className="section-heading">
             <div>
               <p className="muted">Договорённости</p>
@@ -1341,7 +1334,7 @@ export default function DanceTeamPage() {
           </div>
         </section>
 
-        <section className="section-block studio-section">
+        <section className="section-block studio-section" style={{display:area==="TRAINERS"?"":"none"}}>
           <div className="section-heading">
             <div>
               <p className="muted">Переменная часть</p>
@@ -1418,7 +1411,7 @@ export default function DanceTeamPage() {
           </div>
         </section>
 
-        <section className="section-block studio-section">
+        <section className="section-block studio-section" style={{display:area==="PAYROLL"?"":"none"}}>
           <div className="section-heading">
             <div>
               <p className="muted">Итог месяца</p>
@@ -1591,7 +1584,7 @@ export default function DanceTeamPage() {
           </div>
         </section>
 
-        <section className="section-block studio-section">
+        <section className="section-block studio-section" style={{display:area==="PAYROLL"?"":"none"}}>
           <div className="section-heading"><div><p className="muted">Факт</p><h2>Начисления текущего месяца</h2></div></div>
           <div className="data-table-wrap">
             <table className="data-table">
@@ -1613,7 +1606,7 @@ export default function DanceTeamPage() {
           </div>
         </section>
 
-        <section className="section-block studio-section">
+        <section className="section-block studio-section" style={{display:area==="ROOMS"?"":"none"}}>
           <div className="section-heading"><div><p className="muted">Залы</p><h2>Договоры и себестоимость</h2></div></div>
           <div className="data-table-wrap">
             <table className="data-table">
@@ -1641,7 +1634,7 @@ export default function DanceTeamPage() {
           </div>
         </section>
 
-        <section className="section-block studio-section">
+        <section className="section-block studio-section" style={{display:area==="ROOMS"?"":"none"}}>
           <div className="section-heading">
             <div>
               <p className="muted">Финансы</p>
