@@ -3,7 +3,7 @@ import {useCallback,useEffect,useMemo,useState} from "react";
 import {AppSidebar} from "../../../components/app-sidebar";
 import {apiRequest} from "../../../lib/api";
 
-type Warehouse={id:string;name:string;code:string;tracked_skus:number};
+type Warehouse={id:string;name:string;code:string;tracked_skus:number|null};
 type Connection={id:string;name:string;provider:string;status:string;last_synced_at:string|null;last_error:string|null};
 type Mapping={id:string;connection_id:string;external_offer_id:string;sku_id:string;sku:string;channel_name:string;provider:string};
 type StockListing={
@@ -43,6 +43,7 @@ export default function EcommerceHubPage(){
     const [stock,page]=await Promise.all([
       apiRequest<Hub>("/channels/stock-hub"),
       apiRequest<{items:Product[]}>("/catalog/products/page?limit=50")
+        .catch(()=>({items:[] as Product[]}))
     ]);
     setHub(stock);setProducts(page.items);
   },[]);
