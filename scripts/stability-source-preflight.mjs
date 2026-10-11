@@ -203,6 +203,41 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path: "apps/web/app/signup/page.tsx",
+      patterns: [/customization\/business-vertical/, /verticalCode/,
+        /Выберите вашу сферу бизнеса/, /app\/start/],
+      message: "New business signup no longer connects the chosen niche"
+    },
+    {
+      path: "apps/web/app/app/start/page.tsx",
+      patterns: [/dashboard\/activation/, /customization\/business-profile/,
+        /corebiz-capabilities-changed/, /confirmChange/],
+      message: "First-day wizard or safe vertical switching is missing"
+    },
+    {
+      path: "apps/api/src/modules/business/dashboard/dashboard.service.ts",
+      patterns: [/dance-service/, /dance-lesson/, /auto-vehicle/,
+        /market-order/, /task-done/, /b2b-terms/, /shop-payment/],
+      message: "Industry-specific activation regressed to generic ERP steps"
+    },
+    {
+      path: "apps/web/components/app-sidebar.tsx",
+      patterns: [/corebiz\.menu\.profile\./, /verticalCode/,
+        /profile==="dance"/, /profile==="automotive"/],
+      message: "Niche navigation isolation or tenant preference is missing"
+    },
+    {
+      path: "apps/api/src/modules/platform/customization/customization.controller.ts",
+      patterns: [/typeof body.enabled!=="boolean"/],
+      message: "Capability update may interpret string false as true"
+    },
+    {
+      path: "apps/api/src/modules/business/dance-studio/dance-studio.service.ts",
+      patterns: [/id:"service"/, /AS services/,
+        /id:"trainer"/, /id:"program"/],
+      message: "Dance program setup skips the mandatory training service"
+    },
+    {
       path: "apps/api/src/modules/platform/payments/commerce-payments.service.ts",
       patterns: [/verifyAmount\(intent,payment\)/,
         /finance\.receiveSalesPayment/, /finance\.refundSalesPayment/,
