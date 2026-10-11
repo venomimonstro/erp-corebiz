@@ -71,18 +71,31 @@ async function reconcile(pool:Pool,key:PoolKey):Promise<void>{
       client.query<{safety:string;enabled:boolean}>(`SELECT safety_stock_milli::text AS safety,enabled
          FROM inventory_policy WHERE tenant_id=$1 AND warehouse_id=$2 AND sku_id=$3`,
         [key.tenant_id,key.warehouse_id,key.sku_id]),
-      client.query<{demand:string}>(`SELECT coalesce(sum(li.quantity_milli),0)::text AS demand
-         FROM channel_order_line_inbox li
-         JOIN channel_order_inbox o ON o.tenant_id=li.tenant_id AND o.id=li.inbox_order_id
-         WHERE li.tenant_id=$1 AND li.mapped_sku_id=$3
-           AND (o.status IN ('RECEIVED','READY','NEEDS_MAPPING','IMPORTING','FAILED')
-             OR (o.status='IMPORTED' AND NOT EXISTS(
-               SELECT 1 FROM oms_order oo WHERE oo.tenant_id=o.tenant_id
-                 AND oo.sales_order_id=o.sales_order_id
-                 AND oo.state IN ('SHIPPED','CANCELLED'))))
-           AND EXISTS(
-             SELECT 1 FROM channel_stock_listing l WHERE l.tenant_id=li.tenant_id
-               AND l.warehouse_id=$2 AND l.sku_id=$3 AND l.connection_id=o.connection_id)`,
+      client.query<{demand:string}>(`SELECT coalesce(sum(
+        greatest(0, demand.quantity_milli-
+          coalesce((SELECT sum(r.quantity_milli)
+             FROM inventory_reservation r
+             WHERE r.tenant_id=demand.tenant_id
+               AND r.sales_order_id=demand.sales_order_id
+               AND r.sku_id=$3 AND r.warehouse_id=$2 AND r.status='ACTIVE'),0))
+      ),0)::text AS demand
+      FROM (
+        SELECT o.tenant_id,o.sales_order_id,o.connection_id,o.status,
+          sum(li.quantity_milli)::bigint AS quantity_milli
+        FROM channel_order_inbox o
+        JOIN channel_order_line_inbox li ON li.tenant_id=o.tenant_id
+           AND li.inbox_order_id=o.id
+        WHERE li.tenant_id=$1 AND li.mapped_sku_id=$3
+          AND (o.status IN ('RECEIVED','READY','NEEDS_MAPPING','IMPORTING','FAILED')
+            OR (o.status='IMPORTED' AND NOT EXISTS(
+              SELECT 1 FROM oms_order oo WHERE oo.tenant_id=o.tenant_id
+                AND oo.sales_order_id=o.sales_order_id
+                AND oo.state IN ('SHIPPED','CANCELLED'))))
+          AND EXISTS(
+            SELECT 1 FROM channel_stock_listing l WHERE l.tenant_id=li.tenant_id
+              AND l.warehouse_id=$2 AND l.sku_id=$3 AND l.connection_id=o.connection_id)
+        GROUP BY o.tenant_id,o.sales_order_id,o.connection_id,o.status,o.id
+      ) demand`,
         [key.tenant_id,key.warehouse_id,key.sku_id]),
       client.query<{connection_id:string}>(`SELECT DISTINCT o.connection_id
          FROM channel_order_inbox o JOIN channel_order_line_inbox li
@@ -92,7 +105,11 @@ async function reconcile(pool:Pool,key:PoolKey):Promise<void>{
            AND EXISTS(SELECT 1 FROM channel_stock_listing l
              WHERE l.tenant_id=$1 AND l.warehouse_id=$2 AND l.connection_id=o.connection_id)`,
         [key.tenant_id,key.warehouse_id]),
-      client.query<{demand:string}>(`SELECT coalesce(sum(li.quantity_milli),0)::text AS demand
+      client.query<{demand:string}>(`SELECT coalesce(sum(greatest(0,li.quantity_milli-
+          coalesce((SELECT sum(r.quantity_milli) FROM inventory_reservation r
+            WHERE r.tenant_id=li.tenant_id AND r.sales_order_id=o.id
+              AND r.sales_order_line_id=li.id AND r.warehouse_id=$2
+              AND r.status='ACTIVE'),0))),0)::text AS demand
         FROM sales_order_line li
         JOIN sales_order o ON o.tenant_id=li.tenant_id AND o.id=li.order_id
         WHERE li.tenant_id=$1 AND li.sku_id=$3
