@@ -83,6 +83,10 @@ type Booking = {
     usageUnit: string;
   } | null;
   delivery_format_snapshot?: string;
+  billing_status?: string | null;
+  obligation_status?: string | null;
+  invoice_status?: string | null;
+  settled_minor?: string;
   billing?: {
     id: string;
     status: string;
@@ -94,6 +98,13 @@ type Booking = {
     invoiceId: string | null;
     invoiceNumber: string | null;
     invoiceStatus: string | null;
+  } | null;
+  refund?: {
+    id?: string;
+    status: string;
+    amountMinor: string;
+    settledMinor: string;
+    dueAt?: string | null;
   } | null;
   resources: Array<{
     resourceId: string;
@@ -873,6 +884,15 @@ export default function BookingsPage() {
                   {details.billing?.obligationStatus ?? "Нет дебиторки"}
                 </small>
               </article>
+              {details.refund ? (
+                <article>
+                  <span>К возврату</span>
+                  <strong>
+                    {money(details.refund.amountMinor, details.currency)}
+                  </strong>
+                  <small>{details.refund.status}</small>
+                </article>
+              ) : null}
             </div>
 
             <div className="studio-form-section">
@@ -954,6 +974,23 @@ export default function BookingsPage() {
                         <strong>
                           {money(booking.price_minor_snapshot, booking.currency)}
                         </strong>
+                        <small className="booking-finance-state">
+                          {booking.refund
+                            ? "Возврат " +
+                              money(
+                                booking.refund.amountMinor,
+                                booking.currency
+                              )
+                            : booking.billing_status === "PAID"
+                              ? "Оплачено"
+                              : booking.billing_status === "PARTIALLY_PAID"
+                                ? "Частично оплачено"
+                                : booking.invoice_status === "ISSUED"
+                                  ? "Счёт выставлен"
+                                  : booking.party_name
+                                    ? "Без счёта"
+                                    : "Внутренняя бронь"}
+                        </small>
                       </div>
                     </div>
 
