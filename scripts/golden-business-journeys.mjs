@@ -813,6 +813,34 @@ async function danceStudioJourney() {
     "DANCE statement must preserve manual adjustment"
   );
 
+  const reviewedStatement = await request(
+    "POST",
+    "/dance/payroll-statements/" + adjustedStatement.id + "/review",
+    {
+      status: "ACKNOWLEDGED",
+      comment: "Golden payroll review accepted"
+    }
+  );
+  assert.equal(
+    reviewedStatement.status,
+    "ACKNOWLEDGED",
+    "DANCE trainer statement must be acknowledged before payroll export"
+  );
+
+  const reviewedStatements = await request(
+    "GET",
+    "/dance/payroll-statements?from=" +
+      encodeURIComponent(payrollFrom.toISOString()) +
+      "&to=" +
+      encodeURIComponent(payrollTo.toISOString())
+  );
+  assert.equal(
+    reviewedStatements.find((item) => item.id === adjustedStatement.id)
+      ?.review_status,
+    "ACKNOWLEDGED",
+    "DANCE trainer review state must be visible in payroll workspace"
+  );
+
   const legalEntity = await request(
     "POST",
     "/organization/legal-entities",
