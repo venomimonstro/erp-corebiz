@@ -176,8 +176,10 @@ function currencyFromWb(value: unknown): string {
 
 export function isFinalMarketplaceCancellation(status:string|null|undefined):boolean {
   const normalized=(status??"").trim().toLowerCase();
-  // A cancellation REQUEST is not final; keep shadow demand until it is settled.
-  return /^(cancelled|canceled|cancel|declined)(?:$|[\/_\s])/.test(normalized);
+  // Requests to cancel are not terminal and must keep the order demand.
+  if(normalized==="cancel_requested"||normalized.startsWith("cancel_request"))return false;
+  return /^(cancelled|canceled|declined)(?:$|[\/_\s])/.test(normalized)
+    || normalized==="cancel" || normalized.startsWith("cancel/");
 }
 
 async function persistOrder(
