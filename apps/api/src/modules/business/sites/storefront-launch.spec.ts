@@ -34,7 +34,7 @@ describe("ecommerce launch safety", () => {
       sku_code:"SKU"+n,barcode:null,
       sale_price_minor:"1200",currency:"RUB",atp_milli:"1000"
     }));
-    const pageQuery=jest.fn(async()=>({rows}));
+    const pageQuery=jest.fn(async(_sql:string,_params:unknown[])=>({rows}));
     const database={
       query:jest.fn(async()=>({rows:[{
         site_id:siteId,tenant_id:context.tenantId,
