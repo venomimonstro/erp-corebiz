@@ -81,13 +81,18 @@ export class DanceEconomicsService {
       amountMinor:string;
       dueAt?:string;
       note?:string;
+      requestKey?:string;
     }
   ){
 
     await this.requireFinance(context,"finance.write");
     const scopeIds=await this.scopeIds(context,"dance.write");
-    if(!/^\d+$/.test(input.amountMinor)||BigInt(input.amountMinor)<=0n)
+    if(!/^\d{1,15}$/.test(input.amountMinor)||BigInt(input.amountMinor)<=0n)
       throw new BadRequestException("Некорректная сумма начисления");
+    if(input.requestKey&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.requestKey))
+      throw new BadRequestException("Неверный ключ повтора операции");
+    if(input.sourceType&& !["OTHER","INSTALLMENT"].includes(input.sourceType))
+      throw new BadRequestException("Начисления за абонементы и уроки создаются только через соответствующий процесс");
     const dueAt=input.dueAt?new Date(input.dueAt):null;
     if(dueAt&&Number.isNaN(dueAt.getTime()))
       throw new BadRequestException("Некорректный срок оплаты");
@@ -118,7 +123,8 @@ export class DanceEconomicsService {
         sourceId:input.sourceId??null,
         amountMinor:input.amountMinor,
         dueAt,
-        note:input.note
+        note:input.note,
+        requestKey:input.requestKey
       });
     });
   }
@@ -2417,8 +2423,37 @@ export class DanceEconomicsService {
       amountMinor:string;
       dueAt:Date|null;
       note?:string;
+      requestKey?:string;
     }
   ){
+    const requestKey=input.requestKey??null;
+    if(requestKey){
+      const previous=await client.query<{
+        id:string;student_id:string;payer_party_id:string;
+        source_type:string;source_id:string|null;amount_minor:string;
+        due_at:Date|null;obligation_id:string|null;invoice_id:string|null;status:string;
+      }>(
+        `SELECT id,student_id,payer_party_id,source_type,source_id,
+          amount_minor::text,due_at,obligation_id,invoice_id,status
+         FROM dance_student_charge
+         WHERE tenant_id=$1 AND request_key=$2 FOR UPDATE`,
+        [context.tenantId,requestKey]
+      );
+      if(previous.rows[0]){
+        const row=previous.rows[0];
+        if(row.student_id!==input.studentId||
+          row.payer_party_id!==input.payerPartyId||
+          row.source_type!==input.sourceType||
+          row.source_id!==input.sourceId||
+          row.amount_minor!==input.amountMinor||
+          (row.due_at?new Date(row.due_at).toISOString():null)!==
+            (input.dueAt?.toISOString()??null))
+          throw new ConflictException("Ключ повтора уже использован для другого начисления");
+        return {id:row.id,obligation_id:row.obligation_id,
+          invoice_id:row.invoice_id,status:row.status,reused:true};
+      }
+    }
+
     if(input.sourceId){
       const existing=await client.query(
         `SELECT id,obligation_id,invoice_id,status
@@ -2434,17 +2469,41 @@ export class DanceEconomicsService {
     const charge=await client.query<{id:string}>(
       `INSERT INTO dance_student_charge(
          tenant_id,student_id,payer_party_id,source_type,source_id,
-         amount_minor,due_at,note,created_by_membership_id
-       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         amount_minor,due_at,note,created_by_membership_id,request_key
+       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT(tenant_id,request_key)
+         WHERE request_key IS NOT NULL DO NOTHING
        RETURNING id`,
       [
         context.tenantId,input.studentId,input.payerPartyId,input.sourceType,
         input.sourceId,input.amountMinor,input.dueAt,
-        input.note?.trim()||null,context.membershipId
+        input.note?.trim()||null,context.membershipId,requestKey
       ]
     );
     const chargeId=charge.rows[0]?.id;
-    if(!chargeId) throw new Error("DANCE_CHARGE_CREATE_FAILED");
+    if(!chargeId&&requestKey){
+      const already=await client.query<{
+        id:string;student_id:string;payer_party_id:string;
+        source_type:string;source_id:string|null;amount_minor:string;
+        due_at:Date|null;obligation_id:string|null;invoice_id:string|null;status:string;
+      }>(
+        `SELECT id,student_id,payer_party_id,source_type,source_id,
+          amount_minor::text,due_at,obligation_id,invoice_id,status
+         FROM dance_student_charge WHERE tenant_id=$1 AND request_key=$2`,
+        [context.tenantId,requestKey]
+      );
+      const row=already.rows[0];
+      if(!row)throw new ConflictException("Запрос обрабатывается. Повторите с тем же ключом");
+      if(row.student_id!==input.studentId||row.payer_party_id!==input.payerPartyId||
+        row.source_type!==input.sourceType||row.source_id!==input.sourceId||
+        row.amount_minor!==input.amountMinor||
+        (row.due_at?new Date(row.due_at).toISOString():null)!==
+          (input.dueAt?.toISOString()??null))
+        throw new ConflictException("Ключ повтора уже использован для другого начисления");
+      return {id:row.id,obligation_id:row.obligation_id,
+        invoice_id:row.invoice_id,status:row.status,reused:true};
+    }
+    if(!chargeId)throw new Error("DANCE_CHARGE_CREATE_FAILED");
 
     const obligation=await client.query<{id:string}>(
       `INSERT INTO financial_obligation(
