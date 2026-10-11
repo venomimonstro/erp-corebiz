@@ -35,6 +35,21 @@ export class BookingController {
     };
   }
 
+  @Patch("catalog/:id")
+  @RequirePermission("service.write")
+  async updateService(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.booking.updateService(
+        this.context(request),id,body
+      )
+    };
+  }
+
   @Post("technology-cards/:cardId/archive")
   @RequirePermission("service.write")
   async archiveTechnologyCard(
