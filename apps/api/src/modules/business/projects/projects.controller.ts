@@ -24,8 +24,15 @@ export class ProjectsController {
     return { ok: true, data: await this.projects.list(this.context(request)) };
   }
 
+
+  @Get("agency/health")
+  @RequirePermission("finance.read")
+  async agencyHealth(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.agencyHealth(this.context(request))};
+  }
+
   @Get("agency/overview")
-  @RequirePermission("projects.read")
+  @RequirePermission("finance.read")
   async agencyOverview(
     @Req() request:AuthenticatedRequest
   ):Promise<ApiSuccess<unknown>> {

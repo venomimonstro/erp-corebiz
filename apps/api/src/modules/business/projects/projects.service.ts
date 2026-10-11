@@ -916,7 +916,139 @@ export class ProjectsService {
         error.code === "23505"
     );
   }
+
+  async agencyHealth(context:TenantContext) {
+    const financeScope=await this.authorization.resolveScope(context,"finance.read");
+    if(!financeScope)throw new ForbiddenException("Финансовые показатели доступны только уполномоченным сотрудникам");
+    const projectScope=await this.membershipIdsForScope(context,"projects.read");
+    const crmScope=await this.authorization.resolveScope(context,"crm.read");
+    const crmMemberships=crmScope
+      ?await this.authorization.membershipIdsForScope(context,crmScope):[];
+    return this.database.withTenantTransaction(context,async client=>{
+      const [invoice,contracts,deliveries,followups,cash]=await Promise.all([
+        client.query<{
+          id:string;business_number:string;party_name:string|null;due_at:string|null;
+          amount_minor:string;remaining_minor:string;project_id:string;project_name:string;
+        }>(`SELECT i.id,i.business_number,party.display_name AS party_name,
+                  i.due_at::text,i.amount_minor::text,
+                  (o.amount_minor-o.settled_minor)::text AS remaining_minor,
+                  p.id AS project_id,p.name AS project_name
+           FROM finance_invoice i
+           JOIN financial_obligation o ON o.tenant_id=i.tenant_id AND o.id=i.obligation_id
+           JOIN work_project_monthly_statement s ON s.tenant_id=i.tenant_id AND s.id=i.source_id
+           JOIN work_project p ON p.tenant_id=s.tenant_id AND p.id=s.project_id
+           LEFT JOIN party ON party.tenant_id=p.tenant_id AND party.id=p.party_id
+           WHERE i.tenant_id=$1 AND i.source_type='AGENCY_PROJECT_STATEMENT'
+             AND o.status IN ('OPEN','PARTIALLY_SETTLED') AND o.amount_minor>o.settled_minor
+             AND i.status NOT IN ('CANCELLED','CREDITED')
+             AND ($2::uuid[] IS NULL OR p.responsible_membership_id=ANY($2::uuid[]))
+           ORDER BY i.due_at NULLS LAST,i.issued_at DESC LIMIT 500`,
+          [context.tenantId,projectScope]),
+        client.query<{
+          id:string;contract_number:string;project_id:string;project_name:string;
+          ends_on:string;renewal_notice_days:number;service_fee_minor:string;
+        }>(`SELECT c.id,c.contract_number,c.project_id,p.name AS project_name,
+                  c.ends_on::text,c.renewal_notice_days,c.service_fee_minor::text
+           FROM agency_client_contract c
+           JOIN work_project p ON p.tenant_id=c.tenant_id AND p.id=c.project_id
+           WHERE c.tenant_id=$1 AND c.status='ACTIVE'
+             AND p.status NOT IN ('CANCELLED','COMPLETED')
+             AND ($2::uuid[] IS NULL OR p.responsible_membership_id=ANY($2::uuid[]))
+             AND c.ends_on IS NOT NULL
+             AND c.ends_on<=current_date+c.renewal_notice_days
+           ORDER BY c.ends_on LIMIT 100`,
+          [context.tenantId,projectScope]),
+        client.query<{
+          id:string;project_id:string;project_name:string;title:string;due_at:string|null;
+          source:string;
+        }>(`SELECT a.id,a.project_id,p.name AS project_name,a.title,
+                  a.due_at::text,'APPROVAL'::text AS source
+           FROM work_project_client_approval a
+           JOIN work_project p ON p.tenant_id=a.tenant_id AND p.id=a.project_id
+           WHERE a.tenant_id=$1 AND a.status='PENDING' AND a.due_at<now()
+             AND ($2::uuid[] IS NULL OR p.responsible_membership_id=ANY($2::uuid[]))
+           UNION ALL
+           SELECT d.id,d.project_id,p.name,d.title,d.due_at::text,'DELIVERABLE'::text
+           FROM work_project_deliverable d
+           JOIN work_project p ON p.tenant_id=d.tenant_id AND p.id=d.project_id
+           WHERE d.tenant_id=$1 AND d.status NOT IN ('APPROVED','CANCELLED')
+             AND d.due_at<now()
+             AND ($2::uuid[] IS NULL OR p.responsible_membership_id=ANY($2::uuid[]))
+           ORDER BY due_at LIMIT 200`,
+          [context.tenantId,projectScope]),
+        crmScope?client.query<{
+          id:string;title:string;next_action_at:string|null;
+          next_action_title:string|null;amount_minor:string;
+        }>(`SELECT d.id,d.title,d.next_action_at::text,d.next_action_title,d.amount_minor::text
+           FROM crm_deal d
+           JOIN crm_stage stage ON stage.tenant_id=d.tenant_id AND stage.id=d.stage_id
+           WHERE d.tenant_id=$1 AND stage.kind='NORMAL'
+             AND ($2::uuid[] IS NULL OR d.responsible_membership_id=ANY($2::uuid[]))
+             AND (d.next_action_at IS NULL OR d.next_action_at<now())
+           ORDER BY d.next_action_at NULLS FIRST,d.updated_at ASC LIMIT 100`,
+          [context.tenantId,crmMemberships]):Promise.resolve({rows:[]}),
+        client.query<{monthly_recurring_minor:string;active_contracts:string}>(
+          `SELECT COALESCE(sum(c.service_fee_minor),0)::text AS monthly_recurring_minor,
+                  count(*)::text AS active_contracts
+           FROM agency_client_contract c
+           JOIN work_project p ON p.tenant_id=c.tenant_id AND p.id=c.project_id
+           WHERE c.tenant_id=$1 AND c.status='ACTIVE' AND c.billing_cycle='MONTHLY'
+             AND c.starts_on<=current_date
+             AND (c.ends_on IS NULL OR c.ends_on>=current_date)
+             AND p.currency='RUB' AND p.status NOT IN ('CANCELLED','COMPLETED')
+             AND ($2::uuid[] IS NULL OR p.responsible_membership_id=ANY($2::uuid[]))`,
+          [context.tenantId,projectScope])
+      ]);
+      const items:Array<{
+        type:string;title:string;description:string;href:string;
+        dueAt:string|null;priority:"high"|"medium";
+      }>=[];
+      let outstandingRub=0n,overdueRub=0n,overdueInvoices=0;
+      const today=Date.now();
+      for(const row of invoice.rows){
+        const amount=BigInt(row.remaining_minor);
+        outstandingRub+=amount;
+        if(row.due_at && new Date(row.due_at).getTime()<today){
+          overdueRub+=amount;overdueInvoices++;
+          if(items.length<100)items.push({
+            type:"INVOICE",title:"Просрочена оплата "+row.business_number,
+            description:(row.party_name??row.project_name)+" · остаток "+(Number(amount)/100).toLocaleString("ru-RU")+" ₽",
+            href:"/app/finance",dueAt:row.due_at,priority:"high"
+          });
+        }
+      }
+      for(const row of contracts.rows)if(items.length<150)items.push({
+        type:"RENEWAL",title:"Продление договора "+row.contract_number,
+        description:row.project_name,href:"/app/agency/contracts",
+        dueAt:row.ends_on,priority:row.ends_on<new Date().toISOString().slice(0,10)?"high":"medium"
+      });
+      for(const row of deliveries.rows)if(items.length<200)items.push({
+        type:row.source,title:(row.source==="APPROVAL"?"Ожидается согласование: ":"Просрочен результат: ")+row.title,
+        description:row.project_name,href:"/app/projects/"+row.project_id,
+        dueAt:row.due_at,priority:"high"
+      });
+      for(const row of followups.rows)if(items.length<250)items.push({
+        type:"CRM",title:row.next_action_at?"Просрочен контакт: "+row.title:"Нет следующего действия: "+row.title,
+        description:row.next_action_title??"Назначьте следующий шаг в сделке",
+        href:"/app/crm/deals/"+row.id,dueAt:row.next_action_at,
+        priority:row.next_action_at?"high":"medium"
+      });
+      const score={overdueInvoices,overdueDeliveries:deliveries.rows.length,
+        renewalDue:contracts.rows.length,unworkedDeals:followups.rows.length,
+        unpaidInvoiceCount:invoice.rows.length,
+        outstandingMinor:outstandingRub.toString(),overdueMinor:overdueRub.toString(),
+        contractedMonthlyRevenueMinor:cash.rows[0]?.monthly_recurring_minor??"0",
+        activeMonthlyContracts:Number(cash.rows[0]?.active_contracts??0),
+        crmVisible:Boolean(crmScope)};
+      items.sort((a,b)=>Number(a.priority==="medium")-Number(b.priority==="medium")
+        ||String(a.dueAt??"9999").localeCompare(String(b.dueAt??"9999")));
+      return {score,alerts:items.slice(0,120)};
+    });
+  }
+
   async agencyOverview(context:TenantContext) {
+    if(!await this.authorization.resolveScope(context,"finance.read"))
+      throw new ForbiddenException("Недостаточно прав на финансовую сводку агентства");
     const scoped=await this.membershipIdsForScope(context,"projects.read");
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
