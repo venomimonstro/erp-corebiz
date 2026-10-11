@@ -142,6 +142,277 @@ export class BookingService {
     });
   }
 
+  async deliveryRules(
+    context: TenantContext,
+    serviceId?: string
+  ): Promise<Array<Record<string, unknown>>> {
+    await this.requireServiceAll(context, "service.read");
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `SELECT
+           r.id,r.service_id,s.name AS service_name,
+           r.employee_resource_id,e.name AS employee_name,
+           r.branch_id,b.name AS branch_name,r.delivery_format,
+           r.price_minor::text,r.price_max_minor::text,
+           r.duration_minutes,r.capacity_units,r.technology_card_id,
+           tc.name AS technology_card_name,r.weekdays,
+           r.start_minute,r.end_minute,r.priority,
+           r.valid_from,r.valid_to,r.status,r.metadata
+         FROM service_delivery_rule r
+         JOIN service_catalog_item s
+           ON s.tenant_id=r.tenant_id AND s.id=r.service_id
+         LEFT JOIN service_resource e
+           ON e.tenant_id=r.tenant_id AND e.id=r.employee_resource_id
+         LEFT JOIN branch b
+           ON b.tenant_id=r.tenant_id AND b.id=r.branch_id
+         LEFT JOIN service_technology_card tc
+           ON tc.tenant_id=r.tenant_id AND tc.id=r.technology_card_id
+         WHERE r.tenant_id=$1
+           AND r.status='ACTIVE'
+           AND ($2::uuid IS NULL OR r.service_id=$2)
+         ORDER BY s.name,e.name NULLS LAST,r.priority,r.start_minute`,
+        [context.tenantId, serviceId ?? null]
+      );
+      return result.rows;
+    });
+  }
+
+  async createDeliveryRule(
+    context: TenantContext,
+    input: {
+      serviceId: string;
+      employeeResourceId?: string;
+      branchId?: string;
+      deliveryFormat?: "INDIVIDUAL" | "GROUP" | "SELF_PRACTICE" | "RENTAL";
+      priceMinor?: string;
+      priceMaxMinor?: string;
+      durationMinutes?: number;
+      capacityUnits?: number;
+      technologyCardId?: string;
+      weekdays?: number[];
+      startMinute?: number;
+      endMinute?: number;
+      priority?: number;
+      validFrom?: string;
+      validTo?: string;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<{ id: string }> {
+    await this.requireServiceAll(context, "service.write");
+
+    const format = input.deliveryFormat ?? "INDIVIDUAL";
+    if (!["INDIVIDUAL","GROUP","SELF_PRACTICE","RENTAL"].includes(format)) {
+      throw new BadRequestException("Некорректный формат оказания услуги");
+    }
+    for (const value of [input.priceMinor,input.priceMaxMinor]) {
+      if (value !== undefined && !/^\d+$/.test(value)) {
+        throw new BadRequestException("Некорректная цена");
+      }
+    }
+    if (
+      input.priceMinor !== undefined &&
+      input.priceMaxMinor !== undefined &&
+      BigInt(input.priceMaxMinor) < BigInt(input.priceMinor)
+    ) {
+      throw new BadRequestException("Максимальная цена меньше минимальной");
+    }
+
+    const duration =
+      input.durationMinutes === undefined ? null : Math.floor(input.durationMinutes);
+    if (duration !== null && (duration < 5 || duration > 1440)) {
+      throw new BadRequestException("Некорректная длительность");
+    }
+    const capacity = Math.floor(input.capacityUnits ?? 1);
+    if (capacity < 1 || capacity > 100000) {
+      throw new BadRequestException("Некорректная доля ресурса");
+    }
+    const weekdays = Array.from(new Set(input.weekdays ?? [1,2,3,4,5,6,7]))
+      .map(Number)
+      .sort((a,b)=>a-b);
+    if (!weekdays.length || weekdays.some(day => !Number.isInteger(day) || day < 1 || day > 7)) {
+      throw new BadRequestException("Некорректные дни недели");
+    }
+    const startMinute = Math.floor(input.startMinute ?? 0);
+    const endMinute = Math.floor(input.endMinute ?? 1440);
+    if (startMinute < 0 || startMinute > 1439 || endMinute < 1 ||
+        endMinute > 1440 || endMinute <= startMinute) {
+      throw new BadRequestException("Некорректный временной интервал");
+    }
+    const priority = Math.floor(input.priority ?? 100);
+    if (priority < 1 || priority > 100000) {
+      throw new BadRequestException("Некорректный приоритет");
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const service = await client.query(
+        "SELECT 1 FROM service_catalog_item WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
+        [context.tenantId,input.serviceId]
+      );
+      if (!service.rowCount) throw new NotFoundException("Услуга не найдена");
+
+      if (input.employeeResourceId) {
+        const employee = await client.query(
+          `SELECT 1 FROM service_resource
+           WHERE tenant_id=$1 AND id=$2 AND type='EMPLOYEE' AND status='ACTIVE'`,
+          [context.tenantId,input.employeeResourceId]
+        );
+        if (!employee.rowCount) throw new NotFoundException("Сотрудник не найден");
+      }
+      if (input.technologyCardId) {
+        const card = await client.query(
+          `SELECT 1 FROM service_technology_card
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,input.technologyCardId]
+        );
+        if (!card.rowCount) throw new NotFoundException("Технологическая карта не найдена");
+      }
+
+      try {
+        const result = await client.query<{id:string}>(
+          `INSERT INTO service_delivery_rule(
+             tenant_id,service_id,employee_resource_id,branch_id,delivery_format,
+             price_minor,price_max_minor,duration_minutes,capacity_units,
+             technology_card_id,weekdays,start_minute,end_minute,priority,
+             valid_from,valid_to,metadata
+           ) VALUES(
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::smallint[],$12,$13,$14,
+             coalesce($15::date,current_date),$16::date,$17
+           )
+           RETURNING id`,
+          [
+            context.tenantId,input.serviceId,input.employeeResourceId ?? null,
+            input.branchId ?? null,format,input.priceMinor ?? null,
+            input.priceMaxMinor ?? null,duration,capacity,
+            input.technologyCardId ?? null,weekdays,startMinute,endMinute,
+            priority,input.validFrom ?? null,input.validTo ?? null,
+            JSON.stringify(input.metadata ?? {})
+          ]
+        );
+        return result.rows[0]!;
+      } catch (error) {
+        const message=error instanceof Error?error.message:String(error);
+        if (message.includes("SERVICE_DELIVERY_RULE_AMBIGUOUS")) {
+          throw new ConflictException(
+            "Для этой услуги уже есть пересекающееся правило с тем же приоритетом"
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  async technologyCards(
+    context: TenantContext
+  ): Promise<Array<Record<string, unknown>>> {
+    await this.requireServiceAll(context, "service.read");
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query(
+        `SELECT
+           c.id,c.name,c.code,c.description,c.status,c.metadata,
+           coalesce(json_agg(json_build_object(
+             'id',l.id,
+             'warehouseId',l.warehouse_id,
+             'warehouseName',w.name,
+             'skuId',l.sku_id,
+             'sku',sku.code,
+             'productName',p.name,
+             'quantityMilli',l.quantity_milli::text,
+             'wasteBps',l.waste_bps
+           ) ORDER BY l.created_at) FILTER (WHERE l.id IS NOT NULL),'[]'::json) AS lines
+         FROM service_technology_card c
+         LEFT JOIN service_technology_card_line l
+           ON l.tenant_id=c.tenant_id AND l.card_id=c.id
+         LEFT JOIN warehouse w
+           ON w.tenant_id=l.tenant_id AND w.id=l.warehouse_id
+         LEFT JOIN sku
+           ON sku.tenant_id=l.tenant_id AND sku.id=l.sku_id
+         LEFT JOIN product_variant v
+           ON v.tenant_id=sku.tenant_id AND v.id=sku.variant_id
+         LEFT JOIN product p
+           ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+         WHERE c.tenant_id=$1 AND c.status='ACTIVE'
+         GROUP BY c.id
+         ORDER BY c.name`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async createTechnologyCard(
+    context: TenantContext,
+    input: {
+      name: string;
+      code?: string;
+      description?: string;
+      lines: Array<{
+        warehouseId: string;
+        skuId: string;
+        quantityMilli: string;
+        wasteBps?: number;
+        metadata?: Record<string, unknown>;
+      }>;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<{ id: string }> {
+    await this.requireServiceAll(context, "service.write");
+    const name=input.name?.trim();
+    if (!name || name.length < 2 || name.length > 160) {
+      throw new BadRequestException("Некорректное название технологической карты");
+    }
+    if (!Array.isArray(input.lines) || !input.lines.length || input.lines.length > 200) {
+      throw new BadRequestException("Добавьте от 1 до 200 расходников");
+    }
+    for (const line of input.lines) {
+      if (!/^\d+$/.test(line.quantityMilli) || BigInt(line.quantityMilli) <= 0n) {
+        throw new BadRequestException("Некорректная норма расхода");
+      }
+      const waste=Math.floor(line.wasteBps ?? 0);
+      if (waste < 0 || waste > 10000) {
+        throw new BadRequestException("Некорректный процент технологических потерь");
+      }
+    }
+
+    return this.database.withTenantTransaction(context, async (client) => {
+      const card=await client.query<{id:string}>(
+        `INSERT INTO service_technology_card(
+           tenant_id,name,code,description,metadata
+         ) VALUES($1,$2,$3,$4,$5)
+         RETURNING id`,
+        [
+          context.tenantId,name,input.code?.trim() || null,
+          input.description?.trim() || null,JSON.stringify(input.metadata ?? {})
+        ]
+      );
+      const id=card.rows[0]?.id;
+      if (!id) throw new Error("SERVICE_TECH_CARD_CREATE_FAILED");
+
+      for (const line of input.lines) {
+        const refs=await client.query(
+          `SELECT
+             EXISTS(SELECT 1 FROM warehouse w
+               WHERE w.tenant_id=$1 AND w.id=$2 AND w.status='ACTIVE') AS warehouse_ok,
+             EXISTS(SELECT 1 FROM sku s
+               WHERE s.tenant_id=$1 AND s.id=$3 AND s.status='ACTIVE') AS sku_ok`,
+          [context.tenantId,line.warehouseId,line.skuId]
+        );
+        if (!refs.rows[0]?.warehouse_ok) throw new NotFoundException("Склад не найден");
+        if (!refs.rows[0]?.sku_ok) throw new NotFoundException("Расходник не найден");
+
+        await client.query(
+          `INSERT INTO service_technology_card_line(
+             tenant_id,card_id,warehouse_id,sku_id,quantity_milli,waste_bps,metadata
+           ) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            context.tenantId,id,line.warehouseId,line.skuId,line.quantityMilli,
+            Math.floor(line.wasteBps ?? 0),JSON.stringify(line.metadata ?? {})
+          ]
+        );
+      }
+      return {id};
+    });
+  }
+
   async addRequirement(
     context: TenantContext,
     serviceId: string,
