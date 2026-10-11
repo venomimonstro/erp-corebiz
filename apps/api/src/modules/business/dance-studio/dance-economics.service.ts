@@ -84,7 +84,8 @@ export class DanceEconomicsService {
     }
   ){
 
-    await this.requireFinance(context,"finance.write");    const scopeIds=await this.scopeIds(context,"dance.write");
+    await this.requireFinance(context,"finance.write");
+    const scopeIds=await this.scopeIds(context,"dance.write");
     if(!/^\d+$/.test(input.amountMinor)||BigInt(input.amountMinor)<=0n)
       throw new BadRequestException("Некорректная сумма начисления");
     const dueAt=input.dueAt?new Date(input.dueAt):null;
@@ -213,7 +214,8 @@ export class DanceEconomicsService {
     }
   ){
 
-    await this.requireFinance(context,"finance.write");    await this.requireAll(context,"dance.write");
+    await this.requireFinance(context,"finance.write");
+    await this.requireAll(context,"dance.write");
     const money=[
       input.monthlyBaseMinor??"0",
       input.dailyBaseMinor??"0",
@@ -321,7 +323,8 @@ export class DanceEconomicsService {
     planId:string
   ){
 
-    await this.requireFinance(context,"finance.write");    await this.requireAll(context,"dance.write");
+    await this.requireFinance(context,"finance.write");
+    await this.requireAll(context,"dance.write");
     return this.database.withTenantTransaction(context,async client=>{
       const plan=await client.query<{status:string}>(
         `SELECT status
@@ -388,7 +391,8 @@ export class DanceEconomicsService {
     }
   ){
 
-    await this.requireFinance(context,"finance.write");    await this.requireAll(context,"dance.write");
+    await this.requireFinance(context,"finance.write");
+    await this.requireAll(context,"dance.write");
     const money=[
       input.fixedMinor??"0",
       input.hourlyMinor??"0",
@@ -638,7 +642,8 @@ export class DanceEconomicsService {
     }
   ){
 
-    await this.requireFinance(context,"finance.write");    await this.requireAll(context,"dance.write");
+    await this.requireFinance(context,"finance.write");
+    await this.requireAll(context,"dance.write");
     const amounts=[
       input.hourlyRateMinor??"0",
       input.monthlyMinor??"0",
@@ -717,7 +722,8 @@ export class DanceEconomicsService {
     input:{month:string}
   ){
 
-    await this.requireFinance(context,"finance.write");    await this.requireAll(context,"dance.write");
+    await this.requireFinance(context,"finance.write");
+    await this.requireAll(context,"dance.write");
     const target=this.normalizeMonth(input.month);
 
     return this.database.withTenantTransaction(context,async client=>{
@@ -1617,7 +1623,8 @@ export class DanceEconomicsService {
     }
   ){
 
-    await this.requireFinance(context,"finance.write");    await this.requireAll(context,"dance.write");
+    await this.requireFinance(context,"finance.write");
+    await this.requireAll(context,"dance.write");
     if(!/^-?\d+$/.test(input.amountMinor)||BigInt(input.amountMinor)===0n){
       throw new BadRequestException("Некорректная сумма корректировки");
     }
@@ -1827,7 +1834,8 @@ export class DanceEconomicsService {
     }
   ){
 
-    await this.requireFinance(context,"finance.write");    await this.requireAll(context,"dance.write");
+    await this.requireFinance(context,"finance.write");
+    await this.requireAll(context,"dance.write");
     const comment=input.comment?.trim();
     if(!["RESOLVED","WAIVED"].includes(input.status)){
       throw new BadRequestException("Некорректный статус решения");
@@ -1913,7 +1921,8 @@ export class DanceEconomicsService {
     input:{from:string;to:string}
   ){
 
-    await this.requireFinance(context,"finance.write");    await this.requireAll(context,"dance.write");
+    await this.requireFinance(context,"finance.write");
+    await this.requireAll(context,"dance.write");
     const {from,to}=this.dateRange(input.from,input.to);
     return this.database.withTenantTransaction(context,async client=>{
       const periodFrom=from.toISOString().slice(0,10);
@@ -1967,7 +1976,8 @@ export class DanceEconomicsService {
     input:{batchId:string;from:string;to:string}
   ){
 
-    await this.requireFinance(context,"finance.write");    await this.requireAll(context,"dance.write");
+    await this.requireFinance(context,"finance.write");
+    await this.requireAll(context,"dance.write");
     const {from,to}=this.dateRange(input.from,input.to);
     return this.database.withTenantTransaction(context,async client=>{
       const batch=await client.query(
