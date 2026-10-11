@@ -1,5 +1,5 @@
 import {
-  Body,Controller,Get,Param,Post,Query,Req
+  Body,Controller,Get,Param,Patch,Post,Query,Req
 } from "@nestjs/common";
 import type { ApiSuccess,TenantContext } from "@corebiz/contracts";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
@@ -38,6 +38,22 @@ export class AutomotiveController {
     return {ok:true,data:await this.automotive.workOrders(this.context(request))};
   }
 
+  @Get("work-orders/:id")
+  @RequirePermission("service.read")
+  async workOrder(
+    @Req() request:AuthenticatedRequest,@Param("id") id:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.automotive.workOrder(this.context(request),id)};
+  }
+
+  @Patch("work-orders/:id")
+  @RequirePermission("service.write")
+  async updateWorkOrder(
+    @Req() request:AuthenticatedRequest,@Param("id") id:string,@Body() body:any
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.automotive.updateWorkOrder(this.context(request),id,body)};
+  }
+
   @Post("work-orders")
   @RequirePermission("service.write")
   async createWorkOrder(
@@ -52,6 +68,22 @@ export class AutomotiveController {
     @Req() request:AuthenticatedRequest,@Param("id") id:string,@Body() body:any
   ):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.automotive.addWorkOrderLine(this.context(request),id,body)};
+  }
+
+  @Patch("work-orders/:id/lines/:lineId")
+  @RequirePermission("service.write")
+  async updateWorkOrderLine(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Param("lineId") lineId:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.automotive.updateWorkOrderLine(
+        this.context(request),id,lineId,body
+      )
+    };
   }
 
   @Get("donors")
