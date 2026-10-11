@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
+import { StudioModal } from "../../../../components/studio-modal";
 import { apiRequest } from "../../../../lib/api";
 
 type Service = {
@@ -11,12 +12,22 @@ type Service = {
   duration_minutes: number;
   price_minor: string;
   currency: string;
+  delivery_format: "INDIVIDUAL" | "GROUP" | "SELF_PRACTICE" | "RENTAL";
+  group_capacity: number;
 };
 
 type Resource = {
   id: string;
   name: string;
   type: string;
+  capacity: number;
+};
+
+type ResourceZone = {
+  id: string;
+  name: string;
+  code: string | null;
+  capacity_units: number;
 };
 
 type Customer = {
@@ -71,11 +82,26 @@ type Booking = {
     usageValue: string;
     usageUnit: string;
   } | null;
+  delivery_format_snapshot?: string;
+  billing?: {
+    id: string;
+    status: string;
+    amountMinor: string;
+    dueAt: string | null;
+    obligationId: string | null;
+    obligationStatus: string | null;
+    settledMinor: string;
+    invoiceId: string | null;
+    invoiceNumber: string | null;
+    invoiceStatus: string | null;
+  } | null;
   resources: Array<{
     resourceId: string;
     resourceName: string;
     type: string;
     capacityUnits: number;
+    zoneId?: string | null;
+    zoneName?: string | null;
   }>;
 };
 
@@ -102,11 +128,15 @@ export default function BookingsPage() {
   const [customerPackages, setCustomerPackages] = useState<ServicePackage[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [weekOffset, setWeekOffset] = useState(0);
   const [resourceFilter, setResourceFilter] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [selectedService, setSelectedService] = useState("");
   const [selectedResource, setSelectedResource] = useState("");
+  const [selectedZone, setSelectedZone] = useState("");
+  const [selectedCapacityUnits, setSelectedCapacityUnits] = useState("1");
+  const [resourceZones, setResourceZones] = useState<ResourceZone[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState("");
   const [selectedAsset, setSelectedAsset] = useState("");
   const [selectedPackage, setSelectedPackage] = useState("");
@@ -153,6 +183,25 @@ export default function BookingsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    setSelectedZone("");
+    setSelectedCapacityUnits("1");
+    if (!selectedResource) {
+      setResourceZones([]);
+      return;
+    }
+    const resource = resources.find((item) => item.id === selectedResource);
+    if (!resource || !["ROOM","HALL","WORKPLACE","EQUIPMENT","OTHER"].includes(resource.type)) {
+      setResourceZones([]);
+      return;
+    }
+    void apiRequest<ResourceZone[]>(
+      "/service/resources/" + encodeURIComponent(selectedResource) + "/zones"
+    )
+      .then(setResourceZones)
+      .catch(() => setResourceZones([]));
+  }, [selectedResource, resources]);
 
   useEffect(() => {
     if (!selectedCustomer) {
@@ -208,6 +257,31 @@ export default function BookingsPage() {
     setShowCreate(true);
   }, [services.length, resources.length]);
 
+  const activeService = useMemo(
+    () => services.find((item) => item.id === selectedService) ?? null,
+    [services, selectedService]
+  );
+  const activeResource = useMemo(
+    () => resources.find((item) => item.id === selectedResource) ?? null,
+    [resources, selectedResource]
+  );
+  const spaceMode =
+    activeService?.delivery_format === "SELF_PRACTICE" ||
+    activeService?.delivery_format === "RENTAL";
+
+  const eligibleResources = useMemo(() => {
+    if (!activeService) return resources;
+    if (
+      activeService.delivery_format === "SELF_PRACTICE" ||
+      activeService.delivery_format === "RENTAL"
+    ) {
+      return resources.filter((item) =>
+        ["ROOM","HALL","WORKPLACE"].includes(item.type)
+      );
+    }
+    return resources.filter((item) => item.type === "EMPLOYEE");
+  }, [activeService, resources]);
+
   const grouped = useMemo(() => {
     const map = new Map<string, Booking[]>();
 
@@ -251,6 +325,13 @@ export default function BookingsPage() {
         })
       });
 
+      setNotice(
+        selectedPackage
+          ? "Запись создана и посещение зарезервировано по абонементу."
+          : selectedCustomer && Number(activeService?.price_minor ?? "0") > 0
+            ? "Запись создана. Счёт и дебиторка сформированы автоматически."
+            : "Запись создана."
+      );
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать услугу");
@@ -412,7 +493,12 @@ export default function BookingsPage() {
         method: "POST",
         body: JSON.stringify({
           serviceId: selectedService,
-          resourceIds: [selectedResource],
+          resources: [{
+            resourceId: selectedResource,
+            capacityUnits: Number(selectedCapacityUnits || "1"),
+            zoneId: selectedZone || undefined
+          }],
+          deliveryFormat: activeService?.delivery_format,
           startsAt: parsed.toISOString(),
           partyId: selectedCustomer || undefined,
           assetId: selectedAsset || undefined,
@@ -423,6 +509,8 @@ export default function BookingsPage() {
       });
       setShowCreate(false);
       setSelectedStart("");
+      setSelectedZone("");
+      setSelectedCapacityUnits("1");
       setSelectedCustomer("");
       setSelectedAsset("");
       setSelectedPackage("");
@@ -481,6 +569,13 @@ export default function BookingsPage() {
           version: booking.version
         })
       });
+      setNotice(
+        status === "CANCELLED"
+          ? "Запись отменена. Открытый счёт закрыт; если была оплата, создано обязательство на возврат."
+          : status === "COMPLETED"
+            ? "Услуга завершена. Финансы и расходники зафиксированы."
+            : ""
+      );
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось изменить статус");
@@ -491,13 +586,15 @@ export default function BookingsPage() {
     <main className="app-shell">
       <AppSidebar active="bookings" />
 
-      <section className="workspace">
-        <header className="workspace-header">
+      <section className="workspace workspace-wide studio-premium">
+        <header className="studio-hero compact">
           <div>
-            <p className="muted">Сервис / Календарь</p>
+            <span className="studio-eyebrow">Календарь и деньги</span>
             <h1>Записи</h1>
-            <p className="workspace-summary">
-              Услуга резервирует реальную мощность ресурса и не допускает двойную запись.
+            <p>
+              Один экран для визитов, аренды и самостоятельной практики:
+              ресурс резервируется по реальной вместимости, а платная запись
+              сразу формирует счёт.
             </p>
           </div>
 
@@ -510,6 +607,13 @@ export default function BookingsPage() {
             </button>
           </div>
         </header>
+
+        {notice ? (
+          <div className="inline-success">
+            <strong>Готово</strong>
+            <span>{notice}</span>
+          </div>
+        ) : null}
 
         {error ? (
           <div className="inline-error">
@@ -524,17 +628,67 @@ export default function BookingsPage() {
             <p className="muted">Выберите услугу, ресурс и местное время. Доступность проверяется сервером.</p>
             <div className="header-actions" style={{ flexWrap: "wrap" }}>
               <label>Услуга{" "}
-                <select required value={selectedService} onChange={(e) => { setSelectedService(e.target.value); setSelectedStart(""); setAvailableSlots([]); }}>
+                <select required value={selectedService} onChange={(e) => {
+                  setSelectedService(e.target.value);
+                  setSelectedResource("");
+                  setSelectedStart("");
+                  setAvailableSlots([]);
+                }}>
                   <option value="">Выбрать услугу</option>
-                  {services.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.duration_minutes} мин</option>)}
+                  {services.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} · {item.duration_minutes} мин · {money(item.price_minor,item.currency)}
+                    </option>
+                  ))}
                 </select>
               </label>
-              <label>Сотрудник или ресурс{" "}
-                <select required value={selectedResource} onChange={(e) => { setSelectedResource(e.target.value); setSelectedStart(""); setAvailableSlots([]); }}>
-                  <option value="">Выбрать ресурс</option>
-                  {resources.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              <label>{spaceMode ? "Зал / пространство" : "Исполнитель"}{" "}
+                <select required value={selectedResource} onChange={(e) => {
+                  setSelectedResource(e.target.value);
+                  setSelectedStart("");
+                  setAvailableSlots([]);
+                }}>
+                  <option value="">
+                    {spaceMode ? "Выбрать пространство" : "Выбрать сотрудника"}
+                  </option>
+                  {eligibleResources.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                      {spaceMode ? " · вместимость " + item.capacity : ""}
+                    </option>
+                  ))}
                 </select>
               </label>
+              {spaceMode && selectedResource ? (
+                <>
+                  <label>Зона{" "}
+                    <select
+                      value={selectedZone}
+                      onChange={(e) => setSelectedZone(e.target.value)}
+                    >
+                      <option value="">Без зоны / общий ресурс</option>
+                      {resourceZones.map((zone) => (
+                        <option key={zone.id} value={zone.id}>
+                          {zone.name} · {zone.capacity_units} ед.
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>Сколько места занимает{" "}
+                    <input
+                      type="number"
+                      min="1"
+                      max={
+                        selectedZone
+                          ? resourceZones.find((zone) => zone.id === selectedZone)?.capacity_units
+                          : activeResource?.capacity
+                      }
+                      value={selectedCapacityUnits}
+                      onChange={(e) => setSelectedCapacityUnits(e.target.value)}
+                    />
+                  </label>
+                </>
+              ) : null}
               <label>Клиент{" "}
                 <select
                   value={selectedCustomer}
@@ -671,29 +825,95 @@ export default function BookingsPage() {
             <span>Выберите другой период, ресурс или создайте новую запись.</span>
           </div>
         ) : null}
-        {details && (
-          <section className="settings-card">
-            <h2>Визит {details.business_number}</h2>
-            <p>{details.service_name} · {details.party_name ?? "Клиент не указан"}</p>
+        {details ? (
+          <StudioModal
+            eyebrow="Карточка визита"
+            title={details.business_number}
+            description={
+              details.service_name +
+              " · " +
+              (details.party_name ?? "Клиент не указан")
+            }
+            onClose={() => setDetails(null)}
+            footer={
+              <button type="button" onClick={() => setDetails(null)}>
+                Закрыть
+              </button>
+            }
+          >
+            <div className="studio-kpi-grid compact">
+              <article>
+                <span>Стоимость</span>
+                <strong>
+                  {money(details.price_minor_snapshot, details.currency)}
+                </strong>
+                <small>Цена услуги / аренды</small>
+              </article>
+              <article>
+                <span>Счёт</span>
+                <strong>
+                  {details.billing?.invoiceNumber ?? "Не требуется"}
+                </strong>
+                <small>
+                  {details.billing?.invoiceStatus ?? (
+                    details.party_name ? "Без начисления" : "Нет клиента"
+                  )}
+                </small>
+              </article>
+              <article>
+                <span>Оплачено</span>
+                <strong>
+                  {money(
+                    details.billing?.settledMinor ?? "0",
+                    details.currency
+                  )}
+                </strong>
+                <small>
+                  {details.billing?.obligationStatus ?? "Нет дебиторки"}
+                </small>
+              </article>
+            </div>
+
+            <div className="studio-form-section">
+              <header>
+                <strong>Время и ресурсы</strong>
+                <span>
+                  {new Date(details.starts_at).toLocaleString("ru-RU")}
+                </span>
+              </header>
+              <div className="booking-resource-summary">
+                {details.resources.map((item) => (
+                  <div key={item.resourceId}>
+                    <strong>{item.resourceName}</strong>
+                    <span>
+                      {item.zoneName ? item.zoneName + " · " : ""}
+                      {item.capacityUnits} ед. вместимости
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             {details.asset ? (
-              <p>
-                Объект: {details.asset.displayName}
-                {details.asset.registrationNumber
-                  ? " · " + details.asset.registrationNumber
-                  : ""}
-                {details.asset.usageValue
-                  ? " · " + details.asset.usageValue + " " + details.asset.usageUnit
-                  : ""}
-              </p>
+              <div className="studio-form-section">
+                <header>
+                  <strong>Объект клиента</strong>
+                  <span>
+                    {details.asset.displayName}
+                    {details.asset.registrationNumber
+                      ? " · " + details.asset.registrationNumber
+                      : ""}
+                  </span>
+                </header>
+              </div>
             ) : null}
-            <p>{new Date(details.starts_at).toLocaleString("ru-RU")}</p>
-            <p>{details.resources.map((item) => item.resourceName).join(", ")}</p>
-            <p>Статус: {details.status}</p>
-            <p>Стоимость: {money(details.price_minor_snapshot, details.currency)}</p>
-            <p>Это стоимость услуги, не подтверждение оплаты.</p>
-            <button type="button" onClick={() => setDetails(null)}>Закрыть карточку</button>
-          </section>
-        )}
+
+            <div className="studio-form-note">
+              Стоимость и оплата разделены: наличие цены не означает, что деньги
+              получены. Оплата подтверждается только финансовым обязательством.
+            </div>
+          </StudioModal>
+        ) : null}
         <div className="booking-calendar">
           {grouped.map(([date, rows]) => (
             <section className="booking-day" key={date}>
