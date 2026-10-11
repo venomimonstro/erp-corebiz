@@ -27,6 +27,12 @@ export class DanceStudioController {
     return {ok:true,data:await this.studio.access(this.ctx(req))};
   }
 
+  @Get("readiness")
+  @RequirePermission("dance.read")
+  async readiness(@Req() req:AuthenticatedRequest):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.studio.readiness(this.ctx(req))};
+  }
+
   @Get("dashboard")
   @RequirePermission("dance.read")
   async dashboard(@Req() req:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {

@@ -40,6 +40,56 @@ export class DanceStudioService {
       canManageDance:Boolean(danceWrite)};
   }
 
+
+  async readiness(context:TenantContext){
+    await this.requireAll(context,"dance.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{
+        trainers:number;rooms:number;programs:number;groups:number;
+        scheduled:number;plans:number;payroll_profiles:number;
+        branches:number;
+      }>(`SELECT
+        (SELECT count(*)::integer FROM service_resource
+         WHERE tenant_id=$1 AND type='EMPLOYEE' AND status='ACTIVE') AS trainers,
+        (SELECT count(*)::integer FROM service_resource
+         WHERE tenant_id=$1 AND type IN ('ROOM','HALL','WORKPLACE') AND status='ACTIVE') AS rooms,
+        (SELECT count(*)::integer FROM dance_program
+         WHERE tenant_id=$1 AND status='ACTIVE') AS programs,
+        (SELECT count(*)::integer FROM dance_group
+         WHERE tenant_id=$1 AND status='ACTIVE') AS groups,
+        (SELECT count(*)::integer FROM dance_lesson
+         WHERE tenant_id=$1 AND starts_at>=now()
+           AND status IN ('PLANNED','OPEN_FOR_BOOKING')) AS scheduled,
+        (SELECT count(*)::integer FROM service_package_plan
+         WHERE tenant_id=$1 AND status='ACTIVE') AS plans,
+        (SELECT count(*)::integer FROM trainer_payroll_profile
+         WHERE tenant_id=$1 AND status='ACTIVE') AS payroll_profiles,
+        (SELECT count(*)::integer FROM branch
+         WHERE tenant_id=$1 AND status='ACTIVE') AS branches`,[context.tenantId]);
+      const counts=result.rows[0]!;
+      const steps=[
+        {id:"trainer",title:"Добавьте тренера",subtitle:"Укажите расписание работы и ресурсы",
+          href:"/app/dance/setup",count:counts.trainers,required:true},
+        {id:"program",title:"Создайте направление",subtitle:"Название, стоимость, длительность и возраст",
+          href:"/app/dance/groups",count:counts.programs,required:true},
+        {id:"group",title:"Откройте группу",subtitle:"Назначьте тренера, зал, вместимость и дни",
+          href:"/app/dance/groups",count:counts.groups,required:true},
+        {id:"lesson",title:"Сформируйте расписание",subtitle:"Проверьте будущие уроки и запись",
+          href:"/app/dance/groups",count:counts.scheduled,required:true},
+        {id:"package",title:"Настройте абонемент",subtitle:"Количество занятий, срок, цена и заморозка",
+          href:"/app/service/packages",count:counts.plans,required:false},
+        {id:"payroll",title:"Установите оплату тренерам",subtitle:"Оклад, ставка, процент и гарантии",
+          href:"/app/dance/team",count:counts.payroll_profiles,required:false},
+        {id:"room",title:"Укажите зал и филиал",subtitle:"Вместимость, часы работы и стоимость",
+          href:"/app/dance/setup",count:counts.rooms,required:false}
+      ];
+      const ready=steps.filter(x=>x.count>0).length;
+      return {ready,all:steps.length,
+        canLaunch:steps.filter(x=>x.required).every(x=>x.count>0),
+        steps:steps.map(x=>({...x,done:x.count>0}))};
+    });
+  }
+
   async dashboard(context: TenantContext) {
     const scopeIds = await this.scopeIds(context, "dance.read");
     // Trainers need their roster and lessons, not the company's unit economics.
