@@ -148,6 +148,12 @@ export class AutomotiveService {
 
   async createWorkOrder(context:TenantContext,input:any) {
     if(!input.vehicleId) throw new BadRequestException("Выберите автомобиль");
+    if(input.authorizationLimitMinor!==undefined&&input.authorizationLimitMinor!==null){
+      const value=String(input.authorizationLimitMinor);
+      if(!/^\\d{1,15}$/.test(value)||BigInt(value)<=0n)
+        throw new BadRequestException("Согласованный лимит должен быть положительной суммой в копейках");
+    }
+
     return this.database.withTenantTransaction(context,async client=>{
       const vehicle=await client.query<{party_id:string|null}>(
         "SELECT party_id FROM automotive_vehicle WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE' FOR SHARE",
