@@ -12,8 +12,12 @@ const roleId="55555555-5555-4555-8555-555555555555";
 
 describe("RBAC role assignment cannot mint an owner or elevate rights",()=>{
   function harness(args:{role:string;actorOwner:boolean;targetOwner:boolean;
-    elevated?:boolean;targetExists?:boolean}){
+    elevated?:boolean;targetExists?:boolean;manageAll?:boolean}){
     const query=jest.fn(async(sql:string,values:unknown[]=[])=>{
+      if(sql.includes("SELECT 1 FROM membership_role mr")){
+        const ok=args.manageAll!==false;
+        return {rows:ok?[{allowed:1}]:[],rowCount:ok?1:0};
+      }
       if(sql.includes("SELECT id")&&sql.includes("FROM tenant_membership"))
         return {rows:args.targetExists===false?[]:[{id:targetId}],rowCount:args.targetExists===false?0:1};
       if(sql.includes("SELECT code")&&sql.includes("FROM tenant_role"))
@@ -67,4 +71,14 @@ describe("RBAC role assignment cannot mint an owner or elevate rights",()=>{
     await expect(service.assignRole(context,targetId,roleId))
       .rejects.toBeInstanceOf(NotFoundException);
   });
+  it("fails closed when roles.manage is limited to an employee scope",async()=>{
+    const {service,query}=harness({role:"VIEWER",actorOwner:false,
+      targetOwner:false,manageAll:false});
+    await expect(service.assignRole(context,targetId,roleId))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(query.mock.calls.some(x=>String(x[0]).includes("DELETE FROM membership_role")))
+      .toBe(false);
+    await expect(service.list(context)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
 });
