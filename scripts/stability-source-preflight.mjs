@@ -490,7 +490,12 @@ async function inspectRequiredHardening(root) {
       /payroll_accrual_components/,
       /room_rental_statements/,
       /payroll_statement_reviews/,
-      /payroll_statement_review_events/
+      /payroll_statement_review_events/,
+      /accounting_tax_profiles/,
+      /accounting_compliance_obligations/,
+      /accounting_tax_calculations/,
+      /accounting_compliance_packets/,
+      /accounting_tax_payment_classifications/
     ],
     message: "Dance studio tenant export coverage is missing"
   }
