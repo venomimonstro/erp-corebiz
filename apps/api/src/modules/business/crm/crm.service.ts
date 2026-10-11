@@ -5,6 +5,7 @@ import {
   NotFoundException
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
+import { createHash } from "node:crypto";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
 
@@ -415,6 +416,78 @@ export class CrmService {
       };
     });
   }
+  async nextAction(
+    context:TenantContext,dealId:string,
+    input:{title:string;dueAt:string;idempotencyKey:string}
+  ):Promise<{taskId:string;dealId:string;dueAt:string}>{
+    const scope=await this.authorization.resolveScope(context,"crm.write");
+    if(!scope)throw new BadRequestException("Недостаточно прав");
+    const ids=await this.authorization.membershipIdsForScope(context,scope);
+    const title=input?.title?.trim();
+    const key=input?.idempotencyKey?.trim();
+    const time=Date.parse(input?.dueAt??"");
+    if(!title||title.length>240 || !key||key.length<8||key.length>120 ||
+       !Number.isFinite(time)||
+       time<Date.now()-300000 || time>Date.now()+366*86400000){
+      throw new BadRequestException("Укажите действие, срок и ключ запроса");
+    }
+    const iso=new Date(time).toISOString();
+    const fingerprint=createHash("sha256").update(JSON.stringify({title,dueAt:iso}))
+      .digest("hex");
+    return this.database.withTenantTransaction(context,async client=>{
+      const deal=await client.query<{
+        id:string;responsible_membership_id:string|null;
+      }>(
+        `SELECT id,responsible_membership_id FROM crm_deal
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,dealId]);
+      const row=deal.rows[0];
+      if(!row || (ids && (!row.responsible_membership_id ||
+          !ids.includes(row.responsible_membership_id))))
+        throw new NotFoundException("Сделка не найдена");
+      const prior=await client.query<{
+        task_id:string;payload_fingerprint:string;
+      }>(
+        `SELECT task_id,payload_fingerprint FROM crm_next_action
+         WHERE tenant_id=$1 AND deal_id=$2 AND idempotency_key=$3`,
+        [context.tenantId,dealId,key]);
+      if(prior.rows[0]){
+        if(prior.rows[0].payload_fingerprint!==fingerprint)
+          throw new ConflictException(
+            "Ключ действия уже использован для другого содержания");
+        return {taskId:prior.rows[0].task_id,dealId,dueAt:iso};
+      }
+      const task=await client.query<{id:string}>(
+        `INSERT INTO task(
+           tenant_id,title,type,responsible_membership_id,due_at,
+           linked_type,linked_id,created_by_membership_id
+         ) VALUES($1,$2,'FOLLOW_UP',$3,$4,'DEAL',$5,$6) RETURNING id`,
+        [context.tenantId,title,row.responsible_membership_id??context.membershipId,
+          iso,dealId,context.membershipId]);
+      const taskId=task.rows[0]!.id;
+      await client.query(
+        `INSERT INTO crm_next_action(
+           tenant_id,deal_id,task_id,idempotency_key,payload_fingerprint
+         ) VALUES($1,$2,$3,$4,$5)`,
+        [context.tenantId,dealId,taskId,key,fingerprint]);
+      await client.query(
+        `UPDATE crm_deal SET next_action_at=$3,next_action_title=$4,
+           updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,dealId,iso,title]);
+      await client.query(
+        `INSERT INTO crm_activity(
+           tenant_id,deal_id,activity_type,subject,body,due_at,
+           responsible_membership_id,created_by_membership_id,
+           source_type,source_id
+         ) VALUES($1,$2,'TASK',$3,'Назначено следующее действие',$4,$5,$6,'TASK',$7)`,
+        [context.tenantId,dealId,title,iso,
+          row.responsible_membership_id??context.membershipId,
+          context.membershipId,taskId]);
+      return {taskId,dealId,dueAt:iso};
+    });
+  }
+
   async pipelines(context:TenantContext) {
     const scope=await this.authorization.resolveScope(context,"crm.read");
     if(!scope) throw new BadRequestException("Недостаточно прав");
