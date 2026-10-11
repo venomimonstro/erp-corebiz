@@ -225,6 +225,11 @@ export class BillingService {
     context: TenantContext,
     planCode: string
   ): Promise<{ selected: true; planCode: string }> {
+    if (typeof planCode !== "string" ||
+        planCode.length < 1 || planCode.length > 80 ||
+        !/^[A-Z0-9_-]+$/i.test(planCode.trim())) {
+      throw new BadRequestException("Некорректный тариф");
+    }
     const code = planCode.trim().toUpperCase();
 
     return this.database.withTenantTransaction(context, async (client) => {
