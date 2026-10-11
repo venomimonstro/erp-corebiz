@@ -490,7 +490,8 @@ async function inspectRequiredHardening(root) {
     "185_dance_group_room_allocation.sql",
     "185_payroll_payment_lifecycle.sql",
     "186_service_employee_economics.sql",
-    "187_service_payroll_export_lifecycle.sql"
+    "187_service_payroll_export_lifecycle.sql",
+    "188_service_waitlist.sql"
   ];
 
   for (const name of requiredMigrations) {
@@ -524,7 +525,9 @@ async function inspectUniversalServiceEconomics(root) {
         /minimum_guarantee_minor/,
         /finalizePayroll/,
         /exportPayrollToBatch/,
-        /SERVICE_EMPLOYEE_STATEMENT/
+        /SERVICE_EMPLOYEE_STATEMENT/,
+        /service_waitlist_entry/,
+        /service\.waitlist_offer_created/
       ]
     ],
     [
