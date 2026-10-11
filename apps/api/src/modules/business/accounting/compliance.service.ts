@@ -889,7 +889,8 @@ export class ComplianceService {
     return this.database.withTenantTransaction(context,async client=>{
       const obligationResult=await client.query<any>(
         `SELECT
-           o.*,le.inn,coalesce(p.kpp,le.kpp) AS kpp,p.oktmo
+           o.*,le.inn,p.entity_kind,
+           coalesce(p.kpp,le.kpp) AS kpp,p.oktmo
          FROM accounting_compliance_obligation o
          JOIN accounting_tax_profile p
            ON p.tenant_id=o.tenant_id AND p.id=o.tax_profile_id
