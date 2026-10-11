@@ -303,11 +303,16 @@ export class CommercePaymentsService {
           email:string|null;site_slug:string;
         }>(
           `SELECT c.sales_order_id AS order_id,o.total_minor::text AS amount_minor,
-             o.payment_status,p.email,s.public_slug AS site_slug
+             o.payment_status,customer.email,s.public_slug AS site_slug
            FROM storefront_cart c
            JOIN sales_order o ON o.tenant_id=c.tenant_id AND o.id=c.sales_order_id
            JOIN site s ON s.tenant_id=c.tenant_id AND s.id=c.site_id
-           JOIN party p ON p.tenant_id=o.tenant_id AND p.id=o.party_id
+           LEFT JOIN LATERAL (
+             SELECT pc.value AS email FROM party_contact pc
+             WHERE pc.tenant_id=o.tenant_id AND pc.party_id=o.party_id
+               AND pc.type='EMAIL'
+             ORDER BY pc.is_primary DESC,pc.created_at DESC LIMIT 1
+           ) customer ON true
            JOIN commerce_order_delivery d
              ON d.tenant_id=c.tenant_id AND d.sales_order_id=o.id
            WHERE c.tenant_id=$1 AND c.id=$2 AND c.status='CHECKED_OUT'
