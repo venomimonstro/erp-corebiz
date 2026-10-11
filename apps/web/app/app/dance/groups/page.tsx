@@ -26,6 +26,9 @@ type Group = {
   trainer_name: string | null;
   room_resource_id: string | null;
   room_name: string | null;
+  room_zone_id: string | null;
+  room_zone_name: string | null;
+  room_capacity_units: number;
   capacity: number;
   break_even_members: number;
   members: number;
@@ -179,6 +182,8 @@ export default function DanceGroupsPage() {
   const [groupProgramId, setGroupProgramId] = useState("");
   const [groupTrainerId, setGroupTrainerId] = useState("");
   const [groupRoomId, setGroupRoomId] = useState("");
+  const [groupRoomZoneId, setGroupRoomZoneId] = useState("");
+  const [groupRoomCapacityUnits, setGroupRoomCapacityUnits] = useState("1");
   const [groupName, setGroupName] = useState("");
   const [groupCapacity, setGroupCapacity] = useState("14");
   const [groupBreakEven, setGroupBreakEven] = useState("5");
@@ -370,6 +375,8 @@ export default function DanceGroupsPage() {
     setGroupProgramId(program.id);
     setGroupTrainerId(trainers[0]?.id??"");
     setGroupRoomId(rooms[0]?.id??"");
+    setGroupRoomZoneId("");
+    setGroupRoomCapacityUnits("1");
     setGroupName(program.name+" · группа");
     setGroupCapacity("14");
     setGroupBreakEven("5");
@@ -391,6 +398,7 @@ export default function DanceGroupsPage() {
     const trainer=trainers.find((item)=>item.id===groupTrainerId);
     const capacity=Number(groupCapacity);
     const breakEven=Number(groupBreakEven);
+    const roomUnits=Number(groupRoomCapacityUnits);
     const [hours,minutes]=groupTime.split(":").map(Number);
     const startMinute=hours*60+minutes;
     if(!program||!trainer||!groupName.trim()){
@@ -400,6 +408,7 @@ export default function DanceGroupsPage() {
     if(
       !Number.isSafeInteger(capacity)||capacity<1||capacity>500||
       !Number.isSafeInteger(breakEven)||breakEven<1||breakEven>capacity||
+      !Number.isSafeInteger(roomUnits)||roomUnits<1||
       !groupDays.length||!Number.isFinite(startMinute)||startMinute<0||startMinute>1439
     ){
       setError("Проверьте вместимость, break-even и расписание");
@@ -414,6 +423,8 @@ export default function DanceGroupsPage() {
           name:groupName.trim(),
           trainerResourceId:trainer.id,
           roomResourceId:groupRoomId||undefined,
+          roomZoneId:groupRoomZoneId||undefined,
+          roomCapacityUnits:groupRoomId?roomUnits:undefined,
           capacity,
           breakEvenMembers:breakEven,
           schedule:groupDays.map((weekday)=>({
@@ -1359,10 +1370,61 @@ export default function DanceGroupsPage() {
             </div>
             <div className="studio-form-grid">
               <label><span>Тренер</span><select value={groupTrainerId} onChange={(event)=>setGroupTrainerId(event.target.value)}>{trainers.map((trainer)=><option key={trainer.id} value={trainer.id}>{trainer.name}</option>)}</select></label>
-              <label><span>Зал</span><select value={groupRoomId} onChange={(event)=>setGroupRoomId(event.target.value)}><option value="">Без зала</option>{rooms.map((room)=><option key={room.id} value={room.id}>{room.name}</option>)}</select></label>
+              <label>
+                <span>Зал</span>
+                <select
+                  value={groupRoomId}
+                  onChange={(event)=>{
+                    setGroupRoomId(event.target.value);
+                    setGroupRoomZoneId("");
+                    setGroupRoomCapacityUnits("1");
+                  }}
+                >
+                  <option value="">Без зала</option>
+                  {rooms.map((room)=><option key={room.id} value={room.id}>{room.name} · {room.capacity} ед.</option>)}
+                </select>
+              </label>
             </div>
+            {groupRoomId ? (
+              <div className="studio-form-grid">
+                <label>
+                  <span>Зона зала</span>
+                  <select
+                    value={groupRoomZoneId}
+                    onChange={(event)=>{
+                      setGroupRoomZoneId(event.target.value);
+                      setGroupRoomCapacityUnits("1");
+                    }}
+                  >
+                    <option value="">Общий зал / без зоны</option>
+                    {(zones[groupRoomId]??[]).map((zone)=>(
+                      <option key={zone.id} value={zone.id}>
+                        {zone.name} · {zone.capacity_units} ед.
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Сколько пространства закрепить</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max={
+                      (zones[groupRoomId]??[]).find(
+                        (zone)=>zone.id===groupRoomZoneId
+                      )?.capacity_units ??
+                      rooms.find((room)=>room.id===groupRoomId)?.capacity ??
+                      1
+                    }
+                    value={groupRoomCapacityUnits}
+                    onChange={(event)=>setGroupRoomCapacityUnits(event.target.value)}
+                  />
+                  <small>Остальная часть зала останется доступна другим занятиям и арендаторам.</small>
+                </label>
+              </div>
+            ) : null}
             <div className="studio-form-grid">
-              <label><span>Вместимость</span><input type="number" min="1" max="500" value={groupCapacity} onChange={(event)=>setGroupCapacity(event.target.value)} /></label>
+              <label><span>Вместимость группы</span><input type="number" min="1" max="500" value={groupCapacity} onChange={(event)=>setGroupCapacity(event.target.value)} /></label>
               <label><span>Break-even, учеников</span><input type="number" min="1" value={groupBreakEven} onChange={(event)=>setGroupBreakEven(event.target.value)} /></label>
             </div>
             <div className="studio-form-section">
