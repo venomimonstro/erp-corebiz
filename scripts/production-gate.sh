@@ -45,6 +45,28 @@ for binary in psql pg_dump pg_restore node pnpm sha256sum; do
   fi
 done
 
+# Business journey smoke scripts can CREATE orders, transactions and accounts.
+# A production URL must never be accepted as a disposable test target.
+for smoke_var in COREBIZ_SMOKE_BASE_URL COREBIZ_SMOKE_WEB_URL; do
+  smoke_url="${!smoke_var}"
+  if ! node - "$smoke_url" <<'NODE'
+const raw = process.argv[2];
+try {
+  const url = new URL(raw);
+  const allowed = new Set(["localhost", "127.0.0.1", "[::1]"]);
+  if (!["http:", "https:"].includes(url.protocol) ||
+      !allowed.has(url.hostname) ||
+      url.username || url.password) process.exit(1);
+} catch {
+  process.exit(1);
+}
+NODE
+  then
+    echo "[production-gate] BLOCKED: $smoke_var must point to a local loopback staging instance" >&2
+    exit 1
+  fi
+done
+
 EVIDENCE_DIR="${COREBIZ_RELEASE_EVIDENCE_DIR:-./artifacts/release-gate}"
 mkdir -p "$EVIDENCE_DIR"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
