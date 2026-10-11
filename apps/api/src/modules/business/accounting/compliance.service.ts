@@ -582,10 +582,13 @@ export class ComplianceService {
   async preparePacket(context:TenantContext,obligationId:string) {
     return this.database.withTenantTransaction(context,async client=>{
       const obligationResult=await client.query<any>(
-        `SELECT o.*,p.inn,p.kpp,p.oktmo
+        `SELECT
+           o.*,le.inn,coalesce(p.kpp,le.kpp) AS kpp,p.oktmo
          FROM accounting_compliance_obligation o
          JOIN accounting_tax_profile p
            ON p.tenant_id=o.tenant_id AND p.id=o.tax_profile_id
+         JOIN legal_entity le
+           ON le.tenant_id=o.tenant_id AND le.id=o.legal_entity_id
          WHERE o.tenant_id=$1 AND o.id=$2
          FOR UPDATE OF o`,
         [context.tenantId,obligationId]
