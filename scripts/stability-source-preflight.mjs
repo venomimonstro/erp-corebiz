@@ -570,7 +570,9 @@ async function inspectRequiredHardening(root) {
     "193_accounting_tax_automation.sql",
     "193_accounting_compliance_workflow.sql",
     "194_accounting_tax_payment_classification.sql",
-    "195_accounting_signature_evidence.sql"
+    "194_accounting_tax_ledger.sql",
+    "195_accounting_signature_evidence.sql",
+    "196_cash_account_legal_entity.sql"
   ];
 
   for (const name of requiredMigrations) {
