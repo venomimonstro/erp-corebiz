@@ -109,6 +109,60 @@ export class TaxComplianceController {
     };
   }
 
+  @Post("obligations/:id/packet")
+  @RequirePermission("accounting.compliance.manage")
+  async preparePacket(
+    @Req() req:AuthenticatedRequest,
+    @Param("id") id:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.tax.preparePacket(this.ctx(req),id)};
+  }
+
+  @Post("packets/:id/validate")
+  @RequirePermission("accounting.compliance.manage")
+  async validatePacket(
+    @Req() req:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:{valid:boolean;errors?:string[]}
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.tax.validatePacket(this.ctx(req),id,body)};
+  }
+
+  @Post("packets/:id/signature")
+  @RequirePermission("accounting.compliance.approve")
+  async recordSignature(
+    @Req() req:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:{signatureReference:string;certificateFingerprint:string}
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.tax.recordPacketSignature(this.ctx(req),id,body)
+    };
+  }
+
+  @Post("obligations/:id/approve")
+  @RequirePermission("accounting.compliance.approve")
+  async approveObligation(
+    @Req() req:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:{note?:string}
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.tax.approveObligation(this.ctx(req),id,body.note)
+    };
+  }
+
+  @Post("obligations/:id/queue")
+  @RequirePermission("accounting.compliance.approve")
+  async queueSubmission(
+    @Req() req:AuthenticatedRequest,
+    @Param("id") id:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.tax.queueSubmission(this.ctx(req),id)};
+  }
+
   @Post("ens")
   @RequirePermission("accounting.compliance.manage")
   async recordEns(
