@@ -32,3 +32,14 @@ export function availableUnits(
   if(units>BigInt(Number.MAX_SAFE_INTEGER))throw new Error("ATP_OVERFLOW");
   return Number(units);
 }
+
+/** Block increases until previously published quantities on other channels are released. */
+export function conservativeTarget(
+  requested:number,published:number|null,totalPublished:number,physicalAvailable:number
+):number{
+  for(const n of [requested,totalPublished,physicalAvailable])
+    if(!Number.isSafeInteger(n)||n<0)throw new Error("INVALID_STOCK_TARGET");
+  if(published===null)return 0;
+  if(!Number.isSafeInteger(published)||published<0)throw new Error("INVALID_PUBLISHED_STOCK");
+  return Math.min(requested,published+Math.max(0,physicalAvailable-totalPublished));
+}
