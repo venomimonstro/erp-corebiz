@@ -202,16 +202,6 @@ export class AutomotiveService {
           Boolean(input.approved),JSON.stringify(input.metadata??{})
         ]
       );
-      await client.query(
-        `UPDATE automotive_work_order o
-         SET estimated_total_minor=coalesce((
-           SELECT sum((l.unit_price_minor*l.quantity_milli+999)/1000)
-           FROM automotive_work_order_line l
-           WHERE l.tenant_id=o.tenant_id AND l.work_order_id=o.id
-         ),0),updated_at=now()
-         WHERE o.tenant_id=$1 AND o.id=$2`,
-        [context.tenantId,workOrderId]
-      );
       return result.rows[0];
     });
   }
@@ -388,8 +378,9 @@ export class AutomotiveService {
       if(["DELIVERED","CANCELLED"].includes(row.order_status)){
         throw new BadRequestException("Закрытый заказ-наряд изменять нельзя");
       }
-      if(input.completed===true&&input.approved===false){
-        throw new BadRequestException("Нельзя завершить неподтверждённую строку");
+      const effectiveApproved=input.approved??Boolean(row.approved);
+      if(input.completed===true&&!effectiveApproved){
+        throw new BadRequestException("Сначала согласуйте позицию с клиентом");
       }
       const result=await client.query(
         `UPDATE automotive_work_order_line
