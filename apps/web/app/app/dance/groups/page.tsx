@@ -658,43 +658,39 @@ export default function DanceGroupsPage() {
 
   async function changeMember(
     member: Roster["members"][number],
-    status: "ACTIVE" | "PAUSED" | "LEFT"
+    status: "ACTIVE" | "PAUSED" | "LEFT",
+    releasePlace = false
   ) {
-    if (!selectedGroup) return;
-    let keepPlace: boolean | undefined;
-    if (status === "PAUSED") {
-      keepPlace = window.confirm(
-        "Сохранить место в группе на время паузы? OK = сохранить, Отмена = освободить."
-      );
+    if(!selectedGroup||pending)return;
+    let keepPlace:boolean|undefined;
+    if(status==="PAUSED"){
+      if(!window.confirm(releasePlace
+        ?"Освободить место этого ученика? Его будущие занятия будут отменены, а место может перейти следующему из списка ожидания."
+        :"Поставить ученика на паузу, сохранив место в группе? Будущие записи будут сняты."
+      ))return;
+      keepPlace=!releasePlace;
     }
-    if (
-      status === "LEFT" &&
-      !window.confirm("Вывести ученика из группы и снять будущие записи?")
-    ) {
-      return;
-    }
-
-    try {
-      const result = await apiRequest<{
-        promoted?: { student_id?: string } | null;
-      }>(
-        `/dance/groups/${selectedGroup.id}/members/${member.id}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ status, keepPlace })
+    if(status==="LEFT"&&!window.confirm(
+      "Вывести ученика из группы? Все его будущие занятия и связанные резервы будут отменены."
+    ))return;
+    setPending(true);setError("");setNotice("");
+    try{
+      const result=await apiRequest<{promoted?:{student_id?:string}|null}>(
+        `/dance/groups/${selectedGroup.id}/members/${member.id}`,{
+          method:"PATCH",body:JSON.stringify({status,keepPlace})
         }
       );
-      if (result.promoted) {
-        setNotice("Свободное место передано первому ученику из листа ожидания.");
-      }
+      setNotice(result.promoted
+        ?"Изменение сохранено. Свободное место передано следующему ученику в ожидании."
+        :"Статус ученика обновлён. Будущие занятия и резервы синхронизированы.");
       await load();
       await loadRoster(selectedGroup.id);
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Не удалось изменить участие"
-      );
-    }
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось изменить участие");
+      await loadRoster(selectedGroup.id);
+    }finally{setPending(false);}
   }
+
 
   function openGenerateModal() {
     if(!selectedGroup)return;
@@ -1144,8 +1140,13 @@ export default function DanceGroupsPage() {
                           <button onClick={() => void changeMember(member, "ACTIVE")} type="button">Вернуть</button>
                         ) : null}
                         {canManageDance&&member.status === "ACTIVE" ? (
-                          <button className="secondary-button" onClick={() => void changeMember(member, "PAUSED")} type="button">Пауза</button>
+                          <button className="secondary-button" disabled={pending}
+                            onClick={() => void changeMember(member, "PAUSED")} type="button">Пауза</button>
                         ) : null}
+                        {canManageDance&&member.status==="PAUSED"&&member.reserved_place ? (
+                          <button className="secondary-button" disabled={pending}
+                            onClick={()=>void changeMember(member,"PAUSED",true)} type="button">Освободить место</button>
+                        ):null}
                         {canManageDance&&member.status !== "LEFT" ? (
                           <button className="secondary-button" onClick={() => void changeMember(member, "LEFT")} type="button">Вывести</button>
                         ) : null}
