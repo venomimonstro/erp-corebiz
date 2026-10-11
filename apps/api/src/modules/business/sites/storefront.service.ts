@@ -638,8 +638,8 @@ export class StorefrontService {
 
   /**
    * Tenant-scoped launch checklist. This is deliberately NOT a payment-gateway
-   * health check: no online acquiring, fiscal receipt or carrier integration
-   * is currently configured by the storefront.
+   * health check: merchant settings do not prove payment/fiscal
+   * provider connectivity or HTTPS reachability. This is fail-closed.
    */
   async readiness(context:TenantContext,siteId:string):Promise<Record<string,unknown>>{
     const result=await this.database.withTenantTransaction(context,async client=>
@@ -651,6 +651,9 @@ export class StorefrontService {
         priced_sku:boolean;
         available_sku:boolean;
         primary_domain:string|null;
+        acquiring_configured:boolean;
+        fiscal_configured:boolean;
+        delivery_configured:boolean;
       }>(
         `SELECT s.public_slug,
            EXISTS (
@@ -700,6 +703,19 @@ export class StorefrontService {
                AND COALESCE(ip.enabled,true)
                AND b.physical_milli-b.reserved_milli-COALESCE(ip.safety_stock_milli,0)>0
            ) AS available_sku,
+           EXISTS (
+             SELECT 1 FROM commerce_merchant_config m
+             WHERE m.tenant_id=s.tenant_id AND m.site_id=s.id AND m.enabled
+           ) AS acquiring_configured,
+           EXISTS (
+             SELECT 1 FROM commerce_merchant_config m
+             WHERE m.tenant_id=s.tenant_id AND m.site_id=s.id
+               AND m.enabled AND m.fiscal_enabled
+           ) AS fiscal_configured,
+           EXISTS (
+             SELECT 1 FROM commerce_delivery_method m
+             WHERE m.tenant_id=s.tenant_id AND m.site_id=s.id AND m.active
+           ) AS delivery_configured,
            (
              SELECT d.hostname FROM site_domain d
              WHERE d.tenant_id=s.tenant_id AND d.site_id=s.id
@@ -726,7 +742,16 @@ export class StorefrontService {
       {code:"AVAILABLE_STOCK",title:"Есть доступные к заказу остатки",done:site.available_sku,
         action:"Примите товар на склад и проверьте резервы и страховой запас."},
       {code:"CUSTOM_DOMAIN",title:"Собственный домен активирован",done:Boolean(site.primary_domain),
-        action:"Добавьте домен, подтвердите владение TXT-записью и активируйте."}
+        action:"Добавьте домен, подтвердите владение TXT-записью и активируйте."},
+      {code:"ACQUIRING_CONFIGURED",title:"Указаны реквизиты эквайринга продавца",
+        done:site.acquiring_configured,
+        action:"Откройте «Оплата и доставка», подключите свой магазин YooKassa."},
+      {code:"FISCAL_CONFIGURED",title:"Подтверждены настройки передачи чеков",
+        done:site.fiscal_configured,
+        action:"Подключите ККТ и укажите налоговый режим и ставку НДС."},
+      {code:"DELIVERY_CONFIGURED",title:"Настроен хотя бы один способ получения",
+        done:site.delivery_configured,
+        action:"Добавьте самовывоз или курьера магазина с фиксированным тарифом."}
     ];
     const canTestOrders=checks.slice(0,5).every(check=>check.done);
     return {
@@ -736,10 +761,10 @@ export class StorefrontService {
       canTestOrders,
       canLaunchWithOnlinePayments:false,
       externalBlockers:[
-        "Требуется подключение и тестирование эквайринга, подтверждения оплаты и возвратов.",
-        "Требуется подключение способов доставки, расчёта тарифа и передачи отправлений.",
-        "Для расчётов в РФ необходимы проверка требований 54-ФЗ, ККТ и отправки чеков.",
-        "DNS маршрутизация на сервер магазина и действующий HTTPS-сертификат подтверждаются отдельно."
+        "Платёжные реквизиты и настройки нужно проверить на тестовом и затем реальном платеже с PSP webhook.",
+        "Доставка внешними перевозчиками и ПВЗ пока не подключена; доступны самовывоз и локальный курьер.",
+        "Для товаров с предоплатой может понадобиться дополнительный чек зачёта при передаче товара. Требуется проверка 54-ФЗ и ККТ.",
+        "Проверка DNS, HTTPS, возврата денег и повторных вебхуков выполняется на стенде отдельно."
       ]
     };
   }
