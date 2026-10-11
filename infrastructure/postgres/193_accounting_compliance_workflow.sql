@@ -65,15 +65,15 @@ CREATE TABLE accounting_compliance_packet (
   UNIQUE(tenant_id,obligation_id,packet_kind)
 );
 
+ALTER TABLE accounting_compliance_packet
+  ADD CONSTRAINT accounting_compliance_packet_tenant_id_uq
+  UNIQUE(tenant_id,id);
+
 ALTER TABLE accounting_compliance_obligation
   ADD CONSTRAINT accounting_compliance_obligation_packet_fk
   FOREIGN KEY(tenant_id,packet_id)
   REFERENCES accounting_compliance_packet(tenant_id,id)
   DEFERRABLE INITIALLY DEFERRED;
-
-ALTER TABLE accounting_compliance_packet
-  ADD CONSTRAINT accounting_compliance_packet_tenant_id_uq
-  UNIQUE(tenant_id,id);
 
 CREATE TABLE accounting_compliance_receipt (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
