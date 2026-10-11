@@ -279,7 +279,7 @@ function quoteIdentifier(value: string): string {
 }
 
 
-async function* readEntity(
+export async function* readEntity(
   client:PoolClient,tenantId:string,entity:ExportEntity
 ):AsyncGenerator<Record<string,unknown>[]>{
   if(!(await tableExists(client,entity.table))||
