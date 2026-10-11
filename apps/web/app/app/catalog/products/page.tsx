@@ -14,12 +14,13 @@ type ProductRow = {
   sku: string;
   barcode: string | null;
   salePriceMinor: string;
-  costPriceMinor: string;
+  costPriceMinor: string | null;
   currency: string;
   trackInventory: boolean;
 };
 
-function money(value: string, currency: string): string {
+function money(value: string | null, currency: string): string {
+  if(value===null)return "—";
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
     currency,
@@ -28,26 +29,34 @@ function money(value: string, currency: string): string {
 }
 
 export default function ProductsPage() {
-  const [items, setItems] = useState<ProductRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [items,setItems]=useState<ProductRow[]>([]);
+  const [loading,setLoading]=useState(true);
+  const [nextPageLoading,setNextPageLoading]=useState(false);
+  const [error,setError]=useState("");
+  const [cursor,setCursor]=useState<string|null>(null);
+  const [hasMore,setHasMore]=useState(false);
+  const [search,setSearch]=useState("");
+  const [activeSearch,setActiveSearch]=useState("");
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load=useCallback(async(nextCursor:string|null=null,query=activeSearch)=>{
+    if(nextCursor)setNextPageLoading(true);else setLoading(true);
     setError("");
+    try{
+      const qs=new URLSearchParams({limit:"100"});
+      if(nextCursor)qs.set("cursor",nextCursor);
+      if(query.trim())qs.set("q",query.trim());
+      const page=await apiRequest<{
+        items:ProductRow[];nextCursor:string|null;hasMore:boolean
+      }>("/catalog/products/page?"+qs.toString());
+      setItems(current=>nextCursor?[...current,...page.items]:page.items);
+      setCursor(page.nextCursor);
+      setHasMore(page.hasMore);
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось загрузить каталог");
+    }finally{setLoading(false);setNextPageLoading(false);}
+  },[activeSearch]);
 
-    try {
-      setItems(await apiRequest<ProductRow[]>("/catalog/products"));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось загрузить товары");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(()=>{void load();},[load]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -92,7 +101,7 @@ export default function ProductsPage() {
           kind: "STOCKABLE"
         })
       });
-      await load();
+      await load(null,activeSearch);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать товар");
     }
@@ -107,10 +116,26 @@ export default function ProductsPage() {
           <div>
             <p className="muted">Каталог / ERP Core</p>
             <h1>Товары</h1>
-            <p className="workspace-summary">{items.length} SKU</p>
+            <p className="workspace-summary">Загружено SKU: {items.length}
+              {hasMore?" · есть следующая страница":""}</p>
           </div>
           <button onClick={quickCreate} type="button">+ Товар</button>
         </header>
+
+        <form onSubmit={event=>{
+          event.preventDefault();
+          const q=search.trim();
+          if(q.length>0&&q.length<3){setError("Поиск от 3 символов");return;}
+          setActiveSearch(q);
+          if(activeSearch===q)void load(null,q);
+        }} className="catalog-search-strip">
+          <input type="search" aria-label="Найти товар по названию, SKU или штрихкоду"
+            placeholder="Поиск по SKU, штрихкоду или названию (от 3 символов)"
+            value={search} onChange={e=>setSearch(e.target.value)}/>
+          <button type="submit" disabled={loading||nextPageLoading}>Найти</button>
+          {activeSearch?<button type="button" className="secondary-button"
+            onClick={()=>{setSearch("");setActiveSearch("");}}>Очистить</button>:null}
+        </form>
 
         {error ? (
           <div className="inline-error">
@@ -136,8 +161,8 @@ export default function ProductsPage() {
               </thead>
               <tbody>
                 {items.map((item) => {
-                  const margin =
-                    Number(item.salePriceMinor) - Number(item.costPriceMinor);
+                  const margin=item.costPriceMinor===null
+                    ?null:Number(item.salePriceMinor)-Number(item.costPriceMinor);
 
                   return (
                     <tr key={item.skuId}>
@@ -150,7 +175,7 @@ export default function ProductsPage() {
                       <td>{item.sku}</td>
                       <td>{money(item.salePriceMinor, item.currency)}</td>
                       <td>{money(item.costPriceMinor, item.currency)}</td>
-                      <td>{money(String(margin), item.currency)}</td>
+                      <td>{money(margin===null?null:String(margin), item.currency)}</td>
                       <td>{item.trackInventory ? "Да" : "Нет"}</td>
                     </tr>
                   );
@@ -170,6 +195,13 @@ export default function ProductsPage() {
             </table>
           </div>
         ) : null}
+        {hasMore&&!loading?<div className="catalog-more">
+          <button type="button" className="secondary-button" disabled={nextPageLoading}
+            onClick={()=>{if(cursor)void load(cursor,activeSearch);}}>
+            {nextPageLoading?"Загружаем…":"Показать ещё 100 SKU"}
+          </button>
+          <span>Каталог загружается страницами, без выгрузки всей базы в браузер.</span>
+        </div>:null}
       </section>
     </main>
   );
