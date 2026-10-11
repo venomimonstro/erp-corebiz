@@ -78,6 +78,15 @@ type Economics={
     employee_cost_minor:string;
     margin_minor:string;
   }>;
+  retentionAlerts:Array<{
+    party_id:string;
+    party_name:string;
+    service_id:string;
+    service_name:string;
+    last_completed_at:string;
+    target_at:string;
+    overdue_days:number;
+  }>;
 };
 
 type Balance={
@@ -384,6 +393,60 @@ export default function ServiceHomePage(){
             </div>
           </article>
         </section>
+
+        {(economics?.retentionAlerts.length??0)>0?(
+          <section className="studio-section">
+            <div className="studio-section-head">
+              <div>
+                <span>Возврат клиентов</span>
+                <h2>Кому уже пора вернуться</h2>
+                <p>
+                  Только клиенты без будущей записи на ту же услугу.
+                  Срок считается от последнего завершённого визита.
+                </p>
+              </div>
+              <a className="secondary-button" href="/app/crm">
+                Клиенты
+              </a>
+            </div>
+            <div className="studio-rule-grid">
+              {(economics?.retentionAlerts??[]).slice(0,12).map(item=>(
+                <article
+                  className="studio-rule-card"
+                  key={item.party_id+"|"+item.service_id}
+                >
+                  <header>
+                    <div>
+                      <span className="studio-chip">
+                        {item.overdue_days>0
+                          ?"просрочено "+item.overdue_days+" дн."
+                          :"пора записать"}
+                      </span>
+                      <h3>{item.party_name}</h3>
+                      <p>{item.service_name}</p>
+                    </div>
+                    <strong>
+                      {new Date(item.target_at).toLocaleDateString("ru-RU",{
+                        day:"2-digit",month:"short"
+                      })}
+                    </strong>
+                  </header>
+                  <footer>
+                    <span>
+                      Был{" "}
+                      {new Date(item.last_completed_at).toLocaleDateString(
+                        "ru-RU",{day:"2-digit",month:"short"}
+                      )}
+                    </span>
+                    <a href="/app/service/bookings?create=1">
+                      Записать →
+                    </a>
+                  </footer>
+                </article>
+              ))}
+            </div>
+          </section>
+        ):null}
 
         {analytics?(
           <section className="studio-section">
