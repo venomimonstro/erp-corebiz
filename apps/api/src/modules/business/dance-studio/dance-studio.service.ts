@@ -18,7 +18,8 @@ type LessonType =
   | "MASTER_CLASS"
   | "OPEN_CLASS"
   | "REHEARSAL"
-  | "RENTAL_EVENT";
+  | "RENTAL_EVENT"
+  | "SELF_PRACTICE";
 
 @Injectable()
 export class DanceStudioService {
