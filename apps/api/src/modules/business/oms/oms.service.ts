@@ -175,12 +175,13 @@ export class OmsService {
            COALESCE(b.reserved_milli,0)::text AS reserved_milli,
            COALESCE(ip.safety_stock_milli,0)::text AS safety_stock_milli,
            COALESCE(ip.sourcing_priority,100)::int AS sourcing_priority,
-           GREATEST(
-             COALESCE(b.physical_milli,0)
-             - COALESCE(b.reserved_milli,0)
-             - COALESCE(ip.safety_stock_milli,0),
-             0
-           )::text AS atp_milli
+           COALESCE(ip.enabled,true) AS sourcing_enabled,
+           CASE WHEN COALESCE(ip.enabled,true)=false THEN '0'
+             ELSE GREATEST(
+               COALESCE(b.physical_milli,0)
+               - COALESCE(b.reserved_milli,0)
+               - COALESCE(ip.safety_stock_milli,0),0
+             )::text END AS atp_milli
          FROM warehouse w
          CROSS JOIN sku s
          LEFT JOIN warehouse_wms_profile wp
@@ -200,7 +201,6 @@ export class OmsService {
            AND s.status='ACTIVE'
            AND s.track_inventory=true
            AND ($2::uuid IS NULL OR s.id=$2)
-           AND COALESCE(ip.enabled,true)=true
            -- Mixed 3PL stock belongs to individual owners. The unscoped
            -- ATP endpoint must never advertise another client's inventory.
            AND (wp.owner_tracking_state IS DISTINCT FROM 'OWNER_LEDGER')

@@ -60,6 +60,7 @@ type Atp = {
   reserved_milli: string;
   safety_stock_milli: string;
   sourcing_priority: number;
+  sourcing_enabled:boolean;
   atp_milli: string;
 };
 
@@ -162,6 +163,26 @@ export default function OmsPage() {
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось сохранить политику");
+    }
+  }
+
+  async function toggleSourcing(row:Atp){
+    const next=!row.sourcing_enabled;
+    if(!window.confirm(next
+      ?"Разрешить новые резервы этого товара на выбранном складе? Проверьте фактические остатки."
+      :"Остановить новые резервы этого товара? Уже оформленные заказы и складские резервы сохранятся."
+    ))return;
+    setError("");
+    try{
+      await apiRequest("/oms/policies",{
+        method:"POST",
+        body:JSON.stringify({
+          warehouseId:row.warehouse_id,skuId:row.sku_id,enabled:next
+        })
+      });
+      await load();
+    }catch(error){
+      setError(error instanceof Error?error.message:"Не удалось изменить доступность");
     }
   }
 
@@ -360,7 +381,10 @@ export default function OmsPage() {
                     <td>{qty(row.physical_milli)}</td>
                     <td>{qty(row.reserved_milli)}</td>
                     <td>{qty(row.safety_stock_milli)}</td>
-                    <td><strong>{qty(row.atp_milli)}</strong></td>
+                    <td>
+                      <strong>{qty(row.atp_milli)}</strong>
+                      {!row.sourcing_enabled?<small>Продажи отключены</small>:null}
+                    </td>
                     <td>{row.sourcing_priority}</td>
                     <td className="table-actions">
                       <button
@@ -369,6 +393,10 @@ export default function OmsPage() {
                         type="button"
                       >
                         Политика
+                      </button>
+                      <button className="secondary-button"
+                        onClick={()=>void toggleSourcing(row)} type="button">
+                        {row.sourcing_enabled?"Приостановить":"Возобновить"}
                       </button>
                     </td>
                   </tr>
