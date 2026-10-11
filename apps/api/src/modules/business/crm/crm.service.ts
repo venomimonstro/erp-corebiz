@@ -415,4 +415,414 @@ export class CrmService {
       };
     });
   }
+  async pipelines(context:TenantContext) {
+    const scope=await this.authorization.resolveScope(context,"crm.read");
+    if(!scope) throw new BadRequestException("Недостаточно прав");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           p.id,p.name,p.is_default,p.status,
+           coalesce(json_agg(json_build_object(
+             'id',s.id,'name',s.name,'kind',s.kind,
+             'position',s.position,'probability',s.probability,'color',s.color
+           ) ORDER BY s.position) FILTER (WHERE s.id IS NOT NULL),'[]'::json) AS stages
+         FROM crm_pipeline p
+         LEFT JOIN crm_stage s
+           ON s.tenant_id=p.tenant_id AND s.pipeline_id=p.id
+         WHERE p.tenant_id=$1 AND p.status='ACTIVE'
+         GROUP BY p.id
+         ORDER BY p.is_default DESC,p.created_at`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async createPipeline(
+    context:TenantContext,
+    input:{
+      name:string;
+      stages?:Array<{name:string;probability?:number;color?:string}>;
+    }
+  ) {
+    const scope=await this.authorization.resolveScope(context,"crm.write");
+    if(scope!=="all"){
+      throw new BadRequestException("Создание воронок доступно администратору CRM");
+    }
+    const name=input.name?.trim();
+    if(!name||name.length>120){
+      throw new BadRequestException("Некорректное название воронки");
+    }
+    const stages=(input.stages?.length?input.stages:[
+      {name:"Новая",probability:10},
+      {name:"Квалификация",probability:25},
+      {name:"КП / оценка",probability:50},
+      {name:"Переговоры",probability:75}
+    ]).slice(0,20);
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const pipeline=await client.query<{id:string}>(
+        `INSERT INTO crm_pipeline(tenant_id,name,is_default)
+         VALUES($1,$2,false) RETURNING id`,
+        [context.tenantId,name]
+      );
+      const id=pipeline.rows[0]!.id;
+      let position=10;
+      for(const stage of stages){
+        const stageName=stage.name?.trim();
+        if(!stageName) continue;
+        const probability=Math.max(0,Math.min(100,Math.floor(stage.probability??0)));
+        await client.query(
+          `INSERT INTO crm_stage(
+             tenant_id,pipeline_id,name,kind,position,probability,color
+           ) VALUES($1,$2,$3,'NORMAL',$4,$5,$6)`,
+          [
+            context.tenantId,id,stageName,position,probability,
+            stage.color?.trim()||null
+          ]
+        );
+        position+=10;
+      }
+      await client.query(
+        `INSERT INTO crm_stage(
+           tenant_id,pipeline_id,name,kind,position,probability,color
+         ) VALUES
+           ($1,$2,'Успешно','WON',900,100,'#10B981'),
+           ($1,$2,'Проиграно','LOST',1000,0,'#EF4444')`,
+        [context.tenantId,id]
+      );
+      return {id};
+    });
+  }
+
+  async dealDetails(context:TenantContext,dealId:string) {
+    const scope=await this.authorization.resolveScope(context,"crm.read");
+    if(!scope) throw new BadRequestException("Недостаточно прав");
+    const scoped=await this.authorization.membershipIdsForScope(context,scope);
+    return this.database.withTenantTransaction(context,async client=>{
+      const deal=await client.query<any>(
+        `SELECT
+           d.*,p.display_name AS party_name,
+           s.name AS stage_name,s.kind AS stage_kind,
+           pl.name AS pipeline_name,
+           tm.user_id AS responsible_user_id
+         FROM crm_deal d
+         JOIN crm_stage s
+           ON s.tenant_id=d.tenant_id AND s.id=d.stage_id
+         JOIN crm_pipeline pl
+           ON pl.tenant_id=d.tenant_id AND pl.id=d.pipeline_id
+         LEFT JOIN party p
+           ON p.tenant_id=d.tenant_id AND p.id=d.party_id
+         LEFT JOIN tenant_membership tm
+           ON tm.tenant_id=d.tenant_id AND tm.id=d.responsible_membership_id
+         WHERE d.tenant_id=$1 AND d.id=$2
+           AND (
+             $3::uuid[] IS NULL
+             OR d.responsible_membership_id=ANY($3::uuid[])
+           )`,
+        [context.tenantId,dealId,scoped]
+      );
+      const row=deal.rows[0];
+      if(!row) throw new NotFoundException("Сделка не найдена");
+
+      const [contacts,tags,notes,activities,tasks,history]=await Promise.all([
+        row.party_id?client.query(
+          `SELECT id,type,value,label,is_primary
+           FROM party_contact
+           WHERE tenant_id=$1 AND party_id=$2
+           ORDER BY is_primary DESC,created_at`,
+          [context.tenantId,row.party_id]
+        ):Promise.resolve({rows:[]}),
+        client.query(
+          `SELECT t.id,t.name,t.color
+           FROM crm_deal_tag dt
+           JOIN crm_tag t ON t.tenant_id=dt.tenant_id AND t.id=dt.tag_id
+           WHERE dt.tenant_id=$1 AND dt.deal_id=$2
+           ORDER BY t.name`,
+          [context.tenantId,dealId]
+        ),
+        client.query(
+          `SELECT id,body,pinned,created_by_membership_id,created_at,updated_at
+           FROM crm_note
+           WHERE tenant_id=$1 AND deal_id=$2
+           ORDER BY pinned DESC,created_at DESC
+           LIMIT 200`,
+          [context.tenantId,dealId]
+        ),
+        client.query(
+          `SELECT *
+           FROM crm_activity
+           WHERE tenant_id=$1 AND deal_id=$2
+           ORDER BY happened_at DESC,id DESC
+           LIMIT 300`,
+          [context.tenantId,dealId]
+        ),
+        client.query(
+          `SELECT
+             id,title,type,state,priority,responsible_membership_id,
+             due_at,completed_at,description
+           FROM task
+           WHERE tenant_id=$1 AND linked_type='DEAL' AND linked_id=$2
+           ORDER BY
+             CASE state WHEN 'DONE' THEN 1 WHEN 'CANCELLED' THEN 2 ELSE 0 END,
+             due_at NULLS LAST,created_at DESC
+           LIMIT 200`,
+          [context.tenantId,dealId]
+        ),
+        client.query(
+          `SELECT
+             h.id,h.from_stage_id,h.to_stage_id,
+             fs.name AS from_stage_name,ts.name AS to_stage_name,
+             h.actor_membership_id,h.created_at
+           FROM crm_deal_stage_history h
+           LEFT JOIN crm_stage fs
+             ON fs.tenant_id=h.tenant_id AND fs.id=h.from_stage_id
+           JOIN crm_stage ts
+             ON ts.tenant_id=h.tenant_id AND ts.id=h.to_stage_id
+           WHERE h.tenant_id=$1 AND h.deal_id=$2
+           ORDER BY h.created_at DESC
+           LIMIT 100`,
+          [context.tenantId,dealId]
+        )
+      ]);
+
+      return {
+        deal:row,
+        contacts:contacts.rows,
+        tags:tags.rows,
+        notes:notes.rows,
+        activities:activities.rows,
+        tasks:tasks.rows,
+        history:history.rows
+      };
+    });
+  }
+
+  async updateDeal(
+    context:TenantContext,
+    dealId:string,
+    input:{
+      title?:string;
+      amountMinor?:string;
+      priority?:"LOW"|"NORMAL"|"HIGH"|"URGENT";
+      leadScore?:number;
+      nextActionAt?:string|null;
+      nextActionTitle?:string|null;
+      expectedCloseDate?:string|null;
+      responsibleMembershipId?:string;
+      version:number;
+    }
+  ) {
+    const scope=await this.authorization.resolveScope(context,"crm.write");
+    if(!scope) throw new BadRequestException("Недостаточно прав");
+    const scoped=await this.authorization.membershipIdsForScope(context,scope);
+    if(!Number.isSafeInteger(input.version)||input.version<1){
+      throw new BadRequestException("Некорректная версия сделки");
+    }
+    if(input.amountMinor!==undefined&&!/^\d+$/.test(input.amountMinor)){
+      throw new BadRequestException("Некорректная сумма");
+    }
+    if(input.leadScore!==undefined&&(
+      !Number.isSafeInteger(input.leadScore)||input.leadScore<0||input.leadScore>100
+    )){
+      throw new BadRequestException("Lead score должен быть от 0 до 100");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const current=await client.query<any>(
+        `SELECT *
+         FROM crm_deal
+         WHERE tenant_id=$1 AND id=$2
+           AND ($3::uuid[] IS NULL OR responsible_membership_id=ANY($3::uuid[]))
+         FOR UPDATE`,
+        [context.tenantId,dealId,scoped]
+      );
+      const deal=current.rows[0];
+      if(!deal) throw new NotFoundException("Сделка не найдена");
+      if(Number(deal.version)!==input.version){
+        throw new ConflictException("Сделка уже изменена другим пользователем");
+      }
+      if(input.responsibleMembershipId&&scoped&&
+         !scoped.includes(input.responsibleMembershipId)){
+        throw new BadRequestException("Ответственный сотрудник недоступен");
+      }
+
+      const result=await client.query(
+        `UPDATE crm_deal
+         SET title=coalesce($3,title),
+             amount_minor=coalesce($4::bigint,amount_minor),
+             priority=coalesce($5,priority),
+             lead_score=coalesce($6,lead_score),
+             next_action_at=$7,
+             next_action_title=$8,
+             expected_close_date=$9::date,
+             responsible_membership_id=coalesce($10::uuid,responsible_membership_id),
+             version=version+1,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING *`,
+        [
+          context.tenantId,dealId,input.title?.trim()||null,
+          input.amountMinor??null,input.priority??null,
+          input.leadScore??null,
+          input.nextActionAt===undefined?deal.next_action_at:input.nextActionAt,
+          input.nextActionTitle===undefined?deal.next_action_title:
+            input.nextActionTitle?.trim()||null,
+          input.expectedCloseDate===undefined?deal.expected_close_date:
+            input.expectedCloseDate,
+          input.responsibleMembershipId??null
+        ]
+      );
+      return result.rows[0];
+    });
+  }
+
+  async addNote(
+    context:TenantContext,
+    dealId:string,
+    input:{body:string;pinned?:boolean}
+  ){
+    const scope=await this.authorization.resolveScope(context,"crm.write");
+    if(!scope) throw new BadRequestException("Недостаточно прав");
+    const body=input.body?.trim();
+    if(!body) throw new BadRequestException("Введите текст заметки");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `INSERT INTO crm_note(
+           tenant_id,deal_id,body,pinned,created_by_membership_id
+         ) VALUES($1,$2,$3,$4,$5)
+         RETURNING *`,
+        [context.tenantId,dealId,body,Boolean(input.pinned),context.membershipId]
+      );
+      await client.query(
+        `INSERT INTO crm_activity(
+           tenant_id,deal_id,activity_type,subject,body,
+           created_by_membership_id
+         ) VALUES($1,$2,'NOTE','Заметка',$3,$4)`,
+        [context.tenantId,dealId,body,context.membershipId]
+      );
+      return result.rows[0];
+    });
+  }
+
+  async addActivity(
+    context:TenantContext,
+    dealId:string,
+    input:{
+      activityType:"CALL"|"EMAIL"|"MEETING"|"MESSAGE"|"TASK";
+      direction?:"INBOUND"|"OUTBOUND";
+      subject?:string;
+      body?:string;
+      happenedAt?:string;
+      dueAt?:string;
+    }
+  ){
+    const scope=await this.authorization.resolveScope(context,"crm.write");
+    if(!scope) throw new BadRequestException("Недостаточно прав");
+    if(!["CALL","EMAIL","MEETING","MESSAGE","TASK"].includes(input.activityType)){
+      throw new BadRequestException("Некорректный тип активности");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const deal=await client.query<any>(
+        "SELECT party_id,responsible_membership_id FROM crm_deal WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,dealId]
+      );
+      const row=deal.rows[0];
+      if(!row) throw new NotFoundException("Сделка не найдена");
+      const happened=input.happenedAt?new Date(input.happenedAt):new Date();
+      const due=input.dueAt?new Date(input.dueAt):null;
+      if(Number.isNaN(happened.getTime())||(due&&Number.isNaN(due.getTime()))){
+        throw new BadRequestException("Некорректная дата активности");
+      }
+      const activity=await client.query(
+        `INSERT INTO crm_activity(
+           tenant_id,deal_id,party_id,activity_type,direction,
+           subject,body,happened_at,due_at,responsible_membership_id,
+           created_by_membership_id
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         RETURNING *`,
+        [
+          context.tenantId,dealId,row.party_id,input.activityType,
+          input.direction??null,input.subject?.trim()||null,
+          input.body?.trim()||null,happened,due,
+          row.responsible_membership_id,context.membershipId
+        ]
+      );
+      if(input.activityType==="TASK"&&due){
+        await client.query(
+          `INSERT INTO task(
+             tenant_id,title,type,state,priority,responsible_membership_id,
+             due_at,linked_type,linked_id,description,created_by_membership_id
+           ) VALUES(
+             $1,$2,'CRM','OPEN','NORMAL',$3,$4,'DEAL',$5,$6,$7
+           )`,
+          [
+            context.tenantId,input.subject?.trim()||"Следующее действие",
+            row.responsible_membership_id??context.membershipId,due,dealId,
+            input.body?.trim()||null,context.membershipId
+          ]
+        );
+      }
+      return activity.rows[0];
+    });
+  }
+
+  async tags(context:TenantContext){
+    const scope=await this.authorization.resolveScope(context,"crm.read");
+    if(!scope) throw new BadRequestException("Недостаточно прав");
+    return this.database.withTenantTransaction(context,async client=>(
+      await client.query(
+        "SELECT id,name,color FROM crm_tag WHERE tenant_id=$1 ORDER BY name",
+        [context.tenantId]
+      )
+    ).rows);
+  }
+
+  async createTag(
+    context:TenantContext,
+    input:{name:string;color?:string}
+  ){
+    const name=input.name?.trim();
+    if(!name||name.length>80) throw new BadRequestException("Некорректный тег");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `INSERT INTO crm_tag(tenant_id,name,color)
+         VALUES($1,$2,$3)
+         ON CONFLICT(tenant_id,name)
+         DO UPDATE SET color=coalesce(EXCLUDED.color,crm_tag.color)
+         RETURNING *`,
+        [context.tenantId,name,input.color?.trim()||null]
+      );
+      return result.rows[0];
+    });
+  }
+
+  async setDealTags(
+    context:TenantContext,
+    dealId:string,
+    tagIds:string[]
+  ){
+    const ids=Array.from(new Set(tagIds??[])).slice(0,50);
+    return this.database.withTenantTransaction(context,async client=>{
+      const valid=ids.length?await client.query<{id:string}>(
+        "SELECT id FROM crm_tag WHERE tenant_id=$1 AND id=ANY($2::uuid[])",
+        [context.tenantId,ids]
+      ):{rows:[]};
+      if(valid.rows.length!==ids.length){
+        throw new BadRequestException("Один или несколько тегов недоступны");
+      }
+      await client.query(
+        "DELETE FROM crm_deal_tag WHERE tenant_id=$1 AND deal_id=$2",
+        [context.tenantId,dealId]
+      );
+      for(const id of ids){
+        await client.query(
+          `INSERT INTO crm_deal_tag(tenant_id,deal_id,tag_id)
+           VALUES($1,$2,$3)`,
+          [context.tenantId,dealId,id]
+        );
+      }
+      return {updated:true,count:ids.length};
+    });
+  }
+
 }
