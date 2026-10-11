@@ -51,7 +51,6 @@ export class DanceStudioService {
         `SELECT
            l.id,g.name AS group_name,p.name AS program_name,
            l.lesson_type,l.starts_at,l.ends_at,l.capacity,l.status,
-           coalesce(rr.timezone,tr.timezone,'Europe/Moscow') AS lesson_timezone,
            tr.name AS trainer_name,rr.name AS room_name,
            coalesce(rr.timezone,tr.timezone,'Europe/Moscow') AS lesson_timezone,
            count(lp.id) FILTER (
