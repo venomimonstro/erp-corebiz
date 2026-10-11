@@ -211,7 +211,7 @@ async function inspectRequiredHardening(root) {
     {
       path:"apps/api/src/modules/platform/tenants/tenants.service.ts",
       patterns:[/requireManageAll/, /async revokeInvitation/,
-        /token_hash/, /roleId/, /membershipIds/],
+        /token_hash/, /roleId/, /role_permission/],
       message:"Invitation owner/role restrictions or secret hashing may have regressed"
     },
     {
