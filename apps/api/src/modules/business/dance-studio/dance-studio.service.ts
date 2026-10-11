@@ -1682,6 +1682,7 @@ export class DanceStudioService {
         const member=memberResult.rows[0];
         if(!member) throw new NotFoundException("Участник группы не найден");
 
+        let cancelledFuture=0;
         // A pause or departure must atomically cancel all future booked
         // lessons and restore their reserved package/makeup credits.
         // Do not commit group status first and try to clean up later.
@@ -1703,6 +1704,7 @@ export class DanceStudioService {
             throw new ConflictException(
               "Слишком много будущих уроков для одной операции. Сократите горизонт расписания"
             );
+          cancelledFuture=future.rows.length;
           for(const row of future.rows){
             await this.markAttendanceTx(
               client,context,scopeIds,row.lesson_id,row.participant_id,
@@ -1750,6 +1752,16 @@ export class DanceStudioService {
           );
         }
 
+        await this.audit(
+          client,context,"dance.group_member_status_changed",
+          "dance_group_member",memberId,{
+            groupId,studentId:member.student_id,
+            previousStatus:member.status,status:input.status,
+            previousReservedPlace:member.reserved_place,
+            reservedPlace,cancelledFuture,
+            promotedStudentId:promoted?.student_id??null
+          }
+        );
         return {
           member:updated.rows[0],
           promoted
