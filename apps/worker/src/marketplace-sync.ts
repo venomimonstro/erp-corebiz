@@ -174,6 +174,12 @@ function currencyFromWb(value: unknown): string {
   return "RUB";
 }
 
+export function isFinalMarketplaceCancellation(status:string|null|undefined):boolean {
+  const normalized=(status??"").trim().toLowerCase();
+  // A cancellation REQUEST is not final; keep shadow demand until it is settled.
+  return /^(cancelled|canceled|cancel|declined)(?:$|[\/_\s])/.test(normalized);
+}
+
 async function persistOrder(
   pool: Pool,
   job: SyncJob,
@@ -234,8 +240,7 @@ async function persistOrder(
         ]
       );
 
-      const externalStatus=(order.externalStatus??"").trim().toLowerCase();
-      const cancelled=/^(cancelled|canceled|cancel|declined)(?:$|[\\/_\\s])/.test(externalStatus);
+      const cancelled=isFinalMarketplaceCancellation(order.externalStatus);
       // An imported order already has a linked sale and possibly OMS reservations:
       // never silently release its stock solely because a provider changed status.
       if (existing?.status === "IMPORTED") {
