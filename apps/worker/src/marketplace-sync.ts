@@ -3,6 +3,7 @@ import {
   createHash
 } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
+import {processStockHubOnce} from "./stock-hub.js";
 
 type SyncJob = {
   job_id: string;
@@ -704,6 +705,11 @@ async function processOzon(
       const normalized = normalizeOzonPosting(posting);
       if (!normalized) continue;
       const outcome = await persistOrder(pool, job, normalized);
+      // Publish reductions immediately after a newly discovered FBS order.
+      if(outcome==="created"||outcome==="updated") {
+        await processStockHubOnce(pool);
+        await processStockHubOnce(pool);
+      }
       if (outcome === "created") imported += 1;
       if (outcome === "updated") updated += 1;
     }
@@ -878,6 +884,11 @@ async function processWildberries(
       const normalized = normalizeWbOrder(order, statuses.get(id));
       if (!normalized) continue;
       const outcome = await persistOrder(pool, job, normalized);
+      // Publish reductions immediately after a newly discovered FBS order.
+      if(outcome==="created"||outcome==="updated") {
+        await processStockHubOnce(pool);
+        await processStockHubOnce(pool);
+      }
       if (outcome === "created") imported += 1;
       if (outcome === "updated") updated += 1;
     }
