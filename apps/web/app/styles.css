@@ -4056,3 +4056,26 @@ button, .primary, .secondary { font: inherit; }
 .catalog-product-image-action{padding:0;background:transparent;border:0;
   color:#637789;text-align:left;font-size:11px;cursor:pointer;align-self:flex-start}
 .catalog-product-image-action:hover{text-decoration:underline}
+
+/* Accessible site-builder block library with keyboard reorder fallback. */
+.site-block-palette{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;
+  padding:13px;margin:15px 0;border-radius:14px;background:#f7f9f9;border:1px solid #e9edf0}
+.site-block-palette button{border:1px solid #e4e9ec;background:#fff;border-radius:11px;
+  padding:12px;text-align:left;cursor:pointer;display:grid;gap:4px;
+  transition:border-color .15s,transform .15s,box-shadow .15s}
+.site-block-palette button:hover{border-color:#849ba8;transform:translateY(-1px);
+  box-shadow:0 5px 14px rgba(15,34,50,.06)}
+.site-block-palette button:focus-visible{outline:2px solid #657e90;outline-offset:2px}
+.site-block-palette button strong{font-size:12px;font-weight:650;color:#303b44}
+.site-block-palette button small{font-size:10px;color:#7b8790;line-height:1.5}
+.block-editor>header[draggable=true]{cursor:grab;user-select:none}
+.block-editor>header[draggable=true]:active{cursor:grabbing}
+.block-editor.is-dragging{opacity:.56;border-style:dashed}
+.preview-browser-bar button{margin-left:auto;border:0;border-radius:6px;
+  padding:5px 8px;background:transparent;font-size:10px;color:#7a858c;cursor:pointer}
+.preview-browser-bar button+button{margin-left:0}
+.preview-browser-bar button.active{background:#eaf0f2;color:#2c404e;font-weight:700}
+.site-preview.preview-mobile{max-width:375px;width:100%;margin-left:auto;margin-right:auto;
+  box-sizing:border-box}
+@media(max-width:640px){.site-block-palette{grid-template-columns:1fr}
+  .block-editor>header{flex-wrap:wrap}.site-preview.preview-mobile{max-width:100%}}
