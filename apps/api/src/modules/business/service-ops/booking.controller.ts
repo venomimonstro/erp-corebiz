@@ -46,6 +46,53 @@ export class BookingController {
     return { ok: true, data: { updated: true } };
   }
 
+  @Get("delivery-rules")
+  @RequirePermission("service.read")
+  async deliveryRules(
+    @Req() request:AuthenticatedRequest,
+    @Query("serviceId") serviceId?:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.booking.deliveryRules(this.context(request),serviceId)
+    };
+  }
+
+  @Post("delivery-rules")
+  @RequirePermission("service.write")
+  async createDeliveryRule(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.booking.createDeliveryRule(this.context(request),body)
+    };
+  }
+
+  @Get("technology-cards")
+  @RequirePermission("service.read")
+  async technologyCards(
+    @Req() request:AuthenticatedRequest
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.booking.technologyCards(this.context(request))
+    };
+  }
+
+  @Post("technology-cards")
+  @RequirePermission("service.write")
+  async createTechnologyCard(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.booking.createTechnologyCard(this.context(request),body)
+    };
+  }
+
   @Get("availability")
   @RequirePermission("service.read")
   async availability(
