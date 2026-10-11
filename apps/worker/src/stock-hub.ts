@@ -1,6 +1,6 @@
 import {createDecipheriv,createHash} from "node:crypto";
 import type {Pool,PoolClient} from "pg";
-import {availableUnits,distributeUnits,type MarketListing} from "./stock-allocation.js";
+import {availableUnits,distributeUnits,conservativeTarget,type MarketListing} from "./stock-allocation.js";
 
 type PoolKey={tenant_id:string;warehouse_id:string;sku_id:string};
 type ListingRow={
@@ -141,9 +141,7 @@ async function reconcile(pool:Pool,key:PoolKey):Promise<void>{
     const existingPublished=rows.rows.reduce((sum,r)=>sum+(r.published_units??0),0);
     const desired=rows.rows.map(l=>{
       const requested=allocation.get(l.id)??0;
-      if(l.published_units===null)return {l,amount:0};
-      const allowedIncrease=Math.max(0,stock-existingPublished);
-      return {l,amount:Math.min(requested,l.published_units+allowedIncrease)};
+      return {l,amount:conservativeTarget(requested,l.published_units,existingPublished,stock)};
     });
     for(const {l,amount} of desired){
       const canSend=Boolean(l.credentials_ready&&l.external_warehouse_id&&
