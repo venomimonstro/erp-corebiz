@@ -1,0 +1,219 @@
+"use client";
+import {useCallback,useEffect,useState} from "react";
+import {AppSidebar} from "../../../../../components/app-sidebar";
+import {apiRequest} from "../../../../../lib/api";
+
+type Site={id:string;name:string};
+type Provider="CDEK"|"ATOL_ONLINE";
+type Connection={
+  id:string;provider:Provider;state:string;
+  environment:"SANDBOX"|"PRODUCTION";enabled:boolean;
+  public_config:{fromCityCode?:number;groupCode?:string};
+  verified_at:string|null;last_error_code:string|null
+};
+type Quote={
+  quoteId:string;tariffCode:number;amountMinor:string;
+  periodMin:number|null;periodMax:number|null;expiresAt:string
+};
+const money=(minor:string)=>new Intl.NumberFormat("ru-RU",{
+  currency:"RUB",style:"currency"
+}).format(Number(minor)/100);
+export default function MerchantConnectorsPage(){
+  const [sites,setSites]=useState<Site[]>([]);
+  const [siteId,setSiteId]=useState("");
+  const [connections,setConnections]=useState<Connection[]>([]);
+  const [provider,setProvider]=useState<Provider>("CDEK");
+  const [environment,setEnvironment]=useState<"SANDBOX"|"PRODUCTION">("SANDBOX");
+  const [clientId,setClientId]=useState("");
+  const [clientSecret,setClientSecret]=useState("");
+  const [city,setCity]=useState("44");
+  const [atolLogin,setAtolLogin]=useState("");
+  const [atolPassword,setAtolPassword]=useState("");
+  const [atolGroup,setAtolGroup]=useState("");
+  const [toCity,setToCity]=useState("137");
+  const [weight,setWeight]=useState("1000");
+  const [length,setLength]=useState("20");
+  const [width,setWidth]=useState("20");
+  const [height,setHeight]=useState("20");
+  const [quotes,setQuotes]=useState<Quote[]>([]);
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+  const [note,setNote]=useState("");
+  useEffect(()=>{
+    void apiRequest<Site[]>("/sites").then(rows=>{
+      setSites(rows);setSiteId(rows[0]?.id??"");
+    }).catch(e=>setError(e instanceof Error?e.message:"Нет доступа к сайтам"));
+  },[]);
+  const load=useCallback(async()=>{
+    if(!siteId)return;
+    try{
+      setConnections(await apiRequest<Connection[]>(
+        "/provider-connectors/sites/"+siteId));
+    }catch(e){setError(e instanceof Error?e.message:"Подключения не загружены");}
+  },[siteId]);
+  useEffect(()=>{void load();},[load]);
+  const current=connections.find(c=>c.provider===provider);
+  async function save(){
+    if(!siteId||busy)return;
+    setBusy(true);setError("");setNote("");
+    try{
+      const credentials=provider==="CDEK"
+        ?{clientId,clientSecret}:{login:atolLogin,password:atolPassword,
+          groupCode:atolGroup};
+      await apiRequest("/provider-connectors/sites/"+siteId+"/configure",{
+        method:"POST",body:JSON.stringify({
+          provider,environment,credentials,
+          ...(provider==="CDEK"?{fromCityCode:Number(city)}:{})
+        })
+      });
+      setClientSecret("");setAtolPassword("");
+      setNote("Реквизиты сохранены зашифрованными. Теперь проверьте авторизацию.");
+      await load();setQuotes([]);
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось сохранить ключи");}
+    finally{setBusy(false);}
+  }
+  async function verify(){
+    if(!siteId||busy)return;
+    setBusy(true);setError("");setNote("");
+    try{
+      const row=await apiRequest<{state:string;note:string}>(
+        "/provider-connectors/sites/"+siteId+"/"+provider+"/verify",{
+          method:"POST"
+        });
+      setNote(row.note);await load();
+    }catch(e){setError(e instanceof Error?e.message:"Провайдер отклонил проверку");}
+    finally{setBusy(false);}
+  }
+  async function quote(){
+    if(!siteId||busy)return;
+    setBusy(true);setError("");setNote("");
+    try{
+      const rows=await apiRequest<Quote[]>(
+        "/provider-connectors/sites/"+siteId+"/cdek/quotes",{
+          method:"POST",body:JSON.stringify({
+            toCityCode:Number(toCity),weightGrams:Number(weight),
+            lengthCm:Number(length),widthCm:Number(width),heightCm:Number(height)
+          })
+        });
+      setQuotes(rows);setNote(rows.length?"Тарифы получены от СДЭК.":"СДЭК не предложил тарифов для этих параметров.");
+    }catch(e){setError(e instanceof Error?e.message:"Расчёт доставки недоступен");}
+    finally{setBusy(false);}
+  }
+  return <main className="app-shell">
+    <AppSidebar active="settings"/>
+    <section className="workspace workspace-wide studio-premium">
+      <header className="studio-hero compact"><div>
+        <span className="studio-eyebrow">Провайдеры продавца · по каждому сайту</span>
+        <h1>Подключение СДЭК и АТОЛ Онлайн</h1>
+        <p>Сохраняем секретные ключи зашифрованными, проверяем их непосредственно
+          у провайдера. Без проверки не показываем статус подключения.</p>
+      </div><a className="secondary-button"
+        href="/app/settings/integrations">Все интеграции</a></header>
+      {error?<p className="inline-error" role="alert">{error}</p>:null}
+      {note?<p role="status">{note}</p>:null}
+      <section className="studio-section">
+        <div className="studio-form-grid">
+          <label>Интернет-магазин
+            <select value={siteId} onChange={e=>{setSiteId(e.target.value);setQuotes([]);}}>
+              {sites.map(s=><option value={s.id} key={s.id}>{s.name}</option>)}
+            </select>
+          </label>
+          <label>Провайдер
+            <select value={provider} onChange={e=>{setProvider(e.target.value as Provider);setQuotes([]);}}>
+              <option value="CDEK">СДЭК API v2</option>
+              <option value="ATOL_ONLINE">АТОЛ Онлайн v5 · ФФД 1.2</option>
+            </select>
+          </label>
+          <label>Контур
+            <select value={environment}
+              onChange={e=>setEnvironment(e.target.value as typeof environment)}>
+              <option value="SANDBOX">Тестовый</option>
+              <option value="PRODUCTION">Рабочий</option>
+            </select>
+          </label>
+        </div>
+        <p><strong>Статус:</strong> {current?.state??"Реквизиты не сохранены"}
+          {current?.verified_at?" · проверено "+new Date(current.verified_at).toLocaleString("ru-RU"):""}
+          {current?.environment?" · "+current.environment:""}
+        </p>
+        <p className="muted">Повторное сохранение реквизитов отключает ранее проверенное
+          подключение до повторной авторизации.</p>
+      </section>
+      <section className="studio-section">
+        <h2>{provider==="CDEK"?"Учётные данные СДЭК":"Кассовые реквизиты АТОЛ"}</h2>
+        <div className="studio-form-grid">
+          {provider==="CDEK"?<>
+            <label>Client ID
+              <input value={clientId} onChange={e=>setClientId(e.target.value)}
+                autoComplete="off"/>
+            </label>
+            <label>Client Secret
+              <input type="password" value={clientSecret}
+                onChange={e=>setClientSecret(e.target.value)}
+                autoComplete="new-password"/>
+            </label>
+            <label>Код города отправления (СДЭК)
+              <input type="number" min="1" step="1" value={city}
+                onChange={e=>setCity(e.target.value)}/>
+            </label>
+          </>:<>
+            <label>Login АТОЛ
+              <input value={atolLogin} onChange={e=>setAtolLogin(e.target.value)}
+                autoComplete="off"/>
+            </label>
+            <label>Password АТОЛ
+              <input type="password" value={atolPassword}
+                onChange={e=>setAtolPassword(e.target.value)}
+                autoComplete="new-password"/>
+            </label>
+            <label>Код группы ККТ
+              <input value={atolGroup} onChange={e=>setAtolGroup(e.target.value)}/>
+            </label>
+          </>}
+        </div>
+        <div className="studio-hero-actions">
+          <button type="button" disabled={!siteId||busy}
+            onClick={()=>void save()}>Сохранить ключи</button>
+          <button type="button" className="secondary-button"
+            disabled={!siteId||!current||busy} onClick={()=>void verify()}>
+            Проверить доступ у провайдера
+          </button>
+        </div>
+        <p className="muted">{provider==="ATOL_ONLINE"
+          ?"Авторизация по API v5 не фискализирует чек. Для отправки чеков потребуется отдельный жизненный цикл."
+          :"Авторизация не создаёт доставку. Отправления включим после приёмки накладных, ярлыков и статусов."}</p>
+      </section>
+      {provider==="CDEK"&&current?.state==="VERIFIED"?<section className="studio-section">
+        <h2>Проверить расчёт доставки</h2>
+        <div className="studio-form-grid">
+          {[
+            ["Код города назначения",toCity,setToCity],
+            ["Вес, грамм",weight,setWeight],
+            ["Длина, см",length,setLength],
+            ["Ширина, см",width,setWidth],
+            ["Высота, см",height,setHeight]
+          ].map(([title,value,change],i)=><label key={i}>{title as string}
+            <input type="number" min="1" step="1" value={value as string}
+              onChange={e=>(change as (v:string)=>void)(e.target.value)}/>
+          </label>)}
+        </div>
+        <button type="button" disabled={busy} onClick={()=>void quote()}>
+          Получить тарифы СДЭК
+        </button>
+        {quotes.length>0?<div className="data-table-wrap">
+          <table className="data-table"><thead><tr>
+            <th>Тариф</th><th>Стоимость</th><th>Срок</th><th>Действует до</th>
+          </tr></thead><tbody>
+            {quotes.map(q=><tr key={q.quoteId}>
+              <td>{q.tariffCode}</td><td>{money(q.amountMinor)}</td>
+              <td>{q.periodMin??"?"}–{q.periodMax??"?"} дней</td>
+              <td>{new Date(q.expiresAt).toLocaleString("ru-RU")}</td>
+            </tr>)}
+          </tbody></table>
+        </div>:null}
+        <p className="muted">Расчёты справочные, не используются для создания
+          накладной покупателя до внедрения проверенного checkout-адаптера.</p>
+      </section>:null}
+    </section>
+  </main>;
+}
