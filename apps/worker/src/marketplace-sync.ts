@@ -43,28 +43,28 @@ class ProviderRateLimitError extends Error {
   }
 }
 
-function encryptionKey(): Buffer {
-  const secret = process.env.SESSION_SECRET?.trim();
-  if (!secret) {
-    throw new Error("SESSION_SECRET is required for marketplace sync");
-  }
-
-  return createHash("sha256")
-    .update(secret + "|corebiz-channels-v1")
-    .digest();
+function encryptionKey(version:"v1"|"v2"):Buffer{
+  const secret=version==="v2"
+    ?process.env.CHANNEL_ENCRYPTION_KEY?.trim()
+    :process.env.SESSION_SECRET?.trim();
+  if(!secret)throw new Error(version==="v2"
+    ?"CHANNEL_ENCRYPTION_KEY_REQUIRED_FOR_V2"
+    :"SESSION_SECRET_REQUIRED_FOR_LEGACY_CHANNEL_KEY");
+  return createHash("sha256").update(secret+
+    (version==="v2"?"|corebiz-channels-v2":"|corebiz-channels-v1")).digest();
 }
 
 function decryptCredentials(
   payload: string
 ): Record<string, unknown> {
   const [version, ivRaw, tagRaw, dataRaw] = payload.split(".");
-  if (version !== "v1" || !ivRaw || !tagRaw || !dataRaw) {
+  if (!["v1","v2"].includes(version) || !ivRaw || !tagRaw || !dataRaw) {
     throw new Error("CHANNEL_SECRET_FORMAT_INVALID");
   }
 
   const decipher = createDecipheriv(
     "aes-256-gcm",
-    encryptionKey(),
+    encryptionKey(version as "v1"|"v2"),
     Buffer.from(ivRaw, "base64url")
   );
   decipher.setAuthTag(Buffer.from(tagRaw, "base64url"));
