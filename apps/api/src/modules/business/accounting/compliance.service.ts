@@ -2099,9 +2099,19 @@ export class ComplianceService {
     ].includes(input.receiptType)) {
       throw new BadRequestException("Некорректный тип квитанции");
     }
+    if(!input.provider?.trim()||!input.externalReference?.trim()){
+      throw new BadRequestException("Укажите источник и номер подтверждения");
+    }
+
     return this.database.withTenantTransaction(context,async client=>{
-      const current=await client.query<{workflow_status:string}>(
-        `SELECT workflow_status
+      const current=await client.query<{
+        workflow_status:string;
+        obligation_type:string;
+        payment_obligation_id:string|null;
+        payment_id:string|null;
+      }>(
+        `SELECT
+           workflow_status,obligation_type,payment_obligation_id,payment_id
          FROM accounting_compliance_obligation
          WHERE tenant_id=$1 AND id=$2
          FOR UPDATE`,
@@ -2109,6 +2119,19 @@ export class ComplianceService {
       );
       const row=current.rows[0];
       if(!row) throw new NotFoundException("Обязательство не найдено");
+
+      if(
+        input.receiptType==="PAYMENT" &&
+        (
+          row.obligation_type!=="PAY" ||
+          !row.payment_obligation_id ||
+          !row.payment_id
+        )
+      ){
+        throw new ConflictException(
+          "Подтверждение оплаты доступно только после формирования и отправки налогового платежа"
+        );
+      }
 
       await client.query(
         `INSERT INTO accounting_compliance_receipt(
@@ -2127,6 +2150,30 @@ export class ComplianceService {
       if(input.receiptType==="REJECTED") next="REJECTED";
       if(input.receiptType==="PAYMENT") next="PAID";
 
+      if(input.receiptType==="PAYMENT"){
+        const payable=await client.query<{
+          amount_minor:string;
+          settled_minor:string;
+        }>(
+          `SELECT amount_minor::text,settled_minor::text
+           FROM financial_obligation
+           WHERE tenant_id=$1 AND id=$2
+           FOR UPDATE`,
+          [context.tenantId,row.payment_obligation_id]
+        );
+        const paymentObligation=payable.rows[0];
+        if(!paymentObligation){
+          throw new ConflictException("Финансовое обязательство по налогу не найдено");
+        }
+
+        await client.query(
+          `UPDATE financial_obligation
+           SET settled_minor=amount_minor,status='SETTLED',updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,row.payment_obligation_id]
+        );
+      }
+
       if(next!==row.workflow_status) {
         await client.query(
           `UPDATE accounting_compliance_obligation
@@ -2139,21 +2186,42 @@ export class ComplianceService {
                  WHEN $3='REJECTED' THEN $4
                  ELSE rejection_reason
                END,
+               payment_confirmed_at=CASE
+                 WHEN $5::text='PAYMENT' THEN now()
+                 ELSE payment_confirmed_at
+               END,
+               payment_confirmation_source=CASE
+                 WHEN $5::text='PAYMENT' THEN $6
+                 ELSE payment_confirmation_source
+               END,
+               payment_confirmation_reference=CASE
+                 WHEN $5::text='PAYMENT' THEN $7
+                 ELSE payment_confirmation_reference
+               END,
                updated_at=now()
            WHERE tenant_id=$1 AND id=$2`,
           [
             context.tenantId,obligationId,next,
             input.receiptType==="REJECTED"
               ?String(input.payload?.reason??"Отклонено оператором/ФНС")
-              :null
+              :null,
+            input.receiptType,input.provider.trim(),
+            input.externalReference.trim()
           ]
         );
         await this.event(
           client,context,obligationId,"RECEIPT_"+input.receiptType,
-          row.workflow_status,next,input.payload??{}
+          row.workflow_status,next,{
+            ...(input.payload??{}),
+            provider:input.provider.trim(),
+            externalReference:input.externalReference.trim()
+          }
         );
       }
-      return {status:next};
+      return {
+        status:next,
+        paymentConfirmed:input.receiptType==="PAYMENT"&&next==="PAID"
+      };
     });
   }
 
