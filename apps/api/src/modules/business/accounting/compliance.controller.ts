@@ -28,6 +28,35 @@ export class ComplianceController {
     };
   }
 
+  @Get("autopilot")
+  @RequirePermission("accounting.compliance.read")
+  async autopilot(
+    @Req() req:AuthenticatedRequest,
+    @Query("legalEntityId") legalEntityId:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.autopilot(
+        this.context(req),legalEntityId
+      )
+    };
+  }
+
+  @Post("autopilot/:id/status")
+  @RequirePermission("accounting.compliance.manage")
+  async updateAutopilotTask(
+    @Req() req:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:{status:"OPEN"|"IN_PROGRESS"|"DISMISSED"}
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.updateAutopilotTask(
+        this.context(req),id,body
+      )
+    };
+  }
+
   @Get("profile")
   @RequirePermission("accounting.compliance.read")
   async profile(
