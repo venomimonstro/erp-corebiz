@@ -1156,11 +1156,15 @@ export class BookingService {
       await client.query(
         `INSERT INTO service_package_entitlement(
            tenant_id,package_id,source_plan_entitlement_id,
-           lesson_type,dance_program_id,dance_group_id,visit_limit_snapshot,
-           management_visit_value_minor_snapshot,priority
+           service_id,trainer_resource_id,
+           lesson_type,dance_program_id,dance_group_id,
+           weekdays,start_minute,end_minute,
+           visit_limit_snapshot,management_visit_value_minor_snapshot,priority
          )
          SELECT
-           tenant_id,$3,id,lesson_type,dance_program_id,dance_group_id,
+           tenant_id,$3,id,service_id,trainer_resource_id,
+           lesson_type,dance_program_id,dance_group_id,
+           weekdays,start_minute,end_minute,
            visit_limit,management_visit_value_minor,priority
          FROM service_package_plan_entitlement
          WHERE tenant_id=$1 AND plan_id=$2
