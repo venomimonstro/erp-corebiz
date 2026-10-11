@@ -25,11 +25,18 @@ type Zone = {
   capacity_units: number;
 };
 
+type Service = {
+  id: string;
+  name: string;
+};
+
 type Plan = {
   id: string;
   trainer_resource_id: string;
   trainer_name: string;
   lesson_type: string | null;
+  service_id: string | null;
+  service_name: string | null;
   calculation_type: string;
   fixed_minor: string;
   hourly_minor: string;
@@ -39,6 +46,15 @@ type Plan = {
   threshold_extra_minor: string;
   revenue_basis: string;
   priority: number;
+  minimum_guarantee_minor: string;
+  components: Array<{
+    id: string;
+    componentType: string;
+    amountMinor: string;
+    percentBps: number;
+    thresholdCount: number;
+    revenueBasis: string;
+  }>;
 };
 
 type Accrual = {
@@ -99,6 +115,21 @@ type PayrollBatch = {
   status: string;
 };
 
+type TrainerStatement = {
+  id: string;
+  trainer_resource_id: string;
+  trainer_name: string;
+  period_from: string;
+  period_to: string;
+  lesson_accrual_minor: string;
+  base_minor: string;
+  guarantee_adjustment_minor: string;
+  total_minor: string;
+  currency: string;
+  status: string;
+  payroll_batch_id: string | null;
+};
+
 function money(value: string) {
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
@@ -145,13 +176,16 @@ function monthRange() {
 export default function DanceTeamPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [accruals, setAccruals] = useState<Accrual[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [roomStatements, setRoomStatements] = useState<RoomStatement[]>([]);
   const [entities, setEntities] = useState<LegalEntity[]>([]);
   const [payroll, setPayroll] = useState<PayrollBatch[]>([]);
+  const [trainerStatements, setTrainerStatements] = useState<TrainerStatement[]>([]);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [pending, setPending] = useState(false);
   const [zones, setZones] = useState<Record<string, Zone[]>>({});
   const [roomModal, setRoomModal] = useState(false);
@@ -172,10 +206,19 @@ export default function DanceTeamPage() {
     "FIXED" | "HOURLY" | "PERCENT" | "ATTENDEE" | "COMPOSITE"
   >("FIXED");
   const [planLessonType, setPlanLessonType] = useState("");
+  const [planServiceId, setPlanServiceId] = useState("");
   const [planBaseRub, setPlanBaseRub] = useState("1500");
   const [planPercent, setPlanPercent] = useState("40");
   const [planPerAttendeeRub, setPlanPerAttendeeRub] = useState("100");
   const [planGuaranteeRub, setPlanGuaranteeRub] = useState("0");
+  const [planRevenueBasis, setPlanRevenueBasis] = useState<
+    "EARNED" | "PAID" | "BILLED" | "LIST"
+  >("EARNED");
+  const [planBasePeriod, setPlanBasePeriod] = useState<"MONTH" | "DAY">("MONTH");
+  const [planVariableType, setPlanVariableType] = useState<
+    "PERCENT" | "HOURLY" | "PER_ATTENDEE" | "FIXED_PER_LESSON"
+  >("PERCENT");
+  const [planVariableRub, setPlanVariableRub] = useState("500");
 
   const load = useCallback(async () => {
     setError("");
@@ -185,17 +228,26 @@ export default function DanceTeamPage() {
       const [
         customerRows,
         resourceRows,
+        serviceRows,
         planRows,
         accrualRows,
+        trainerStatementRows,
         contractRows,
         statementRows,
         organization
       ] = await Promise.all([
           apiRequest<Customer[]>("/crm/customers"),
           apiRequest<Resource[]>("/service/resources"),
+          apiRequest<Service[]>("/service/catalog"),
           apiRequest<Plan[]>("/dance/compensation-plans"),
           apiRequest<Accrual[]>(
             "/dance/compensation-accruals?from=" +
+              encodeURIComponent(range.from) +
+              "&to=" +
+              encodeURIComponent(range.to)
+          ),
+          apiRequest<TrainerStatement[]>(
+            "/dance/payroll-statements?from=" +
               encodeURIComponent(range.from) +
               "&to=" +
               encodeURIComponent(range.to)
@@ -208,6 +260,7 @@ export default function DanceTeamPage() {
         ]);
       setCustomers(customerRows);
       setResources(resourceRows);
+      setServices(serviceRows);
       const roomRows = resourceRows.filter((item) =>
         ["ROOM", "HALL", "WORKPLACE"].includes(item.type)
       );
@@ -220,6 +273,7 @@ export default function DanceTeamPage() {
       setZones(Object.fromEntries(zoneRows));
       setPlans(planRows);
       setAccruals(accrualRows);
+      setTrainerStatements(trainerStatementRows);
       setContracts(contractRows);
       setRoomStatements(statementRows);
       setEntities(organization.legalEntities);
@@ -265,6 +319,12 @@ export default function DanceTeamPage() {
 
   function openPlanModal() {
     setPlanTrainerId((current) => current || trainers[0]?.id || "");
+    setPlanServiceId("");
+    setPlanLessonType("");
+    setPlanRevenueBasis("EARNED");
+    setPlanBasePeriod("MONTH");
+    setPlanVariableType("PERCENT");
+    setPlanVariableRub("500");
     setPlanModal(true);
   }
 
@@ -278,11 +338,13 @@ export default function DanceTeamPage() {
     const percent = Number(planPercent.replace(",", "."));
     const perAttendeeRub = Number(planPerAttendeeRub.replace(",", "."));
     const guaranteeRub = Number(planGuaranteeRub.replace(",", "."));
+    const variableRub = Number(planVariableRub.replace(",", "."));
     if (
       !Number.isFinite(baseRub) || baseRub < 0 ||
       !Number.isFinite(percent) || percent < 0 || percent > 100 ||
       !Number.isFinite(perAttendeeRub) || perAttendeeRub < 0 ||
-      !Number.isFinite(guaranteeRub) || guaranteeRub < 0
+      !Number.isFinite(guaranteeRub) || guaranteeRub < 0 ||
+      !Number.isFinite(variableRub) || variableRub < 0
     ) {
       setError("Проверьте денежные условия правила");
       return;
@@ -293,14 +355,22 @@ export default function DanceTeamPage() {
       planScheme === "COMPOSITE"
         ? [
             {
-              componentType: "MONTHLY_BASE",
+              componentType:
+                planBasePeriod === "DAY" ? "DAILY_BASE" : "MONTHLY_BASE",
               amountMinor: baseMinor,
               priority: 100
             },
             {
-              componentType: "PERCENT",
-              percentBps: Math.round(percent * 100),
-              revenueBasis: "EARNED",
+              componentType: planVariableType,
+              amountMinor:
+                planVariableType === "PERCENT"
+                  ? "0"
+                  : String(Math.round(variableRub * 100)),
+              percentBps:
+                planVariableType === "PERCENT"
+                  ? Math.round(percent * 100)
+                  : 0,
+              revenueBasis: planRevenueBasis,
               priority: 110
             }
           ]
@@ -313,6 +383,7 @@ export default function DanceTeamPage() {
         method: "POST",
         body: JSON.stringify({
           trainerResourceId: planTrainerId,
+          serviceId: planServiceId || undefined,
           lessonType: planLessonType || undefined,
           calculationType: planScheme,
           fixedMinor:
@@ -326,13 +397,14 @@ export default function DanceTeamPage() {
             planScheme === "ATTENDEE"
               ? String(Math.round(perAttendeeRub * 100))
               : "0",
-          revenueBasis: "EARNED",
+          revenueBasis: planRevenueBasis,
           minimumGuaranteeMinor: String(Math.round(guaranteeRub * 100)),
           guaranteePeriod: "MONTH",
           components
         })
       });
       setPlanModal(false);
+      setNotice("Правило зарплаты сохранено.");
       await load();
     } catch (cause) {
       setError(
@@ -481,11 +553,20 @@ export default function DanceTeamPage() {
     const range = monthRange();
     setPending(true);
     try {
-      const result = await apiRequest<{ approved: number }>("/dance/compensation/approve", {
+      const result = await apiRequest<{
+        approved: number;
+        statements: TrainerStatement[];
+      }>("/dance/compensation/approve", {
         method: "POST",
         body: JSON.stringify(range)
       });
-      window.alert("Утверждено начислений: " + result.approved);
+      setNotice(
+        "Месяц рассчитан: " +
+          result.statements.length +
+          " ведомостей, новых начислений утверждено " +
+          result.approved +
+          "."
+      );
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось утвердить начисления");
@@ -513,7 +594,7 @@ export default function DanceTeamPage() {
           })
         });
       }
-      const result = await apiRequest<{ trainers: number; accruals: number }>(
+      const result = await apiRequest<{ trainers: number; accruals: number; statements: number }>(
         "/dance/compensation/export-payroll",
         {
           method: "POST",
@@ -524,7 +605,9 @@ export default function DanceTeamPage() {
           })
         }
       );
-      window.alert(`Передано в payroll: ${result.accruals} начислений, ${result.trainers} тренеров`);
+      setNotice(
+        `В payroll передано: ${result.statements} ведомостей, ${result.trainers} тренеров.`
+      );
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось передать начисления в payroll");
@@ -536,16 +619,17 @@ export default function DanceTeamPage() {
   return (
     <main className="app-shell">
       <AppSidebar active="dance-team" />
-      <section className="workspace workspace-wide">
-        <header className="workspace-header">
+      <section className="workspace workspace-wide studio-premium">
+        <header className="studio-hero compact">
           <div>
-            <p className="muted">Студия / Тренеры и залы</p>
-            <h1>Зарплата и стоимость ресурсов</h1>
-            <p className="workspace-summary">
-              Формулы оплаты тренеров, аренда залов и неизменяемые начисления по завершённым урокам.
+            <span className="studio-eyebrow">Команда и себестоимость</span>
+            <h1>Зарплата и залы</h1>
+            <p>
+              Правила оплаты тренеров, итоговые ведомости, payroll и аренда
+              пространства собраны в одном контуре.
             </p>
           </div>
-          <div className="header-actions">
+          <div className="studio-hero-actions">
             <button className="secondary-button" onClick={openPlanModal} type="button">+ Правило зарплаты</button>
             <button className="secondary-button" onClick={openRoomModal} type="button">+ Аренда зала</button>
             <button className="secondary-button" disabled={pending} onClick={() => void finalizeRoomMonth()} type="button">Закрыть аренду месяца</button>
@@ -556,7 +640,8 @@ export default function DanceTeamPage() {
 
         <DanceWorkspaceNav active="team" />
 
-        {error ? <div className="inline-error"><strong>Тренеры и залы</strong><span>{error}</span></div> : null}
+        {error ? <div className="studio-message error"><strong>Тренеры и залы</strong><span>{error}</span></div> : null}
+        {notice ? <div className="studio-message success"><strong>Готово</strong><span>{notice}</span></div> : null}
 
         <div className="owner-kpi-grid studio-kpi-grid">
           {trainerTotals.map(([id, total]) => (
@@ -579,12 +664,15 @@ export default function DanceTeamPage() {
           <div className="section-heading"><div><p className="muted">Правила</p><h2>Оплата тренеров</h2></div></div>
           <div className="data-table-wrap">
             <table className="data-table">
-              <thead><tr><th>Тренер</th><th>Урок</th><th>Схема</th><th>Условия</th><th>База</th></tr></thead>
+              <thead><tr><th>Тренер</th><th>Для чего</th><th>Схема</th><th>Условия</th><th>База</th></tr></thead>
               <tbody>
                 {plans.map((plan) => (
                   <tr key={plan.id}>
                     <td><strong>{plan.trainer_name}</strong></td>
-                    <td>{plan.lesson_type ?? "Любой"}</td>
+                    <td>
+                      {plan.service_name ?? "Любая услуга"}
+                      <small>{plan.lesson_type ?? "любой формат"}</small>
+                    </td>
                     <td>{compensationLabel(plan.calculation_type)}</td>
                     <td>
                       {plan.calculation_type === "FIXED" ? money(plan.fixed_minor) : null}
@@ -592,12 +680,64 @@ export default function DanceTeamPage() {
                       {plan.calculation_type === "PERCENT" ? plan.percent_bps / 100 + "%" : null}
                       {plan.calculation_type === "ATTENDEE" ? money(plan.fixed_minor) + " + " + money(plan.per_attendee_minor) + "/уч." : null}
                       {plan.calculation_type === "TIERED" ? money(plan.fixed_minor) + " + " + money(plan.threshold_extra_minor) + " после " + plan.threshold_count : null}
+                      {plan.calculation_type === "COMPOSITE"
+                        ? plan.components.map((component) =>
+                            component.componentType === "PERCENT"
+                              ? component.percentBps / 100 + "%"
+                              : component.componentType === "MONTHLY_BASE"
+                                ? money(component.amountMinor) + "/мес"
+                                : component.componentType === "DAILY_BASE"
+                                  ? money(component.amountMinor) + "/день"
+                                  : money(component.amountMinor) + " · " + component.componentType
+                          ).join(" + ")
+                        : null}
+                      {BigInt(plan.minimum_guarantee_minor ?? "0") > 0n
+                        ? " · гарантия " + money(plan.minimum_guarantee_minor)
+                        : ""}
                     </td>
                     <td>{revenueBasisLabel(plan.revenue_basis)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        </section>
+
+        <section className="section-block studio-section">
+          <div className="section-heading">
+            <div>
+              <p className="muted">Итог месяца</p>
+              <h2>Ведомости тренеров</h2>
+            </div>
+            <span className="studio-helper">
+              Оклад и гарантия добавляются здесь, а не в каждый урок.
+            </span>
+          </div>
+          <div className="trainer-statement-grid">
+            {trainerStatements.map((statement) => (
+              <article key={statement.id}>
+                <header>
+                  <div>
+                    <span>Тренер</span>
+                    <h3>{statement.trainer_name}</h3>
+                  </div>
+                  <span className="status-pill">{statement.status}</span>
+                </header>
+                <strong>{money(statement.total_minor)}</strong>
+                <div>
+                  <span>За занятия <b>{money(statement.lesson_accrual_minor)}</b></span>
+                  <span>База <b>{money(statement.base_minor)}</b></span>
+                  <span>Гарантия <b>{money(statement.guarantee_adjustment_minor)}</b></span>
+                </div>
+              </article>
+            ))}
+            {!trainerStatements.length ? (
+              <div className="studio-empty">
+                <span>₽</span>
+                <strong>Месяц ещё не утверждён</strong>
+                <p>Закройте занятия и нажмите «Утвердить месяц». Система соберёт итоговую зарплату автоматически.</p>
+              </div>
+            ) : null}
           </div>
         </section>
 
@@ -921,6 +1061,18 @@ export default function DanceTeamPage() {
               </header>
               <div className="studio-form-grid">
                 <label>
+                  <span>Услуга</span>
+                  <select
+                    value={planServiceId}
+                    onChange={(event) => setPlanServiceId(event.target.value)}
+                  >
+                    <option value="">Все услуги</option>
+                    {services.map((service) => (
+                      <option key={service.id} value={service.id}>{service.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
                   <span>Тренер</span>
                   <select
                     value={planTrainerId}
@@ -980,6 +1132,72 @@ export default function DanceTeamPage() {
             </div>
 
             <div className="studio-divider" />
+
+            {(planScheme === "PERCENT" || planScheme === "COMPOSITE") ? (
+              <label>
+                <span>База для процента</span>
+                <select
+                  value={planRevenueBasis}
+                  onChange={(event) =>
+                    setPlanRevenueBasis(event.target.value as typeof planRevenueBasis)
+                  }
+                >
+                  <option value="EARNED">Оказанные услуги</option>
+                  <option value="PAID">Фактически оплачено</option>
+                  <option value="BILLED">Начислено клиентам</option>
+                  <option value="LIST">Цена по прайсу</option>
+                </select>
+              </label>
+            ) : null}
+
+            {planScheme === "COMPOSITE" ? (
+              <div className="studio-form-section">
+                <header>
+                  <strong>Составная схема</strong>
+                  <span>База начисляется один раз за месяц или рабочий день; переменная часть — по каждому занятию.</span>
+                </header>
+                <div className="studio-form-grid">
+                  <label>
+                    <span>Период базы</span>
+                    <select
+                      value={planBasePeriod}
+                      onChange={(event) => setPlanBasePeriod(event.target.value as "MONTH" | "DAY")}
+                    >
+                      <option value="MONTH">Оклад в месяц</option>
+                      <option value="DAY">Фикс за рабочий день</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Переменная часть</span>
+                    <select
+                      value={planVariableType}
+                      onChange={(event) => setPlanVariableType(event.target.value as typeof planVariableType)}
+                    >
+                      <option value="PERCENT">Процент от реализации</option>
+                      <option value="HOURLY">Ставка за часы</option>
+                      <option value="PER_ATTENDEE">За каждого ученика</option>
+                      <option value="FIXED_PER_LESSON">Фикс за занятие</option>
+                    </select>
+                  </label>
+                </div>
+                {planVariableType !== "PERCENT" ? (
+                  <label>
+                    <span>
+                      {planVariableType === "HOURLY"
+                        ? "Переменная ставка за час, ₽"
+                        : planVariableType === "PER_ATTENDEE"
+                          ? "За каждого пришедшего, ₽"
+                          : "Доплата за занятие, ₽"}
+                    </span>
+                    <input
+                      inputMode="decimal"
+                      value={planVariableRub}
+                      onChange={(event) => setPlanVariableRub(event.target.value)}
+                    />
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="studio-form-grid">
               <label>
