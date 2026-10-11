@@ -301,6 +301,34 @@ export class BookingService {
     });
   }
 
+  async archiveDeliveryRule(
+    context:TenantContext,
+    ruleId:string
+  ):Promise<{id:string;status:string;changed:boolean}>{
+    await this.requireServiceAll(context,"service.write");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{status:string}>(
+        `SELECT status
+         FROM service_delivery_rule
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,ruleId]
+      );
+      const row=result.rows[0];
+      if(!row) throw new NotFoundException("Правило оказания услуги не найдено");
+      if(row.status==="ARCHIVED"){
+        return {id:ruleId,status:"ARCHIVED",changed:false};
+      }
+      await client.query(
+        `UPDATE service_delivery_rule
+         SET status='ARCHIVED',updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,ruleId]
+      );
+      return {id:ruleId,status:"ARCHIVED",changed:true};
+    });
+  }
+
   async technologyCards(
     context: TenantContext
   ): Promise<Array<Record<string, unknown>>> {
@@ -410,6 +438,50 @@ export class BookingService {
         );
       }
       return {id};
+    });
+  }
+
+  async archiveTechnologyCard(
+    context:TenantContext,
+    cardId:string
+  ):Promise<{id:string;status:string;changed:boolean}>{
+    await this.requireServiceAll(context,"service.write");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{status:string}>(
+        `SELECT status
+         FROM service_technology_card
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,cardId]
+      );
+      const row=result.rows[0];
+      if(!row) throw new NotFoundException("Технологическая карта не найдена");
+      if(row.status==="ARCHIVED"){
+        return {id:cardId,status:"ARCHIVED",changed:false};
+      }
+
+      const activeRule=await client.query(
+        `SELECT 1
+         FROM service_delivery_rule
+         WHERE tenant_id=$1
+           AND technology_card_id=$2
+           AND status='ACTIVE'
+         LIMIT 1`,
+        [context.tenantId,cardId]
+      );
+      if(activeRule.rowCount){
+        throw new ConflictException(
+          "Сначала отключите активные правила услуг, использующие эту техкарту"
+        );
+      }
+
+      await client.query(
+        `UPDATE service_technology_card
+         SET status='ARCHIVED',updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,cardId]
+      );
+      return {id:cardId,status:"ARCHIVED",changed:true};
     });
   }
 
