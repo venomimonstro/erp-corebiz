@@ -203,6 +203,38 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"infrastructure/postgres/234_payment_reconciliation_queue.sql",
+      patterns:[/commerce_reconcile_task/, /FOR UPDATE SKIP LOCKED/,
+        /corebiz_claim_commerce_reconciliation/, /ENABLE ROW LEVEL SECURITY/],
+      message:"Payment webhook recovery has lost durable SQL leases or tenant RLS"
+    },
+    {
+      path:"apps/api/src/modules/platform/payments/commerce-payments.service.ts",
+      patterns:[/reconcileDueBatch/, /commerce_reconcile_task/,
+        /COREBIZ_PAYMENT_RECONCILE_ENABLED/, /reconcileRefund/,
+        /PROVIDER_OR_LEDGER_ERROR/],
+      message:"Payment recovery can silently stop after lost YooKassa webhooks"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/merchant-gateways.ts",
+      patterns:[/api.edu.cdek.ru/, /api.cdek.ru/,
+        /calculator\/tarifflist/, /testonline.atol.ru/,
+        /possystem\/v5\/getToken/],
+      message:"CDEK and ATOL provider verification or sandbox endpoints changed"
+    },
+    {
+      path:"infrastructure/postgres/235_provider_connections_quotes.sql",
+      patterns:[/commerce_provider_connection/, /encrypted_credentials/,
+        /commerce_shipping_quote/, /ENABLE ROW LEVEL SECURITY/],
+      message:"Seller credentials, quote retention and tenant isolation missing"
+    },
+    {
+      path:"infrastructure/postgres/236_serial_imei_marking_register.sql",
+      patterns:[/retail_serial_unit/, /marking_code_ciphertext/,
+        /marking_state<>'VERIFIED'/, /ENABLE ROW LEVEL SECURITY/],
+      message:"Device identity or protected pre-marking registry missing"
+    },
+    {
       path:"apps/api/src/modules/platform/go-live/commercial-checkout-policy.ts",
       patterns:[/WEB_PAYMENT_E2E/, /WEB_FISCAL_E2E/,
         /WEB_FULFILLMENT_E2E/, /POS_BANK_E2E/,
