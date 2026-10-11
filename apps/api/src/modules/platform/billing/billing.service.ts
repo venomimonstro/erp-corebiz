@@ -304,9 +304,9 @@ export class BillingService {
         throw new NotFoundException("Подписка не найдена");
       }
 
-      // No payment gateway is wired to SaaS subscriptions yet. Selecting a
-      // paid plan must NEVER activate paid entitlements without a verified
-      // payment event. Same-plan requests remain idempotent; free plans work.
+      // Paid subscriptions are activated only via verified YooKassa
+      // /payments/saas/start + GET PSP reconciliation, never by self-serve
+      // selecting a plan. Free plans can be selected immediately.
       if (subscription.rows[0].current_plan_code === row.code) {
         return { selected: true, planCode: row.code };
       }
