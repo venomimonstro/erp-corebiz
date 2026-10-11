@@ -12,6 +12,7 @@ import { AuthorizationService } from "../../platform/authorization/authorization
 import { DomainEventService } from "../../platform/events/domain-event.service";
 import { AttributionService } from "../growth/attribution.service";
 import { InventoryService } from "../inventory/inventory.service";
+import { ServiceEconomicsService } from "./service-economics.service";
 
 type BookingStatus =
   | "DRAFT"
@@ -29,7 +30,8 @@ export class BookingService {
     private readonly events: DomainEventService,
     private readonly attribution: AttributionService,
     private readonly authorization: AuthorizationService,
-    private readonly inventory: InventoryService
+    private readonly inventory: InventoryService,
+    private readonly economics: ServiceEconomicsService
   ) {}
 
   async services(context: TenantContext): Promise<Array<Record<string, unknown>>> {
@@ -2696,6 +2698,7 @@ export class BookingService {
 
       if (row.status === "COMPLETED") {
         await this.consumeRemainingMaterials(client,context,bookingId);
+        await this.economics.calculateBookingTx(client,context,bookingId);
       }
 
       if (["COMPLETED","CANCELLED","NO_SHOW"].includes(row.status)) {
