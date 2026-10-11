@@ -299,6 +299,49 @@ export function AccountingComplianceCenter({
     item=>item.obligation_type==="PAY"&&item.code.includes("USN")
   )??null;
 
+  useEffect(()=>{
+    const item=next;
+    if(!item||item.form_code!=="KND_1110355"){
+      setNotificationLine(null);
+      return;
+    }
+    void apiRequest<ComplianceLine[]>(
+      "/accounting/compliance/obligations/"+
+        item.id+
+        "/lines"
+    ).then(rows=>{
+      const line=rows[0]??null;
+      setNotificationLine(line);
+      setLineKpp(line?.kpp??profile?.kpp??"");
+      setLineOktmo(line?.oktmo??profile?.oktmo??"");
+      setLineKbk(line?.kbk??"");
+      setLinePeriodCode(line?.tax_period_code??"");
+      setLineYear(String(
+        line?.reporting_year??new Date(item.due_at).getFullYear()
+      ));
+      setLineAmountRub(
+        line?.amount_minor!==null&&line?.amount_minor!==undefined
+          ?String(Number(line.amount_minor)/100)
+          :item.amount_minor!==null
+            ?String(Number(item.amount_minor)/100)
+            :""
+      );
+    }).catch(cause=>{
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось загрузить реквизиты уведомления"
+      );
+    });
+  },[
+    next?.id,
+    next?.form_code,
+    next?.amount_minor,
+    next?.due_at,
+    profile?.kpp,
+    profile?.oktmo
+  ]);
+
   async function saveProfile() {
     const rate=Number(usnRate.replace(",","."));
     const minimumRate=Number(usnMinRate.replace(",","."));
@@ -558,6 +601,69 @@ export function AccountingComplianceCenter({
         cause instanceof Error
           ?cause.message
           :"Не удалось подтвердить расчёт"
+      );
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  async function saveNotificationLine(item:Obligation) {
+    const amount=Number(lineAmountRub.replace(",","."));
+    const year=Number(lineYear);
+    if(!Number.isFinite(amount)||amount<0){
+      setError("Проверьте сумму строки уведомления");
+      return;
+    }
+    if(!Number.isSafeInteger(year)||year<2000||year>2100){
+      setError("Проверьте отчётный год");
+      return;
+    }
+    if(entityKind==="ORGANIZATION"&&!/^\d{9}$/.test(lineKpp.trim())){
+      setError("Для организации укажите КПП: 9 цифр");
+      return;
+    }
+    if(!/^(?:\d{8}|\d{11})$/.test(lineOktmo.trim())){
+      setError("ОКТМО должен содержать 8 или 11 цифр");
+      return;
+    }
+    if(!/^\d{20}$/.test(lineKbk.trim())){
+      setError("КБК должен содержать 20 цифр");
+      return;
+    }
+    if(!/^\d{2}\/\d{2}$/.test(linePeriodCode.trim())){
+      setError("Код периода укажите в формате 00/00");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    try{
+      const line=await apiRequest<ComplianceLine>(
+        "/accounting/compliance/obligations/"+item.id+"/lines",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            lineNumber:1,
+            kpp:lineKpp.trim()||undefined,
+            oktmo:lineOktmo.trim(),
+            kbk:lineKbk.trim(),
+            taxPeriodCode:linePeriodCode.trim(),
+            reportingYear:year,
+            amountMinor:String(Math.round(amount*100)),
+            confirm:true
+          })
+        }
+      );
+      setNotificationLine(line);
+      setNotice(
+        "Строка уведомления подтверждена. Теперь можно собрать пакет."
+      );
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось сохранить строку уведомления"
       );
     }finally{
       setBusy(false);
