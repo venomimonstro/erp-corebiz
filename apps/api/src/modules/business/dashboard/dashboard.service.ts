@@ -1363,7 +1363,7 @@ export class DashboardService {
       if(verticalCode==="MARKETPLACE_SELLER"){
         const result=await client.query<{mapped:number}>(
           `SELECT count(*)::integer AS mapped FROM channel_product_mapping
-           WHERE tenant_id=$1`,[context.tenantId]);
+           WHERE tenant_id=$1 AND status='ACTIVE'`,[context.tenantId]);
         definitions.ECOMMERCE=[
           {key:"market-sku",title:"Загрузите товары и SKU",
             detail:"Один внутренний SKU используется для склада и всех каналов.",
@@ -1380,7 +1380,8 @@ export class DashboardService {
         ];
         const imported=await client.query<{orders:number}>(
           `SELECT count(*)::integer AS orders FROM channel_order_inbox
-           WHERE tenant_id=$1 AND sales_order_id IS NOT NULL`,
+           WHERE tenant_id=$1 AND status='IMPORTED'
+             AND sales_order_id IS NOT NULL`,
           [context.tenantId]
         );
         definitions.ECOMMERCE[3]!.done=(imported.rows[0]?.orders??0)>0;
