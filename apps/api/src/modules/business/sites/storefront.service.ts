@@ -490,6 +490,107 @@ export class StorefrontService {
     }
   }
 
+  /**
+   * Tenant-scoped launch checklist. This is deliberately NOT a payment-gateway
+   * health check: no online acquiring, fiscal receipt or carrier integration
+   * is currently configured by the storefront.
+   */
+  async readiness(context:TenantContext,siteId:string):Promise<Record<string,unknown>>{
+    const result=await this.database.withTenantTransaction(context,async client=>
+      client.query<{
+        public_slug:string;
+        store_enabled:boolean;
+        home_published:boolean;
+        catalog_published:boolean;
+        priced_sku:boolean;
+        available_sku:boolean;
+        primary_domain:string|null;
+      }>(
+        `SELECT s.public_slug,
+           EXISTS (
+             SELECT 1 FROM storefront_config c
+             WHERE c.site_id=s.id AND c.tenant_id=s.tenant_id AND c.enabled
+           ) AS store_enabled,
+           EXISTS (
+             SELECT 1 FROM site_page p
+             WHERE p.site_id=s.id AND p.tenant_id=s.tenant_id
+               AND p.status='ACTIVE' AND p.slug='/'
+               AND p.published_version_id IS NOT NULL
+           ) AS home_published,
+           EXISTS (
+             SELECT 1 FROM site_page p
+             JOIN site_page_version v
+               ON v.id=p.published_version_id AND v.tenant_id=p.tenant_id
+             JOIN site_block b
+               ON b.tenant_id=v.tenant_id AND b.page_version_id=v.id
+             WHERE p.site_id=s.id AND p.tenant_id=s.tenant_id AND p.status='ACTIVE'
+               AND v.status='PUBLISHED'
+               AND b.block_type IN ('CATALOG','PRODUCT_GRID')
+           ) AS catalog_published,
+           EXISTS (
+             SELECT 1 FROM sku k
+             JOIN product_variant v ON v.tenant_id=k.tenant_id AND v.id=k.variant_id
+             JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+             WHERE k.tenant_id=s.tenant_id AND k.status='ACTIVE'
+               AND v.status='ACTIVE' AND p.status='ACTIVE'
+               AND k.sale_price_minor>0
+           ) AS priced_sku,
+           EXISTS (
+             SELECT 1 FROM inventory_balance b
+             JOIN sku k ON k.tenant_id=b.tenant_id AND k.id=b.sku_id
+             JOIN product_variant v ON v.tenant_id=k.tenant_id AND v.id=k.variant_id
+             JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+             LEFT JOIN inventory_policy ip
+               ON ip.tenant_id=b.tenant_id AND ip.warehouse_id=b.warehouse_id AND ip.sku_id=b.sku_id
+             WHERE b.tenant_id=s.tenant_id
+               AND k.status='ACTIVE' AND v.status='ACTIVE' AND p.status='ACTIVE'
+               AND k.sale_price_minor>0
+               AND b.physical_milli-b.reserved_milli-COALESCE(ip.safety_stock_milli,0)>0
+           ) AS available_sku,
+           (
+             SELECT d.hostname FROM site_domain d
+             WHERE d.tenant_id=s.tenant_id AND d.site_id=s.id
+               AND d.status='ACTIVE' AND d.is_primary
+             LIMIT 1
+           ) AS primary_domain
+         FROM site s
+         WHERE s.tenant_id=$1 AND s.id=$2 AND s.status='ACTIVE'`,
+        [context.tenantId,siteId]
+      )
+    );
+    const site=result.rows[0];
+    if(!site) throw new NotFoundException("Сайт не найден");
+
+    const checks=[
+      {code:"STORE_ENABLED",title:"Магазин подключён к ERP",done:site.store_enabled,
+        action:"Включите интернет-магазин в разделе Сайты."},
+      {code:"HOME_PUBLISHED",title:"Главная страница опубликована",done:site.home_published,
+        action:"Откройте главную, сохраните и опубликуйте страницу."},
+      {code:"CATALOG_PUBLISHED",title:"На опубликованной странице есть каталог",done:site.catalog_published,
+        action:"Добавьте блок «Товары» и опубликуйте страницу."},
+      {code:"PRICED_PRODUCTS",title:"Есть активные товары с ценой",done:site.priced_sku,
+        action:"Импортируйте товары или создайте SKU и заполните цены."},
+      {code:"AVAILABLE_STOCK",title:"Есть доступные к заказу остатки",done:site.available_sku,
+        action:"Примите товар на склад и проверьте резервы и страховой запас."},
+      {code:"CUSTOM_DOMAIN",title:"Собственный домен активирован",done:Boolean(site.primary_domain),
+        action:"Добавьте домен, подтвердите владение TXT-записью и активируйте."}
+    ];
+    const canTestOrders=checks.slice(0,5).every(check=>check.done);
+    return {
+      siteId,publicUrl:"/s/"+site.public_slug,
+      primaryDomain:site.primary_domain,
+      checks,
+      canTestOrders,
+      canLaunchWithOnlinePayments:false,
+      externalBlockers:[
+        "Требуется подключение и тестирование эквайринга, подтверждения оплаты и возвратов.",
+        "Требуется подключение способов доставки, расчёта тарифа и передачи отправлений.",
+        "Для расчётов в РФ необходимы проверка требований 54-ФЗ, ККТ и отправки чеков.",
+        "DNS маршрутизация на сервер магазина и действующий HTTPS-сертификат подтверждаются отдельно."
+      ]
+    };
+  }
+
   private async resolveStorefront(siteCode:string):Promise<{
     site_id:string;tenant_id:string;responsible_membership_id:string;currency:string;
   }>{
