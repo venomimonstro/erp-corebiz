@@ -18,7 +18,7 @@ test("million-SKU inventory export seeks composite PK and never uses OFFSET",asy
       calls.push({sql,params});
       if(sql.includes("to_regclass("))return {rows:[{exists:true}]};
       if(sql.includes("information_schema.columns"))
-        return {rows:[{exists:params[0]==="inventory_balance"}]};
+        return {rows:[{exists:sql.includes("column_name='tenant_id'")}]};
       if(sql.includes("SELECT * FROM"))return {
         rows:params.length===2?rows.slice(0,5000):rows.slice(5000)
       };
