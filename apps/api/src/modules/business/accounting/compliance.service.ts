@@ -74,7 +74,15 @@ export class ComplianceService {
     ].includes(input.taxRegime)) {
       throw new BadRequestException("Некорректный налоговый режим");
     }
-    const vatMode=input.vatMode??"NO_VAT";
+    if(input.taxRegime==="NPD"){
+      if(!["IP","INDIVIDUAL"].includes(input.entityKind)){
+        throw new BadRequestException("НПД доступен только физлицу или ИП");
+      }
+      if(input.hasEmployees){
+        throw new BadRequestException("НПД нельзя использовать с наёмными сотрудниками");
+      }
+    }
+    const vatMode=input.taxRegime==="NPD"?"NO_VAT":(input.vatMode??"NO_VAT");
     if(!["NO_VAT","VAT_5","VAT_7","VAT_22","VAT_MIXED"].includes(vatMode)) {
       throw new BadRequestException("Некорректный режим НДС");
     }
@@ -97,6 +105,12 @@ export class ComplianceService {
         [context.tenantId,input.legalEntityId]
       );
       if(!entity.rowCount) throw new NotFoundException("Юридическое лицо не найдено");
+      await client.query(
+        `UPDATE legal_entity
+         SET taxpayer_kind=$3,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,input.legalEntityId,input.entityKind]
+      );
 
       const current=await client.query<{id:string;effective_from:string}>(
         `SELECT id,effective_from::text
@@ -189,6 +203,88 @@ export class ComplianceService {
         ]
       );
       return created.rows[0];
+    });
+  }
+
+  async overview(
+    context:TenantContext,
+    legalEntityId:string
+  ){
+    if(!legalEntityId){
+      throw new BadRequestException("Выберите налогоплательщика");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const profileResult=await client.query<any>(
+        `SELECT
+           p.*,le.name AS legal_entity_name,le.inn,le.kpp AS legal_entity_kpp
+         FROM accounting_tax_profile p
+         JOIN legal_entity le
+           ON le.tenant_id=p.tenant_id AND le.id=p.legal_entity_id
+         WHERE p.tenant_id=$1
+           AND p.legal_entity_id=$2
+           AND p.status='ACTIVE'
+         ORDER BY p.effective_from DESC,p.created_at DESC
+         LIMIT 1`,
+        [context.tenantId,legalEntityId]
+      );
+      const profile=profileResult.rows[0]??null;
+
+      const obligations=await client.query<any>(
+        `SELECT
+           o.*,
+           coalesce(r.form_code,o.code) AS form_code,
+           r.source_url,
+           p.validation_status AS packet_validation_status,
+           p.signature_status AS packet_signature_status,
+           CASE
+             WHEN o.workflow_status IN ('ACCEPTED','PAID','CANCELLED')
+               THEN 'DONE'
+             WHEN o.due_at<now() THEN 'OVERDUE'
+             WHEN o.due_at<=now()+interval '7 days' THEN 'URGENT'
+             WHEN o.due_at<=now()+interval '30 days' THEN 'UPCOMING'
+             ELSE 'LATER'
+           END AS urgency,
+           coalesce(
+             o.calculation_snapshot->>'verificationNote',
+             o.source_snapshot->>'reviewNote'
+           ) AS review_note,
+           o.packet_id
+         FROM accounting_compliance_obligation o
+         LEFT JOIN accounting_regulatory_rule r ON r.id=o.rule_id
+         LEFT JOIN accounting_compliance_packet p
+           ON p.tenant_id=o.tenant_id AND p.id=o.packet_id
+         WHERE o.tenant_id=$1 AND o.legal_entity_id=$2
+         ORDER BY
+           CASE
+             WHEN o.workflow_status IN ('ACCEPTED','PAID','CANCELLED') THEN 1
+             ELSE 0
+           END,
+           o.due_at,o.created_at`,
+        [context.tenantId,legalEntityId]
+      );
+
+      const connectors=await client.query(
+        `SELECT
+           id,provider,status,supports_filing,supports_receipts,
+           certificate_valid_to,last_verified_at,last_error
+         FROM accounting_reporting_connector
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+         ORDER BY
+           CASE status WHEN 'VERIFIED' THEN 0 WHEN 'CONFIGURED' THEN 1 ELSE 2 END,
+           provider`,
+        [context.tenantId,legalEntityId]
+      );
+
+      const counts:Record<string,number>={};
+      for(const row of obligations.rows){
+        counts[row.urgency]=(counts[row.urgency]??0)+1;
+      }
+      return {
+        profile,
+        counts,
+        obligations:obligations.rows,
+        connectors:connectors.rows
+      };
     });
   }
 
