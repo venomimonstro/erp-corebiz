@@ -1,4 +1,3 @@
-import {BadRequestException} from "@nestjs/common";
 import {MarketplaceHubService} from "./marketplace-hub.service";
 
 const ctx={
@@ -24,7 +23,7 @@ describe("ecommerce mapping lookup at million-SKU scale",()=>{
     });
     expect(result).toHaveLength(1);
     expect(query).toHaveBeenCalledTimes(1);
-    const [sql,params]=query.mock.calls[0];
+    const [sql,params]=query.mock.calls[0]!;
     expect(sql).toContain("m.tenant_id=$1 AND m.connection_id=$2");
     expect(sql).toContain("LIMIT $4");
     expect(sql).not.toContain("OFFSET");
@@ -34,7 +33,7 @@ describe("ecommerce mapping lookup at million-SKU scale",()=>{
     const {service,query}=harness();
     const search="ab_%\\cd";
     await service.searchMappings(ctx,{connectionId,query:search});
-    const [sql,params]=query.mock.calls[0];
+    const [sql,params]=query.mock.calls[0]!;
     expect(sql).not.toContain(search);
     expect(params[2]).toContain("\\_");
     expect(params[2]).toContain("\\%");
