@@ -27,6 +27,10 @@ const initial={connectionId:"",mappingId:"",warehouseId:"",externalWarehouseId:"
 export default function EcommerceHubPage(){
   const [hub,setHub]=useState<Hub|null>(null);
   const [products,setProducts]=useState<Product[]>([]);
+  const [productSearch,setProductSearch]=useState("");
+  const [mappingSearch,setMappingSearch]=useState("");
+  const [matchedMappings,setMatchedMappings]=useState<Mapping[]>([]);
+  const [refreshMappings,setRefreshMappings]=useState(0);
   const [form,setForm]=useState(initial);
   const [mapConnection,setMapConnection]=useState("");
   const [mapSku,setMapSku]=useState("");
@@ -36,20 +40,56 @@ export default function EcommerceHubPage(){
   const [busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true);
   const load=useCallback(async()=>{
-    const [stock,products]=await Promise.all([
+    const [stock,page]=await Promise.all([
       apiRequest<Hub>("/channels/stock-hub"),
-      apiRequest<Product[]>("/catalog/products")
+      apiRequest<{items:Product[]}>("/catalog/products/page?limit=50")
     ]);
-    setHub(stock);setProducts(products);
+    setHub(stock);setProducts(page.items);
   },[]);
   useEffect(()=>{
     void load().catch(e=>setError(e instanceof Error?e.message:"Не удалось загрузить хаб"))
       .finally(()=>setLoading(false));
   },[load]);
+  // Server-side lookup: millions of SKUs must never be downloaded to a select.
+  useEffect(()=>{
+    let active=true;
+    const needle=productSearch.trim();
+    if(needle.length>0&&needle.length<3)return;
+    const timeout=setTimeout(()=>{
+      const q=new URLSearchParams({limit:"50"});
+      if(needle)q.set("q",needle);
+      void apiRequest<{items:Product[]}>("/catalog/products/page?"+q.toString())
+        .then(page=>{if(active)setProducts(page.items);})
+        .catch(e=>{if(active)setError(e instanceof Error?e.message:"Ошибка поиска SKU");});
+    },300);
+    return ()=>{active=false;clearTimeout(timeout);};
+  },[productSearch]);
+  useEffect(()=>{
+    let active=true;
+    const needle=mappingSearch.trim();
+    if(!form.connectionId){
+      setMatchedMappings([]);return;
+    }
+    if(needle.length>0&&needle.length<3)return;
+    const timeout=setTimeout(()=>{
+      const q=new URLSearchParams({connectionId:form.connectionId,limit:"50"});
+      if(needle)q.set("q",needle);
+      void apiRequest<Mapping[]>("/channels/stock-hub/mappings?"+q.toString())
+        .then(rows=>{if(active)setMatchedMappings(rows);})
+        .catch(e=>{if(active)setError(e instanceof Error?e.message:"Ошибка поиска сопоставлений");});
+    },300);
+    return ()=>{active=false;clearTimeout(timeout);};
+  },[form.connectionId,mappingSearch,refreshMappings]);
+
   const connections=useMemo(()=>(hub?.connections??[]).filter(c=>
     ["OZON","WILDBERRIES","YANDEX_MARKET"].includes(c.provider)),[hub]);
-  const availableMappings=useMemo(()=>(hub?.mappings??[]).filter(m=>
-    m.connection_id===form.connectionId),[hub,form.connectionId]);
+  const availableMappings=useMemo(()=>{
+    const rows=[...matchedMappings];
+    // Keep an already edited listing selectable across search/page changes.
+    const selected=(hub?.mappings??[]).find(m=>m.id===form.mappingId);
+    if(selected&&!rows.some(m=>m.id===selected.id))rows.unshift(selected);
+    return rows;
+  },[hub,matchedMappings,form.mappingId]);
   const provider=connections.find(c=>c.id===form.connectionId)?.provider??"";
   const stockConnection=hub?.connections.find(c=>c.id===form.connectionId);
   const needsWb=provider==="WILDBERRIES";
@@ -94,6 +134,7 @@ export default function EcommerceHubPage(){
       });
       setMapExternal("");
       await load();
+      setRefreshMappings(n=>n+1);
       setNotice("Товар сопоставлен. Теперь настройте его остатки в хабе.");
     }catch(e){setError(e instanceof Error?e.message:"Не удалось сопоставить товар");}
     finally{setBusy(false);}
@@ -149,7 +190,7 @@ export default function EcommerceHubPage(){
           <small>единый внутренний каталог</small></article>
         <article><span>Активная публикация</span><strong>{hub.listings.filter(x=>x.publish_enabled).length}</strong>
           <small>уже настроенных витрин</small></article>
-        <article><span>Очередь пересчёта</span><strong>{hub.queuedPools}</strong>
+        <article><span>Очередь пересчёта</span><strong>{hub.queuedPools>=10001?"10 000+":hub.queuedPools}</strong>
           <small>складов и товаров</small></article>
         <article><span>Проблемы обмена</span>
           <strong>{hub.listings.filter(x=>["BLOCKED","RETRY"].includes(x.sync_status??"")).length}</strong>
@@ -165,6 +206,9 @@ export default function EcommerceHubPage(){
             <option value="">Выберите подключение</option>
             {connections.map(c=><option key={c.id} value={c.id}>{c.name} · {c.provider}</option>)}
           </select>
+          <input value={productSearch} onChange={e=>setProductSearch(e.target.value)}
+            placeholder="Поиск внутреннего SKU (от 3 символов)"
+            aria-label="Поиск товара по артикулу, названию или штрихкоду"/>
           <select value={mapSku} onChange={e=>setMapSku(e.target.value)} aria-label="Внутренний SKU">
             <option value="">Внутренний SKU</option>
             {products.map(p=><option key={p.skuId} value={p.skuId}>{p.sku} · {p.productName}</option>)}
@@ -185,6 +229,9 @@ export default function EcommerceHubPage(){
             <option value="">Подключение</option>
             {connections.map(c=><option key={c.id} value={c.id}>{c.name} · {c.provider}</option>)}
           </select>
+          <input value={mappingSearch} onChange={e=>setMappingSearch(e.target.value)}
+            placeholder="Поиск сопоставления SKU / offer_id"
+            aria-label="Поиск сопоставленного товара (от 3 символов)"/>
           <select aria-label="Сопоставленный товар" value={form.mappingId}
             onChange={e=>setForm({...form,mappingId:e.target.value})}>
             <option value="">SKU / offer_id</option>
