@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post, Req } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
+import { ApiCost } from "../../../infrastructure/http/api-cost.decorator";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
 import { MigrationService } from "./migration.service";
@@ -8,6 +9,7 @@ import { MigrationService } from "./migration.service";
 export class MigrationController {
   constructor(private readonly migration: MigrationService) {}
 
+  @ApiCost("EXPENSIVE")
   @Post("ingest")
   @RequirePermission("migration.manage")
   async ingest(
@@ -37,6 +39,7 @@ export class MigrationController {
     };
   }
 
+  @ApiCost("EXPENSIVE")
   @Post(":id/import")
   @RequirePermission("migration.manage")
   async importBatch(
