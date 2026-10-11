@@ -2258,6 +2258,36 @@ export class InventoryService {
     return { applied: movement.applied };
   }
 
+  async receiveForAutomotive(
+    client:PoolClient,
+    context:TenantContext,
+    input:{
+      partId:string;
+      warehouseId:string;
+      skuId:string;
+      quantityMilli:bigint;
+      unitCostMinor:bigint;
+    }
+  ):Promise<{movementId:string;applied:boolean}>{
+    if(input.quantityMilli<=0n){
+      throw new BadRequestException("Количество автомобильной детали должно быть больше нуля");
+    }
+    if(input.unitCostMinor<0n){
+      throw new BadRequestException("Себестоимость детали не может быть отрицательной");
+    }
+    return this.postMovement(client,context,{
+      warehouseId:input.warehouseId,
+      skuId:input.skuId,
+      movementType:"RECEIPT",
+      quantityDeltaMilli:input.quantityMilli,
+      unitCostMinor:input.unitCostMinor,
+      sourceType:"AUTOMOTIVE_DISMANTLED_PART",
+      sourceId:input.partId,
+      reason:"Приход детали с авторазбора",
+      idempotencyKey:"automotive-part-receipt:"+input.partId
+    });
+  }
+
   async moveOwnerLocation(
     client:PoolClient,
     context:TenantContext,
