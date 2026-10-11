@@ -589,6 +589,24 @@ export class BookingService {
            p.freeze_days_allowed,p.makeup_days_valid,p.allow_makeup,
            p.family_eligible,p.activation_policy,p.allowed_debt_minor::text,
            p.grace_period_days,
+           coalesce((
+             SELECT json_agg(json_build_object(
+               'id',e.id,
+               'serviceId',e.service_id,
+               'trainerResourceId',e.trainer_resource_id,
+               'lessonType',e.lesson_type,
+               'danceProgramId',e.dance_program_id,
+               'danceGroupId',e.dance_group_id,
+               'weekdays',e.weekdays,
+               'startMinute',e.start_minute,
+               'endMinute',e.end_minute,
+               'visitLimit',e.visit_limit,
+               'managementVisitValueMinor',e.management_visit_value_minor::text,
+               'priority',e.priority
+             ) ORDER BY e.priority,e.id)
+             FROM service_package_plan_entitlement e
+             WHERE e.tenant_id=p.tenant_id AND e.plan_id=p.id
+           ),'[]'::json) AS entitlements,
            p.no_show_policy,p.status,p.metadata,p.created_at,p.updated_at
          FROM service_package_plan p
          LEFT JOIN service_catalog_item s
