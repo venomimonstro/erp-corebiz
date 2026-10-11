@@ -616,9 +616,11 @@ export class DanceStudioService {
       );
 
       const setup=scopeIds===null ? (await client.query<{
-        programs:number;groups:number;trainers:number;students:number;plans:number;lessons:number;
+        services:number;programs:number;groups:number;trainers:number;students:number;plans:number;lessons:number;
       }>(
         `SELECT
+          (SELECT count(*)::integer FROM service_catalog_item sc
+           WHERE sc.tenant_id=$1 AND sc.status='ACTIVE') AS services,
           (SELECT count(*)::integer FROM dance_program p
            WHERE p.tenant_id=$1 AND p.status='ACTIVE') AS programs,
           (SELECT count(*)::integer FROM dance_group g
