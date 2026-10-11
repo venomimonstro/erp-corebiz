@@ -7,12 +7,14 @@ import { ActionQueueCenter } from "./action-queue-center";
 
 type Entry = readonly [href: string, label: string, key: string];
 type Section = { title: string; items: Entry[] };
-type MenuProfile = "all" | "commerce" | "service" | "warehouse";
+type MenuProfile = "all" | "commerce" | "service" | "warehouse" | "dance" | "automotive" | "agency";
 type Capability = { key: string; enabled: boolean };
 type WorkspaceContext = {
   roles: string[];
   permissions: Array<{ code: string; scope: string }>;
   profileCode: string;
+  verticalCode: string | null;
+  tenantId: string;
   workspace: string;
 };
 
@@ -33,6 +35,7 @@ const permissionByKey: Record<string,string> = {
   "accounting-taxes": "accounting.compliance.read",
   "service-home": "service.read",
   "service-setup": "service.read",
+  "first-day": "customization.manage",
   "service-team": "service.read",
   dance: "dance.read",
   "dance-students": "dance.read",
@@ -129,6 +132,9 @@ const capabilityByKey: Record<string,string> = {
 
 const profileSections: Record<MenuProfile, readonly string[]> = {
   all: [],
+  dance: ["Клиенты и задачи", "Запись и услуги", "Продажи и товары", "Управление"],
+  automotive: ["Клиенты и задачи", "Запись и услуги", "Продажи и товары", "Управление"],
+  agency: ["Клиенты и задачи", "Продажи и товары", "Аналитика", "Управление"],
   commerce: ["Клиенты и задачи", "Продажи и товары", "Онлайн-торговля", "Аналитика", "Управление"],
   service: ["Клиенты и задачи", "Запись и услуги", "Продажи и товары", "Аналитика", "Управление"],
   warehouse: ["Клиенты и задачи", "Продажи и товары", "Склад и 3PL", "Управление"]
@@ -197,6 +203,7 @@ const sections: Section[] = [
   { title: "Управление", items: [
     ["/app/assistant", "Помощник владельца", "owner-assistant"],
     ["/app/operations", "Что требует внимания", "operations"],
+    ["/app/start", "Первый запуск · выбор ниши", "first-day"],
     ["/app/settings", "Настройки", "settings"],
     ["/app/settings/customization", "Адаптация системы", "customization"],
     ["/app/workflows", "Автоматизации", "workflows"],
@@ -219,15 +226,6 @@ export function AppSidebar({ active }: { active: string }) {
   const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContext | null>(null);
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem("corebiz.menu.profile");
-      if (stored === "commerce" || stored === "service" || stored === "warehouse" || stored === "all") {
-        setProfile(stored);
-      }
-    } catch { /* Private browsing: use a full navigation menu. */ }
-  }, []);
-
-  useEffect(() => {
     let cancelled = false;
 
     async function loadCapabilities() {
@@ -241,19 +239,27 @@ export function AppSidebar({ active }: { active: string }) {
             Object.fromEntries(rows.map((item) => [item.key,item.enabled]))
           );
           setWorkspaceContext(context);
-          // Show the few relevant business areas on first login.
-          // Explicit personal menu settings always win.
+          // Navigation preferences belong to a specific tenant; a user may
+          // switch from their dance studio to a marketplace business.
+          const preset:MenuProfile =
+            context.verticalCode==="DANCE_FITNESS" ? "dance" :
+            ["AUTO_SERVICE","AUTO_PARTS_DISMANTLING"].includes(context.verticalCode??"")
+              ? "automotive" :
+            ["PROFESSIONAL_SERVICES","WEB_STUDIO","WEB_MARKETING_AGENCY",
+              "MARKETING_AGENCY"].includes(context.verticalCode??"")
+              ? "agency" :
+            context.profileCode==="ECOMMERCE" || context.profileCode==="TRADE"
+              ? "commerce" : context.profileCode==="SERVICE" ? "service" :
+            context.profileCode==="WAREHOUSE_3PL" ? "warehouse":"all";
           try {
-            if (!window.localStorage.getItem("corebiz.menu.profile")) {
-              const preset: MenuProfile =
-                context.profileCode === "ECOMMERCE" || context.profileCode === "TRADE"
-                  ? "commerce"
-                  : context.profileCode === "SERVICE" ? "service"
-                  : context.profileCode === "WAREHOUSE_3PL" ? "warehouse"
-                  : "all";
-              setProfile(preset);
-            }
-          } catch { /* private mode */ }
+            const stored=window.localStorage.getItem(
+              "corebiz.menu.profile."+context.tenantId);
+            const choices:MenuProfile[]=[
+              "all","commerce","service","warehouse","dance","automotive","agency"
+            ];
+            setProfile(choices.includes(stored as MenuProfile)
+              ? stored as MenuProfile:preset);
+          }catch{setProfile(preset);}
         }
       } catch {
         // Fail open for navigation only. Backend guards remain authoritative.
@@ -276,7 +282,13 @@ export function AppSidebar({ active }: { active: string }) {
 
   function updateProfile(value: MenuProfile) {
     setProfile(value);
-    try { window.localStorage.setItem("corebiz.menu.profile", value); } catch { /* no persistence */ }
+    if(workspaceContext?.tenantId) {
+      try {
+        window.localStorage.setItem(
+          "corebiz.menu.profile."+workspaceContext.tenantId,value
+        );
+      } catch { /* no persistence */ }
+    }
   }
   const capabilityFilteredSections = useMemo(
     () =>
@@ -285,6 +297,26 @@ export function AppSidebar({ active }: { active: string }) {
           ...section,
           items: section.items.filter((entry) => {
             if (entry[2] === active) return true;
+
+            // An industry sidebar shows only relevant workflows. Users can
+            // still choose "all" when they run a mixed business.
+            const key=entry[2];
+            if(profile==="dance" && (
+              key==="automotive" || key==="service-assets" ||
+              (key.startsWith("service-") &&
+               !["service-setup","service-packages"].includes(key)) ||
+              ["bookings","service-waitlist"].includes(key)
+            ))return false;
+            if(profile==="automotive" && (
+              key.startsWith("dance") ||
+              ["service-team","service-waitlist","service-packages"].includes(key)
+            ))return false;
+            if(profile==="service" && (key.startsWith("dance") ||
+              key==="automotive" || key==="service-assets"))return false;
+            if(profile==="agency" && (
+              key.startsWith("dance") || key==="automotive" ||
+              key.startsWith("service-") || ["bookings","resources"].includes(key)
+            ))return false;
 
             const capability = capabilityByKey[entry[2]];
             if (
@@ -309,7 +341,7 @@ export function AppSidebar({ active }: { active: string }) {
           })
         }))
         .filter((section) => section.items.length > 0),
-    [active, capabilities, workspaceContext]
+    [active, capabilities, workspaceContext, profile]
   );
 
   const visibleSections = capabilityFilteredSections.filter((section) =>
@@ -349,6 +381,9 @@ export function AppSidebar({ active }: { active: string }) {
           <span>Показывать разделы для</span>
           <select value={profile} onChange={(event) => updateProfile(event.target.value as MenuProfile)}>
             <option value="all">Все направления</option>
+            <option value="dance">Студия танцев</option>
+            <option value="automotive">Автосервис и авторазбор</option>
+            <option value="agency">Агентство и проекты</option>
             <option value="commerce">Торговля и интернет-магазин</option>
             <option value="service">Услуги и запись клиентов</option>
             <option value="warehouse">Склад и логистика</option>
