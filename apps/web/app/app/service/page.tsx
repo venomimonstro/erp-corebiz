@@ -11,7 +11,7 @@ type Booking={
   status:string;
   starts_at:string;
   ends_at:string;
-  price_minor_snapshot:string;
+  price_minor_snapshot:string|null;
   currency:string;
   version:number;
   party_name:string|null;
@@ -29,7 +29,7 @@ type TodayData={
     total:number;
     completed:number;
     noShow:number;
-    revenueMinor:string;
+    revenueMinor:string|null;
   };
 };
 
@@ -40,7 +40,7 @@ type Analytics={
     bookings:number;
     completed:number;
     no_show:number;
-    revenue_minor:string;
+    revenue_minor:string|null;
   }>;
   resources:Array<{
     id:string;
@@ -98,7 +98,8 @@ type Balance={
   availableMilli:string;
 };
 
-function money(value:string|number|undefined){
+function money(value:string|number|null|undefined){
+  if(value===null||value===undefined)return "—";
   return new Intl.NumberFormat("ru-RU",{
     style:"currency",
     currency:"RUB",
@@ -125,8 +126,8 @@ export default function ServiceHomePage(){
       const [todayData,analyticsData,balanceData,economicsData]=await Promise.all([
         apiRequest<TodayData>("/service/workspace/today"),
         apiRequest<Analytics>("/service/workspace/analytics"),
-        apiRequest<Balance[]>("/inventory/balances"),
-        apiRequest<Economics>("/service/economics")
+        apiRequest<Balance[]>("/inventory/balances").catch(()=>[]),
+        apiRequest<Economics>("/service/economics").catch(()=>null)
       ]);
       setToday(todayData);
       setAnalytics(analyticsData);

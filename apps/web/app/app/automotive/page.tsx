@@ -44,6 +44,7 @@ type Part={
 };
 
 function money(value:string|number|null|undefined){
+  if(value===null||value===undefined)return "—";
   return new Intl.NumberFormat("ru-RU",{
     style:"currency",currency:"RUB",maximumFractionDigits:0
   }).format(Number(value??0)/100);
@@ -115,8 +116,8 @@ export default function AutomotivePage(){
         apiRequest<Dashboard>("/automotive/dashboard"),
         apiRequest<Vehicle[]>("/automotive/vehicles"),
         apiRequest<WorkOrder[]>("/automotive/work-orders"),
-        apiRequest<Donor[]>("/automotive/donors"),
-        apiRequest<Part[]>("/automotive/parts")
+        apiRequest<Donor[]>("/automotive/donors").catch(()=>[]),
+        apiRequest<Part[]>("/automotive/parts").catch(()=>[])
       ]);
       setDashboard(d); setVehicles(v); setOrders(o); setDonors(ds); setParts(ps);
       if(!orderVehicleId&&v[0]) setOrderVehicleId(v[0].id);
