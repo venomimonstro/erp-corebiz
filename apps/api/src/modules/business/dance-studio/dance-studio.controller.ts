@@ -431,6 +431,20 @@ export class DanceStudioController {
     };
   }
 
+  @Post("compensation-plans/:planId/archive")
+  @RequirePermission("dance.write")
+  async archiveCompensationPlan(
+    @Req() req:AuthenticatedRequest,
+    @Param("planId") planId:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.economics.archiveCompensationPlan(
+        this.ctx(req),planId
+      )
+    };
+  }
+
   @Post("compensation-plans")
   @RequirePermission("dance.write")
   async createCompensationPlan(
