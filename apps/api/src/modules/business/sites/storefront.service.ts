@@ -86,7 +86,7 @@ export class StorefrontService {
     }
     const search=options.q?.trim()||null;
     // Escape LIKE wildcards; user search must not widen the query with % or _.
-    const safeSearch=search?.replace(/[\\%_]/g,"\\const search=options.q?.trim()||null;")??null;
+    const safeSearch=search?.replace(/[\\%_]/g, value=>"\\"+value)??null;
     if(search && search.length<2){
       throw new BadRequestException("Для поиска введите минимум 2 символа");
     }
