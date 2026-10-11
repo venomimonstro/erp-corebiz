@@ -16,6 +16,7 @@ export class CatalogService {
   async list(context: TenantContext): Promise<Array<{
     productId: string;
     productName: string;
+    imageUrl: string | null;
     kind: string;
     variantId: string;
     variantName: string;
@@ -32,6 +33,7 @@ export class CatalogService {
       const result = await client.query<{
         product_id: string;
         product_name: string;
+        image_url: string | null;
         kind: string;
         variant_id: string;
         variant_name: string;
@@ -46,6 +48,7 @@ export class CatalogService {
         `SELECT
            p.id AS product_id,
            p.name AS product_name,
+           p.image_url,
            p.kind,
            v.id AS variant_id,
            v.name AS variant_name,
@@ -75,6 +78,7 @@ export class CatalogService {
       return result.rows.map((row) => ({
         productId: row.product_id,
         productName: row.product_name,
+        imageUrl: row.image_url,
         kind: row.kind,
         variantId: row.variant_id,
         variantName: row.variant_name,
@@ -111,12 +115,12 @@ export class CatalogService {
     return this.database.withTenantTransaction(context,async client=>{
       const canReadCost=await this.mayReadCost(client,context);
       const result=await client.query<{
-        product_id:string;product_name:string;kind:string;
+        product_id:string;product_name:string;image_url:string|null;kind:string;
         variant_id:string;variant_name:string;sku_id:string;
         sku_code:string;barcode:string|null;sale_price_minor:string;
         cost_price_minor:string;currency:string;track_inventory:boolean;
       }>(
-        `SELECT p.id AS product_id,p.name AS product_name,p.kind,
+        `SELECT p.id AS product_id,p.name AS product_name,p.image_url,p.kind,
           v.id AS variant_id,v.name AS variant_name,
           s.id AS sku_id,s.code AS sku_code,s.barcode,
           s.sale_price_minor::text,s.cost_price_minor::text,
@@ -138,7 +142,8 @@ export class CatalogService {
       const rows=result.rows.slice(0,limit);
       return {
         items:rows.map(row=>({
-          productId:row.product_id,productName:row.product_name,kind:row.kind,
+          productId:row.product_id,productName:row.product_name,
+          imageUrl:row.image_url,kind:row.kind,
           variantId:row.variant_id,variantName:row.variant_name,
           skuId:row.sku_id,sku:row.sku_code,barcode:row.barcode,
           salePriceMinor:row.sale_price_minor,
@@ -176,6 +181,7 @@ export class CatalogService {
       costPriceMinor?: string;
       categoryId?: string;
       description?: string;
+      imageUrl?: string;
     }
   ): Promise<{ productId: string; variantId: string; skuId: string; sku: string }> {
     if(!input||typeof input.name!=="string")
@@ -194,6 +200,7 @@ export class CatalogService {
        BigInt(costPriceMinor)>9223372036854775807n)
       throw new BadRequestException("Некорректная цена");
 
+    const imageUrl=this.validImageUrl(input.imageUrl);
     const skuCode=input.sku?.trim()||
       `SKU-${randomUUID().replaceAll("-","").slice(0,10).toUpperCase()}`;
     if(skuCode.length>128||skuCode.length===0||
@@ -231,15 +238,16 @@ export class CatalogService {
 
       const productResult = await client.query<{ id: string }>(
         `INSERT INTO product(
-           tenant_id, category_id, name, kind, description
-         ) VALUES ($1,$2,$3,$4,$5)
+           tenant_id, category_id, name, kind, description, image_url
+         ) VALUES ($1,$2,$3,$4,$5,$6)
          RETURNING id`,
         [
           context.tenantId,
           input.categoryId ?? null,
           name,
           input.kind ?? "STOCKABLE",
-          input.description?.trim() || null
+          input.description?.trim() || null,
+          imageUrl
         ]
       );
 
@@ -300,4 +308,49 @@ export class CatalogService {
       };
     });
   }
+  /** Image links are only displayed by browsers; never server-side fetched. */
+  private validImageUrl(value:unknown):string|null {
+    if(value===undefined || value===null || value==="") return null;
+    if(typeof value!=="string" || value.length>2048)
+      throw new BadRequestException("Некорректная ссылка на изображение");
+    const normalized=value.trim();
+    if(!normalized)return null;
+    try {
+      const url=new URL(normalized);
+      if(url.protocol!=="https:" || !url.hostname || url.username || url.password)
+        throw new Error("INVALID_URL");
+      return normalized;
+    } catch {
+      throw new BadRequestException("Изображение должно быть доступно по HTTPS");
+    }
+  }
+
+  async updateImage(
+    context:TenantContext,
+    productId:string,
+    input:{imageUrl?:string|null}
+  ):Promise<{updated:true;imageUrl:string|null}> {
+    if(!input || typeof input!=="object" || Array.isArray(input) ||
+       !Object.prototype.hasOwnProperty.call(input,"imageUrl"))
+      throw new BadRequestException("Укажите ссылку на изображение или null");
+    const imageUrl=this.validImageUrl(input.imageUrl);
+    return this.database.withTenantTransaction(context,async client=>{
+      const updated=await client.query(
+        `UPDATE product SET image_url=$3,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+         RETURNING id`,
+        [context.tenantId,productId,imageUrl]
+      );
+      if(!updated.rowCount)throw new NotFoundException("Товар не найден");
+      await client.query(
+        `INSERT INTO audit_event(tenant_id,actor_user_id,actor_membership_id,
+          action,resource_type,resource_id,after_data)
+         VALUES ($1,$2,$3,'catalog.product_image_updated','product',$4,$5)`,
+        [context.tenantId,context.userId,context.membershipId,productId,
+          JSON.stringify({imageUrl})]
+      );
+      return {updated:true,imageUrl};
+    });
+  }
+
 }
