@@ -1166,7 +1166,7 @@ export class ProjectsService {
     if (!amount || !/^[1-9][0-9]{0,14}$/.test(amount))
       throw new BadRequestException("Некорректная сумма расхода в копейках");
     const expenseOn=input?.expenseOn??new Date().toISOString().slice(0,10);
-    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(expenseOn) ||
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(expenseOn) ||
         !Number.isFinite(Date.parse(expenseOn)) ||
         new Date(expenseOn).toISOString().slice(0,10)!==expenseOn)
       throw new BadRequestException("Некорректная дата расхода");
