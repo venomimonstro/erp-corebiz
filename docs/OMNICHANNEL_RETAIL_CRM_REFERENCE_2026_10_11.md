@@ -64,6 +64,8 @@
 В этом спринте:
 - переключение воронок на UI и создание дополнительных pipeline;
 - поиск по карточкам, фильтр забытых сделок/просрочек;
+- оценка прогноза выручки по вероятностям **открытых** стадий;
+  это не касса/факт-выручка и не учитывает незагруженные карточки;
 - `POST /api/v1/crm/deals/:id/next-action` создаёт **настоящую**
   связанную задачу, фиксирует `crm_activity`, назначает срок и
   ответственного. Уникальный ключ и fingerprint предотвращают
@@ -97,7 +99,9 @@ routing/SLA, конструктор триггеров, полноценный
 [Digital Pipeline](https://www.amocrm.ru/developers/content/web_sdk/digital_pipeline),
 [МойСклад POS API](https://dev.moysklad.ru/doc/api/pos/1.0/),
 [Резервы и складской учёт](https://support.moysklad.ru/hc/ru/товары%20и%20склады/остатки%20и%20себестоимость/складской_учет_остатки_резервы_ожидания),
-[YCLIENTS ресурсы](https://support.yclients.ru/5-8-210).
+[YCLIENTS ресурсы](https://support.yclients.ru/5-8-210),
+[1С:Розница — склад](https://v8.1c.ru/retail/upravlenie-skladom/),
+[1С:Розница — документация](https://its.1c.ru/db/content/retail30doc/src/%D0%B2%D0%B2%D0%B5%D0%B4%D0%B5%D0%BD%D0%B8%D0%B5.htm).
 
 ## Коммерческие P0 — прежде чем продавать как готовую сеть
 
