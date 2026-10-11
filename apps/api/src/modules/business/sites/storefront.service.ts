@@ -118,12 +118,15 @@ export class StorefrontService {
          )
          SELECT i.product_id,i.product_name,i.description,i.image_url,
            i.sku_id,i.sku_code,i.barcode,i.sale_price_minor,i.currency,
-           COALESCE(sum(GREATEST(
-             COALESCE(b.physical_milli,0)-COALESCE(b.reserved_milli,0)-
-               COALESCE(ip.safety_stock_milli,0),0
-           )),0)::text AS atp_milli
+           COALESCE(sum(CASE WHEN w.status='ACTIVE' AND COALESCE(ip.enabled,true)
+             THEN GREATEST(
+               COALESCE(b.physical_milli,0)-COALESCE(b.reserved_milli,0)-
+               COALESCE(ip.safety_stock_milli,0),0)
+             ELSE 0 END),0)::text AS atp_milli
          FROM items i
          LEFT JOIN inventory_balance b ON b.tenant_id=$1 AND b.sku_id=i.sku_id
+         LEFT JOIN warehouse w
+           ON w.tenant_id=b.tenant_id AND w.id=b.warehouse_id
          LEFT JOIN inventory_policy ip
            ON ip.tenant_id=b.tenant_id AND ip.warehouse_id=b.warehouse_id
            AND ip.sku_id=b.sku_id
@@ -572,22 +575,29 @@ export class StorefrontService {
            ) AS catalog_published,
            EXISTS (
              SELECT 1 FROM sku k
+             JOIN storefront_config c
+               ON c.tenant_id=k.tenant_id AND c.site_id=s.id AND c.enabled
              JOIN product_variant v ON v.tenant_id=k.tenant_id AND v.id=k.variant_id
              JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
              WHERE k.tenant_id=s.tenant_id AND k.status='ACTIVE'
                AND v.status='ACTIVE' AND p.status='ACTIVE'
-               AND k.sale_price_minor>0
+               AND k.sale_price_minor>0 AND k.currency=c.currency
            ) AS priced_sku,
            EXISTS (
              SELECT 1 FROM inventory_balance b
+             JOIN warehouse w
+               ON w.tenant_id=b.tenant_id AND w.id=b.warehouse_id AND w.status='ACTIVE'
              JOIN sku k ON k.tenant_id=b.tenant_id AND k.id=b.sku_id
+             JOIN storefront_config c
+               ON c.tenant_id=b.tenant_id AND c.site_id=s.id AND c.enabled
              JOIN product_variant v ON v.tenant_id=k.tenant_id AND v.id=k.variant_id
              JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
              LEFT JOIN inventory_policy ip
                ON ip.tenant_id=b.tenant_id AND ip.warehouse_id=b.warehouse_id AND ip.sku_id=b.sku_id
              WHERE b.tenant_id=s.tenant_id
                AND k.status='ACTIVE' AND v.status='ACTIVE' AND p.status='ACTIVE'
-               AND k.sale_price_minor>0
+               AND k.sale_price_minor>0 AND k.currency=c.currency
+               AND COALESCE(ip.enabled,true)
                AND b.physical_milli-b.reserved_milli-COALESCE(ip.safety_stock_milli,0)>0
            ) AS available_sku,
            (
