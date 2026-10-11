@@ -9,7 +9,7 @@ const context:TenantContext={
 
 describe("cross-vertical permission resolution",()=>{
   function service(scope:"all"|"branch"|"team"|"own"|null){
-    const client={query:jest.fn(async()=>({rows:[{scope}]}))};
+    const client={query:jest.fn(async(_sql:string,_args:unknown[])=>({rows:[{scope}]}))};
     const db={withTenantTransaction:jest.fn(async (_ctx:unknown,cb:any)=>cb(client))};
     return {service:new AuthorizationService(db as any),client,db};
   }
