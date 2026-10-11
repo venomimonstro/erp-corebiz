@@ -359,7 +359,7 @@ export const BUSINESS_VERTICALS: Record<
     profileCode: "SERVICE",
     version: 1,
     enabledCapabilities: [
-      "crm","tasks","sales","finance","accounting","projects",
+      "crm","tasks","sales","finance","accounting","service","projects",
       "sites","growth","workflow","support"
     ],
     customFields: [
@@ -375,7 +375,7 @@ export const BUSINESS_VERTICALS: Record<
       "Сколько ретейнерной выручки защищено на следующий месяц?",
       "Какая дебиторка и какие налоги требуют действия?"
     ],
-    primaryWorkspaces: ["crm","agency","projects","tasks","finance","accounting","growth"],
+    primaryWorkspaces: ["crm","projects","tasks","finance","accounting","growth"],
     operatingFlows: [
       "Лид → квалификация → оценка → КП → переговоры → договор → проект",
       "Проект → scope → deliverables → внутренняя проверка → согласование клиента → сдача",
@@ -415,7 +415,7 @@ export const BUSINESS_VERTICALS: Record<
       "Сколько денег будет получено после приёмки и какие этапы не оплачены?",
       "Как загружены дизайнеры, разработчики, тестировщики и менеджеры проектов?"
     ],
-    primaryWorkspaces: ["crm","agency","projects","tasks","finance","support"],
+    primaryWorkspaces: ["crm","projects","tasks","finance","support"],
     operatingFlows: [
       "Заявка → бриф → оценка часов → КП → договор → проект",
       "Проект → ТЗ → прототип → дизайн → разработка → QA → приёмка → релиз",
@@ -453,7 +453,7 @@ export const BUSINESS_VERTICALS: Record<
       "Какие месячные отчёты и медиапланы ждут согласования?",
       "Кто рискует не продлить договор и какую выручку потеряем?"
     ],
-    primaryWorkspaces: ["crm","agency","projects","tasks","finance","growth"],
+    primaryWorkspaces: ["crm","projects","tasks","finance","growth"],
     operatingFlows: [
       "Входящий лид → аудит → стратегия → КП → договор → onboarding клиента",
       "Ретейнер → медиаплан → задачи SEO/SMM/PPC → согласование → запуск",
