@@ -8,6 +8,11 @@
 - Source of Truth: `docs/MASTER_SPEC.md`.
 - Текущий этап: **аудит и стабилизация основного контура после спринтов 54–66**. Основа этих спринтов есть в коде, но production-приёмка не пройдена.
 - Актуальный аудит: [Стабильность, безопасность, UX и сравнение с МойСклад](docs/AUDIT_PRODUCT_SECURITY_UX_MOYSKLAD_2026_10_08.md).
+- Архитектура всех бизнес-вертикалей, интеграции, роли и масштабирование: [Business architecture + security + 1M SKU](docs/ARCHITECTURE_SECURITY_SCALING_BUSINESS_VERTICALS_2026_10_11.md).
+- Проверка **runtime** RLS на сервере: `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/security_tenant_isolation_gate.sql` (от имени непривилегированного app role).
+- Нагрузочный тест 1000 отдельных пользовательских сессий: `scripts/load-1000-sessions.mjs` — только локальный одноразовый стенд, требует фикстуры и `COREBIZ_CONFIRM_DISPOSABLE_DB=YES`.
+- API большого каталога: `GET /api/v1/catalog/products/page?limit=100&cursor=...&q=...`; индексы `222_catalog_million_sku_indexes.sql`. Создание trigram-индексов может блокировать запись на большом существующем каталоге, сначала проверять на копии.
+
 - Исправления входа при RLS: [Auth/RLS gate](docs/AUTH_RUNTIME_RLS_2026_10_09.md).
 - Проверка миграций: `node scripts/migration-preflight.mjs` (10 предупреждений по историческим номерам, не причина автоматического BLOCK).
 - Симуляция клиента (только одноразовая тестовая БД): `scripts/smoke-user-journey.mjs`; браузерная симуляция: `scripts/smoke-browser-journey.mjs` (требует локальный Playwright).
