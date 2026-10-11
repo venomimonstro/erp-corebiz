@@ -96,7 +96,7 @@ const queueLabels: Record<Dashboard["queue"][number]["type"], string> = {
   STOCK_RISK: "Склад"
 };
 
-const workspaceLabels: Record<WorkspaceContext["workspace"], {
+const workspaceLabels: Record<WorkspaceContext["workspace"]|"PROJECTS", {
   eyebrow: string;
   summary: string;
 }> = {
@@ -127,6 +127,10 @@ const workspaceLabels: Record<WorkspaceContext["workspace"], {
   PROCUREMENT: {
     eyebrow: "Рабочее место закупок",
     summary: "Заказы поставщикам, ожидаемые поставки и просрочки."
+  },
+  PROJECTS: {
+    eyebrow: "Мои проекты",
+    summary: "Задачи и сроки ваших клиентских проектов — без чужих бюджетов и портфелей."
   },
   VIEWER: {
     eyebrow: "Рабочее пространство",
@@ -213,7 +217,8 @@ export default function AppHomePage() {
   }, [dashboard]);
 
   const workspaceCopy = context
-    ? workspaceLabels[context.workspace]
+    ? (workspaceLabels[(member?.workspace??context.workspace)
+          as keyof typeof workspaceLabels]??workspaceLabels.VIEWER)
     : workspaceLabels.VIEWER;
 
   return (
