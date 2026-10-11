@@ -842,7 +842,8 @@ export default function DanceTeamPage() {
             </p>
           </div>
           <div className="studio-hero-actions">
-            <button className="secondary-button" onClick={openPlanModal} type="button">+ Правило зарплаты</button>
+            <button className="secondary-button" onClick={() => openProfileModal()} type="button">+ Условия тренера</button>
+            <button className="secondary-button" onClick={openPlanModal} type="button">+ Правило доплаты</button>
             <button className="secondary-button" onClick={openRoomModal} type="button">+ Аренда зала</button>
             <button className="secondary-button" disabled={pending} onClick={() => void finalizeRoomMonth()} type="button">Закрыть аренду месяца</button>
             <button disabled={pending} onClick={() => void approveMonth()} type="button">Утвердить месяц</button>
@@ -873,7 +874,103 @@ export default function DanceTeamPage() {
         </div>
 
         <section className="section-block studio-section">
-          <div className="section-heading"><div><p className="muted">Правила</p><h2>Оплата тренеров</h2></div></div>
+          <div className="section-heading">
+            <div>
+              <p className="muted">Договорённости</p>
+              <h2>Постоянные условия тренеров</h2>
+            </div>
+            <span className="studio-helper">
+              Оклад и гарантия задаются один раз. Правила по услугам ниже
+              отвечают только за переменную часть.
+            </span>
+          </div>
+          <div className="trainer-condition-grid">
+            {trainers.map((trainer) => {
+              const profile=profileByTrainer.get(trainer.id);
+              return (
+                <article className="trainer-condition-card" key={trainer.id}>
+                  <header>
+                    <div>
+                      <span>Тренер</span>
+                      <h3>{trainer.name}</h3>
+                    </div>
+                    <span className={"status-pill " + (profile ? "" : "muted")}>
+                      {profile ? "НАСТРОЕНО" : "БЕЗ ОКЛАДА"}
+                    </span>
+                  </header>
+                  <div className="trainer-condition-money">
+                    <strong>
+                      {profile && BigInt(profile.monthly_base_minor)>0n
+                        ? money(profile.monthly_base_minor)
+                        : "Переменная оплата"}
+                    </strong>
+                    <small>
+                      {profile && BigInt(profile.monthly_base_minor)>0n
+                        ? "фикс в месяц"
+                        : "без месячного оклада"}
+                    </small>
+                  </div>
+                  <div className="trainer-condition-facts">
+                    <span>
+                      За день
+                      <b>
+                        {profile ? money(profile.daily_base_minor) : "0 ₽"}
+                      </b>
+                    </span>
+                    <span>
+                      Минимум
+                      <b>
+                        {profile
+                          ? money(profile.minimum_guarantee_minor)
+                          : "0 ₽"}
+                      </b>
+                    </span>
+                    <span>
+                      Payroll
+                      <b>
+                        {trainer.membership_id || profile?.membership_id
+                          ? "готов"
+                          : "нужна привязка"}
+                      </b>
+                    </span>
+                  </div>
+                  {profile?.note ? (
+                    <p className="trainer-condition-note">{profile.note}</p>
+                  ) : null}
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => openProfileModal(trainer.id)}
+                  >
+                    {profile ? "Изменить условия" : "Настроить условия"}
+                  </button>
+                </article>
+              );
+            })}
+            {!trainers.length ? (
+              <div className="studio-empty">
+                <span>人</span>
+                <strong>Тренеры ещё не добавлены</strong>
+                <p>
+                  Создайте ресурсы сотрудников, затем настройте оплату и
+                  расписание.
+                </p>
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="section-block studio-section">
+          <div className="section-heading">
+            <div>
+              <p className="muted">Переменная часть</p>
+              <h2>Правила доплат за работу</h2>
+            </div>
+            <span className="studio-helper">
+              Процент, часы, занятие или доплата за ученика с точным
+              ограничением по услуге, направлению, группе и филиалу.
+            </span>
+          </div>
           <div className="data-table-wrap">
             <table className="data-table">
               <thead><tr><th>Тренер</th><th>Для чего</th><th>Схема</th><th>Условия</th><th>База</th></tr></thead>
@@ -1073,6 +1170,129 @@ export default function DanceTeamPage() {
             </table>
           </div>
         </section>
+        {profileModal ? (
+          <StudioModal
+            eyebrow="Условия тренера"
+            title="Оклад и минимальная гарантия"
+            description="Постоянная часть хранится отдельно от процентов и ставок по занятиям. Поэтому несколько услуг или групп не удваивают оклад."
+            onClose={() => setProfileModal(false)}
+            footer={
+              <>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setProfileModal(false)}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => void saveProfile()}
+                >
+                  {pending ? "Сохраняем…" : "Сохранить условия"}
+                </button>
+              </>
+            }
+          >
+            <div className="studio-form-section">
+              <header>
+                <strong>Кому задаём условия</strong>
+                <span>
+                  Эти значения применяются один раз к итоговой ведомости
+                  тренера за месяц.
+                </span>
+              </header>
+              <label>
+                <span>Тренер</span>
+                <select
+                  value={profileTrainerId}
+                  onChange={(event) => {
+                    const id=event.target.value;
+                    const existing=profileByTrainer.get(id);
+                    setProfileTrainerId(id);
+                    setProfileMonthlyRub(
+                      existing
+                        ? String(Number(existing.monthly_base_minor)/100)
+                        : "0"
+                    );
+                    setProfileDailyRub(
+                      existing
+                        ? String(Number(existing.daily_base_minor)/100)
+                        : "0"
+                    );
+                    setProfileGuaranteeRub(
+                      existing
+                        ? String(
+                            Number(existing.minimum_guarantee_minor)/100
+                          )
+                        : "0"
+                    );
+                    setProfileNote(existing?.note ?? "");
+                  }}
+                >
+                  <option value="">Выберите тренера</option>
+                  {trainers.map((trainer) => (
+                    <option key={trainer.id} value={trainer.id}>
+                      {trainer.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="studio-form-section">
+              <header>
+                <strong>Постоянная часть</strong>
+                <span>
+                  Можно использовать месячный оклад, дневную ставку или оба
+                  варианта. Ноль означает, что компонент не используется.
+                </span>
+              </header>
+              <div className="studio-form-grid">
+                <label>
+                  <span>Оклад в месяц, ₽</span>
+                  <input
+                    inputMode="decimal"
+                    value={profileMonthlyRub}
+                    onChange={(event) =>
+                      setProfileMonthlyRub(event.target.value)
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Фикс за рабочий день, ₽</span>
+                  <input
+                    inputMode="decimal"
+                    value={profileDailyRub}
+                    onChange={(event) =>
+                      setProfileDailyRub(event.target.value)
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Минимальная гарантия за месяц, ₽</span>
+                  <input
+                    inputMode="decimal"
+                    value={profileGuaranteeRub}
+                    onChange={(event) =>
+                      setProfileGuaranteeRub(event.target.value)
+                    }
+                  />
+                </label>
+              </div>
+              <label>
+                <span>Комментарий</span>
+                <input
+                  value={profileNote}
+                  onChange={(event) => setProfileNote(event.target.value)}
+                  placeholder="Например: оклад администратора направления"
+                />
+              </label>
+            </div>
+          </StudioModal>
+        ) : null}
+
         {adjustmentModal && adjustmentStatement ? (
           <StudioModal
             eyebrow="Корректировка зарплаты"
