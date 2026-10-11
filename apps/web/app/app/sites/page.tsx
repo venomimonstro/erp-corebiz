@@ -136,6 +136,9 @@ export default function SitesPage() {
   const [ogImage, setOgImage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [previewMode, setPreviewMode] = useState<"DESKTOP" | "MOBILE">("DESKTOP");
   const [readiness, setReadiness] = useState<StoreReadiness | null>(null);
   const [readinessError, setReadinessError] = useState("");
 
@@ -538,16 +541,9 @@ export default function SitesPage() {
     }
   }
 
-  function addBlock() {
-    const type = (
-      window.prompt(
-        "Выберите блок: " +
-          TYPES.map((type) => LABELS[type] + " (" + type + ")").join(", "),
-        "TEXT"
-      ) ?? ""
-    ).toUpperCase();
-
+  function addBlock(type: string) {
     if (!TYPES.includes(type)) return;
+    setPaletteOpen(false);
 
     const defaults: Record<string,Record<string,unknown>> = {
       HERO: {
@@ -590,6 +586,31 @@ export default function SitesPage() {
       ...current,
       { block_type: type, config: defaults[type] ?? {} }
     ]);
+  }
+
+  function duplicateBlock(index: number) {
+    setBlocks((current) => {
+      const original = current[index];
+      if (!original) return current;
+      const next = [...current];
+      next.splice(index + 1, 0, {
+        block_type: original.block_type,
+        config: JSON.parse(JSON.stringify(original.config)) as Record<string, unknown>
+      });
+      return next;
+    });
+  }
+
+  function dragBlock(source: number, target: number) {
+    if (source === target) return;
+    setBlocks((current) => {
+      if (source < 0 || target < 0 || source >= current.length ||
+          target >= current.length) return current;
+      const next = [...current];
+      const [moved] = next.splice(source, 1);
+      if (moved) next.splice(target, 0, moved);
+      return next;
+    });
   }
 
   function updateBlock(index: number, config: Record<string,unknown>) {
@@ -892,8 +913,9 @@ export default function SitesPage() {
                   </div>
 
                   <div className="builder-actions">
-                    <button className="secondary-button" onClick={addBlock}>
-                      + Блок
+                    <button className="secondary-button" type="button"
+                      aria-expanded={paletteOpen} onClick={() => setPaletteOpen(v => !v)}>
+                      {paletteOpen ? "Скрыть блоки" : "+ Добавить блок"}
                     </button>
                     <button
                       className="secondary-button"
@@ -910,6 +932,23 @@ export default function SitesPage() {
                     </button>
                   </div>
                 </div>
+
+                {paletteOpen ? (
+                  <div className="site-block-palette" aria-label="Библиотека блоков">
+                    {TYPES.map(type => (
+                      <button key={type} type="button"
+                        onClick={() => addBlock(type)}>
+                        <strong>＋ {LABELS[type]}</strong>
+                        <small>{type === "PRODUCT_GRID" ? "Товары и корзина из ERP" :
+                          type === "CATALOG" ? "Каталог с наличием" :
+                          type === "HERO" ? "Первый экран страницы" :
+                          type === "FEATURES" ? "Преимущества компании" :
+                          type === "IMAGE" ? "Фотография и подпись" :
+                          "Контентный блок"}</small>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
 
                 <div className="site-meta-grid">
                   <label>
@@ -971,10 +1010,18 @@ export default function SitesPage() {
 
                 <div className="block-editor-list">
                   {blocks.map((block, index) => (
-                    <article className="block-editor" key={index}>
-                      <header>
+                    <article className={"block-editor"+(dragIndex===index?" is-dragging":"")} key={index}
+                      onDragOver={event => event.preventDefault()}
+                      onDrop={event => {
+                        event.preventDefault();
+                        if (dragIndex !== null) dragBlock(dragIndex, index);
+                        setDragIndex(null);
+                      }}>
+                      <header draggable title="Перетащите, чтобы изменить порядок блоков"
+                        onDragStart={event => { event.dataTransfer.effectAllowed="move"; setDragIndex(index); }}
+                        onDragEnd={() => setDragIndex(null)}>
                         <div>
-                          <small>Блок {index + 1}</small>
+                          <small>☷ Перетащите · Блок {index + 1}</small>
                           <strong>{LABELS[block.block_type] ?? block.block_type}</strong>
                         </div>
                         <div className="builder-actions">
@@ -991,6 +1038,10 @@ export default function SitesPage() {
                             onClick={() => move(index, 1)}
                           >
                             ↓
+                          </button>
+                          <button className="secondary-button" type="button"
+                            onClick={() => duplicateBlock(index)}>
+                            Копировать
                           </button>
                           <button
                             className="secondary-button"
@@ -1029,12 +1080,16 @@ export default function SitesPage() {
             )}
           </section>
 
-          <aside className="site-preview">
+          <aside className={"site-preview" + (previewMode === "MOBILE" ? " preview-mobile" : "")}>
             <div className="preview-browser-bar">
               <span />
               <span />
               <span />
               <b>Предпросмотр</b>
+              <button className={previewMode === "DESKTOP" ? "active" : ""}
+                type="button" onClick={() => setPreviewMode("DESKTOP")}>ПК</button>
+              <button className={previewMode === "MOBILE" ? "active" : ""}
+                type="button" onClick={() => setPreviewMode("MOBILE")}>Телефон</button>
             </div>
             {blocks.length ? (
               blocks.map((block, index) => (
