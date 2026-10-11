@@ -463,6 +463,19 @@ export class AutomotiveService {
       if(["DELIVERED","CANCELLED"].includes(row.order_status)){
         throw new BadRequestException("Закрытый заказ-наряд изменять нельзя");
       }
+      if(Boolean(row.completed)&&(
+         input.approved===false ||
+         (input.unitPriceMinor!==undefined&&
+          BigInt(input.unitPriceMinor)!==BigInt(row.unit_price_minor))
+      ))throw new BadRequestException(
+        "Завершённая работа не может менять согласованную цену. Требуется корректирующий документ"
+      );
+      if(Boolean(row.approved)&&input.unitPriceMinor!==undefined&&
+         BigInt(input.unitPriceMinor)!==BigInt(row.unit_price_minor)&&
+         input.approved!==false)
+        throw new BadRequestException(
+          "Перед изменением согласованной цены снимите согласование и получите новое подтверждение клиента"
+        );
       const effectiveApproved=input.approved??Boolean(row.approved);
       if(input.completed===true&&!effectiveApproved){
         throw new BadRequestException("Сначала согласуйте позицию с клиентом");
@@ -487,6 +500,27 @@ export class AutomotiveService {
           input.unitPriceMinor??null,input.unitCostMinor??null
         ]
       );
+      if(
+        input.approved!==undefined || input.completed!==undefined ||
+        input.unitPriceMinor!==undefined || input.unitCostMinor!==undefined
+      ){
+        await client.query(
+          `INSERT INTO audit_event(
+             tenant_id,actor_user_id,actor_membership_id,
+             action,resource_type,resource_id,after_data
+           ) VALUES($1,$2,$3,'automotive.work_order_line_updated','automotive_work_order_line',$4,$5)`,
+          [context.tenantId,context.userId,context.membershipId,lineId,
+           JSON.stringify({
+             workOrderId,previousApproved:row.approved,
+             approved:input.approved??row.approved,
+             previousCompleted:row.completed,
+             completed:input.completed??row.completed,
+             previousPriceMinor:String(row.unit_price_minor),
+             priceMinor:String(input.unitPriceMinor??row.unit_price_minor),
+             costChanged:input.unitCostMinor!==undefined
+           })]
+        );
+      }
       return result.rows[0];
     });
   }
