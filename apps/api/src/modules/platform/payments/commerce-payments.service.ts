@@ -48,8 +48,8 @@ export class CommercePaymentsService {
     );
     return {shopId,secret};
   }
-  private seller(config:SellerConfig):MerchantCredentials {
-    if(!config.enabled||!config.fiscal_enabled) throw new ConflictException(
+  private seller(config:SellerConfig,forNewPayment=true):MerchantCredentials {
+    if(forNewPayment && (!config.enabled||!config.fiscal_enabled)) throw new ConflictException(
       "Для магазина не включены эквайринг и передача данных для чека"
     );
     return {shopId:config.shop_id,secret:openMerchantSecret(config.encrypted_secret)};
@@ -392,12 +392,18 @@ export class CommercePaymentsService {
   async webhook(body:unknown){
     const data=body as {event?:unknown;object?:{id?:unknown}};
     if(!data || typeof data!=="object" ||
-       !["payment.succeeded","payment.canceled"].includes(String(data.event)) ||
+       !["payment.succeeded","payment.canceled","refund.succeeded"].includes(String(data.event)) ||
        !data.object || typeof data.object.id!=="string" ||
        !/^[a-zA-Z0-9_-]{8,100}$/.test(data.object.id)){
       throw new BadRequestException("Неподдерживаемое уведомление");
     }
     const providerId=data.object.id;
+    if(data.event==="refund.succeeded"){
+      const match=await this.database.query<{tenant_id:string}>(
+        "SELECT * FROM corebiz_resolve_refund_tenant($1)",[providerId]);
+      if(match.rows[0])await this.reconcileRefund(match.rows[0].tenant_id,providerId);
+      return {accepted:true};
+    }
     const matches=await this.database.query<{tenant_id:string}>(
       "SELECT * FROM corebiz_resolve_payment_tenant($1)",[providerId]);
     if(!matches.rows[0])return {accepted:true};
@@ -457,11 +463,154 @@ export class CommercePaymentsService {
       return r.rows[0]??null;
     });
   }
+  async fullRefund(context:TenantContext,orderId:string){
+    this.readonlyUuid(orderId);
+    const claim=await this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{
+        intent_id:string;site_id:string;amount_minor:string;
+        provider_payment_id:string;status:string;
+      }>(
+        `SELECT i.id AS intent_id,i.site_id,i.amount_minor::text,
+           i.provider_payment_id,i.status
+         FROM commerce_payment_intent i
+         WHERE i.tenant_id=$1 AND i.sales_order_id=$2
+           AND i.purpose='STOREFRONT' AND i.status='SUCCEEDED'
+         FOR UPDATE`,
+        [context.tenantId,orderId]);
+      const intent=result.rows[0];
+      if(!intent?.provider_payment_id)throw new ConflictException(
+        "Заказ не оплачен подтверждённым онлайн-платежом"
+      );
+      const existing=await client.query<{
+        id:string;provider_refund_id:string|null;status:string;idempotency_key:string;
+      }>(
+        "SELECT * FROM commerce_refund WHERE tenant_id=$1 AND intent_id=$2 FOR UPDATE",
+        [context.tenantId,intent.intent_id]);
+      if(existing.rows[0])return {intent,refund:existing.rows[0]};
+      const id=randomUUID();
+      const created=await client.query<{
+        id:string;provider_refund_id:string|null;status:string;idempotency_key:string;
+      }>(
+        `INSERT INTO commerce_refund(
+          id,tenant_id,intent_id,sales_order_id,amount_minor,idempotency_key
+        ) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [id,context.tenantId,intent.intent_id,orderId,
+          intent.amount_minor,providerIdempotencyKey("corebiz-refund-"+id)]);
+      return {intent,refund:created.rows[0]!};
+    });
+    if(claim.refund.status==="SUCCEEDED")return {
+      refundId:claim.refund.id,status:"SUCCEEDED"
+    };
+    const credentials=this.seller(
+      await this.sellerConfig(context.tenantId,claim.intent.site_id),false
+    );
+    let refundId=claim.refund.provider_refund_id;
+    if(!refundId){
+      const reply=await this.gateway.createRefund(
+        credentials,claim.refund.idempotency_key,
+        claim.intent.provider_payment_id,claim.intent.amount_minor
+      );
+      if(reply.payment_id!==claim.intent.provider_payment_id ||
+         reply.amount.currency!=="RUB" ||
+         moneyToMinor(reply.amount.value)!==claim.intent.amount_minor){
+        throw new ConflictException("Возврат не совпадает с первоначальным платежом");
+      }
+      refundId=reply.id;
+      await this.database.withTenantTransaction(context,async client=>{
+        await client.query(
+          `UPDATE commerce_refund
+           SET provider_refund_id=$3,status='PENDING',updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status IN ('NEW','PENDING')
+             AND (provider_refund_id IS NULL OR provider_refund_id=$3)`,
+          [context.tenantId,claim.refund.id,refundId]);
+      });
+    }
+    // All ledger mutations happen only after a verified GET from YooKassa.
+    await this.reconcileRefund(context.tenantId,refundId);
+    const state=await this.database.withTenantTransaction(context,async client=>
+      client.query<{status:string;fiscal_status:string}>(
+        "SELECT status,fiscal_status FROM commerce_refund WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,claim.refund.id]));
+    return {refundId:claim.refund.id,status:state.rows[0]?.status??"PENDING",
+      fiscalStatus:state.rows[0]?.fiscal_status??"PENDING"};
+  }
+  async refundStatus(context:TenantContext,refundId:string){
+    this.readonlyUuid(refundId);
+    const result=await this.database.withTenantTransaction(context,async client=>
+      client.query<{id:string;provider_refund_id:string|null;status:string;fiscal_status:string}>(
+        "SELECT id,provider_refund_id,status,fiscal_status FROM commerce_refund WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,refundId]));
+    const row=result.rows[0];if(!row)throw new NotFoundException("Возврат не найден");
+    if(row.provider_refund_id&&row.status==="PENDING")
+      await this.reconcileRefund(context.tenantId,row.provider_refund_id);
+    const fresh=await this.database.withTenantTransaction(context,async client=>
+      client.query<{status:string;fiscal_status:string}>(
+        "SELECT status,fiscal_status FROM commerce_refund WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,refundId]));
+    return fresh.rows[0];
+  }
+  private async reconcileRefund(tenantId:string,providerRefundId:string){
+    const context=this.context(tenantId);
+    const result=await this.database.withTenantTransaction(context,async client=>
+      client.query<{
+        id:string;intent_id:string;status:string;site_id:string;amount_minor:string;
+        sales_order_id:string;provider_payment_id:string;
+      }>(
+        `SELECT r.id,r.intent_id,r.status,i.site_id,r.amount_minor::text,
+           r.sales_order_id,i.provider_payment_id
+         FROM commerce_refund r
+         JOIN commerce_payment_intent i ON i.tenant_id=r.tenant_id AND i.id=r.intent_id
+         WHERE r.tenant_id=$1 AND r.provider_refund_id=$2`,
+        [tenantId,providerRefundId]));
+    const refund=result.rows[0];if(!refund||refund.status==="SUCCEEDED")return;
+    const creds=this.seller(await this.sellerConfig(tenantId,refund.site_id),false);
+    const verified=await this.gateway.getRefund(creds,providerRefundId);
+    if(verified.id!==providerRefundId ||
+      verified.payment_id!==refund.provider_payment_id ||
+      verified.amount.currency!=="RUB" ||
+      moneyToMinor(verified.amount.value)!==refund.amount_minor){
+      throw new ConflictException("Данные возврата не соответствуют исходному платежу");
+    }
+    if(verified.status==="canceled"){
+      await this.database.withTenantTransaction(context,async client=>
+        client.query(
+          `UPDATE commerce_refund SET status='CANCELED',updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status IN ('NEW','PENDING')`,
+          [tenantId,refund.id]));
+      return;
+    }
+    if(verified.status!=="succeeded")return;
+    const operator=await this.database.withTenantTransaction(context,async client=>{
+      const r=await client.query<{user_id:string;id:string}>(
+        `SELECT m.user_id,m.id FROM storefront_config sc
+         JOIN tenant_membership m ON m.tenant_id=sc.tenant_id
+           AND m.id=sc.responsible_membership_id AND m.status='ACTIVE'
+         WHERE sc.tenant_id=$1 AND sc.site_id=$2`,
+        [tenantId,refund.site_id]);
+      return r.rows[0]??null;
+    });
+    if(!operator)throw new ConflictException("Не найден сотрудник для проведения возврата");
+    const posted=await this.finance.refundSalesPayment(
+      {tenantId,userId:operator.user_id,membershipId:operator.id},
+      {orderId:refund.sales_order_id,amountMinor:refund.amount_minor,
+        idempotencyKey:"yookassa-refund:"+refund.id,
+        note:"Проверенный возврат YooKassa "+verified.id}
+    );
+    await this.database.withTenantTransaction(context,async client=>
+      client.query(
+        `UPDATE commerce_refund
+         SET status='SUCCEEDED',finance_payment_id=$3,fiscal_status=$4,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status IN ('NEW','PENDING','SUCCEEDED')`,
+        [tenantId,refund.id,posted.paymentId,
+          verified.receipt_registration==="succeeded"?"SUCCEEDED":
+          verified.receipt_registration==="failed"?"FAILED":"PENDING"]));
+  }
+
   private async reconcileIntent(intent:Intent):Promise<void>{
     if(!intent.provider_payment_id)return;
     const creds=intent.purpose==="SAAS"
       ?this.platform()
-      :this.seller(await this.sellerConfig(intent.tenant_id,intent.site_id!));
+      :this.seller(await this.sellerConfig(intent.tenant_id,intent.site_id!),false);
     // Never trust the payload of an unauthenticated callback. The provider API
     // authenticates the lookup and metadata, amount and currency are compared.
     const payment=await this.gateway.get(creds,intent.provider_payment_id);
