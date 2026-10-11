@@ -314,7 +314,17 @@ SELECT 'TRAINER_PAYROLL_STATEMENT_TOTAL_MISMATCH',count(*)::bigint
 FROM trainer_payroll_statement s
 WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
   AND s.total_minor<>(
-    s.lesson_accrual_minor+s.base_minor+s.guarantee_adjustment_minor
+    s.lesson_accrual_minor+s.base_minor+
+    s.guarantee_adjustment_minor+s.adjustment_minor
+  )
+UNION ALL
+SELECT 'TRAINER_PAYROLL_ADJUSTMENT_SUM_MISMATCH',count(*)::bigint
+FROM trainer_payroll_statement s
+WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND s.adjustment_minor<>(
+    SELECT coalesce(sum(a.amount_minor),0)
+    FROM trainer_payroll_adjustment a
+    WHERE a.tenant_id=s.tenant_id AND a.statement_id=s.id
   )
 UNION ALL
 SELECT 'TRAINER_PAYROLL_EXPORTED_WITHOUT_BATCH',count(*)::bigint
