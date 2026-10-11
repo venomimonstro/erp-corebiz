@@ -112,6 +112,8 @@ const EXPORT_ENTITIES: ExportEntity[] = [
   { table: "inventory_owner", label: "inventory_owners" },
   { table: "accounting_entry", label: "accounting_entries" },
   { table: "accounting_entry_line", label: "accounting_entry_lines" },
+  { table: "payroll_statement_review", label: "payroll_statement_reviews" },
+  { table: "payroll_statement_review_event", label: "payroll_statement_review_events" },
   { table: "payroll_accrual_batch", label: "payroll_batches" },
   { table: "payroll_accrual_component", label: "payroll_accrual_components" },
   { table: "payroll_accrual_line", label: "payroll_lines" }
