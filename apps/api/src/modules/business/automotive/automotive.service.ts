@@ -6,10 +6,14 @@ import {
 import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { InventoryService } from "../inventory/inventory.service";
 
 @Injectable()
 export class AutomotiveService {
-  constructor(private readonly database:DatabaseService) {}
+  constructor(
+    private readonly database:DatabaseService,
+    private readonly inventory:InventoryService
+  ) {}
 
   async dashboard(context:TenantContext) {
     return this.database.withTenantTransaction(context,async client=>{
@@ -493,6 +497,17 @@ export class AutomotiveService {
         [context.tenantId,donorId]
       );
       if(!donor.rowCount) throw new NotFoundException("Донор не найден");
+      if(Boolean(input.skuId)!==Boolean(input.warehouseId)){
+        throw new BadRequestException(
+          "Для складского прихода укажите одновременно SKU и склад"
+        );
+      }
+      const quantity=BigInt(String(input.quantityMilli??1000));
+      const allocatedCost=BigInt(String(input.allocatedCostMinor??0));
+      if(quantity<=0n||allocatedCost<0n){
+        throw new BadRequestException("Некорректное количество или себестоимость детали");
+      }
+
       const result=await client.query(
         `INSERT INTO automotive_dismantled_part(
            tenant_id,donor_vehicle_id,sku_id,part_name,oem_number,
@@ -505,10 +520,25 @@ export class AutomotiveService {
           String(input.oemNumber??"").trim()||null,
           input.conditionGrade??"USED_B",
           String(input.serialNumber??"").trim()||null,input.warehouseId??null,
-          input.quantityMilli??1000,input.allocatedCostMinor??0,
+          quantity.toString(),allocatedCost.toString(),
           input.askingPriceMinor??0,JSON.stringify(input.metadata??{})
         ]
       );
+      const part=result.rows[0];
+      if(!part) throw new Error("AUTOMOTIVE_DISMANTLED_PART_CREATE_FAILED");
+
+      if(input.skuId&&input.warehouseId){
+        const perUnitCost=
+          quantity>0n ? (allocatedCost*1000n+quantity-1n)/quantity : 0n;
+        await this.inventory.receiveForAutomotive(client,context,{
+          partId:part.id,
+          warehouseId:input.warehouseId,
+          skuId:input.skuId,
+          quantityMilli:quantity,
+          unitCostMinor:perUnitCost
+        });
+      }
+
       await client.query(
         `UPDATE automotive_donor_vehicle
          SET status=CASE WHEN status='RECEIVED' THEN 'DISMANTLING' ELSE status END,
@@ -516,7 +546,7 @@ export class AutomotiveService {
          WHERE tenant_id=$1 AND id=$2`,
         [context.tenantId,donorId]
       );
-      return result.rows[0];
+      return part;
     });
   }
 
