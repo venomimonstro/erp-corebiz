@@ -301,7 +301,7 @@ async function* readEntity(
   }
 }
 
-async function compressExport(
+export async function compressExport(
   source:AsyncIterable<string>
 ):Promise<{artifact:Buffer;rawBytes:number;compressedBytes:number}>{
   let rawBytes=0,compressedBytes=0;
