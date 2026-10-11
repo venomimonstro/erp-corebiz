@@ -1740,10 +1740,7 @@ export class DanceEconomicsService {
           "Согласовать можно только закрытую ведомость"
         );
       }
-      if(
-        scopeIds!==null &&
-        row.membership_id!==context.membershipId
-      ){
+      if(row.membership_id!==context.membershipId){
         throw new ForbiddenException(
           "Сотрудник может согласовать только собственную ведомость"
         );
