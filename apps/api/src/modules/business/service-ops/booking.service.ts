@@ -586,7 +586,24 @@ export class BookingService {
            offered.resource_name AS offered_resource_name,
            offered.resource_type AS offered_resource_type,
            offered.capacity_units AS offered_capacity_units,
-           offered.zone_id AS offered_zone_id
+           offered.zone_id AS offered_zone_id,
+           coalesce((
+             SELECT json_agg(json_build_object(
+               'resourceId',obr.resource_id,
+               'resourceName',orr.name,
+               'type',orr.type,
+               'capacityUnits',obr.capacity_units,
+               'zoneId',obr.zone_id
+             ) ORDER BY
+               CASE WHEN orr.type='EMPLOYEE' THEN 0 ELSE 1 END,
+               orr.id
+             )
+             FROM service_booking_resource obr
+             JOIN service_resource orr
+               ON orr.tenant_id=obr.tenant_id AND orr.id=obr.resource_id
+             WHERE obr.tenant_id=w.tenant_id
+               AND obr.booking_id=w.source_booking_id
+           ),'[]'::json) AS offered_resources
          FROM service_waitlist_entry w
          JOIN party p
            ON p.tenant_id=w.tenant_id AND p.id=w.party_id
