@@ -224,7 +224,11 @@ export default function BookingsPage() {
   useEffect(() => {
     setSelectedZone("");
     setSelectedCapacityUnits("1");
-    const spaceResourceId=spaceMode
+    const selectedServiceRow=services.find(item=>item.id===selectedService);
+    const isSpaceMode=
+      selectedServiceRow?.delivery_format==="SELF_PRACTICE"||
+      selectedServiceRow?.delivery_format==="RENTAL";
+    const spaceResourceId=isSpaceMode
       ?selectedResource
       :selectedSupportResource;
     if(!spaceResourceId){
@@ -244,7 +248,10 @@ export default function BookingsPage() {
     )
       .then(setResourceZones)
       .catch(()=>setResourceZones([]));
-  }, [selectedResource,selectedSupportResource,resources,spaceMode]);
+  }, [
+    selectedResource,selectedSupportResource,selectedService,
+    services,resources
+  ]);
 
   useEffect(() => {
     if (!selectedCustomer) {
