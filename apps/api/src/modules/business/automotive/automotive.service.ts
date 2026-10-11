@@ -374,6 +374,24 @@ export class AutomotiveService {
         ]
       );
 
+      if(input.authorizationLimitMinor!==undefined){
+        await client.query(
+          `INSERT INTO audit_event(
+             tenant_id,actor_user_id,actor_membership_id,
+             action,resource_type,resource_id,after_data
+           ) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            context.tenantId,context.userId,context.membershipId,
+            "automotive.authorization_limit_changed","automotive_work_order",
+            workOrderId,JSON.stringify({
+              previousLimitMinor:row.authorization_limit_minor,
+              newLimitMinor:input.authorizationLimitMinor,
+              note:input.authorizationNote?.trim()
+            })
+          ]
+        );
+      }
+
       if(requestedStatus==="DELIVERED"&&mileageOut!==null){
         await client.query(
           `UPDATE automotive_vehicle
