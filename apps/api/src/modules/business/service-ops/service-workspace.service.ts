@@ -30,7 +30,7 @@ export class ServiceWorkspaceService {
       total: number;
       completed: number;
       noShow: number;
-      revenueMinor: string;
+      revenueMinor: string | null;
     };
   }> {
     const base = date ? new Date(date) : new Date();
@@ -42,6 +42,7 @@ export class ServiceWorkspaceService {
     start.setHours(0, 0, 0, 0);
     const end = new Date(start.getTime() + 86400000);
     const scopedMembershipIds = await this.serviceScope(context, "service.read");
+    const canViewFinance=Boolean(await this.authorization.resolveScope(context,"finance.read"));
 
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
@@ -79,12 +80,14 @@ export class ServiceWorkspaceService {
       }
 
       return {
-        bookings: result.rows,
+        bookings: canViewFinance?result.rows:result.rows.map(row=>({
+          ...row,price_minor_snapshot:null,currency:null
+        })),
         metrics: {
           total: result.rowCount ?? 0,
           completed,
           noShow,
-          revenueMinor: revenue.toString()
+          revenueMinor: canViewFinance?revenue.toString():null
         }
       };
     });
@@ -296,9 +299,10 @@ export class ServiceWorkspaceService {
   ): Promise<{
     customer: { id: string; name: string };
     bookings: Array<Record<string, unknown>>;
-    completedRevenueMinor: string;
+    completedRevenueMinor: string | null;
   }> {
     const scopedMembershipIds = await this.serviceScope(context, "service.read");
+    const canViewFinance=Boolean(await this.authorization.resolveScope(context,"finance.read"));
     return this.database.withTenantTransaction(context, async (client) => {
       const party = await client.query<{ id: string; display_name: string }>(
         `SELECT p.id,p.display_name
@@ -353,8 +357,10 @@ export class ServiceWorkspaceService {
           id: customer.id,
           name: customer.display_name
         },
-        bookings: bookings.rows,
-        completedRevenueMinor: revenue.toString()
+        bookings: canViewFinance?bookings.rows:bookings.rows.map(row=>({
+          ...row,price_minor_snapshot:null,currency:null
+        })),
+        completedRevenueMinor: canViewFinance?revenue.toString():null
       };
     });
   }
@@ -380,6 +386,7 @@ export class ServiceWorkspaceService {
       throw new BadRequestException("Некорректный период аналитики");
     }
     const scopedMembershipIds = await this.serviceScope(context, "service.read");
+    const canViewFinance=Boolean(await this.authorization.resolveScope(context,"finance.read"));
 
     return this.database.withTenantTransaction(context, async (client) => {
       const services = await client.query(
@@ -415,7 +422,9 @@ export class ServiceWorkspaceService {
       );
 
       return {
-        services: services.rows,
+        services: canViewFinance?services.rows:services.rows.map(row=>({
+          ...row,revenue_minor:null
+        })),
         resources: resources.rows
       };
     });
