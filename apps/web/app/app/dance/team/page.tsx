@@ -1127,7 +1127,7 @@ export default function DanceTeamPage() {
   return (
     <main className="app-shell">
       <AppSidebar active="dance-team" />
-      <section className="workspace workspace-wide studio-premium">
+      <section className="workspace workspace-wide studio-premium dance-detail">
         <header className="studio-hero compact">
           <div>
             <span className="studio-eyebrow">Команда и себестоимость</span>
