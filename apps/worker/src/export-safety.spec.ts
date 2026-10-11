@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {gunzipSync} from "node:zlib";
 import {csvBatch,csvCell} from "./export-safety.js";
-import {compressExport} from "./tenant-export.js";
+import {compressExport,cleanValue} from "./tenant-export.js";
 
 test("CSV formulas from customer and supplier fields are rendered as text",()=>{
   for(const value of [
@@ -54,4 +54,25 @@ test("streamer preserves exact bytes across small and empty chunks",async()=>{
   const result=await compressExport(source());
   assert.equal(gunzipSync(result.artifact).toString(),"abc");
   assert.equal(result.rawBytes,3);
+});
+
+test("export preserves real timestamps, binary fields and strips nested secrets",()=>{
+  const input={
+    created_at:new Date("2026-10-11T09:20:30Z"),
+    barcode:"12345",
+    document_bytes:Buffer.from("hello","utf8"),
+    nested:{
+      api_key:"do-not-export",
+      access_token:"secret",
+      provider_password:"password",
+      delivery_at:new Date("2026-11-01T00:00:00Z")
+    }
+  };
+  const result=cleanValue(input) as any;
+  assert.equal(result.created_at,"2026-10-11T09:20:30.000Z");
+  assert.equal(result.document_bytes,Buffer.from("hello").toString("base64"));
+  assert.equal(result.nested.delivery_at,"2026-11-01T00:00:00.000Z");
+  assert.equal(result.nested.api_key,undefined);
+  assert.equal(result.nested.access_token,undefined);
+  assert.equal(result.nested.provider_password,undefined);
 });
