@@ -114,7 +114,9 @@ export default function DanceDashboardPage(){
         description:"Проверьте плательщиков и договорённости.",
         count:data.debt.overdue_count,href:"/app/dance/students",kind:"urgent"});
     }
-    return rows.filter(r=>r.count>0).sort((a,b)=>
+    return rows.filter(r=>r.count>0 &&
+      (data.canViewFinancials || !["payment","profitability","trainer"].includes(r.id)))
+      .sort((a,b)=>
       Number(b.kind==="urgent")-Number(a.kind==="urgent")||b.count-a.count);
   },[data]);
   const visibleActions=showAllActions?actions:actions.slice(0,4);
