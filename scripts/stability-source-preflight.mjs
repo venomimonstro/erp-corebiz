@@ -402,7 +402,7 @@ async function inspectRequiredHardening(root) {
     message: "Shared hall and self-practice lesson UX is missing"
   },
   {
-    path: "apps/web/app/app/dance/setup/page.tsx",
+    path: "apps/web/components/service-business-setup.tsx",
     patterns: [
       /service\/delivery-rules/,
       /service\/technology-cards/,
@@ -410,7 +410,7 @@ async function inspectRequiredHardening(root) {
       /inventory\/warehouses/,
       /service\/resources\/.*\/zones/
     ],
-    message: "Service pricing, technology card, or zone setup UX is missing"
+    message: "Shared service pricing, technology card, or zone setup UX is missing"
   },
   {
     path: "apps/worker/src/tenant-export.ts",
