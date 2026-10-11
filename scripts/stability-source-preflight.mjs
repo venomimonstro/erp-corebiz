@@ -257,6 +257,27 @@ async function inspectRequiredHardening(root) {
       message: "B2B commercial terms are not sales-scope guarded"
     },
     {
+      path: "apps/api/src/modules/business/accounting/accounting.service.ts",
+      patterns: [
+        /saveTaxProfile/,
+        /buildComplianceCalendar/,
+        /prepareCompliancePacket/,
+        /complianceTransition/,
+        /accounting_compliance_obligation/
+      ],
+      message: "Russian tax compliance workflow is not fully wired"
+    },
+    {
+      path: "apps/web/app/app/accounting/taxes/page.tsx",
+      patterns: [
+        /Налоги и ФНС/,
+        /Налоговый профиль/,
+        /Подготовить/,
+        /Принято ФНС/
+      ],
+      message: "Owner tax compliance workspace is missing"
+    },
+    {
       path: "apps/api/src/modules/business/service-ops/booking.service.ts",
       patterns: [
         /serviceScope/,
@@ -504,7 +525,9 @@ async function inspectRequiredHardening(root) {
     "187_service_payroll_export_lifecycle.sql",
     "188_service_waitlist.sql",
     "189_service_rebooking_cycle.sql",
-    "190_payroll_statement_reviews.sql"
+    "190_payroll_statement_reviews.sql",
+    "192_accounting_compliance_center.sql",
+    "193_accounting_compliance_workflow.sql"
   ];
 
   for (const name of requiredMigrations) {
