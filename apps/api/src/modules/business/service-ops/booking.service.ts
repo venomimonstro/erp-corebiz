@@ -1750,7 +1750,10 @@ export class BookingService {
     });
   }
 
-  async bookingDetails(context: TenantContext, bookingId: string): Promise<Record<string, unknown>> {
+  async bookingDetails(
+    context: TenantContext,
+    bookingId: string
+  ): Promise<Record<string, unknown>> {
     const scopedMembershipIds = await this.serviceScope(context, "service.read");
     return this.database.withTenantTransaction(context, async (client) => {
       await this.assertBookingAccess(
@@ -1760,26 +1763,66 @@ export class BookingService {
         scopedMembershipIds
       );
       const result = await client.query(
-        `SELECT b.id,b.business_number,b.status,b.source,b.starts_at,b.ends_at,
-                b.price_minor_snapshot::text,b.currency,b.version,b.notes,b.party_id,b.asset_id,
-                p.display_name AS party_name,s.name AS service_name,
-                CASE WHEN a.id IS NULL THEN NULL ELSE json_build_object(
-                  'id',a.id,'assetType',a.asset_type,'displayName',a.display_name,
-                  'externalKey',a.external_key,'registrationNumber',a.registration_number,
-                  'manufacturer',a.manufacturer,'model',a.model,
-                  'productionYear',a.production_year,
-                  'usageValue',a.usage_value::text,'usageUnit',a.usage_unit
-                ) END AS asset,
-                COALESCE(json_agg(json_build_object('resourceId',r.id,'resourceName',r.name,'type',r.type))
-                  FILTER (WHERE r.id IS NOT NULL),'[]'::json) AS resources
+        `SELECT
+           b.id,b.business_number,b.status,b.source,b.starts_at,b.ends_at,
+           b.price_minor_snapshot::text,b.currency,b.version,b.notes,
+           b.party_id,b.asset_id,b.delivery_format_snapshot,
+           p.display_name AS party_name,s.name AS service_name,
+           CASE WHEN a.id IS NULL THEN NULL ELSE json_build_object(
+             'id',a.id,'assetType',a.asset_type,'displayName',a.display_name,
+             'externalKey',a.external_key,
+             'registrationNumber',a.registration_number,
+             'manufacturer',a.manufacturer,'model',a.model,
+             'productionYear',a.production_year,
+             'usageValue',a.usage_value::text,'usageUnit',a.usage_unit
+           ) END AS asset,
+           CASE WHEN charge.id IS NULL THEN NULL ELSE json_build_object(
+             'id',charge.id,
+             'status',charge.status,
+             'amountMinor',charge.amount_minor::text,
+             'dueAt',charge.due_at,
+             'obligationId',charge.obligation_id,
+             'obligationStatus',fo.status,
+             'settledMinor',coalesce(fo.settled_minor,0)::text,
+             'invoiceId',charge.invoice_id,
+             'invoiceNumber',fi.business_number,
+             'invoiceStatus',fi.status
+           ) END AS billing,
+           COALESCE(
+             json_agg(json_build_object(
+               'resourceId',r.id,
+               'resourceName',r.name,
+               'type',r.type,
+               'capacityUnits',br.capacity_units,
+               'zoneId',br.zone_id,
+               'zoneName',rz.name
+             ) ORDER BY r.type,r.name)
+             FILTER (WHERE r.id IS NOT NULL),
+             '[]'::json
+           ) AS resources
          FROM service_booking b
-         JOIN service_catalog_item s ON s.tenant_id=b.tenant_id AND s.id=b.service_id
-         LEFT JOIN party p ON p.tenant_id=b.tenant_id AND p.id=b.party_id
-         LEFT JOIN service_asset a ON a.tenant_id=b.tenant_id AND a.id=b.asset_id
-         LEFT JOIN service_booking_resource br ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
-         LEFT JOIN service_resource r ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+         JOIN service_catalog_item s
+           ON s.tenant_id=b.tenant_id AND s.id=b.service_id
+         LEFT JOIN party p
+           ON p.tenant_id=b.tenant_id AND p.id=b.party_id
+         LEFT JOIN service_asset a
+           ON a.tenant_id=b.tenant_id AND a.id=b.asset_id
+         LEFT JOIN service_booking_charge charge
+           ON charge.tenant_id=b.tenant_id AND charge.booking_id=b.id
+         LEFT JOIN financial_obligation fo
+           ON fo.tenant_id=charge.tenant_id AND fo.id=charge.obligation_id
+         LEFT JOIN finance_invoice fi
+           ON fi.tenant_id=charge.tenant_id AND fi.id=charge.invoice_id
+         LEFT JOIN service_booking_resource br
+           ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
+         LEFT JOIN service_resource r
+           ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+         LEFT JOIN service_resource_zone rz
+           ON rz.tenant_id=br.tenant_id AND rz.id=br.zone_id
          WHERE b.tenant_id=$1 AND b.id=$2
-         GROUP BY b.id,p.display_name,s.name,a.id`,
+         GROUP BY
+           b.id,p.display_name,s.name,a.id,
+           charge.id,fo.id,fi.id`,
         [context.tenantId, bookingId]
       );
       if (!result.rows[0]) throw new NotFoundException("Запись не найдена");
@@ -2115,6 +2158,20 @@ export class BookingService {
         await this.seedTechnologyCardMaterials(
           client,context.tenantId,booking.id,rule.technology_card_id
         );
+      }
+
+      if (
+        !input.packageId &&
+        effectivePartyId &&
+        BigInt(priceMinor) > 0n
+      ) {
+        await this.ensureBookingChargeTx(client,context,{
+          bookingId:booking.id,
+          payerPartyId:effectivePartyId,
+          amountMinor:String(priceMinor),
+          currency:service.currency,
+          dueAt:startsAt
+        });
       }
 
       await this.attribution.recordConversion(client,context,{
