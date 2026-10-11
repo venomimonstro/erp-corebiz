@@ -546,6 +546,8 @@ export class ProjectsService {
         const blockers = await client.query<{
           milestones: string;
           tasks: string;
+          deliverables:string;
+          approvals:string;
         }>(
           `SELECT
              (SELECT count(*) FROM work_project_milestone
@@ -555,13 +557,22 @@ export class ProjectsService {
                WHERE tenant_id=$1
                  AND linked_type='PROJECT'
                  AND linked_id=$2
-                 AND state NOT IN ('DONE','CANCELLED'))::text AS tasks`,
+                 AND state NOT IN ('DONE','CANCELLED'))::text AS tasks,
+             (SELECT count(*) FROM work_project_deliverable
+               WHERE tenant_id=$1 AND project_id=$2
+                 AND status NOT IN ('APPROVED','CANCELLED'))::text AS deliverables,
+             (SELECT count(*) FROM work_project_client_approval
+               WHERE tenant_id=$1 AND project_id=$2
+                 AND status='PENDING')::text AS approvals`,
           [context.tenantId, projectId]
         );
         const blocking = blockers.rows[0]!;
-        if (Number(blocking.milestones) > 0 || Number(blocking.tasks) > 0) {
+        if (
+          Number(blocking.milestones)>0||Number(blocking.tasks)>0||
+          Number(blocking.deliverables)>0||Number(blocking.approvals)>0
+        ){
           throw new ConflictException(
-            "Сначала завершите этапы и задачи проекта"
+            "Проект ещё не готов к закрытию: завершите этапы, задачи, передайте результаты и закройте согласования клиента"
           );
         }
       }
