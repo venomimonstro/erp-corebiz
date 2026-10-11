@@ -46,13 +46,29 @@ export class PayrollService {
       const b=await client.query("SELECT 1 FROM payroll_accrual_batch WHERE tenant_id=$1 AND id=$2 AND status='DRAFT' FOR UPDATE",
         [ctx.tenantId,input.batchId]);
       if(!b.rowCount) throw new ConflictException("Payroll batch not found or approved");
+      const employeeRef=input.employeeRef.trim();
+      await client.query(
+        `INSERT INTO payroll_accrual_component(
+           tenant_id,batch_id,employee_ref,source_type,source_key,
+           gross_minor,deduction_minor,metadata
+         ) VALUES($1,$2,$3,'MANUAL','manual',$4,$5,'{}'::jsonb)
+         ON CONFLICT(
+           tenant_id,batch_id,employee_ref,source_type,source_key
+         ) DO UPDATE SET
+           gross_minor=EXCLUDED.gross_minor,
+           deduction_minor=EXCLUDED.deduction_minor,
+           updated_at=now()`,
+        [
+          ctx.tenantId,input.batchId,employeeRef,
+          input.grossMinor,input.deductionMinor
+        ]
+      );
       const r=await client.query(
-        `INSERT INTO payroll_accrual_line(tenant_id,batch_id,employee_ref,gross_minor,deduction_minor)
-         VALUES($1,$2,$3,$4,$5)
-         ON CONFLICT(tenant_id,batch_id,employee_ref) DO UPDATE
-         SET gross_minor=EXCLUDED.gross_minor,deduction_minor=EXCLUDED.deduction_minor
-         RETURNING id,employee_ref,gross_minor::text,deduction_minor::text`,
-        [ctx.tenantId,input.batchId,input.employeeRef.trim(),input.grossMinor,input.deductionMinor]);
+        `SELECT id,employee_ref,gross_minor::text,deduction_minor::text
+         FROM payroll_accrual_line
+         WHERE tenant_id=$1 AND batch_id=$2 AND employee_ref=$3`,
+        [ctx.tenantId,input.batchId,employeeRef]
+      );
       return r.rows[0];
     });
   }
