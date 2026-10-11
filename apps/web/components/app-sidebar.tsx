@@ -38,6 +38,7 @@ const permissionByKey: Record<string,string> = {
   "dance-team": "dance.read",
   "dance-setup": "dance.read",
   bookings: "service.read",
+  "service-waitlist": "service.read",
   resources: "service.read",
   "service-assets": "service.read",
   "service-packages": "service.read",
@@ -92,6 +93,7 @@ const capabilityByKey: Record<string,string> = {
   "dance-team": "dance",
   "dance-setup": "dance",
   bookings: "service",
+  "service-waitlist": "service",
   resources: "service",
   "service-assets": "service",
   "service-packages": "service",
@@ -149,6 +151,7 @@ const sections: Section[] = [
     ["/app/service/setup", "Настройка услуг", "service-setup"],
     ["/app/service/team", "Команда и зарплата", "service-team"],
     ["/app/service/bookings", "Записи клиентов", "bookings"],
+    ["/app/service/waitlist", "Лист ожидания", "service-waitlist"],
     ["/app/service/resources", "Сотрудники и ресурсы", "resources"],
     ["/app/service/assets", "Автомобили и объекты", "service-assets"],
     ["/app/service/packages", "Абонементы", "service-packages"]
