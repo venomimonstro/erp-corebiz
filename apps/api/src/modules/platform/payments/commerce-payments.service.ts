@@ -398,9 +398,8 @@ export class CommercePaymentsService {
             url.hostname===host||url.hostname.endsWith("."+host));
       }catch{trustedLink=false;}
     }
-    if(!trustedLink){
-      throw new ServiceUnavailableException("Провайдер не вернул безопасную ссылку оплаты");
-    }
+    // Persist the PSP ID even when its redirect is unavailable. The payment
+    // may have been captured and must remain reconcilable after a crash.
     await this.database.withTenantTransaction(this.context(intent.tenant_id),async client=>{
       await client.query(
         `UPDATE commerce_payment_intent
@@ -408,8 +407,17 @@ export class CommercePaymentsService {
            fiscal_status='PENDING',updated_at=now()
          WHERE tenant_id=$1 AND id=$2 AND status IN ('NEW','PENDING')
            AND (provider_payment_id IS NULL OR provider_payment_id=$3)`,
-        [intent.tenant_id,intent.id,response.id,link]);
+        [intent.tenant_id,intent.id,response.id,trustedLink?link:null]);
     });
+    if(response.status==="succeeded" && response.paid===true){
+      await this.reconcileIntent({...intent,provider_payment_id:response.id});
+      return {intentId:intent.id,status:"SUCCEEDED"};
+    }
+    if(!trustedLink){
+      throw new ServiceUnavailableException(
+        "Провайдер создал платёж, но не вернул безопасную ссылку: статус можно сверить позже"
+      );
+    }
     return {intentId:intent.id,status:"PENDING",confirmationUrl:link};
   }
   private verifyAmount(intent:Intent,response:ProviderPayment){
