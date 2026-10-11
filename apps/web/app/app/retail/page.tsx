@@ -149,6 +149,9 @@ export default function RetailPage(){
         </div>
         <div className="studio-hero-actions">
           <a className="secondary-button" href="/app/sites">Интернет-магазин</a>
+          <a className="secondary-button" href="/app/retail/serialized">
+            Серийные номера / IMEI
+          </a>
           <button type="button" onClick={()=>setCreateForm(v=>!v)}>+ Торговая точка</button>
         </div>
       </header>
