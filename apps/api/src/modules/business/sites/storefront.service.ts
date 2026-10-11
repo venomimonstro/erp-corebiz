@@ -92,11 +92,12 @@ export class StorefrontService {
     return this.database.withTenantTransaction(this.systemContext(sf.tenant_id),async client=>{
       const result=await client.query<{
         sku_id:string;product_id:string;product_name:string;description:string|null;
+        image_url:string|null;
         sku_code:string;barcode:string|null;sale_price_minor:string;
         currency:string;atp_milli:string;
       }>(
         `WITH items AS (
-           SELECT p.id AS product_id,p.name AS product_name,p.description,
+           SELECT p.id AS product_id,p.name AS product_name,p.description,p.image_url,
              s.id AS sku_id,s.code AS sku_code,s.barcode,
              s.sale_price_minor::text AS sale_price_minor,s.currency
            FROM sku s
@@ -113,7 +114,7 @@ export class StorefrontService {
            ORDER BY s.id
            LIMIT $5
          )
-         SELECT i.product_id,i.product_name,i.description,
+         SELECT i.product_id,i.product_name,i.description,i.image_url,
            i.sku_id,i.sku_code,i.barcode,i.sale_price_minor,i.currency,
            COALESCE(sum(GREATEST(
              COALESCE(b.physical_milli,0)-COALESCE(b.reserved_milli,0)-
@@ -124,7 +125,7 @@ export class StorefrontService {
          LEFT JOIN inventory_policy ip
            ON ip.tenant_id=b.tenant_id AND ip.warehouse_id=b.warehouse_id
            AND ip.sku_id=b.sku_id
-         GROUP BY i.product_id,i.product_name,i.description,
+         GROUP BY i.product_id,i.product_name,i.description,i.image_url,
            i.sku_id,i.sku_code,i.barcode,i.sale_price_minor,i.currency
          ORDER BY i.sku_id`,
         [sf.tenant_id,sf.currency,options.cursor??null,search,limit+1]
