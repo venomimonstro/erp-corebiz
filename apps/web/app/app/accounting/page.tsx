@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../components/app-sidebar";
 import { apiRequest } from "../../../lib/api";
-import { TaxCompliancePanel } from "../../../components/tax-compliance-panel";
+import { AccountingComplianceCenter } from "../../../components/accounting-compliance-center";
 
 type LegalEntity = {
   id: string;
@@ -446,7 +446,11 @@ export default function AccountingPage() {
             </div>
 
             {tab === "tax" ? (
-              <TaxCompliancePanel legalEntityId={legalEntityId} />
+              <AccountingComplianceCenter
+                legalEntityId={legalEntityId}
+                legalEntityName={currentEntity.name}
+                inn={currentEntity.inn}
+              />
             ) : null}
 
             {tab === "overview" ? (
