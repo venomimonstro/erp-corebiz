@@ -174,7 +174,7 @@ const sections: Section[] = [
     ["/app/oms", "Управление заказами", "oms"],
     ["/app/returns", "Возвраты", "returns"],
     ["/app/sites", "Сайты и магазин", "sites"],
-    ["/app/migration", "Перенос из 1С / Excel", "migration"]
+    ["/app/migration", "Импорт Excel / CSV", "migration"]
   ] },
   { title: "Аналитика", items: [
     ["/app/analytics", "Обзор", "analytics"],
