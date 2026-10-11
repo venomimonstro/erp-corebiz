@@ -44,7 +44,7 @@ export class SiteFormsController{
 
   @Public()
   @Post("submit/:publicKey")
-  @ApiCost("WEBHOOK")
+  @ApiCost("PUBLIC_CHECKOUT")
   async submit(
     @Req() req:Request,
     @Param("publicKey") key:string,
