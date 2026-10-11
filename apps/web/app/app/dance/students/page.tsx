@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
 import { DanceWorkspaceNav } from "../../../../components/dance-workspace-nav";
 import { StudioModal } from "../../../../components/studio-modal";
@@ -112,6 +112,7 @@ export default function DanceStudentsPage() {
   const [payerModal, setPayerModal] = useState(false);
   const [payerPartyId, setPayerPartyId] = useState("");
   const [chargeModal, setChargeModal] = useState(false);
+  const chargeRequest=useRef<{fingerprint:string;key:string}|null>(null);
   const [chargeRub, setChargeRub] = useState("");
   const [chargeDueAt, setChargeDueAt] = useState(new Date().toISOString().slice(0,10));
   const [chargeNote, setChargeNote] = useState("");
@@ -294,6 +295,7 @@ export default function DanceStudentsPage() {
 
   function openChargeModal() {
     if (!selected) return;
+    chargeRequest.current=null;
     setChargeRub("");
     setChargeDueAt(new Date().toISOString().slice(0,10));
     setChargeNote("");
@@ -303,26 +305,33 @@ export default function DanceStudentsPage() {
   async function addCharge() {
     if (!selected) return;
     const amountRub = Number(chargeRub.replace(",", "."));
-    if (!Number.isFinite(amountRub) || amountRub <= 0) {
+    const amountMinor=Math.round(amountRub*100);
+    if (!Number.isFinite(amountRub)||amountRub<=0||
+        !Number.isSafeInteger(amountMinor)||amountMinor>999999999999999) {
       setError("Укажите корректную сумму начисления");
       return;
     }
+    const data={
+      payerPartyId:selected.payer_party_id??undefined,
+      sourceType:"OTHER" as const,
+      amountMinor:String(amountMinor),
+      dueAt:chargeDueAt||undefined,
+      note:chargeNote.trim()||undefined
+    };
+    const fingerprint=JSON.stringify({studentId:selected.id,...data});
+    if(chargeRequest.current?.fingerprint!==fingerprint)
+      chargeRequest.current={fingerprint,key:crypto.randomUUID()};
     setPending(true);
     setError("");
     setNotice("");
     try {
       await apiRequest(`/dance/students/${selected.id}/charges`, {
         method: "POST",
-        body: JSON.stringify({
-          payerPartyId: selected.payer_party_id ?? undefined,
-          sourceType: "OTHER",
-          amountMinor: String(Math.round(amountRub * 100)),
-          dueAt: chargeDueAt || undefined,
-          note: chargeNote.trim() || undefined
-        })
+        body:JSON.stringify({...data,requestKey:chargeRequest.current.key})
       });
+      chargeRequest.current=null;
       setChargeModal(false);
-      setNotice("Начисление создано.");
+      setNotice("Начисление создано без дублирования.");
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать начисление");
