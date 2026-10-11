@@ -976,10 +976,13 @@ export class DanceEconomicsService {
       let attendedCount=0;
       let bookedCount=0;
       for(const participant of participants.rows){
-        if(!["WAITLIST","CANCELLED_IN_TIME"].includes(participant.status)) {
-          bookedCount++;
-        }
-        if(["ATTENDED","LATE"].includes(participant.status)) attendedCount++;
+        // Waiting-list and already cancelled records are not reservations.
+        // In particular, a candidate's makeup credit is not locked until
+        // their actual promotion into a class seat.
+        if(["WAITLIST","CANCELLED_IN_TIME"].includes(participant.status))
+          continue;
+        bookedCount++;
+        if(["ATTENDED","LATE"].includes(participant.status))attendedCount++;
         if(participant.makeup_credit_id){
           const credit=await client.query<{
             status:string;
@@ -1077,7 +1080,10 @@ export class DanceEconomicsService {
           [context.tenantId,participant.id]
         );
         const red=redemption.rows[0];
-        if(!red||red.state!=="RESERVED") continue;
+        if(!red||red.state!=="RESERVED")
+          throw new ConflictException(
+            "У записанного ученика отсутствует активный резерв абонемента. Проверьте начисления и не закрывайте урок до сверки"
+          );
 
         const makeup=
           participant.status==="EXCUSED_ABSENCE"&&red.allow_makeup;
