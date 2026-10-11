@@ -47,6 +47,11 @@ export class DatabaseService implements OnModuleDestroy {
 
     try {
       await client.query("BEGIN");
+      // Bound waiting and abandoned transactions under concurrent tenant load.
+      // SET LOCAL is scoped to this transaction, never leaks to the next
+      // tenant when PgBouncer reuses a pooled connection.
+      await client.query("SET LOCAL lock_timeout = '5s'");
+      await client.query("SET LOCAL idle_in_transaction_session_timeout = '60s'");
       const result = await callback(client);
       await client.query("COMMIT");
       return result;
