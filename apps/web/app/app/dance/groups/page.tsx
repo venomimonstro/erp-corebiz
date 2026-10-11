@@ -181,6 +181,7 @@ export default function DanceGroupsPage() {
   const [notice, setNotice] = useState("");
   const [pending, setPending] = useState(false);
   const [canManageDance,setCanManageDance]=useState(false);
+  const [canAdministerDance,setCanAdministerDance]=useState(false);
   const [canViewFinance,setCanViewFinance]=useState(false);
   const [attendancePending,setAttendancePending]=useState<string|null>(null);
   const [programModal, setProgramModal] = useState(false);
@@ -254,9 +255,10 @@ export default function DanceGroupsPage() {
       // A read-only trainer should be able to open their journal even when
       // service, package and resource administration are not permitted.
       const rights=await apiRequest<{
-        canManageDance:boolean;canViewFinance:boolean
+        canManageDance:boolean;canAdministerDance:boolean;canViewFinance:boolean
       }>("/dance/access");
       setCanManageDance(rights.canManageDance);
+      setCanAdministerDance(rights.canAdministerDance);
       setCanViewFinance(rights.canViewFinance);
       const [programRows,groupRows,lessonRows,studentRows,resourceRows,serviceRows,packageRows,makeupRows]=
         await Promise.all([
@@ -266,16 +268,16 @@ export default function DanceGroupsPage() {
             "/dance/lessons?from="+encodeURIComponent(from)+"&to="+encodeURIComponent(to)
           ),
           apiRequest<Student[]>("/dance/students").catch(()=>[] as Student[]),
-          rights.canManageDance
+          rights.canAdministerDance
             ?apiRequest<Resource[]>("/service/resources").catch(()=>[] as Resource[])
             :Promise.resolve([] as Resource[]),
-          rights.canManageDance
+          rights.canAdministerDance
             ?apiRequest<Service[]>("/service/catalog").catch(()=>[] as Service[])
             :Promise.resolve([] as Service[]),
-          rights.canManageDance
+          rights.canAdministerDance
             ?apiRequest<Pack[]>("/service/packages").catch(()=>[] as Pack[])
             :Promise.resolve([] as Pack[]),
-          rights.canManageDance
+          rights.canAdministerDance
             ?apiRequest<MakeupCredit[]>("/dance/makeup-credits").catch(()=>[] as MakeupCredit[])
             :Promise.resolve([] as MakeupCredit[])
         ]);
@@ -1054,10 +1056,10 @@ export default function DanceGroupsPage() {
             </p>
           </div>
           <div className="studio-hero-actions">
-            {canManageDance&&sectionView==="GROUPS"?<>
+            {canAdministerDance&&sectionView==="GROUPS"?<>
               <button className="secondary-button" onClick={openProgramModal} type="button">Направление</button>
               <button onClick={openGroupModal} type="button">Новая группа</button>
-            </>:canManageDance?<>
+            </>:canAdministerDance?<>
               <button className="secondary-button" onClick={()=>openLessonModal("SELF_PRACTICE")} type="button">Практика</button>
               <button onClick={()=>openLessonModal("INDIVIDUAL")} type="button">Индивидуально</button>
             </>:null}
@@ -1112,7 +1114,7 @@ export default function DanceGroupsPage() {
           <section className="settings-card" style={{display:sectionView==="GROUPS"?"":"none"}}>
             <div className="section-heading">
               <div><p className="muted">Состав группы</p><h2>{selectedGroup.name}</h2></div>
-              {canManageDance?<div className="header-actions">
+              {canAdministerDance?<div className="header-actions">
                 <button className="secondary-button" onClick={openEditGroupModal} type="button">Настройки группы</button>
                 <button className="secondary-button" onClick={openMemberModal} type="button">+ Ученик</button>
                 <button className="secondary-button" onClick={openGroupPackageModal} type="button">+ Тариф группы</button>
@@ -1124,7 +1126,7 @@ export default function DanceGroupsPage() {
               <table className="data-table">
                 <thead><tr><th>Ученик</th><th>Статус</th>
                   {canViewFinance?<><th>Плательщик</th><th>Скидка</th></>:null}
-                  {canManageDance?<th>Действия</th>:null}
+                  {canAdministerDance?<th>Действия</th>:null}
                 </tr></thead>
                 <tbody>
                   {roster?.members.map((member) => (
@@ -1135,19 +1137,19 @@ export default function DanceGroupsPage() {
                         <td>{member.discount_bps===null||member.discount_bps===undefined
                           ?"—":(member.discount_bps/100).toLocaleString("ru-RU")+"%"}</td>
                       </>:null}
-                      {canManageDance?<td className="table-actions">
-                        {canManageDance&&member.status !== "ACTIVE" ? (
+                      {canAdministerDance?<td className="table-actions">
+                        {canAdministerDance&&member.status !== "ACTIVE" ? (
                           <button onClick={() => void changeMember(member, "ACTIVE")} type="button">Вернуть</button>
                         ) : null}
-                        {canManageDance&&member.status === "ACTIVE" ? (
+                        {canAdministerDance&&member.status === "ACTIVE" ? (
                           <button className="secondary-button" disabled={pending}
                             onClick={() => void changeMember(member, "PAUSED")} type="button">Пауза</button>
                         ) : null}
-                        {canManageDance&&member.status==="PAUSED"&&member.reserved_place ? (
+                        {canAdministerDance&&member.status==="PAUSED"&&member.reserved_place ? (
                           <button className="secondary-button" disabled={pending}
                             onClick={()=>void changeMember(member,"PAUSED",true)} type="button">Освободить место</button>
                         ):null}
-                        {canManageDance&&member.status !== "LEFT" ? (
+                        {canAdministerDance&&member.status !== "LEFT" ? (
                           <button className="secondary-button" onClick={() => void changeMember(member, "LEFT")} type="button">Вывести</button>
                         ) : null}
                       </td>:null}
@@ -1159,7 +1161,7 @@ export default function DanceGroupsPage() {
                       <td>WAITLIST → {member.enrollment_status ?? "ACTIVE"}</td>
                       {canViewFinance?<><td>—</td><td>{member.discount_bps===null||member.discount_bps===undefined
                         ?"—":(member.discount_bps/100).toLocaleString("ru-RU")+"%"}</td></>:null}
-                      {canManageDance?<td>Автопереход при освобождении места</td>:null}
+                      {canAdministerDance?<td>Автопереход при освобождении места</td>:null}
                     </tr>
                   ))}
                 </tbody>
