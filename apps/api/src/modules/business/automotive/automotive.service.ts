@@ -216,6 +216,205 @@ export class AutomotiveService {
     });
   }
 
+  async workOrder(context:TenantContext,workOrderId:string) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const order=await client.query(
+        `SELECT
+           o.*,v.vin,v.plate_number,v.make,v.model,v.generation,
+           v.production_year,v.mileage_km,p.display_name AS customer_name,
+           coalesce((
+             SELECT json_agg(json_build_object(
+               'id',l.id,'lineType',l.line_type,'description',l.description,
+               'quantityMilli',l.quantity_milli::text,
+               'unitPriceMinor',l.unit_price_minor::text,
+               'unitCostMinor',l.unit_cost_minor::text,
+               'approved',l.approved,'completed',l.completed,
+               'serviceId',l.service_id,'skuId',l.sku_id,
+               'employeeResourceId',l.employee_resource_id
+             ) ORDER BY l.created_at,l.id)
+             FROM automotive_work_order_line l
+             WHERE l.tenant_id=o.tenant_id AND l.work_order_id=o.id
+           ),'[]'::json) AS lines
+         FROM automotive_work_order o
+         JOIN automotive_vehicle v
+           ON v.tenant_id=o.tenant_id AND v.id=o.vehicle_id
+         LEFT JOIN party p
+           ON p.tenant_id=o.tenant_id AND p.id=o.party_id
+         WHERE o.tenant_id=$1 AND o.id=$2`,
+        [context.tenantId,workOrderId]
+      );
+      const row=order.rows[0];
+      if(!row) throw new NotFoundException("Заказ-наряд не найден");
+      return row;
+    });
+  }
+
+  async updateWorkOrder(
+    context:TenantContext,
+    workOrderId:string,
+    input:{
+      status?:string;
+      diagnosis?:string;
+      complaint?:string;
+      promisedAt?:string|null;
+      mileageOutKm?:number|null;
+    }
+  ) {
+    const requestedStatus=input.status?.trim().toUpperCase()||null;
+    const transitions:Record<string,string[]>={
+      DRAFT:["DIAGNOSIS","CANCELLED"],
+      DIAGNOSIS:["WAITING_APPROVAL","WAITING_PARTS","IN_PROGRESS","CANCELLED"],
+      WAITING_APPROVAL:["WAITING_PARTS","IN_PROGRESS","CANCELLED"],
+      WAITING_PARTS:["IN_PROGRESS","CANCELLED"],
+      IN_PROGRESS:["QUALITY_CHECK","WAITING_PARTS","CANCELLED"],
+      QUALITY_CHECK:["READY","IN_PROGRESS"],
+      READY:["DELIVERED","IN_PROGRESS"],
+      DELIVERED:[],
+      CANCELLED:[]
+    };
+    if(requestedStatus&&!Object.prototype.hasOwnProperty.call(transitions,requestedStatus)){
+      throw new BadRequestException("Некорректный статус заказ-наряда");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const current=await client.query<any>(
+        `SELECT o.*,v.mileage_km
+         FROM automotive_work_order o
+         JOIN automotive_vehicle v
+           ON v.tenant_id=o.tenant_id AND v.id=o.vehicle_id
+         WHERE o.tenant_id=$1 AND o.id=$2
+         FOR UPDATE OF o,v`,
+        [context.tenantId,workOrderId]
+      );
+      const row=current.rows[0];
+      if(!row) throw new NotFoundException("Заказ-наряд не найден");
+
+      if(
+        requestedStatus &&
+        requestedStatus!==row.status &&
+        !transitions[row.status]?.includes(requestedStatus)
+      ){
+        throw new BadRequestException(
+          "Недоступный переход: "+row.status+" → "+requestedStatus
+        );
+      }
+
+      if(requestedStatus==="DELIVERED"){
+        const unresolved=await client.query<{count:number}>(
+          `SELECT count(*)::integer AS count
+           FROM automotive_work_order_line
+           WHERE tenant_id=$1 AND work_order_id=$2
+             AND approved=true AND completed=false`,
+          [context.tenantId,workOrderId]
+        );
+        if((unresolved.rows[0]?.count??0)>0){
+          throw new BadRequestException(
+            "Нельзя выдать автомобиль: есть подтверждённые, но незавершённые работы или детали"
+          );
+        }
+      }
+
+      const mileageOut=
+        input.mileageOutKm===undefined||input.mileageOutKm===null
+          ?row.mileage_out_km
+          :Math.floor(input.mileageOutKm);
+      if(
+        mileageOut!==null &&
+        (
+          mileageOut<0 ||
+          (row.mileage_in_km!==null&&mileageOut<row.mileage_in_km)
+        )
+      ){
+        throw new BadRequestException("Пробег при выдаче меньше пробега при приёмке");
+      }
+
+      const result=await client.query(
+        `UPDATE automotive_work_order
+         SET
+           status=coalesce($3,status),
+           diagnosis=CASE WHEN $4::text IS NULL THEN diagnosis ELSE $4 END,
+           complaint=CASE WHEN $5::text IS NULL THEN complaint ELSE $5 END,
+           promised_at=CASE
+             WHEN $6::boolean THEN $7::timestamptz
+             ELSE promised_at
+           END,
+           mileage_out_km=$8,
+           completed_at=CASE
+             WHEN coalesce($3,status)='DELIVERED' THEN coalesce(completed_at,now())
+             ELSE completed_at
+           END,
+           updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING *`,
+        [
+          context.tenantId,workOrderId,requestedStatus,
+          input.diagnosis===undefined?null:input.diagnosis.trim(),
+          input.complaint===undefined?null:input.complaint.trim(),
+          input.promisedAt!==undefined,input.promisedAt??null,mileageOut
+        ]
+      );
+
+      if(requestedStatus==="DELIVERED"&&mileageOut!==null){
+        await client.query(
+          `UPDATE automotive_vehicle
+           SET mileage_km=greatest(coalesce(mileage_km,0),$3),updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,row.vehicle_id,mileageOut]
+        );
+      }
+
+      return result.rows[0];
+    });
+  }
+
+  async updateWorkOrderLine(
+    context:TenantContext,
+    workOrderId:string,
+    lineId:string,
+    input:{approved?:boolean;completed?:boolean;unitPriceMinor?:number;unitCostMinor?:number}
+  ) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const line=await client.query<any>(
+        `SELECT l.*,o.status AS order_status
+         FROM automotive_work_order_line l
+         JOIN automotive_work_order o
+           ON o.tenant_id=l.tenant_id AND o.id=l.work_order_id
+         WHERE l.tenant_id=$1 AND l.work_order_id=$2 AND l.id=$3
+         FOR UPDATE OF l,o`,
+        [context.tenantId,workOrderId,lineId]
+      );
+      const row=line.rows[0];
+      if(!row) throw new NotFoundException("Строка заказ-наряда не найдена");
+      if(["DELIVERED","CANCELLED"].includes(row.order_status)){
+        throw new BadRequestException("Закрытый заказ-наряд изменять нельзя");
+      }
+      if(input.completed===true&&input.approved===false){
+        throw new BadRequestException("Нельзя завершить неподтверждённую строку");
+      }
+      const result=await client.query(
+        `UPDATE automotive_work_order_line
+         SET
+           approved=coalesce($4,approved),
+           completed=CASE
+             WHEN $5::boolean IS NULL THEN completed
+             WHEN $5::boolean=true THEN true
+             ELSE false
+           END,
+           unit_price_minor=coalesce($6,unit_price_minor),
+           unit_cost_minor=coalesce($7,unit_cost_minor),
+           updated_at=now()
+         WHERE tenant_id=$1 AND work_order_id=$2 AND id=$3
+         RETURNING *`,
+        [
+          context.tenantId,workOrderId,lineId,
+          input.approved??null,input.completed??null,
+          input.unitPriceMinor??null,input.unitCostMinor??null
+        ]
+      );
+      return result.rows[0];
+    });
+  }
+
   async donors(context:TenantContext) {
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
