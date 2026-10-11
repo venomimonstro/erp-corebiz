@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -221,10 +222,13 @@ export class CustomizationController {
     @Param("key") key: string,
     @Body() body: { enabled: boolean }
   ): Promise<ApiSuccess<{ updated: true }>> {
+    if(!body || typeof body.enabled!=="boolean"){
+      throw new BadRequestException("Параметр enabled должен быть boolean");
+    }
     await this.customization.setCapability(
       this.context(request),
       key,
-      Boolean(body.enabled)
+      body.enabled
     );
     return { ok: true, data: { updated: true } };
   }
