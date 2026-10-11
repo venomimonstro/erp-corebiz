@@ -34,6 +34,8 @@ type Group = {
   members: number;
   waitlist: number;
   status: string;
+  version: number;
+  schedule: Array<{weekday:number;startMinute:number;durationMinutes?:number;}>;
 };
 
 type Lesson = {
@@ -179,6 +181,7 @@ export default function DanceGroupsPage() {
   const [programMinAge, setProgramMinAge] = useState("6");
   const [programMaxAge, setProgramMaxAge] = useState("17");
   const [groupModal, setGroupModal] = useState(false);
+  const [editingGroupId, setEditingGroupId] = useState("");
   const [groupProgramId, setGroupProgramId] = useState("");
   const [groupTrainerId, setGroupTrainerId] = useState("");
   const [groupRoomId, setGroupRoomId] = useState("");
@@ -372,6 +375,7 @@ export default function DanceGroupsPage() {
       return;
     }
     const program=programs[0]!;
+    setEditingGroupId("");
     setGroupProgramId(program.id);
     setGroupTrainerId(trainers[0]?.id??"");
     setGroupRoomId(rooms[0]?.id??"");
@@ -382,6 +386,31 @@ export default function DanceGroupsPage() {
     setGroupBreakEven("5");
     setGroupDays([1,3]);
     setGroupTime("18:00");
+    setGroupModal(true);
+  }
+
+  function openEditGroupModal() {
+    if(!selectedGroup)return;
+    const firstSlot=selectedGroup.schedule?.[0];
+    const minutes=firstSlot?.startMinute??18*60;
+    setEditingGroupId(selectedGroup.id);
+    setGroupProgramId(selectedGroup.program_id);
+    setGroupTrainerId(selectedGroup.trainer_resource_id);
+    setGroupRoomId(selectedGroup.room_resource_id??"");
+    setGroupRoomZoneId(selectedGroup.room_zone_id??"");
+    setGroupRoomCapacityUnits(String(selectedGroup.room_capacity_units??1));
+    setGroupName(selectedGroup.name);
+    setGroupCapacity(String(selectedGroup.capacity));
+    setGroupBreakEven(String(selectedGroup.break_even_members));
+    setGroupDays(
+      selectedGroup.schedule?.length
+        ?Array.from(new Set(selectedGroup.schedule.map(item=>item.weekday))).sort((a,b)=>a-b)
+        :[1,3]
+    );
+    setGroupTime(
+      String(Math.floor(minutes/60)).padStart(2,"0")+":"+
+      String(minutes%60).padStart(2,"0")
+    );
     setGroupModal(true);
   }
 
@@ -416,26 +445,46 @@ export default function DanceGroupsPage() {
     }
     setPending(true);setError("");setNotice("");
     try{
-      await apiRequest("/dance/groups",{
-        method:"POST",
-        body:JSON.stringify({
-          programId:program.id,
-          name:groupName.trim(),
-          trainerResourceId:trainer.id,
-          roomResourceId:groupRoomId||undefined,
-          roomZoneId:groupRoomZoneId||undefined,
-          roomCapacityUnits:groupRoomId?roomUnits:undefined,
-          capacity,
-          breakEvenMembers:breakEven,
-          schedule:groupDays.map((weekday)=>({
-            weekday,
-            startMinute,
-            durationMinutes:program.default_duration_minutes
-          }))
-        })
-      });
+      const payload={
+        name:groupName.trim(),
+        trainerResourceId:trainer.id,
+        roomResourceId:groupRoomId||null,
+        roomZoneId:groupRoomZoneId||null,
+        roomCapacityUnits:groupRoomId?roomUnits:1,
+        capacity,
+        breakEvenMembers:breakEven,
+        schedule:groupDays.map((weekday)=>({
+          weekday,
+          startMinute,
+          durationMinutes:program.default_duration_minutes
+        }))
+      };
+      if(editingGroupId){
+        const current=groups.find(item=>item.id===editingGroupId);
+        if(!current) throw new Error("Группа для изменения не найдена");
+        const result=await apiRequest<{future_lessons_unchanged:number}>(
+          `/dance/groups/${editingGroupId}`,
+          {method:"PATCH",body:JSON.stringify({...payload,version:current.version})}
+        );
+        setNotice(
+          "Шаблон группы обновлён. Уже созданные будущие занятия не изменены: "+
+          result.future_lessons_unchanged+
+          ". Новые серии используют новые настройки."
+        );
+      }else{
+        await apiRequest("/dance/groups",{
+          method:"POST",
+          body:JSON.stringify({
+            programId:program.id,...payload,
+            roomResourceId:groupRoomId||undefined,
+            roomZoneId:groupRoomZoneId||undefined,
+            roomCapacityUnits:groupRoomId?roomUnits:undefined
+          })
+        });
+        setNotice("Группа создана. Добавьте учеников и создайте занятия.");
+      }
       setGroupModal(false);
-      setNotice("Группа создана. Добавьте учеников и создайте занятия.");
+      setEditingGroupId("");
       await load();
     }catch(cause){
       setError(cause instanceof Error?cause.message:"Не удалось создать группу");
@@ -973,7 +1022,13 @@ export default function DanceGroupsPage() {
                   <tr key={group.id}>
                     <td><strong>{group.name}</strong><small>{group.program_name}</small></td>
                     <td>{group.trainer_name ?? "—"}</td>
-                    <td>{group.room_name ?? "—"}</td>
+                    <td>
+                      {group.room_name ?? "—"}
+                      <small>
+                        {group.room_zone_name ? group.room_zone_name+" · " : ""}
+                        {group.room_resource_id ? group.room_capacity_units+" ед." : ""}
+                      </small>
+                    </td>
                     <td>{group.members}/{group.capacity}</td>
                     <td>{group.break_even_members}</td>
                     <td>{group.waitlist}</td>
@@ -990,6 +1045,7 @@ export default function DanceGroupsPage() {
             <div className="section-heading">
               <div><p className="muted">Состав группы</p><h2>{selectedGroup.name}</h2></div>
               <div className="header-actions">
+                <button className="secondary-button" onClick={openEditGroupModal} type="button">Настройки группы</button>
                 <button className="secondary-button" onClick={openMemberModal} type="button">+ Ученик</button>
                 <button className="secondary-button" onClick={openGroupPackageModal} type="button">+ Тариф группы</button>
                 <button className="secondary-button" disabled={pending} onClick={() => void syncRoster()} type="button">Синхронизировать состав</button>
@@ -1340,14 +1396,26 @@ export default function DanceGroupsPage() {
 
         {groupModal ? (
           <StudioModal
-            eyebrow="Постоянная группа"
-            title="Собрать группу"
-            description="Задайте тренера, зал, вместимость и обычные дни занятий. Серия уроков создаётся отдельно."
-            onClose={() => setGroupModal(false)}
+            eyebrow={editingGroupId ? "Настройки группы" : "Постоянная группа"}
+            title={editingGroupId ? "Изменить группу" : "Собрать группу"}
+            description={
+              editingGroupId
+                ? "Меняется шаблон новых серий. Уже созданные занятия не переписываются."
+                : "Задайте тренера, зал, вместимость и обычные дни занятий. Серия уроков создаётся отдельно."
+            }
+            onClose={() => {
+              setGroupModal(false);
+              setEditingGroupId("");
+            }}
             footer={
               <>
-                <button className="secondary-button" type="button" onClick={() => setGroupModal(false)}>Отмена</button>
-                <button disabled={pending} type="button" onClick={() => void createGroup()}>{pending ? "Сохраняем…" : "Создать группу"}</button>
+                <button className="secondary-button" type="button" onClick={() => {
+                  setGroupModal(false);
+                  setEditingGroupId("");
+                }}>Отмена</button>
+                <button disabled={pending} type="button" onClick={() => void createGroup()}>
+                  {pending ? "Сохраняем…" : editingGroupId ? "Сохранить настройки" : "Создать группу"}
+                </button>
               </>
             }
           >
