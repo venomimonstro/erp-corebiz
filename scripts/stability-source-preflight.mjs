@@ -489,7 +489,8 @@ async function inspectRequiredHardening(root) {
     "184_service_booking_charge_deferred_fix.sql",
     "185_dance_group_room_allocation.sql",
     "185_payroll_payment_lifecycle.sql",
-    "186_service_employee_economics.sql"
+    "186_service_employee_economics.sql",
+    "187_service_payroll_export_lifecycle.sql"
   ];
 
   for (const name of requiredMigrations) {
@@ -521,7 +522,9 @@ async function inspectUniversalServiceEconomics(root) {
         /service_employee_compensation_plan/,
         /PERCENT_MARGIN/,
         /minimum_guarantee_minor/,
-        /finalizePayroll/
+        /finalizePayroll/,
+        /exportPayrollToBatch/,
+        /SERVICE_EMPLOYEE_STATEMENT/
       ]
     ],
     [
