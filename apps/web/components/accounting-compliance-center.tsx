@@ -30,6 +30,8 @@ type Obligation = {
   validation_status:string|null;
   signature_status:string|null;
   source_url:string|null;
+  connector_provider?:string|null;
+  connector_status?:string|null;
 };
 
 type LedgerItem = {
@@ -48,6 +50,17 @@ type EnsSnapshot = {
   as_of:string;
   balance_minor:string|null;
   source:string;
+};
+
+type Connector = {
+  id:string;
+  provider:string;
+  status:string;
+  supports_filing:boolean;
+  supports_receipts:boolean;
+  certificate_fingerprint:string|null;
+  certificate_valid_to:string|null;
+  last_error:string|null;
 };
 
 type CashAccount = {
@@ -131,6 +144,7 @@ export function AccountingComplianceCenter({
   const [ledger,setLedger]=useState<LedgerItem[]>([]);
   const [ens,setEns]=useState<EnsSnapshot[]>([]);
   const [cashAccounts,setCashAccounts]=useState<CashAccount[]>([]);
+  const [connectors,setConnectors]=useState<Connector[]>([]);
   const [calculation,setCalculation]=useState<TaxCalculation|null>(null);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
@@ -162,7 +176,9 @@ export function AccountingComplianceCenter({
         obligationRows,
         ledgerRows,
         ensRows,
-        accountRows
+        accountRows,
+        connectorRows,
+        calculationRows
       ]=await Promise.all([
         apiRequest<TaxProfile|null>(
           "/accounting/compliance/profile?legalEntityId="+
@@ -185,6 +201,14 @@ export function AccountingComplianceCenter({
         apiRequest<CashAccount[]>(
           "/accounting/compliance/cash-accounts?legalEntityId="+
           encodeURIComponent(legalEntityId)
+        ),
+        apiRequest<Connector[]>(
+          "/accounting/compliance/connectors?legalEntityId="+
+          encodeURIComponent(legalEntityId)
+        ),
+        apiRequest<TaxCalculation[]>(
+          "/accounting/compliance/calculations?legalEntityId="+
+          encodeURIComponent(legalEntityId)
         )
       ]);
 
@@ -193,6 +217,8 @@ export function AccountingComplianceCenter({
       setLedger(ledgerRows);
       setEns(ensRows);
       setCashAccounts(accountRows);
+      setConnectors(connectorRows);
+      setCalculation(calculationRows[0]??null);
 
       if(profileRow){
         setEntityKind(profileRow.entity_kind);
@@ -527,6 +553,159 @@ export function AccountingComplianceCenter({
     }
   }
 
+  async function validatePacket(item:Obligation) {
+    const note="Проверены реквизиты, сумма, период и нормативное основание.";
+    setBusy(true);
+    setError("");
+    try{
+      await apiRequest(
+        "/accounting/compliance/obligations/"+item.id+"/packet/validate",
+        {method:"POST",body:JSON.stringify({note})}
+      );
+      setNotice("Пакет проверен. Теперь его можно утвердить.");
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось проверить пакет");
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  async function approveObligation(item:Obligation) {
+    setBusy(true);
+    setError("");
+    try{
+      await apiRequest(
+        "/accounting/compliance/obligations/"+item.id+"/approve",
+        {method:"POST",body:"{}"}
+      );
+      setNotice("Документ утверждён. Для отправки нужна подтверждённая КЭП.");
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось утвердить документ");
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  async function signWithConnector(item:Obligation) {
+    const verified=connectors.find(connector=>
+      connector.status==="VERIFIED" &&
+      connector.supports_filing &&
+      connector.certificate_fingerprint
+    );
+    if(!verified){
+      setError(
+        "Нет проверенного оператора с действующим сертификатом. Подключите ФНС/оператора ЭДО в интеграциях бухгалтерии."
+      );
+      return;
+    }
+    const reference=window.prompt(
+      "Идентификатор подписи/операции у "+verified.provider
+    );
+    if(!reference?.trim()) return;
+    setBusy(true);
+    try{
+      await apiRequest(
+        "/accounting/compliance/obligations/"+item.id+"/signature",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            provider:verified.provider,
+            certificateFingerprint:verified.certificate_fingerprint,
+            providerReference:reference.trim()
+          })
+        }
+      );
+      setNotice("КЭП подтверждена оператором. Документ готов к отправке.");
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось подтвердить подпись");
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  async function recordSubmitted(item:Obligation) {
+    const verified=connectors.find(connector=>
+      connector.status==="VERIFIED" && connector.supports_filing
+    );
+    if(!verified){
+      setError("Нет проверенного канала электронной сдачи.");
+      return;
+    }
+    const reference=window.prompt(
+      "Идентификатор отправки у "+verified.provider
+    );
+    if(!reference?.trim()) return;
+    setBusy(true);
+    try{
+      await apiRequest(
+        "/accounting/compliance/obligations/"+item.id+"/submitted",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            provider:verified.provider,
+            externalReference:reference.trim()
+          })
+        }
+      );
+      setNotice("Отправка зафиксирована. Ждём квитанцию ФНС/оператора.");
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось зафиксировать отправку");
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  async function recordReceipt(
+    item:Obligation,
+    receiptType:"ACCEPTED"|"REJECTED"|"PAYMENT"
+  ) {
+    const provider=item.connector_provider||
+      connectors.find(connector=>connector.status==="VERIFIED")?.provider||
+      "MANUAL";
+    const reference=window.prompt(
+      receiptType==="PAYMENT"
+        ?"Номер/идентификатор подтверждения оплаты"
+        :"Номер квитанции ФНС/оператора"
+    );
+    if(!reference?.trim()) return;
+    const reason=receiptType==="REJECTED"
+      ?window.prompt("Причина отказа из квитанции")?.trim()
+      :undefined;
+    if(receiptType==="REJECTED"&&!reason) return;
+
+    setBusy(true);
+    try{
+      await apiRequest(
+        "/accounting/compliance/obligations/"+item.id+"/receipt",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            provider,
+            externalReference:reference.trim(),
+            receiptType,
+            payload:reason?{reason}:undefined
+          })
+        }
+      );
+      setNotice(
+        receiptType==="ACCEPTED"
+          ?"ФНС приняла документ."
+          :receiptType==="PAYMENT"
+            ?"Оплата подтверждена."
+            :"Отказ сохранён. Исправьте пакет и отправьте повторно."
+      );
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось сохранить квитанцию");
+    }finally{
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="compliance-center">
       <section className="compliance-hero">
@@ -769,8 +948,72 @@ export function AccountingComplianceCenter({
                   type="button"
                   onClick={()=>void preparePacket(next)}
                 >
-                  Подготовить
+                  Подготовить пакет
                 </button>
+              ):null}
+              {next.workflow_status==="READY" &&
+               next.validation_status!=="VALID"?(
+                <button
+                  type="button"
+                  onClick={()=>void validatePacket(next)}
+                >
+                  Проверить пакет
+                </button>
+              ):null}
+              {next.workflow_status==="READY" &&
+               next.validation_status==="VALID"?(
+                <button
+                  type="button"
+                  onClick={()=>void approveObligation(next)}
+                >
+                  Утвердить
+                </button>
+              ):null}
+              {next.workflow_status==="APPROVED" &&
+               next.signature_status!=="SIGNED" &&
+               next.obligation_type!=="PAY"?(
+                <button
+                  type="button"
+                  onClick={()=>void signWithConnector(next)}
+                >
+                  Подтвердить КЭП
+                </button>
+              ):null}
+              {next.workflow_status==="APPROVED" &&
+               next.signature_status==="SIGNED" &&
+               next.obligation_type!=="PAY"?(
+                <button
+                  type="button"
+                  onClick={()=>void recordSubmitted(next)}
+                >
+                  Зафиксировать отправку
+                </button>
+              ):null}
+              {next.workflow_status==="APPROVED" &&
+               next.obligation_type==="PAY"?(
+                <button
+                  type="button"
+                  onClick={()=>void recordReceipt(next,"PAYMENT")}
+                >
+                  Подтвердить оплату
+                </button>
+              ):null}
+              {next.workflow_status==="SUBMITTED"?(
+                <>
+                  <button
+                    type="button"
+                    onClick={()=>void recordReceipt(next,"ACCEPTED")}
+                  >
+                    Принято ФНС
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={()=>void recordReceipt(next,"REJECTED")}
+                  >
+                    Есть отказ
+                  </button>
+                </>
               ):null}
               {next.source_url?(
                 <a
