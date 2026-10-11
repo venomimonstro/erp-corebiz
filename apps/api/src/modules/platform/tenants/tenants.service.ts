@@ -64,9 +64,16 @@ export class TenantsService {
 
   async createInvitation(
     context: TenantContext,
-    emailInput: string
+    emailInput: string,
+    roleId?: string
   ): Promise<{ invitationId: string; token: string; expiresAt: string }> {
+    if (typeof emailInput!=="string" || emailInput.length>254)
+      throw new BadRequestException("Некорректный email");
     const email = emailInput.trim().toLowerCase();
+    if(roleId!==undefined &&
+      (typeof roleId!=="string" ||
+      !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(roleId)))
+      throw new BadRequestException("Некорректная роль");
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       throw new BadRequestException("Некорректный email");
@@ -88,6 +95,49 @@ export class TenantsService {
         throw new ConflictException("Пользователь уже состоит в компании");
       }
 
+      if(roleId){
+        const chosen=await client.query<{code:string}>(
+          `SELECT code FROM tenant_role
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,roleId]);
+        if(!chosen.rows[0] || chosen.rows[0].code==="OWNER")
+          throw new BadRequestException("Нельзя назначить владельца по ссылке");
+        const manager=await client.query<{is_owner:boolean}>(
+          `SELECT tm.is_owner FROM tenant_membership tm
+           JOIN membership_role mr ON mr.tenant_id=tm.tenant_id
+             AND mr.membership_id=tm.id
+           JOIN role_permission rp ON rp.tenant_id=mr.tenant_id
+             AND rp.role_id=mr.role_id
+           WHERE tm.tenant_id=$1 AND tm.id=$2 AND tm.user_id=$3
+             AND tm.status='ACTIVE' AND rp.permission_code IN ('*','roles.manage')
+             AND rp.scope='all' LIMIT 1`,
+          [context.tenantId,context.membershipId,context.userId]);
+        if(!manager.rows[0])throw new BadRequestException(
+          "Выбор роли требует права управления ролями"
+        );
+        if(!manager.rows[0].is_owner){
+          const elevated=await client.query(
+            `SELECT 1 FROM role_permission target
+             WHERE target.tenant_id=$1 AND target.role_id=$2
+               AND NOT EXISTS (
+                 SELECT 1 FROM membership_role actor_role
+                 JOIN role_permission owned ON owned.tenant_id=actor_role.tenant_id
+                   AND owned.role_id=actor_role.role_id
+                 WHERE actor_role.tenant_id=$1
+                   AND actor_role.membership_id=$3
+                   AND owned.permission_code IN ('*',target.permission_code)
+                   AND (CASE owned.scope WHEN 'all' THEN 4 WHEN 'branch' THEN 3
+                          WHEN 'team' THEN 2 WHEN 'own' THEN 1 ELSE 0 END)
+                       >= (CASE target.scope WHEN 'all' THEN 4 WHEN 'branch' THEN 3
+                          WHEN 'team' THEN 2 WHEN 'own' THEN 1 ELSE 0 END)
+               ) LIMIT 1`,
+            [context.tenantId,roleId,context.membershipId]);
+          if(elevated.rowCount)throw new BadRequestException(
+            "Нельзя делегировать права выше своих"
+          );
+        }
+      }
+
       await client.query(
         `UPDATE tenant_invitation
          SET status = 'REVOKED'
@@ -103,10 +153,10 @@ export class TenantsService {
         expires_at: Date;
       }>(
         `INSERT INTO tenant_invitation(
-           tenant_id, email, token_hash, invited_by_user_id, expires_at
-         ) VALUES ($1, $2, $3, $4, now() + interval '7 days')
+           tenant_id, email, token_hash, invited_by_user_id, expires_at, role_id
+         ) VALUES ($1, $2, $3, $4, now() + interval '7 days', $5)
          RETURNING id, expires_at`,
-        [context.tenantId, email, hashToken(token), context.userId]
+        [context.tenantId, email, hashToken(token), context.userId, roleId??null]
       );
 
       const invitation = result.rows[0];
@@ -122,7 +172,7 @@ export class TenantsService {
           context.userId,
           context.membershipId,
           invitation.id,
-          JSON.stringify({ email })
+          JSON.stringify({ email, roleId:roleId??null })
         ]
       );
 
@@ -131,6 +181,57 @@ export class TenantsService {
         token,
         expiresAt: invitation.expires_at.toISOString()
       };
+    });
+  }
+
+  async invitations(context:TenantContext){
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT i.id,i.email,i.status,i.expires_at,i.created_at,
+           r.name AS role_name,r.code AS role_code
+         FROM tenant_invitation i
+         LEFT JOIN tenant_role r ON r.tenant_id=i.tenant_id AND r.id=i.role_id
+         WHERE i.tenant_id=$1 ORDER BY i.created_at DESC LIMIT 100`,
+        [context.tenantId]);
+      return result.rows;
+    });
+  }
+
+  async team(context:TenantContext){
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT m.id AS membership_id,u.email,m.status,m.is_owner,
+            coalesce(json_agg(json_build_object('id',r.id,'code',r.code,'name',r.name))
+              FILTER (WHERE r.id IS NOT NULL),'[]'::json) AS roles
+         FROM tenant_membership m
+         JOIN app_user u ON u.id=m.user_id
+         LEFT JOIN membership_role mr ON mr.tenant_id=m.tenant_id
+           AND mr.membership_id=m.id
+         LEFT JOIN tenant_role r ON r.tenant_id=mr.tenant_id AND r.id=mr.role_id
+         WHERE m.tenant_id=$1
+         GROUP BY m.id,u.id ORDER BY m.is_owner DESC,u.email LIMIT 200`,
+        [context.tenantId]);
+      return result.rows;
+    });
+  }
+
+  async revokeInvitation(context:TenantContext,id:string){
+    if(!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(id))
+      throw new BadRequestException("Некорректный идентификатор");
+    return this.database.withTenantTransaction(context,async client=>{
+      const r=await client.query(
+        `UPDATE tenant_invitation SET status='REVOKED'
+         WHERE tenant_id=$1 AND id=$2 AND status='PENDING'
+         RETURNING id`,
+        [context.tenantId,id]);
+      if(!r.rowCount)throw new NotFoundException("Активное приглашение не найдено");
+      await client.query(
+        `INSERT INTO audit_event(
+          tenant_id,actor_user_id,actor_membership_id,
+          action,resource_type,resource_id
+        ) VALUES($1,$2,$3,'membership.invitation_revoked','tenant_invitation',$4)`,
+        [context.tenantId,context.userId,context.membershipId,id]);
+      return {revoked:true};
     });
   }
 
