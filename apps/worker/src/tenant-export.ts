@@ -84,6 +84,7 @@ const EXPORT_ENTITIES: ExportEntity[] = [
   { table: "service_booking_profitability", label: "service_booking_profitability" },
   { table: "service_employee_booking_accrual", label: "service_employee_booking_accruals" },
   { table: "service_employee_payroll_statement", label: "service_employee_payroll_statements" },
+  { table: "service_waitlist_entry", label: "service_waitlist_entries" },
   { table: "trainer_compensation_plan", label: "trainer_compensation_plans" },
   { table: "trainer_compensation_component", label: "trainer_compensation_components" },
   { table: "trainer_payroll_profile", label: "trainer_payroll_profiles" },
