@@ -293,6 +293,9 @@ async function inspectRequiredHardening(root) {
       /DANCE_ROOM_RENT_STATEMENT/,
       /package_entitlement_id/,
       /trainer_compensation_component/,
+      /trainer_payroll_statement/,
+      /MONTHLY_BASE/,
+      /payroll_batch_id/,
       /service_booking_material/
     ],
     message: "Dance studio economics hardening is missing"
@@ -388,7 +391,8 @@ async function inspectRequiredHardening(root) {
     "175_package_entitlement_integrity_v2.sql",
     "176_service_package_scoped_redemption.sql",
     "177_shared_capacity_integrity.sql",
-    "178_trainer_payroll_export_lifecycle.sql"
+    "178_trainer_payroll_export_lifecycle.sql",
+    "179_trainer_payroll_tenant_integrity.sql"
   ];
 
   for (const name of requiredMigrations) {
