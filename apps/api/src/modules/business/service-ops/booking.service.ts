@@ -2536,85 +2536,157 @@ export class BookingService {
     bufferBeforeMinutes: number,
     bufferAfterMinutes: number,
     capacityUnits: number,
-    ignoreBookingId?: string
+    ignoreBookingId?: string,
+    zoneId?: string | null
   ): Promise<boolean> {
-    const reservedStart = new Date(
-      startsAt.getTime() - bufferBeforeMinutes * 60000
+    const reservedStart=new Date(
+      startsAt.getTime()-bufferBeforeMinutes*60000
     );
-    const reservedEnd = new Date(
-      endsAt.getTime() + bufferAfterMinutes * 60000
+    const reservedEnd=new Date(
+      endsAt.getTime()+bufferAfterMinutes*60000
     );
 
-    const schedule = await client.query(
+    const schedule=await client.query(
       `SELECT 1
        FROM service_resource r
        JOIN service_resource_schedule s
-         ON s.tenant_id = r.tenant_id
-        AND s.resource_id = r.id
-       WHERE r.tenant_id = $1
-         AND r.id = $2
-         AND s.weekday = EXTRACT(ISODOW FROM ($3::timestamptz AT TIME ZONE r.timezone))
+         ON s.tenant_id=r.tenant_id AND s.resource_id=r.id
+       WHERE r.tenant_id=$1 AND r.id=$2
+         AND s.weekday=EXTRACT(
+           ISODOW FROM ($3::timestamptz AT TIME ZONE r.timezone)
+         )
          AND (
-           EXTRACT(HOUR FROM ($3::timestamptz AT TIME ZONE r.timezone))::int * 60
-           + EXTRACT(MINUTE FROM ($3::timestamptz AT TIME ZONE r.timezone))::int
-         ) >= s.start_minute
+           EXTRACT(HOUR FROM ($3::timestamptz AT TIME ZONE r.timezone))::int*60+
+           EXTRACT(MINUTE FROM ($3::timestamptz AT TIME ZONE r.timezone))::int
+         )>=s.start_minute
          AND (
-           EXTRACT(HOUR FROM ($4::timestamptz AT TIME ZONE r.timezone))::int * 60
-           + EXTRACT(MINUTE FROM ($4::timestamptz AT TIME ZONE r.timezone))::int
-         ) <= s.end_minute
-         AND (s.valid_from IS NULL OR s.valid_from <= ($3::timestamptz AT TIME ZONE r.timezone)::date)
-         AND (s.valid_to IS NULL OR s.valid_to >= ($3::timestamptz AT TIME ZONE r.timezone)::date)
+           EXTRACT(HOUR FROM ($4::timestamptz AT TIME ZONE r.timezone))::int*60+
+           EXTRACT(MINUTE FROM ($4::timestamptz AT TIME ZONE r.timezone))::int
+         )<=s.end_minute
+         AND (
+           s.valid_from IS NULL OR
+           s.valid_from<=($3::timestamptz AT TIME ZONE r.timezone)::date
+         )
+         AND (
+           s.valid_to IS NULL OR
+           s.valid_to>=($3::timestamptz AT TIME ZONE r.timezone)::date
+         )
        LIMIT 1`,
-      [tenantId, resourceId, reservedStart, reservedEnd]
+      [tenantId,resourceId,reservedStart,reservedEnd]
     );
+    if(!schedule.rowCount) return false;
 
-    if (!schedule.rowCount) return false;
-
-    const blocked = await client.query(
-      `SELECT 1
-       FROM service_resource_block
-       WHERE tenant_id = $1
-         AND resource_id = $2
-         AND starts_at < $4
-         AND ends_at > $3
-       LIMIT 1`,
-      [tenantId, resourceId, reservedStart, reservedEnd]
-    );
-
-    if (blocked.rowCount) return false;
-
-    const capacity = await client.query<{
-      capacity: number;
-      occupied: string;
+    const capacity=await client.query<{
+      capacity:number;
+      occupied:string;
+      blocked:string;
     }>(
       `SELECT
          r.capacity,
-         COALESCE(sum(
-           CASE WHEN b.id IS NOT NULL THEN br.capacity_units ELSE 0 END
-         ), 0)::text AS occupied
+         coalesce((
+           SELECT sum(br.capacity_units)
+           FROM service_booking_resource br
+           JOIN service_booking b
+             ON b.tenant_id=br.tenant_id AND b.id=br.booking_id
+           WHERE br.tenant_id=r.tenant_id
+             AND br.resource_id=r.id
+             AND b.status IN ('DRAFT','CONFIRMED','ARRIVED','IN_SERVICE')
+             AND b.id<>coalesce(
+               $5::uuid,'00000000-0000-0000-0000-000000000000'::uuid
+             )
+             AND (
+               b.starts_at-
+               make_interval(mins=>b.buffer_before_minutes_snapshot)
+             )<$4
+             AND (
+               b.ends_at+
+               make_interval(mins=>b.buffer_after_minutes_snapshot)
+             )>$3
+         ),0)::text AS occupied,
+         coalesce((
+           SELECT sum(
+             CASE
+               WHEN rb.capacity_units IS NOT NULL THEN rb.capacity_units
+               WHEN rb.zone_id IS NULL THEN r.capacity
+               ELSE z.capacity_units
+             END
+           )
+           FROM service_resource_block rb
+           LEFT JOIN service_resource_zone z
+             ON z.tenant_id=rb.tenant_id AND z.id=rb.zone_id
+           WHERE rb.tenant_id=r.tenant_id
+             AND rb.resource_id=r.id
+             AND rb.starts_at<$4
+             AND rb.ends_at>$3
+         ),0)::text AS blocked
        FROM service_resource r
-       LEFT JOIN service_booking_resource br
-         ON br.tenant_id = r.tenant_id
-        AND br.resource_id = r.id
-       LEFT JOIN service_booking b
-         ON b.tenant_id = br.tenant_id
-        AND b.id = br.booking_id
-        AND b.status IN ('CONFIRMED','ARRIVED','IN_SERVICE')
-        AND b.id <> COALESCE($5::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
-        AND (
-          (b.starts_at - make_interval(mins => b.buffer_before_minutes_snapshot)) < $4
-          AND
-          (b.ends_at + make_interval(mins => b.buffer_after_minutes_snapshot)) > $3
-        )
-       WHERE r.tenant_id = $1 AND r.id = $2
-       GROUP BY r.id`,
-      [tenantId, resourceId, reservedStart, reservedEnd, ignoreBookingId ?? null]
+       WHERE r.tenant_id=$1 AND r.id=$2 AND r.status='ACTIVE'`,
+      [tenantId,resourceId,reservedStart,reservedEnd,ignoreBookingId??null]
     );
+    const row=capacity.rows[0];
+    if(!row) return false;
+    if(
+      Number(row.occupied)+Number(row.blocked)+capacityUnits>row.capacity
+    ) return false;
 
-    const row = capacity.rows[0];
-    if (!row) return false;
+    if(zoneId){
+      const zone=await client.query<{
+        capacity_units:number;
+        occupied:string;
+        blocked:string;
+      }>(
+        `SELECT
+           z.capacity_units,
+           coalesce((
+             SELECT sum(br.capacity_units)
+             FROM service_booking_resource br
+             JOIN service_booking b
+               ON b.tenant_id=br.tenant_id AND b.id=br.booking_id
+             WHERE br.tenant_id=z.tenant_id
+               AND br.resource_id=z.resource_id
+               AND br.zone_id=z.id
+               AND b.status IN ('DRAFT','CONFIRMED','ARRIVED','IN_SERVICE')
+               AND b.id<>coalesce(
+                 $5::uuid,'00000000-0000-0000-0000-000000000000'::uuid
+               )
+               AND (
+                 b.starts_at-
+                 make_interval(mins=>b.buffer_before_minutes_snapshot)
+               )<$4
+               AND (
+                 b.ends_at+
+                 make_interval(mins=>b.buffer_after_minutes_snapshot)
+               )>$3
+           ),0)::text AS occupied,
+           coalesce((
+             SELECT sum(
+               coalesce(rb.capacity_units,z.capacity_units)
+             )
+             FROM service_resource_block rb
+             WHERE rb.tenant_id=z.tenant_id
+               AND rb.resource_id=z.resource_id
+               AND rb.zone_id=z.id
+               AND rb.starts_at<$4
+               AND rb.ends_at>$3
+           ),0)::text AS blocked
+         FROM service_resource_zone z
+         WHERE z.tenant_id=$1
+           AND z.id=$6
+           AND z.resource_id=$2
+           AND z.status='ACTIVE'`,
+        [
+          tenantId,resourceId,reservedStart,reservedEnd,
+          ignoreBookingId??null,zoneId
+        ]
+      );
+      const z=zone.rows[0];
+      if(!z) return false;
+      if(
+        Number(z.occupied)+Number(z.blocked)+capacityUnits>z.capacity_units
+      ) return false;
+    }
 
-    return Number(row.occupied) + capacityUnits <= row.capacity;
+    return true;
   }
 
   private async lockResources(
@@ -2706,6 +2778,183 @@ export class BookingService {
     }
   }
 
+  private async resolveDeliveryRule(
+    client:PoolClient,
+    tenantId:string,
+    serviceId:string,
+    employeeResourceId:string|null,
+    branchId:string|null,
+    deliveryFormat:"INDIVIDUAL"|"GROUP"|"SELF_PRACTICE"|"RENTAL",
+    startsAt:Date,
+    timezone:string
+  ):Promise<{
+    id:string;
+    price_minor:string|null;
+    price_max_minor:string|null;
+    duration_minutes:number|null;
+    capacity_units:number;
+    technology_card_id:string|null;
+  }|null>{
+    const result=await client.query<{
+      id:string;
+      price_minor:string|null;
+      price_max_minor:string|null;
+      duration_minutes:number|null;
+      capacity_units:number;
+      technology_card_id:string|null;
+      employee_resource_id:string|null;
+    }>(
+      `SELECT
+         r.id,r.price_minor::text,r.price_max_minor::text,
+         r.duration_minutes,r.capacity_units,r.technology_card_id,
+         r.employee_resource_id
+       FROM service_delivery_rule r
+       WHERE r.tenant_id=$1
+         AND r.service_id=$2
+         AND r.status='ACTIVE'
+         AND r.delivery_format=$3
+         AND (
+           r.employee_resource_id IS NULL OR
+           r.employee_resource_id=$4::uuid
+         )
+         AND (r.branch_id IS NULL OR r.branch_id=$5::uuid)
+         AND r.valid_from<=($6::timestamptz AT TIME ZONE $7)::date
+         AND (
+           r.valid_to IS NULL OR
+           r.valid_to>=($6::timestamptz AT TIME ZONE $7)::date
+         )
+         AND extract(
+           isodow FROM ($6::timestamptz AT TIME ZONE $7)
+         )::smallint=ANY(r.weekdays)
+         AND (
+           extract(hour FROM ($6::timestamptz AT TIME ZONE $7))::int*60+
+           extract(minute FROM ($6::timestamptz AT TIME ZONE $7))::int
+         )>=r.start_minute
+         AND (
+           extract(hour FROM ($6::timestamptz AT TIME ZONE $7))::int*60+
+           extract(minute FROM ($6::timestamptz AT TIME ZONE $7))::int
+         )<r.end_minute
+       ORDER BY
+         (r.employee_resource_id IS NOT NULL) DESC,
+         (r.branch_id IS NOT NULL) DESC,
+         r.priority,
+         r.valid_from DESC,
+         r.id
+       LIMIT 1`,
+      [
+        tenantId,serviceId,deliveryFormat,employeeResourceId,
+        branchId,startsAt,timezone
+      ]
+    );
+    const row=result.rows[0]??null;
+
+    if(employeeResourceId && (!row || row.employee_resource_id===null)){
+      const restricted=await client.query(
+        `SELECT 1
+         FROM service_delivery_rule r
+         WHERE r.tenant_id=$1
+           AND r.service_id=$2
+           AND r.status='ACTIVE'
+           AND r.delivery_format=$3
+           AND r.employee_resource_id IS NOT NULL
+           AND (r.branch_id IS NULL OR r.branch_id=$4::uuid)
+           AND r.valid_from<=($5::timestamptz AT TIME ZONE $6)::date
+           AND (
+             r.valid_to IS NULL OR
+             r.valid_to>=($5::timestamptz AT TIME ZONE $6)::date
+           )
+           AND extract(
+             isodow FROM ($5::timestamptz AT TIME ZONE $6)
+           )::smallint=ANY(r.weekdays)
+         LIMIT 1`,
+        [tenantId,serviceId,deliveryFormat,branchId,startsAt,timezone]
+      );
+      if(restricted.rowCount && !row){
+        throw new ConflictException(
+          "Выбранный сотрудник не оказывает эту услугу в указанное время"
+        );
+      }
+    }
+    return row;
+  }
+
+  private async seedTechnologyCardMaterials(
+    client:PoolClient,
+    tenantId:string,
+    bookingId:string,
+    technologyCardId:string
+  ):Promise<void>{
+    await client.query(
+      `INSERT INTO service_booking_material(
+         tenant_id,booking_id,warehouse_id,sku_id,
+         planned_quantity_milli,unit_cost_minor_snapshot
+       )
+       SELECT
+         l.tenant_id,$3,l.warehouse_id,l.sku_id,
+         (
+           l.quantity_milli*(10000::bigint+l.waste_bps::bigint)+9999
+         )/10000,
+         s.cost_price_minor
+       FROM service_technology_card_line l
+       JOIN sku s
+         ON s.tenant_id=l.tenant_id AND s.id=l.sku_id
+       WHERE l.tenant_id=$1
+         AND l.card_id=$2
+         AND s.status='ACTIVE'`,
+      [tenantId,technologyCardId,bookingId]
+    );
+  }
+
+  private async consumeRemainingMaterials(
+    client:PoolClient,
+    context:TenantContext,
+    bookingId:string
+  ):Promise<void>{
+    const lines=await client.query<{
+      id:string;
+      warehouse_id:string;
+      sku_id:string;
+      planned_quantity_milli:string;
+      consumed_quantity_milli:string;
+    }>(
+      `SELECT
+         id,warehouse_id,sku_id,
+         planned_quantity_milli::text,consumed_quantity_milli::text
+       FROM service_booking_material
+       WHERE tenant_id=$1 AND booking_id=$2
+       ORDER BY id
+       FOR UPDATE`,
+      [context.tenantId,bookingId]
+    );
+
+    for(const line of lines.rows){
+      const remaining=
+        BigInt(line.planned_quantity_milli)-
+        BigInt(line.consumed_quantity_milli);
+      if(remaining<=0n) continue;
+
+      const movement=await this.inventory.consumeForService(
+        client,context,{
+          bookingId,
+          warehouseId:line.warehouse_id,
+          materialLineId:line.id,
+          skuId:line.sku_id,
+          quantityMilli:remaining,
+          idempotencyKey:"auto-complete"
+        }
+      );
+      if(movement.applied){
+        await client.query(
+          `UPDATE service_booking_material
+           SET consumed_quantity_milli=consumed_quantity_milli+$3::bigint,
+               updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,line.id,remaining.toString()]
+        );
+      }
+    }
+  }
+
   private async getService(
     client: PoolClient,
     tenantId: string,
@@ -2727,6 +2976,8 @@ export class BookingService {
       buffer_after_minutes: number;
       price_minor: string;
       currency: string;
+      delivery_format: "INDIVIDUAL" | "GROUP" | "SELF_PRACTICE" | "RENTAL";
+      group_capacity: number;
     }>(
       `SELECT id, duration_minutes, buffer_before_minutes,
                buffer_after_minutes, price_minor::text, currency,
