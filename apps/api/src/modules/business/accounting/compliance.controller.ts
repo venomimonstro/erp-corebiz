@@ -40,6 +40,35 @@ export class ComplianceController {
     };
   }
 
+  @Get("cash-accounts")
+  @RequirePermission("accounting.compliance.read")
+  async cashAccounts(
+    @Req() req:AuthenticatedRequest,
+    @Query("legalEntityId") legalEntityId:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.cashAccounts(
+        this.context(req),legalEntityId
+      )
+    };
+  }
+
+  @Post("cash-accounts/:id/assign")
+  @RequirePermission("accounting.compliance.manage")
+  async assignCashAccount(
+    @Req() req:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:{legalEntityId:string|null}
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.assignCashAccount(
+        this.context(req),id,body
+      )
+    };
+  }
+
   @Post("tax-ledger/sync")
   @RequirePermission("accounting.compliance.manage")
   async syncLedger(
