@@ -122,7 +122,10 @@ type PayrollBatch = {
   id: string;
   period_from: string;
   period_to: string;
-  status: string;
+  status: "DRAFT" | "APPROVED" | "PAID";
+  paid_at?: string | null;
+  payment_reference?: string | null;
+  payment_note?: string | null;
 };
 
 type TrainerStatement = {
@@ -317,6 +320,12 @@ export default function DanceTeamPage() {
   const [profileDailyRub, setProfileDailyRub] = useState("0");
   const [profileGuaranteeRub, setProfileGuaranteeRub] = useState("0");
   const [profileNote, setProfileNote] = useState("");
+  const [paymentModal,setPaymentModal]=useState(false);
+  const [paymentDate,setPaymentDate]=useState(
+    new Date().toISOString().slice(0,10)
+  );
+  const [paymentReference,setPaymentReference]=useState("");
+  const [paymentNote,setPaymentNote]=useState("");
   const [statementDetail, setStatementDetail] =
     useState<StatementDetail | null>(null);
   const [statementDetailLoading, setStatementDetailLoading] = useState(false);
@@ -435,6 +444,17 @@ export default function DanceTeamPage() {
     }
     return [...map.entries()];
   }, [accruals]);
+
+  const currentPayrollBatch = useMemo(() => {
+    const range=monthRange();
+    const from=range.from.slice(0,10);
+    const to=new Date(
+      new Date(range.to).getTime()-86400000
+    ).toISOString().slice(0,10);
+    return payroll.find(
+      (item)=>item.period_from===from&&item.period_to===to
+    )??null;
+  },[payroll]);
 
   const profileByTrainer = useMemo(
     () =>
@@ -892,6 +912,80 @@ export default function DanceTeamPage() {
     }
   }
 
+  async function approvePayrollBatch() {
+    if(!currentPayrollBatch){
+      setError("Сначала передайте ведомости в payroll");
+      return;
+    }
+    if(currentPayrollBatch.status!=="DRAFT") return;
+    setPending(true);
+    setError("");
+    try{
+      await apiRequest(
+        "/accounting/payroll/batches/"+
+          currentPayrollBatch.id+
+          "/approve",
+        {method:"POST"}
+      );
+      setNotice("Payroll утверждён. Теперь можно зарегистрировать выплату.");
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error?cause.message:"Не удалось утвердить payroll"
+      );
+    }finally{
+      setPending(false);
+    }
+  }
+
+  function openPaymentModal(){
+    if(!currentPayrollBatch||currentPayrollBatch.status!=="APPROVED"){
+      setError("Сначала утвердите payroll");
+      return;
+    }
+    setPaymentDate(new Date().toISOString().slice(0,10));
+    setPaymentReference("");
+    setPaymentNote("");
+    setPaymentModal(true);
+  }
+
+  async function registerPayrollPayment(){
+    if(!currentPayrollBatch) return;
+    const paidAt=new Date(paymentDate+"T12:00:00");
+    if(Number.isNaN(paidAt.getTime())){
+      setError("Проверьте дату выплаты");
+      return;
+    }
+    setPending(true);
+    setError("");
+    try{
+      await apiRequest(
+        "/accounting/payroll/batches/"+
+          currentPayrollBatch.id+
+          "/paid",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            paidAt:paidAt.toISOString(),
+            reference:paymentReference.trim()||undefined,
+            note:paymentNote.trim()||undefined
+          })
+        }
+      );
+      setPaymentModal(false);
+      setNotice(
+        "Выплата зарегистрирована. Связанные ведомости тренеров отмечены как оплаченные."
+      );
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error?cause.message:"Не удалось зарегистрировать выплату"
+      );
+    }finally{
+      setPending(false);
+    }
+  }
+
   async function exportPayroll() {
     if (!entities[0]) {
       setError("Не настроено юридическое лицо");
@@ -951,8 +1045,21 @@ export default function DanceTeamPage() {
             <button className="secondary-button" onClick={openPlanModal} type="button">+ Правило доплаты</button>
             <button className="secondary-button" onClick={openRoomModal} type="button">+ Аренда зала</button>
             <button className="secondary-button" disabled={pending} onClick={() => void finalizeRoomMonth()} type="button">Закрыть аренду месяца</button>
-            <button disabled={pending} onClick={() => void approveMonth()} type="button">Утвердить месяц</button>
-            <button disabled={pending} onClick={() => void exportPayroll()} type="button">В payroll</button>
+            <button disabled={pending} onClick={() => void approveMonth()} type="button">Рассчитать месяц</button>
+            <button disabled={pending} onClick={() => void exportPayroll()} type="button">Передать в payroll</button>
+            {currentPayrollBatch?.status==="DRAFT" ? (
+              <button disabled={pending} onClick={() => void approvePayrollBatch()} type="button">
+                Утвердить payroll
+              </button>
+            ) : null}
+            {currentPayrollBatch?.status==="APPROVED" ? (
+              <button disabled={pending} onClick={openPaymentModal} type="button">
+                Зарегистрировать выплату
+              </button>
+            ) : null}
+            {currentPayrollBatch?.status==="PAID" ? (
+              <span className="status-pill">ВЫПЛАЧЕНО</span>
+            ) : null}
           </div>
         </header>
 
@@ -1484,6 +1591,60 @@ export default function DanceTeamPage() {
                 </div>
               </div>
             ) : null}
+          </StudioModal>
+        ) : null}
+
+        {paymentModal && currentPayrollBatch ? (
+          <StudioModal
+            eyebrow="Payroll"
+            title="Зарегистрировать выплату"
+            description="Это отдельный финансовый шаг после утверждения расчёта. Ведомости тренеров получат статус «Оплачено» только после регистрации выплаты."
+            onClose={()=>setPaymentModal(false)}
+            footer={
+              <>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={()=>setPaymentModal(false)}
+                >
+                  Отмена
+                </button>
+                <button
+                  disabled={pending}
+                  type="button"
+                  onClick={()=>void registerPayrollPayment()}
+                >
+                  {pending?"Сохраняем…":"Подтвердить выплату"}
+                </button>
+              </>
+            }
+          >
+            <div className="studio-form-grid">
+              <label>
+                <span>Дата выплаты</span>
+                <input
+                  type="date"
+                  value={paymentDate}
+                  onChange={(event)=>setPaymentDate(event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Номер платёжного поручения / референс</span>
+                <input
+                  value={paymentReference}
+                  placeholder="Необязательно"
+                  onChange={(event)=>setPaymentReference(event.target.value)}
+                />
+              </label>
+            </div>
+            <label>
+              <span>Комментарий</span>
+              <input
+                value={paymentNote}
+                placeholder="Например: выплачено на карты сотрудников"
+                onChange={(event)=>setPaymentNote(event.target.value)}
+              />
+            </label>
           </StudioModal>
         ) : null}
 
