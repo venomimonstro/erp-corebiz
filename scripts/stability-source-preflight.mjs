@@ -203,6 +203,35 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"apps/api/src/modules/platform/customization/business-verticals.ts",
+      patterns:[/OMNICHANNEL_RETAIL/, /retail/, /sites/, /oms/],
+      message:"The full offline-online business profile disappeared"
+    },
+    {
+      path:"apps/api/src/modules/business/retail/retail-network.service.ts",
+      patterns:[/retail_location/, /inventory_balance/, /sales\.create/,
+        /sales\.reserve/, /retail_cash_shift/, /sale_price_minor>0/],
+      message:"CoreBiz omnichannel store reservations no longer use the canonical ledger"
+    },
+    {
+      path:"apps/api/src/modules/business/crm/crm.service.ts",
+      patterns:[/crm_next_action/, /INSERT INTO task/, /next_action_at/,
+        /membershipIdsForScope/, /crm_activity/],
+      message:"CRM scoped follow-up and task history is missing"
+    },
+    {
+      path:"infrastructure/postgres/231_retail_omnichannel_network.sql",
+      patterns:[/retail_location/, /retail_order_link/, /retail_cash_shift/,
+        /ENABLE ROW LEVEL SECURITY/, /retail_location_tenant/],
+      message:"Omnichannel physical location tenant isolation is missing"
+    },
+    {
+      path:"infrastructure/postgres/232_crm_next_action_idempotency.sql",
+      patterns:[/crm_next_action/, /UNIQUE\(tenant_id,deal_id,idempotency_key\)/,
+        /ENABLE ROW LEVEL SECURITY/],
+      message:"CRM next-action idempotency or RLS disappeared"
+    },
+    {
       path: "apps/web/app/signup/page.tsx",
       patterns: [/customization\/business-vertical/, /verticalCode/,
         /Выберите вашу сферу бизнеса/, /app\/start/],
