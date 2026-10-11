@@ -21,6 +21,12 @@ export class DanceStudioController {
     private readonly economics:DanceEconomicsService
   ) {}
 
+  @Get("access")
+  @RequirePermission("dance.read")
+  async access(@Req() req:AuthenticatedRequest):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.studio.access(this.ctx(req))};
+  }
+
   @Get("dashboard")
   @RequirePermission("dance.read")
   async dashboard(@Req() req:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {

@@ -29,6 +29,17 @@ export class DanceStudioService {
     private readonly authorization: AuthorizationService
   ) {}
 
+  async access(context:TenantContext){
+    await this.scopeIds(context,"dance.read");
+    const [financeRead,financeWrite,danceWrite]=await Promise.all([
+      this.authorization.resolveScope(context,"finance.read"),
+      this.authorization.resolveScope(context,"finance.write"),
+      this.authorization.resolveScope(context,"dance.write")
+    ]);
+    return {canViewFinance:Boolean(financeRead),canManageFinance:Boolean(financeWrite),
+      canManageDance:Boolean(danceWrite)};
+  }
+
   async dashboard(context: TenantContext) {
     const scopeIds = await this.scopeIds(context, "dance.read");
     // Trainers need their roster and lessons, not the company's unit economics.
