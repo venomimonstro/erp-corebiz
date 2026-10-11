@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { gzipSync } from "node:zlib";
+import {createGzip} from "node:zlib";
+import {Readable,Writable} from "node:stream";
+import {pipeline} from "node:stream/promises";
+import {csvBatch} from "./export-safety.js";
 import { Pool, type PoolClient } from "pg";
 
 type ExportJob = {
@@ -266,231 +269,137 @@ function quoteIdentifier(value: string): string {
   return '"' + value.replace(/"/g, '""') + '"';
 }
 
-async function readEntity(
-  client: PoolClient,
-  tenantId: string,
-  entity: ExportEntity,
-  onRows: (rows: Record<string, unknown>[]) => void
-): Promise<number> {
-  if (!(await tableExists(client, entity.table))) return 0;
-  if (!(await hasTenantId(client, entity.table))) return 0;
 
+async function* readEntity(
+  client:PoolClient,tenantId:string,entity:ExportEntity
+):AsyncGenerator<Record<string,unknown>[]>{
+  if(!(await tableExists(client,entity.table))||
+     !(await hasTenantId(client,entity.table)))return;
   const table=quoteIdentifier(entity.table);
   const byId=await hasId(client,entity.table);
-  let offset=0;
   let lastId:unknown=null;
-  let total=0;
-
-  for (;;) {
-    // Primary-key seek avoids quadratic OFFSET scans for million-SKU
-    // tenants. Tables without 'id' keep the legacy bounded fallback.
-    const result=byId
-      ?await client.query<Record<string,unknown>>(
-        `SELECT * FROM ${table}
-         WHERE tenant_id=$1 ${lastId===null?"":"AND id>$3"}
-         ORDER BY id LIMIT $2`,
-        lastId===null?[tenantId,PAGE_SIZE]:[tenantId,PAGE_SIZE,lastId]
-      )
-      :await client.query<Record<string,unknown>>(
-        `SELECT * FROM ${table}
-         WHERE tenant_id=$1 ORDER BY tenant_id
-         LIMIT $2 OFFSET $3`,
-        [tenantId,PAGE_SIZE,offset]
-      );
-    if(!result.rowCount)break;
-    const cleaned=result.rows.map(
-      row=>cleanValue(row) as Record<string,unknown>
-    );
-    onRows(cleaned);
-    total+=cleaned.length;
+  let offset=0;
+  for(;;){
+    const query=byId
+      ?"SELECT * FROM "+table+" WHERE tenant_id=$1 "+
+        (lastId===null?"":"AND id>$3 ")+"ORDER BY id LIMIT $2"
+      :"SELECT * FROM "+table+" WHERE tenant_id=$1 ORDER BY tenant_id LIMIT $2 OFFSET $3";
+    const params=byId?(lastId===null?[tenantId,PAGE_SIZE]:[tenantId,PAGE_SIZE,lastId])
+      :[tenantId,PAGE_SIZE,offset];
+    const result=await client.query<Record<string,unknown>>(query,params);
+    if(!result.rows.length)break;
+    yield result.rows.map(row=>cleanValue(row) as Record<string,unknown>);
     if(byId){
       const tail=result.rows[result.rows.length-1]?.id;
-      if(tail===null||tail===undefined)
-        throw new Error("EXPORT_CURSOR_MISSING");
-      if(tail===lastId)throw new Error("EXPORT_CURSOR_STALLED");
+      if(tail===null||tail===undefined||tail===lastId)
+        throw new Error("EXPORT_CURSOR_STALLED");
       lastId=tail;
     }else{
-      offset+=cleaned.length;
+      offset+=result.rows.length;
     }
-    if(cleaned.length<PAGE_SIZE)break;
+    if(result.rows.length<PAGE_SIZE)break;
   }
-
-  return total;
 }
 
-function csvCell(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  const raw =
-    typeof value === "object"
-      ? JSON.stringify(value)
-      : String(value);
-  return '"' + raw.replace(/"/g, '""') + '"';
+async function compressExport(
+  source:AsyncIterable<string>
+):Promise<{artifact:Buffer;rawBytes:number;compressedBytes:number}>{
+  let rawBytes=0,compressedBytes=0;
+  const compressed:Buffer[]=[];
+  async function* metered(){
+    for await(const chunk of source){
+      rawBytes+=Buffer.byteLength(chunk);
+      if(rawBytes>MAX_RAW_BYTES)
+        throw new Error("EXPORT_TOO_LARGE_FOR_DATABASE_ARTIFACT");
+      yield chunk;
+    }
+  }
+  const sink=new Writable({
+    write(chunk:Buffer,_encoding,callback){
+      compressedBytes+=chunk.length;
+      if(compressedBytes>MAX_ARTIFACT_BYTES)
+        return callback(new Error("EXPORT_ARTIFACT_TOO_LARGE"));
+      compressed.push(Buffer.from(chunk));
+      callback();
+    }
+  });
+  await pipeline(Readable.from(metered()),createGzip({level:6}),sink);
+  return {artifact:Buffer.concat(compressed,compressedBytes),rawBytes,compressedBytes};
 }
 
-function rowsToCsv(rows: Record<string, unknown>[]): string {
-  if (!rows.length) return "";
-
-  const columns = Array.from(
-    rows.reduce<Set<string>>((set, row) => {
-      for (const key of Object.keys(row)) set.add(key);
-      return set;
-    }, new Set<string>())
-  ).sort();
-
-  return [
-    columns.map(csvCell).join(","),
-    ...rows.map((row) =>
-      columns.map((column) => csvCell(row[column])).join(",")
-    )
-  ].join("\n");
-}
-
-async function buildArtifact(
-  pool: Pool,
-  job: ExportJob
-): Promise<{
-  artifact: Buffer;
-  manifest: Record<string, unknown>;
-  filename: string;
-  contentType: string;
-}> {
-  return tenantTransaction(pool, job.tenant_id, async (client) => {
-    const tenant = await client.query<{
-      id: string;
-      name: string;
-      slug: string;
-      status: string;
-      created_at: Date;
+async function buildArtifact(pool:Pool,job:ExportJob):Promise<{
+  artifact:Buffer;manifest:Record<string,unknown>;
+  filename:string;contentType:string;
+}>{
+  return tenantTransaction(pool,job.tenant_id,async client=>{
+    const tenant=await client.query<{
+      id:string;name:string;slug:string;status:string;created_at:Date;
     }>(
-      `SELECT id,name,slug,status,created_at
-       FROM tenant
-       WHERE id=$1`,
+      "SELECT id,name,slug,status,created_at FROM tenant WHERE id=$1",
       [job.tenant_id]
     );
+    const row=tenant.rows[0];
+    if(!row)throw new Error("TENANT_NOT_FOUND");
+    const counts:Record<string,number>={};
+    const generatedAt=new Date().toISOString();
 
-    const tenantRow = tenant.rows[0];
-    if (!tenantRow) throw new Error("TENANT_NOT_FOUND");
-
-    const counts: Record<string, number> = {};
-    let rawBytes = 0;
-
-    if (job.format === "JSON_GZIP") {
-      const data: Record<string, unknown[]> = {};
-
-      for (const entity of EXPORT_ENTITIES) {
-        const rows: Record<string, unknown>[] = [];
-        const count = await readEntity(
-          client,
-          job.tenant_id,
-          entity,
-          (batch) => {
-            rows.push(...batch);
-            rawBytes += Buffer.byteLength(JSON.stringify(batch));
-            if (rawBytes > MAX_RAW_BYTES) {
-              throw new Error("EXPORT_TOO_LARGE_FOR_DATABASE_ARTIFACT");
-            }
-          }
-        );
-        counts[entity.label] = count;
-        if (count > 0) data[entity.label] = rows;
-      }
-
-      const payload = {
-        schemaVersion: job.schema_version,
-        generatedAt: new Date().toISOString(),
-        tenant: cleanValue(tenantRow),
-        manifest: {
-          format: "JSON_GZIP",
-          entityCounts: counts,
-          secretPolicy: "explicit business allowlist + recursive sensitive-key redaction"
-        },
-        data
-      };
-
-      const artifact = gzipSync(
-        Buffer.from(JSON.stringify(payload), "utf8"),
-        { level: 6 }
-      );
-
-      if (artifact.length > MAX_ARTIFACT_BYTES) {
-        throw new Error("EXPORT_ARTIFACT_TOO_LARGE");
-      }
-
-      return {
-        artifact,
-        manifest: {
-          schemaVersion: job.schema_version,
-          format: job.format,
-          entityCounts: counts,
-          rawBytes,
-          compressedBytes: artifact.length
-        },
-        filename:
-          "corebiz-" +
-          tenantRow.slug +
-          "-" +
-          new Date().toISOString().slice(0, 10) +
-          ".json.gz",
-        contentType: "application/gzip"
-      };
-    }
-
-    const sections: string[] = [
-      "# CoreBiz CSV bundle",
-      "# schemaVersion=" + job.schema_version,
-      "# generatedAt=" + new Date().toISOString(),
-      ""
-    ];
-
-    for (const entity of EXPORT_ENTITIES) {
-      const rows: Record<string, unknown>[] = [];
-      const count = await readEntity(
-        client,
-        job.tenant_id,
-        entity,
-        (batch) => {
-          rows.push(...batch);
-          rawBytes += Buffer.byteLength(JSON.stringify(batch));
-          if (rawBytes > MAX_RAW_BYTES) {
-            throw new Error("EXPORT_TOO_LARGE_FOR_DATABASE_ARTIFACT");
-          }
+    async function* jsonChunks():AsyncGenerator<string>{
+      yield '{"schemaVersion":'+JSON.stringify(job.schema_version)+
+        ',"generatedAt":'+JSON.stringify(generatedAt)+
+        ',"tenant":'+JSON.stringify(cleanValue(row))+',"data":{';
+      let firstEntity=true;
+      for(const entity of EXPORT_ENTITIES){
+        let firstRow=true,count=0;
+        for await(const page of readEntity(client,job.tenant_id,entity)){
+          if(firstRow){
+            if(!firstEntity)yield ",";
+            yield JSON.stringify(entity.label)+":[";
+            firstEntity=false;
+          }else yield ",";
+          yield page.map(item=>JSON.stringify(item)).join(",");
+          count+=page.length;firstRow=false;
         }
-      );
-
-      counts[entity.label] = count;
-      if (!count) continue;
-
-      sections.push("# file: " + entity.label + ".csv");
-      sections.push(rowsToCsv(rows));
-      sections.push("");
+        if(!firstRow)yield "]";
+        counts[entity.label]=count;
+      }
+      yield '},"manifest":'+JSON.stringify({
+        format:"JSON_GZIP",entityCounts:counts,
+        secretPolicy:"explicit business allowlist + recursive sensitive-key redaction"
+      })+"}";
     }
 
-    const artifact = gzipSync(
-      Buffer.from(sections.join("\n"), "utf8"),
-      { level: 6 }
+    async function* csvChunks():AsyncGenerator<string>{
+      yield "# CoreBiz CSV bundle\n# schemaVersion="+job.schema_version+
+        "\n# generatedAt="+generatedAt+"\n\n";
+      for(const entity of EXPORT_ENTITIES){
+        let count=0;
+        let columns:string[]=[];
+        for await(const page of readEntity(client,job.tenant_id,entity)){
+          if(count===0){
+            columns=Object.keys(page[0]??{}).sort();
+            yield "# file: "+entity.label+".csv\n";
+          }
+          yield csvBatch(page,columns,count===0);
+          count+=page.length;
+        }
+        counts[entity.label]=count;
+        if(count)yield "\n";
+      }
+    }
+
+    const {artifact,rawBytes,compressedBytes}=await compressExport(
+      job.format==="JSON_GZIP"?jsonChunks():csvChunks()
     );
-
-    if (artifact.length > MAX_ARTIFACT_BYTES) {
-      throw new Error("EXPORT_ARTIFACT_TOO_LARGE");
-    }
-
     return {
-      artifact,
-      manifest: {
-        schemaVersion: job.schema_version,
-        format: job.format,
-        entityCounts: counts,
-        rawBytes,
-        compressedBytes: artifact.length,
-        note: "gzip-compressed multi-section CSV bundle"
+      artifact,manifest:{
+        schemaVersion:job.schema_version,format:job.format,
+        entityCounts:counts,rawBytes,compressedBytes,
+        ...(job.format==="CSV_GZIP"?
+          {note:"gzip-compressed multi-section CSV bundle"}:{})
       },
-      filename:
-        "corebiz-" +
-        tenantRow.slug +
-        "-" +
-        new Date().toISOString().slice(0, 10) +
-        ".csv.gz",
-      contentType: "application/gzip"
+      filename:"corebiz-"+row.slug+"-"+generatedAt.slice(0,10)+
+        (job.format==="JSON_GZIP"?".json.gz":".csv.gz"),
+      contentType:"application/gzip"
     };
   });
 }
