@@ -736,7 +736,7 @@ export class ComplianceService {
   ) {
     return this.database.withTenantTransaction(context,async client=>{
       const row=await client.query<any>(
-        `SELECT o.workflow_status,o.calculation_status,
+        `SELECT o.workflow_status,o.calculation_status,o.obligation_type,
                 p.validation_status
          FROM accounting_compliance_obligation o
          LEFT JOIN accounting_compliance_packet p
@@ -754,8 +754,14 @@ export class ComplianceService {
         throw new ConflictException("Сначала подтвердите проверку пакета");
       }
       if(
-        current.calculation_status!=="CONFIRMED" &&
-        current.calculation_status!=="NOT_CALCULATED"
+        ["PAY","NOTIFY"].includes(current.obligation_type) &&
+        current.calculation_status!=="CONFIRMED"
+      ) {
+        throw new ConflictException("Для платежа или уведомления сначала подтвердите расчёт");
+      }
+      if(
+        !["PAY","NOTIFY"].includes(current.obligation_type) &&
+        !["CONFIRMED","NOT_CALCULATED"].includes(current.calculation_status)
       ) {
         throw new ConflictException("Сначала подтвердите расчёт");
       }
@@ -845,6 +851,97 @@ export class ComplianceService {
     });
   }
 
+  async recordProviderSignature(
+    context:TenantContext,
+    obligationId:string,
+    input:{
+      provider:string;
+      certificateFingerprint:string;
+      providerReference:string;
+    }
+  ) {
+    if(
+      !input.provider?.trim() ||
+      !input.certificateFingerprint?.trim() ||
+      !input.providerReference?.trim()
+    ) {
+      throw new BadRequestException(
+        "Нужны оператор, отпечаток сертификата и идентификатор подписи"
+      );
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const obligation=await client.query<{
+        workflow_status:string;
+        legal_entity_id:string;
+        packet_id:string|null;
+      }>(
+        `SELECT workflow_status,legal_entity_id,packet_id
+         FROM accounting_compliance_obligation
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,obligationId]
+      );
+      const row=obligation.rows[0];
+      if(!row) throw new NotFoundException("Обязательство не найдено");
+      if(row.workflow_status!=="APPROVED"||!row.packet_id) {
+        throw new ConflictException(
+          "Подписывать можно только утверждённый подготовленный пакет"
+        );
+      }
+
+      const connector=await client.query(
+        `SELECT 1
+         FROM accounting_reporting_connector
+         WHERE tenant_id=$1
+           AND legal_entity_id=$2
+           AND provider=$3
+           AND status='VERIFIED'
+           AND certificate_fingerprint=$4
+           AND (
+             certificate_valid_to IS NULL
+             OR certificate_valid_to>now()
+           )`,
+        [
+          context.tenantId,row.legal_entity_id,input.provider.trim(),
+          input.certificateFingerprint.trim()
+        ]
+      );
+      if(!connector.rowCount) {
+        throw new ConflictException(
+          "Подпись не подтверждена проверенным коннектором или сертификат истёк"
+        );
+      }
+
+      const packet=await client.query(
+        `UPDATE accounting_compliance_packet
+         SET signature_status='SIGNED',
+             signed_at=now(),
+             signed_by_membership_id=$4,
+             payload=payload || jsonb_build_object(
+               'signatureProvider',$5,
+               'signatureReference',$6
+             ),
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND obligation_id=$3
+         RETURNING *`,
+        [
+          context.tenantId,row.packet_id,obligationId,context.membershipId,
+          input.provider.trim(),input.providerReference.trim()
+        ]
+      );
+      if(!packet.rows[0]) throw new NotFoundException("Пакет не найден");
+
+      await this.event(
+        client,context,obligationId,"PROVIDER_SIGNATURE_CONFIRMED",
+        "APPROVED","APPROVED",{
+          provider:input.provider.trim(),
+          providerReference:input.providerReference.trim()
+        }
+      );
+      return packet.rows[0];
+    });
+  }
+
   async recordSubmitted(
     context:TenantContext,
     obligationId:string,
@@ -867,6 +964,11 @@ export class ComplianceService {
       if(!row) throw new NotFoundException("Обязательство не найдено");
       if(row.workflow_status!=="APPROVED") {
         throw new ConflictException("Отправка возможна только после утверждения");
+      }
+      if(row.signature_status!=="SIGNED") {
+        throw new ConflictException(
+          "Перед отправкой требуется подтверждённая подпись пакета"
+        );
       }
       const connector=await client.query(
         `SELECT 1
