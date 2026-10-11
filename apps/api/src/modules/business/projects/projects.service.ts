@@ -920,7 +920,9 @@ export class ProjectsService {
 
   async agencyHealth(context:TenantContext) {
     const financeScope=await this.authorization.resolveScope(context,"finance.read");
-    if(!financeScope)throw new ForbiddenException("Финансовые показатели доступны только уполномоченным сотрудникам");
+    const invoiceScope=await this.authorization.resolveScope(context,"finance.invoice.read");
+    if(!financeScope||!invoiceScope)
+      throw new ForbiddenException("Для финансовой панели нужны права finance.read и finance.invoice.read");
     const projectScope=await this.membershipIdsForScope(context,"projects.read");
     const crmScope=await this.authorization.resolveScope(context,"crm.read");
     const crmMemberships=crmScope
