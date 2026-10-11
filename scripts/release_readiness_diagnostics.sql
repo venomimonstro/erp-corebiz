@@ -479,3 +479,26 @@ WHERE c.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
       AND refund.source_id=b.id
       AND refund.amount_minor=o.settled_minor
   );
+
+
+SELECT 'SERVICE_BOOKING_CHARGE_SNAPSHOT_MISMATCH' AS code,count(*)::bigint AS affected
+FROM service_booking_charge c
+JOIN service_booking b
+  ON b.tenant_id=c.tenant_id AND b.id=c.booking_id
+WHERE c.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND (
+    b.party_id IS DISTINCT FROM c.payer_party_id
+    OR b.currency<>c.currency
+    OR b.price_minor_snapshot<>c.amount_minor
+  )
+UNION ALL
+SELECT 'SERVICE_BOOKING_CHARGE_PACKAGE_CONFLICT',count(*)::bigint
+FROM service_booking_charge c
+WHERE c.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND EXISTS(
+    SELECT 1
+    FROM service_package_redemption r
+    WHERE r.tenant_id=c.tenant_id
+      AND r.booking_id=c.booking_id
+      AND r.state IN ('RESERVED','CONSUMED')
+  );
