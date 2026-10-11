@@ -31,6 +31,8 @@ export type BusinessCapabilityKey = (typeof BUSINESS_CAPABILITIES)[number];
 export type BusinessVerticalCode =
   | "GENERAL"
   | "BEAUTY_SALON"
+  | "BARBERSHOP"
+  | "NAIL_SALON"
   | "AUTO_SERVICE"
   | "DANCE_FITNESS"
   | "PROFESSIONAL_SERVICES"
@@ -93,34 +95,114 @@ export const BUSINESS_VERTICALS: Record<
   },
   BEAUTY_SALON: {
     code: "BEAUTY_SALON",
-    title: "Салон красоты / барбершоп",
-    summary: "Онлайн-запись, мастера, услуги, материалы, повторные визиты и деньги.",
+    title: "Салон красоты",
+    summary: "Запись, мастера, кабинеты, персональные цены, техкарты, расходники, зарплата и повторные визиты.",
     profileCode: "SERVICE",
-    version: 3,
+    version: 4,
     enabledCapabilities: [
       "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
       "service","sites","growth","workflow","support"
     ],
     customFields: [
       { entityType: "PARTY", fieldKey: "birthday", label: "Дата рождения", dataType: "DATE" },
-      { entityType: "PARTY", fieldKey: "preferences", label: "Предпочтения клиента", dataType: "TEXT" },
-      { entityType: "PARTY", fieldKey: "contraindications", label: "Важные ограничения", dataType: "TEXT" }
+      { entityType: "PARTY", fieldKey: "beauty_preferences", label: "Предпочтения клиента", dataType: "TEXT" },
+      { entityType: "PARTY", fieldKey: "service_notes", label: "Важные примечания к сервису", dataType: "TEXT" }
     ],
     ownerQuestions: [
-      "Какая загрузка мастеров сегодня и на неделю?",
-      "Какие услуги и мастера дают больше валовой прибыли?",
-      "Кто из клиентов давно не возвращался?"
+      "Какая загрузка мастеров и кабинетов сегодня и на неделю?",
+      "Какие услуги, мастера и категории дают больше маржи после материалов?",
+      "Сколько начислено команде и что нужно выплатить по итогам месяца?",
+      "Кто из клиентов не вернулся в ожидаемый срок?"
     ],
-    primaryWorkspaces: ["service", "crm", "finance", "growth"],
+    primaryWorkspaces: ["service", "crm", "inventory", "finance", "growth"],
     operatingFlows: [
-      "Клиент → запись → визит → услуга → оплата",
-      "Расход материалов → себестоимость услуги",
-      "Повторный визит → удержание клиента"
+      "Клиент → запись → мастер + кабинет → услуга → оплата",
+      "Услуга × мастер → персональная цена и длительность",
+      "Техкарта → фактические расходники → склад → себестоимость визита",
+      "Завершённый визит → начисление мастеру → маржа",
+      "История клиента → повторная запись → удержание"
     ],
     attentionSignals: [
       "Свободные окна при высоком спросе",
-      "No-show и отмены",
-      "Клиенты без повторного визита"
+      "No-show и поздние отмены",
+      "Визит завершён без рассчитанной маржи",
+      "Расход материалов выше нормы",
+      "Сотрудник без правила оплаты",
+      "Клиент не вернулся в ожидаемый срок"
+    ]
+  },
+  BARBERSHOP: {
+    code: "BARBERSHOP",
+    title: "Барбершоп",
+    summary: "Барберы, кресла, персональные прайсы, стрижки и борода, расходники, товарные продажи и зарплата.",
+    profileCode: "SERVICE",
+    version: 1,
+    enabledCapabilities: [
+      "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
+      "service","sites","growth","workflow","support"
+    ],
+    customFields: [
+      { entityType: "PARTY", fieldKey: "preferred_barber", label: "Предпочитаемый барбер", dataType: "TEXT" },
+      { entityType: "PARTY", fieldKey: "hair_beard_notes", label: "Стрижка / борода: предпочтения", dataType: "TEXT" },
+      { entityType: "PARTY", fieldKey: "next_visit_target", label: "Ожидаемая дата следующего визита", dataType: "DATE" }
+    ],
+    ownerQuestions: [
+      "Какая загрузка кресел и барберов по часам?",
+      "Кто приносит маржу после расходников и зарплаты?",
+      "Какие клиенты должны вернуться на повторную стрижку?",
+      "Сколько зарабатываем на услугах и розничных товарах?"
+    ],
+    primaryWorkspaces: ["service", "crm", "sales", "inventory", "finance"],
+    operatingFlows: [
+      "Клиент → барбер → кресло → услуга → оплата",
+      "Стрижка/борода → техкарта → расходники → фактическая себестоимость",
+      "Визит → фикс/процент/комбинация → зарплата барбера",
+      "Визит → рекомендация товара → продажа → дополнительная маржа",
+      "Дата последней услуги → срок повторения → напоминание"
+    ],
+    attentionSignals: [
+      "Окно барбера простаивает",
+      "Барбер перегружен, а другие свободны",
+      "Клиент просрочил ожидаемый повторный визит",
+      "Расход материалов выше техкарты",
+      "Завершённый визит без правила зарплаты"
+    ]
+  },
+  NAIL_SALON: {
+    code: "NAIL_SALON",
+    title: "Маникюрный салон",
+    summary: "Мастера, столы, покрытия и дизайны, нормы материалов, персональная длительность, зарплата и возврат клиентов.",
+    profileCode: "SERVICE",
+    version: 1,
+    enabledCapabilities: [
+      "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
+      "service","sites","growth","workflow","support"
+    ],
+    customFields: [
+      { entityType: "PARTY", fieldKey: "nail_preferences", label: "Предпочтения по маникюру", dataType: "TEXT" },
+      { entityType: "PARTY", fieldKey: "preferred_nail_master", label: "Предпочитаемый мастер", dataType: "TEXT" },
+      { entityType: "PARTY", fieldKey: "next_visit_target", label: "Ожидаемая дата следующего визита", dataType: "DATE" }
+    ],
+    ownerQuestions: [
+      "Как загружены мастера и рабочие места?",
+      "Какие услуги и мастера дают маржу после материалов?",
+      "Не растёт ли расход базы, покрытия и одноразовых материалов?",
+      "Кому пора напомнить о следующем визите?"
+    ],
+    primaryWorkspaces: ["service", "crm", "inventory", "finance", "growth"],
+    operatingFlows: [
+      "Клиент → мастер → рабочее место → услуга → оплата",
+      "Маникюр + покрытие + дизайн → длительность и цена конкретного мастера",
+      "Техкарта → база/цвет/одноразовые материалы → автосписание",
+      "Завершённый визит → начисление мастеру → маржа",
+      "Период носки → целевая дата следующего визита → возврат"
+    ],
+    attentionSignals: [
+      "Перерасход материалов относительно техкарты",
+      "Длинные свободные окна в расписании",
+      "Клиент не записался повторно в целевой срок",
+      "Сотрудник без зарплатного правила",
+      "Визит закрыт без расхода материалов"
     ]
   },
   AUTO_SERVICE: {
