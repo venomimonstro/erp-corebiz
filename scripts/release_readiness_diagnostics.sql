@@ -400,3 +400,82 @@ WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
       AND c.source_key=s.id::text
       AND c.gross_minor=s.total_minor
   );
+
+
+-- Generic service booking billing invariants.
+SELECT 'SERVICE_BOOKING_BILLING_MISSING' AS code,count(*)::bigint AS affected
+FROM service_booking b
+WHERE b.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND b.party_id IS NOT NULL
+  AND b.price_minor_snapshot>0
+  AND b.status<>'CANCELLED'
+  AND NOT EXISTS(
+    SELECT 1
+    FROM service_package_redemption r
+    WHERE r.tenant_id=b.tenant_id AND r.booking_id=b.id
+  )
+  AND NOT EXISTS(
+    SELECT 1
+    FROM service_booking_charge c
+    WHERE c.tenant_id=b.tenant_id AND c.booking_id=b.id
+  )
+UNION ALL
+SELECT 'SERVICE_BOOKING_CHARGE_LINK_MISMATCH',count(*)::bigint
+FROM service_booking_charge c
+JOIN service_booking b
+  ON b.tenant_id=c.tenant_id AND b.id=c.booking_id
+LEFT JOIN financial_obligation o
+  ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
+LEFT JOIN finance_invoice i
+  ON i.tenant_id=c.tenant_id AND i.id=c.invoice_id
+WHERE c.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND c.status<>'CANCELLED'
+  AND (
+    c.obligation_id IS NULL
+    OR c.invoice_id IS NULL
+    OR o.id IS NULL
+    OR i.id IS NULL
+    OR o.direction<>'RECEIVABLE'
+    OR o.source_type<>'SERVICE_BOOKING_CHARGE'
+    OR o.source_id<>c.id
+    OR o.party_id IS DISTINCT FROM c.payer_party_id
+    OR o.amount_minor<>c.amount_minor
+    OR o.currency<>c.currency
+    OR i.source_type<>'SERVICE_BOOKING_CHARGE'
+    OR i.source_id<>c.id
+    OR i.party_id<>c.payer_party_id
+    OR i.amount_minor<>c.amount_minor
+    OR i.currency<>c.currency
+  )
+UNION ALL
+SELECT 'SERVICE_CANCELLED_BOOKING_OPEN_CHARGE',count(*)::bigint
+FROM service_booking_charge c
+JOIN service_booking b
+  ON b.tenant_id=c.tenant_id AND b.id=c.booking_id
+LEFT JOIN financial_obligation o
+  ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
+WHERE c.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND b.status='CANCELLED'
+  AND (
+    c.status<>'CANCELLED'
+    OR o.status IS DISTINCT FROM 'CANCELLED'
+  )
+UNION ALL
+SELECT 'SERVICE_BOOKING_REFUND_MISSING',count(*)::bigint
+FROM service_booking_charge c
+JOIN service_booking b
+  ON b.tenant_id=c.tenant_id AND b.id=c.booking_id
+JOIN financial_obligation o
+  ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
+WHERE c.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND b.status='CANCELLED'
+  AND o.settled_minor>0
+  AND NOT EXISTS(
+    SELECT 1
+    FROM financial_obligation refund
+    WHERE refund.tenant_id=b.tenant_id
+      AND refund.direction='PAYABLE'
+      AND refund.source_type='SERVICE_BOOKING_REFUND'
+      AND refund.source_id=b.id
+      AND refund.amount_minor=o.settled_minor
+  );
