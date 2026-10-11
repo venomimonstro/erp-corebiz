@@ -216,6 +216,9 @@ export class AutomotiveService {
         `SELECT
            o.*,v.vin,v.plate_number,v.make,v.model,v.generation,
            v.production_year,v.mileage_km,p.display_name AS customer_name,
+           (SELECT coalesce(sum(ceil(l.quantity_milli::numeric * l.unit_price_minor::numeric / 1000)),0)::text
+            FROM automotive_work_order_line l WHERE l.tenant_id=o.tenant_id
+              AND l.work_order_id=o.id AND l.approved) AS approved_total_minor,
            coalesce((
              SELECT json_agg(json_build_object(
                'id',l.id,'lineType',l.line_type,'description',l.description,
