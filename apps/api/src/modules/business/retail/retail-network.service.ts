@@ -6,12 +6,28 @@ import { createHash } from "node:crypto";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
 import { SalesService } from "../sales/sales.service";
+import {sealMerchantSecret} from "../../platform/payments/yookassa.gateway";
 
 type OrderLine={skuId:string;quantityMilli:string};
 type OrderInput={
   locationId:string;partyId?:string;idempotencyKey:string;
   channel:"COUNTER"|"CLICK_COLLECT";lines:OrderLine[];
 };
+
+function validUuidLike(value:unknown):value is string{
+  return typeof value==="string"&&
+    /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value);
+}
+function validImei(value:string):boolean{
+  if(!/^\d{15}$/.test(value))return false;
+  let sum=0;
+  for(let i=0;i<15;i++){
+    let digit=Number(value[i]);
+    if(i%2===1){digit*=2;if(digit>9)digit-=9;}
+    sum+=digit;
+  }
+  return sum%10===0;
+}
 
 @Injectable()
 export class RetailNetworkService {
@@ -269,6 +285,93 @@ export class RetailNetworkService {
       status:"RESERVED_AWAITING_PAYMENT",
       notice:"Склад зарезервирован. Оплату и фискальный чек необходимо провести и подтвердить отдельно."
     };
+  }
+
+  async serialized(ctx:TenantContext,locationId:string){
+    await this.permit(ctx,"inventory.read");
+    this.uuid(locationId);
+    return this.db.withTenantTransaction(ctx,async client=>{
+      const location=await client.query(
+        "SELECT 1 FROM retail_location WHERE tenant_id=$1 AND id=$2",
+        [ctx.tenantId,locationId]);
+      if(!location.rowCount)throw new NotFoundException("Торговая точка не найдена");
+      const r=await client.query(
+        `SELECT u.id,u.sku_id,u.serial_number,u.imei,u.gtin,
+           u.marking_product_group,u.marking_state,u.stock_state,
+           (u.marking_code_hash IS NOT NULL) AS marking_code_present,
+           u.created_at,s.code AS sku_code
+         FROM retail_serial_unit u
+         JOIN sku s ON s.tenant_id=u.tenant_id AND s.id=u.sku_id
+         WHERE u.tenant_id=$1 AND u.location_id=$2
+         ORDER BY u.created_at DESC LIMIT 200`,
+        [ctx.tenantId,locationId]);
+      return r.rows;
+    });
+  }
+
+  async registerSerialized(ctx:TenantContext,locationId:string,input:{
+    skuId:string;serialNumber:string;imei?:string;
+    gtin?:string;markingProductGroup?:string;markingCode?:string
+  }){
+    await this.permit(ctx,"inventory.write");
+    this.uuid(locationId);
+    if(!input||typeof input!=="object"||!validUuidLike(input.skuId))
+      throw new BadRequestException("Укажите SKU товара");
+    const serial=typeof input.serialNumber==="string"
+      ?input.serialNumber.trim().toUpperCase():"";
+    if(!/^[A-Z0-9._/-]{4,100}$/.test(serial))
+      throw new BadRequestException("Некорректный серийный номер");
+    const imei=input.imei?.trim()||null;
+    if(imei && !validImei(imei))
+      throw new BadRequestException("IMEI должен состоять из 15 цифр с корректной контрольной суммой");
+    const gtin=input.gtin?.trim()||null;
+    if(gtin&&!/^\d{14}$/.test(gtin))
+      throw new BadRequestException("GTIN должен содержать 14 цифр");
+    const code=input.markingCode??null;
+    if(code!==null && (
+      typeof code!=="string"||code.length<15||code.length>512
+    ))throw new BadRequestException("Некорректный код маркировки");
+    const group=input.markingProductGroup?.trim()||null;
+    if(group&&group.length>80)
+      throw new BadRequestException("Слишком длинный код товарной группы");
+    if(code!==null && (!gtin||!group))
+      throw new BadRequestException("Для Data Matrix укажите GTIN и товарную группу");
+    const ciphertext=code?sealMerchantSecret(code):null;
+    const hash=code?createHash("sha256").update(code).digest("hex"):null;
+    return this.db.withTenantTransaction(ctx,async client=>{
+      const loc=await client.query<{warehouse_id:string}>(
+        `SELECT warehouse_id FROM retail_location
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+        [ctx.tenantId,locationId]);
+      const wh=loc.rows[0]?.warehouse_id;
+      if(!wh)throw new NotFoundException("Точка не найдена");
+      const balance=await client.query<{physical_milli:string}>(
+        `SELECT physical_milli::text FROM inventory_balance
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND sku_id=$3 FOR UPDATE`,
+        [ctx.tenantId,wh,input.skuId]);
+      if(!balance.rows[0]||BigInt(balance.rows[0].physical_milli)<1000n)
+        throw new ConflictException("Для серийного товара требуется подтверждённый приход");
+      const count=await client.query<{count:string}>(
+        `SELECT count(*)::text AS count FROM retail_serial_unit
+         WHERE tenant_id=$1 AND warehouse_id=$2 AND sku_id=$3
+           AND stock_state IN ('REGISTERED','RESERVED','RETURNED')`,
+        [ctx.tenantId,wh,input.skuId]);
+      if((BigInt(count.rows[0]?.count??"0")+1n)*1000n >
+         BigInt(balance.rows[0].physical_milli))
+        throw new ConflictException("Серийных единиц больше, чем фактический складской остаток");
+      const result=await client.query<{id:string;serial_number:string}>(
+        `INSERT INTO retail_serial_unit(
+          tenant_id,location_id,warehouse_id,sku_id,serial_number,imei,gtin,
+          marking_product_group,marking_code_hash,marking_code_ciphertext,
+          created_by_membership_id
+        ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        RETURNING id,serial_number`,
+        [ctx.tenantId,locationId,wh,input.skuId,serial,imei,gtin,group,hash,
+          ciphertext,ctx.membershipId]);
+      return {id:result.rows[0]!.id,serialNumber:serial,imei,gtin,
+        markingCodePresent:Boolean(code),markingState:"NOT_CHECKED",
+        warning:"Этот регистр не подтверждает проверку ГИС МТ или выбытие товара."};
+    });
   }
 
   async shift(ctx:TenantContext,locationId:string,action:"OPEN"|"CLOSE",
