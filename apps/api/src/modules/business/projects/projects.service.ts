@@ -748,6 +748,14 @@ export class ProjectsService {
         );
       }
 
+      const entryDate=input.workDate??new Date().toISOString().slice(0,10);
+      const lockedMonth=await client.query(
+        `SELECT 1 FROM work_project_monthly_statement
+         WHERE tenant_id=$1 AND project_id=$2 AND period_key=$3
+           AND status IN ('FINALIZED','INVOICED','PAID')`,
+        [context.tenantId,projectId,entryDate.slice(0,7)]);
+      if(lockedMonth.rowCount)
+        throw new ConflictException("Этот месяц закрыт: часы задним числом не допускаются");
       const membershipId = input.membershipId ?? context.membershipId;
       const membership = await client.query(
         `SELECT 1 FROM tenant_membership
@@ -1213,11 +1221,18 @@ export class ProjectsService {
     return this.database.withTenantTransaction(context,async(client)=>{
       await this.assertWritableProject(client,context.tenantId,projectId,scoped);
       const project=await client.query<{currency:string}>(
-        "SELECT currency FROM work_project WHERE tenant_id=$1 AND id=$2",
+        "SELECT currency FROM work_project WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
         [context.tenantId,projectId]
       );
       if(project.rows[0]?.currency!=="RUB")
         throw new BadRequestException("Расходы пока доступны только для проектов в RUB");
+      const lockedMonth=await client.query(
+        `SELECT 1 FROM work_project_monthly_statement
+         WHERE tenant_id=$1 AND project_id=$2 AND period_key=$3
+           AND status IN ('FINALIZED','INVOICED','PAID')`,
+        [context.tenantId,projectId,expenseOn.slice(0,7)]);
+      if(lockedMonth.rowCount)
+        throw new ConflictException("Месяц уже закрыт: расходы задним числом не допускаются");
       return (await client.query(
         `INSERT INTO work_project_expense(
            tenant_id,project_id,category,description,amount_minor,
