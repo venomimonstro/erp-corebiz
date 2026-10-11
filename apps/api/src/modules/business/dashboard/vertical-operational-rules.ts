@@ -149,6 +149,67 @@ export const VERTICAL_OPERATIONAL_RULES:readonly VerticalOperationalRule[]=[
         AND updated_at<now()-interval '12 hours'
       ORDER BY updated_at,id LIMIT 201`
   }
+  {
+    code:"OMS_BACKORDER_OVERDUE",domain:"ECOMMERCE",
+    label:"Незакрытая потребность в товарах",
+    severity:"CRITICAL",href:"/app/oms",
+    explanation:"По подтверждённому заказу не хватает товаров: срок обещанной поставки прошёл или срок не указан более двух дней",
+    permission:"oms.read",
+    sql:`SELECT b.id FROM oms_backorder_line b
+      WHERE b.tenant_id=$1 AND b.status IN ('OPEN','PARTIALLY_ALLOCATED')
+        AND (b.expected_at<now() OR
+          (b.expected_at IS NULL AND b.created_at<now()-interval '2 days'))
+      ORDER BY coalesce(b.expected_at,b.created_at),b.id LIMIT 201`
+  },
+  {
+    code:"MARKETPLACE_FEED_STALE",domain:"ECOMMERCE",
+    label:"Маркетплейс не передаёт свежие заказы",
+    severity:"CRITICAL",href:"/app/ecommerce",
+    explanation:"Остатки публикуются, но заказы не синхронизированы более пятнадцати минут. Возможна двойная продажа",
+    permission:"channels.read",
+    sql:`SELECT l.id FROM channel_stock_listing l
+      JOIN channel_connection c ON c.tenant_id=l.tenant_id AND c.id=l.connection_id
+      WHERE l.tenant_id=$1 AND l.publish_enabled AND l.enabled
+        AND c.status='ACTIVE' AND
+          (c.last_synced_at IS NULL OR c.last_synced_at<now()-interval '15 minutes')
+      ORDER BY l.updated_at,l.id LIMIT 201`
+  },
+  {
+    code:"DANCE_STRANDED_VISIT",domain:"DANCE",
+    label:"Зависшие посещения абонементов",
+    severity:"CRITICAL",href:"/app/dance/students",
+    explanation:"Урок отменён или закрыт, но резерв абонемента остался активным. Нужна сверка перед повторным списанием",
+    permission:"dance.read",
+    sql:`SELECT r.id FROM dance_package_redemption r
+      JOIN dance_lesson_participant lp ON lp.tenant_id=r.tenant_id
+        AND lp.id=r.participant_id
+      JOIN dance_lesson l ON l.tenant_id=lp.tenant_id AND l.id=lp.lesson_id
+      WHERE r.tenant_id=$1 AND r.state='RESERVED'
+        AND (lp.status IN ('WAITLIST','CANCELLED_IN_TIME')
+          OR l.status IN ('COMPLETED','CANCELLED_BY_STUDIO','CANCELLED_BY_TRAINER'))
+      ORDER BY r.id LIMIT 201`
+  },
+  {
+    code:"PAYROLL_REVIEW_DISPUTED",domain:"PAYROLL",
+    label:"Неурегулированные споры по зарплате",
+    severity:"CRITICAL",href:"/app/dance/team",
+    explanation:"Тренер или сотрудник не согласен с расчётом. Проверьте спор до выплаты зарплаты",
+    permission:"finance.read",
+    sql:`SELECT id FROM payroll_statement_review
+      WHERE tenant_id=$1 AND review_status='DISPUTED'
+      ORDER BY updated_at,id LIMIT 201`
+  },
+  {
+    code:"PROJECT_CLIENT_APPROVAL_OVERDUE",domain:"PROJECTS",
+    label:"Клиент не согласовал результат или бюджет",
+    severity:"WARNING",href:"/app/agency",
+    explanation:"Истёк согласованный срок решения клиента по этапу, бюджету или запуску кампании",
+    permission:"projects.read",
+    sql:`SELECT id FROM work_project_client_approval
+      WHERE tenant_id=$1 AND status='PENDING'
+        AND due_at IS NOT NULL AND due_at<now()
+      ORDER BY due_at,id LIMIT 201`
+  },
 ] as const;
 
 export const VERTICAL_OPERATIONAL_RULE_BY_CODE=
