@@ -33,6 +33,9 @@ export class RetailNetworkService {
       const r=await client.query(
         `SELECT l.id,l.code,l.name,l.address,l.pickup_enabled,
            l.status,l.branch_id,l.warehouse_id,w.name AS warehouse_name,
+           (SELECT sh.id FROM retail_cash_shift sh
+            WHERE sh.tenant_id=l.tenant_id AND sh.location_id=l.id
+              AND sh.status='OPEN' LIMIT 1) AS open_shift_id,
            coalesce(sum(b.physical_milli),0)::text AS physical_milli,
            coalesce(sum(b.reserved_milli),0)::text AS reserved_milli,
            coalesce(sum(b.physical_milli-b.reserved_milli),0)::text AS available_milli
@@ -102,10 +105,15 @@ export class RetailNetworkService {
       const result=await client.query(
         `SELECT s.id AS sku_id,s.code AS sku_code,p.name AS product_name,
            b.physical_milli::text,b.reserved_milli::text,
-           (b.physical_milli-b.reserved_milli)::text AS available_milli
+           (b.physical_milli-b.reserved_milli)::text AS available_milli,
+           (CASE WHEN coalesce(ip.enabled,true)=false THEN 0
+             ELSE greatest(0,b.physical_milli-b.reserved_milli-
+               coalesce(ip.safety_stock_milli,0)) END)::text AS sellable_milli
          FROM retail_location l
          JOIN inventory_balance b ON b.tenant_id=l.tenant_id
            AND b.warehouse_id=l.warehouse_id
+         LEFT JOIN inventory_policy ip ON ip.tenant_id=b.tenant_id
+           AND ip.warehouse_id=b.warehouse_id AND ip.sku_id=b.sku_id
          JOIN sku s ON s.tenant_id=b.tenant_id AND s.id=b.sku_id
          JOIN product_variant v ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
          JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
@@ -184,6 +192,16 @@ export class RetailNetworkService {
     if(!loc)throw new NotFoundException("Торговая точка недоступна");
     if(input.channel==="CLICK_COLLECT"&&!loc.pickup_enabled)
       throw new ConflictException("Самовывоз из этой точки недоступен");
+    if(input.channel==="COUNTER"){
+      const shift=await this.db.withTenantTransaction(ctx,async client=>
+        client.query(
+          `SELECT 1 FROM retail_cash_shift WHERE tenant_id=$1
+           AND location_id=$2 AND status='OPEN'`,
+          [ctx.tenantId,input.locationId]));
+      if(!shift.rowCount)throw new ConflictException(
+        "Перед работой на кассе откройте смену в торговой точке"
+      );
+    }
     const normalized={
       locationId:input.locationId,channel:input.channel,
       partyId:input.partyId??null,
