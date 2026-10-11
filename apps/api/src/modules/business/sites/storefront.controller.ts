@@ -1,5 +1,5 @@
 import {
-  Body,Controller,Get,Param,Post,Put,Req
+  Body,Controller,Get,Param,Post,Put,Query,Req
 } from "@nestjs/common";
 import type {ApiSuccess,TenantContext} from "@corebiz/contracts";
 import {ApiCost} from "../../../infrastructure/http/api-cost.decorator";
@@ -28,8 +28,14 @@ export class StorefrontController{
   @Public()
   @Get(":siteCode/catalog")
   @ApiCost("SEARCH")
-  async catalog(@Param("siteCode") code:string):Promise<ApiSuccess<unknown>>{
-    return {ok:true,data:await this.storefront.catalog(code)};
+  async catalog(
+    @Param("siteCode") code:string,
+    @Query("cursor") cursor?:string,
+    @Query("q") q?:string,
+    @Query("limit") limit?:string
+  ):Promise<ApiSuccess<unknown>>{
+    const n=limit===undefined?24:Number(limit);
+    return {ok:true,data:await this.storefront.catalog(code,{cursor,q,limit:n})};
   }
 
   @Public()
