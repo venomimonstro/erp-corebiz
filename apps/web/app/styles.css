@@ -2069,3 +2069,85 @@ button, .primary, .secondary { font: inherit; }
   min-width:112px;
   text-align:right;
 }
+
+/* Owner economics */
+.studio-economics-grid {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:14px;
+  margin:14px 0;
+}
+.studio-economics-panel {
+  overflow:hidden;
+  border:1px solid #e1e4e7;
+  border-radius:18px;
+  background:#fff;
+  box-shadow:0 12px 36px rgba(27,31,36,.035);
+}
+.studio-economics-panel > header {
+  display:flex;
+  justify-content:space-between;
+  gap:16px;
+  align-items:flex-start;
+  padding:17px 18px 14px;
+  border-bottom:1px solid #eceeef;
+}
+.studio-economics-panel > header > div {
+  display:grid;
+  gap:3px;
+}
+.studio-economics-panel > header span,
+.studio-economics-panel > header small {
+  color:#949aa0;
+  font-size:8px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+}
+.studio-economics-panel > header h2 {
+  margin:0;
+  font-size:17px;
+  letter-spacing:-.03em;
+}
+.studio-economics-panel > header a {
+  color:#4f575f;
+  font-size:9px;
+}
+.studio-economics-list {
+  display:grid;
+}
+.studio-economics-list > div {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:16px;
+  align-items:center;
+  padding:13px 18px;
+  border-bottom:1px solid #f0f1f2;
+}
+.studio-economics-list > div:last-child {
+  border-bottom:0;
+}
+.studio-economics-list > div > div {
+  display:grid;
+  gap:3px;
+}
+.studio-economics-list > div > div:last-child {
+  justify-items:end;
+  text-align:right;
+}
+.studio-economics-list strong {
+  font-size:12px;
+  letter-spacing:-.015em;
+}
+.studio-economics-list span,
+.studio-economics-list > p {
+  color:#92989e;
+  font-size:9px;
+}
+.studio-economics-list > p {
+  margin:0;
+  padding:18px;
+}
+@media (max-width:860px) {
+  .studio-economics-grid { grid-template-columns:1fr; }
+}
+
