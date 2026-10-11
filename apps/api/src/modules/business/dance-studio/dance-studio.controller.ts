@@ -393,6 +393,29 @@ export class DanceStudioController {
     };
   }
 
+  @Get("payroll-profiles")
+  @RequirePermission("dance.read")
+  async payrollProfiles(
+    @Req() req:AuthenticatedRequest
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.economics.payrollProfiles(this.ctx(req))
+    };
+  }
+
+  @Post("payroll-profiles")
+  @RequirePermission("dance.write")
+  async upsertPayrollProfile(
+    @Req() req:AuthenticatedRequest,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.economics.upsertPayrollProfile(this.ctx(req),body)
+    };
+  }
+
   @Get("compensation-plans")
   @RequirePermission("dance.read")
   async compensationPlans(
