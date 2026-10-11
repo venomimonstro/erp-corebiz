@@ -78,14 +78,26 @@ export class GlobalSearchService {
             display_name: string;
             type: string;
           }>(
-            `SELECT id,display_name,type
-             FROM party
-             WHERE tenant_id=$1
-               AND status='ACTIVE'
-               AND display_name ILIKE $2
-             ORDER BY display_name
+            `SELECT p.id,p.display_name,p.type
+             FROM party p
+             WHERE p.tenant_id=$1
+               AND p.status='ACTIVE'
+               AND p.display_name ILIKE $2
+               AND (
+                 p.responsible_membership_id=$3
+                 OR EXISTS(
+                   SELECT 1 FROM membership_role mr
+                   JOIN role_permission rp
+                     ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
+                   WHERE mr.tenant_id=p.tenant_id
+                     AND mr.membership_id=$3
+                     AND rp.permission_code IN ('*','crm.read')
+                     AND (rp.scope='all' OR rp.permission_code='*')
+                 )
+               )
+             ORDER BY p.display_name
              LIMIT 5`,
-            [context.tenantId, pattern]
+            [context.tenantId, pattern, context.membershipId]
           ),
           client.query<{
             id: string;
@@ -158,7 +170,6 @@ export class GlobalSearchService {
              )
              AND (
                o.responsible_membership_id=$3
-               OR o.responsible_membership_id IS NULL
                OR EXISTS(
                  SELECT 1
                  FROM membership_role mr
@@ -239,7 +250,6 @@ export class GlobalSearchService {
              )
              AND (
                po.responsible_membership_id=$3
-               OR po.responsible_membership_id IS NULL
                OR EXISTS(
                  SELECT 1
                  FROM membership_role mr
