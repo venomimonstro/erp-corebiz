@@ -1366,7 +1366,8 @@ export class DanceEconomicsService {
              tenant_id,batch_id,employee_ref,gross_minor,deduction_minor
            ) VALUES($1,$2,$3,$4,0)
            ON CONFLICT(tenant_id,batch_id,employee_ref)
-           DO UPDATE SET gross_minor=EXCLUDED.gross_minor`,
+           DO UPDATE SET gross_minor=
+             payroll_accrual_line.gross_minor+EXCLUDED.gross_minor`,
           [context.tenantId,input.batchId,membershipId,grossMinor.toString()]
         );
       }
