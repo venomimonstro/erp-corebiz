@@ -2460,7 +2460,7 @@ export class DanceStudioService {
          WHERE tenant_id=$1 AND id=$2`,
         [
           context.tenantId,lesson.host_booking_id,startsAt,endsAt,duration,
-          rule?.price_minor??booking.price_minor_snapshot,rule?.id??null
+          booking.price_minor_snapshot,rule?.id??null
         ]
       );
 
@@ -2520,7 +2520,8 @@ export class DanceStudioService {
           roomZoneId,
           roomCapacityUnits:roomId?roomCapacityUnits:0,
           capacity,
-          deliveryRuleId:rule?.id??null
+          deliveryRuleId:rule?.id??null,
+          priceSnapshotPreservedMinor:booking.price_minor_snapshot
         }
       );
       return row;
