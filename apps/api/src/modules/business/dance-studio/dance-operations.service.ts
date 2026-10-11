@@ -20,9 +20,8 @@ export class DanceOperationsService {
     const scope=await this.authorization.resolveScope(context,"dance.read");
     if(!scope)throw new ForbiddenException("Нет доступа к студии");
     const scopeIds=await this.authorization.membershipIdsForScope(context,scope);
-    const canViewFinance=Boolean(
-      await this.authorization.resolveScope(context,"finance.read")
-    );
+    const canViewFinance=
+      await this.authorization.resolveScope(context,"finance.read")==="all";
     return this.database.withTenantTransaction(context,async client=>{
       const [lessons,groups,redemptions,makeup]=await Promise.all([
         client.query<{
