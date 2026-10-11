@@ -107,6 +107,14 @@ type Props = {
   inn:string|null;
 };
 
+type ProviderDialog = {
+  kind:"SIGN"|"SUBMIT"|"RECEIPT";
+  item:Obligation;
+  provider:string;
+  certificateFingerprint?:string|null;
+  receiptType?:"ACCEPTED"|"REJECTED"|"PAYMENT";
+};
+
 function rub(value:string|number|null|undefined) {
   return new Intl.NumberFormat("ru-RU",{
     style:"currency",
@@ -184,6 +192,9 @@ export function AccountingComplianceCenter({
   const [calculationNote,setCalculationNote]=useState(
     "Налоговая книга и сумма проверены владельцем."
   );
+  const [providerDialog,setProviderDialog]=useState<ProviderDialog|null>(null);
+  const [providerReference,setProviderReference]=useState("");
+  const [providerReason,setProviderReason]=useState("");
 
   const load=useCallback(async()=>{
     if(!legalEntityId) return;
@@ -724,6 +735,13 @@ export function AccountingComplianceCenter({
     }
   }
 
+  function openProviderDialog(dialog:ProviderDialog){
+    setProviderReference("");
+    setProviderReason("");
+    setProviderDialog(dialog);
+    setError("");
+  }
+
   async function signWithConnector(item:Obligation) {
     const verified=connectors.find(connector=>
       connector.status==="VERIFIED" &&
@@ -732,34 +750,16 @@ export function AccountingComplianceCenter({
     );
     if(!verified){
       setError(
-        "Нет проверенного оператора с действующим сертификатом. Подключите ФНС/оператора ЭДО в интеграциях бухгалтерии."
+        "Нет проверенного оператора с действующим сертификатом. Подключите оператора электронной отчётности."
       );
       return;
     }
-    const reference=window.prompt(
-      "Идентификатор подписи/операции у "+verified.provider
-    );
-    if(!reference?.trim()) return;
-    setBusy(true);
-    try{
-      await apiRequest(
-        "/accounting/compliance/obligations/"+item.id+"/signature",
-        {
-          method:"POST",
-          body:JSON.stringify({
-            provider:verified.provider,
-            certificateFingerprint:verified.certificate_fingerprint,
-            providerReference:reference.trim()
-          })
-        }
-      );
-      setNotice("КЭП подтверждена оператором. Документ готов к отправке.");
-      await load();
-    }catch(cause){
-      setError(cause instanceof Error?cause.message:"Не удалось подтвердить подпись");
-    }finally{
-      setBusy(false);
-    }
+    openProviderDialog({
+      kind:"SIGN",
+      item,
+      provider:verified.provider,
+      certificateFingerprint:verified.certificate_fingerprint
+    });
   }
 
   async function recordSubmitted(item:Obligation) {
@@ -770,73 +770,102 @@ export function AccountingComplianceCenter({
       setError("Нет проверенного канала электронной сдачи.");
       return;
     }
-    const reference=window.prompt(
-      "Идентификатор отправки у "+verified.provider
-    );
-    if(!reference?.trim()) return;
-    setBusy(true);
-    try{
-      await apiRequest(
-        "/accounting/compliance/obligations/"+item.id+"/submitted",
-        {
-          method:"POST",
-          body:JSON.stringify({
-            provider:verified.provider,
-            externalReference:reference.trim()
-          })
-        }
-      );
-      setNotice("Отправка зафиксирована. Ждём квитанцию ФНС/оператора.");
-      await load();
-    }catch(cause){
-      setError(cause instanceof Error?cause.message:"Не удалось зафиксировать отправку");
-    }finally{
-      setBusy(false);
-    }
+    openProviderDialog({
+      kind:"SUBMIT",
+      item,
+      provider:verified.provider
+    });
   }
 
   async function recordReceipt(
     item:Obligation,
     receiptType:"ACCEPTED"|"REJECTED"|"PAYMENT"
   ) {
-    const provider=item.connector_provider||
-      connectors.find(connector=>connector.status==="VERIFIED")?.provider||
-      "MANUAL";
-    const reference=window.prompt(
-      receiptType==="PAYMENT"
-        ?"Номер/идентификатор подтверждения оплаты"
-        :"Номер квитанции ФНС/оператора"
-    );
-    if(!reference?.trim()) return;
-    const reason=receiptType==="REJECTED"
-      ?window.prompt("Причина отказа из квитанции")?.trim()
-      :undefined;
-    if(receiptType==="REJECTED"&&!reason) return;
+    openProviderDialog({
+      kind:"RECEIPT",
+      item,
+      receiptType,
+      provider:
+        item.connector_provider||
+        connectors.find(connector=>connector.status==="VERIFIED")?.provider||
+        "MANUAL"
+    });
+  }
+
+  async function confirmProviderDialog(){
+    const dialog=providerDialog;
+    const reference=providerReference.trim();
+    if(!dialog||!reference){
+      setError("Укажите идентификатор операции или квитанции");
+      return;
+    }
+    if(dialog.kind==="RECEIPT"&&dialog.receiptType==="REJECTED"&&!providerReason.trim()){
+      setError("Укажите причину отказа из квитанции");
+      return;
+    }
 
     setBusy(true);
+    setError("");
     try{
-      await apiRequest(
-        "/accounting/compliance/obligations/"+item.id+"/receipt",
-        {
-          method:"POST",
-          body:JSON.stringify({
-            provider,
-            externalReference:reference.trim(),
-            receiptType,
-            payload:reason?{reason}:undefined
-          })
+      if(dialog.kind==="SIGN"){
+        if(!dialog.certificateFingerprint){
+          throw new Error("У оператора не указан отпечаток сертификата");
         }
-      );
-      setNotice(
-        receiptType==="ACCEPTED"
-          ?"ФНС приняла документ."
-          :receiptType==="PAYMENT"
-            ?"Оплата подтверждена."
-            :"Отказ сохранён. Исправьте пакет и отправьте повторно."
-      );
+        await apiRequest(
+          "/accounting/compliance/obligations/"+dialog.item.id+"/signature",
+          {
+            method:"POST",
+            body:JSON.stringify({
+              provider:dialog.provider,
+              certificateFingerprint:dialog.certificateFingerprint,
+              providerReference:reference
+            })
+          }
+        );
+        setNotice("КЭП подтверждена оператором. Документ готов к отправке.");
+      }else if(dialog.kind==="SUBMIT"){
+        await apiRequest(
+          "/accounting/compliance/obligations/"+dialog.item.id+"/submitted",
+          {
+            method:"POST",
+            body:JSON.stringify({
+              provider:dialog.provider,
+              externalReference:reference
+            })
+          }
+        );
+        setNotice("Отправка зафиксирована. Ожидаем квитанцию.");
+      }else{
+        await apiRequest(
+          "/accounting/compliance/obligations/"+dialog.item.id+"/receipt",
+          {
+            method:"POST",
+            body:JSON.stringify({
+              provider:dialog.provider,
+              externalReference:reference,
+              receiptType:dialog.receiptType,
+              payload:providerReason.trim()
+                ?{reason:providerReason.trim()}
+                :undefined
+            })
+          }
+        );
+        setNotice(
+          dialog.receiptType==="ACCEPTED"
+            ?"ФНС приняла документ."
+            :dialog.receiptType==="PAYMENT"
+              ?"Оплата подтверждена."
+              :"Отказ сохранён. Исправьте пакет и отправьте повторно."
+        );
+      }
+      setProviderDialog(null);
+      setProviderReference("");
+      setProviderReason("");
       await load();
     }catch(cause){
-      setError(cause instanceof Error?cause.message:"Не удалось сохранить квитанцию");
+      setError(
+        cause instanceof Error?cause.message:"Не удалось выполнить действие"
+      );
     }finally{
       setBusy(false);
     }
@@ -1556,6 +1585,101 @@ export function AccountingComplianceCenter({
           </div>
         </section>
       </div>
+
+      {providerDialog?(
+        <div
+          className="compliance-dialog-backdrop"
+          role="presentation"
+          onMouseDown={event=>{
+            if(event.target===event.currentTarget&&!busy){
+              setProviderDialog(null);
+            }
+          }}
+        >
+          <section
+            className="compliance-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="compliance-dialog-title"
+          >
+            <div className="compliance-dialog-head">
+              <div>
+                <span className="compliance-eyebrow">
+                  {providerDialog.provider}
+                </span>
+                <h3 id="compliance-dialog-title">
+                  {providerDialog.kind==="SIGN"
+                    ?"Подтверждение электронной подписи"
+                    :providerDialog.kind==="SUBMIT"
+                      ?"Подтверждение отправки"
+                      :providerDialog.receiptType==="PAYMENT"
+                        ?"Подтверждение оплаты"
+                        :"Квитанция ФНС / оператора"}
+                </h3>
+              </div>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={busy}
+                onClick={()=>setProviderDialog(null)}
+              >
+                Закрыть
+              </button>
+            </div>
+            <p>
+              {providerDialog.kind==="SIGN"
+                ?"Укажите реальный идентификатор подписи или операции, полученный от подключённого оператора."
+                :providerDialog.kind==="SUBMIT"
+                  ?"Укажите идентификатор фактической отправки у оператора. Это не выполняет отправку само по себе."
+                  :"Сохраните номер квитанции или подтверждения, полученного из внешней системы."}
+            </p>
+            <label>
+              <span>
+                {providerDialog.kind==="SIGN"
+                  ?"Идентификатор подписи"
+                  :providerDialog.receiptType==="PAYMENT"
+                    ?"Номер подтверждения оплаты"
+                    :"Идентификатор / номер квитанции"}
+              </span>
+              <input
+                autoFocus
+                value={providerReference}
+                onChange={event=>setProviderReference(event.target.value)}
+                placeholder="Например, reference оператора"
+              />
+            </label>
+            {providerDialog.kind==="RECEIPT"&&
+             providerDialog.receiptType==="REJECTED"?(
+              <label>
+                <span>Причина отказа</span>
+                <textarea
+                  rows={4}
+                  value={providerReason}
+                  onChange={event=>setProviderReason(event.target.value)}
+                  placeholder="Скопируйте причину из квитанции"
+                />
+              </label>
+            ):null}
+            <div className="compliance-dialog-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={busy}
+                onClick={()=>setProviderDialog(null)}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                disabled={busy||!providerReference.trim()}
+                onClick={()=>void confirmProviderDialog()}
+              >
+                {busy?"Сохраняем…":"Подтвердить"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ):null}
 
       <p className="compliance-disclaimer">
         Налоговые расчёты являются предварительными до подтверждения.
