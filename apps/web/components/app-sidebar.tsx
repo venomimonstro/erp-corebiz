@@ -21,6 +21,7 @@ const permissionByKey: Record<string,string> = {
   customers: "crm.read",
   tasks: "tasks.read",
   projects: "projects.read",
+  agency: "projects.read",
   orders: "sales.read",
   products: "catalog.read",
   purchases: "procurement.read",
@@ -78,6 +79,7 @@ const capabilityByKey: Record<string,string> = {
   customers: "crm",
   tasks: "tasks",
   projects: "projects",
+  agency: "projects",
   orders: "sales",
   products: "catalog",
   purchases: "procurement",
@@ -133,7 +135,8 @@ const sections: Section[] = [
     ["/app/crm/deals", "Сделки", "deals"],
     ["/app/crm/customers", "Клиенты", "customers"],
     ["/app/tasks", "Задачи", "tasks"],
-    ["/app/projects", "Проекты", "projects"]
+    ["/app/projects", "Проекты", "projects"],
+    ["/app/agency", "Агентство", "agency"]
   ] },
   { title: "Продажи и товары", items: [
     ["/app/sales/orders", "Заказы", "orders"],
