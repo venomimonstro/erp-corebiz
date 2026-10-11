@@ -1547,9 +1547,38 @@ export class DanceStudioService {
         input.overrideReason
       );
 
-      const discount=Math.floor(input.discountBps??0);
-      if(discount<0||discount>10000){
-        throw new BadRequestException("Некорректная скидка");
+      if(input.status!==undefined&&!["TRIAL","ACTIVE"].includes(input.status))
+        throw new BadRequestException("Некорректный статус участника группы");
+      if(input.discountBps!==undefined&&
+         (!Number.isSafeInteger(input.discountBps)||
+          input.discountBps<0||input.discountBps>10000))
+        throw new BadRequestException("Скидка должна быть целым числом от 0 до 10000");
+      const discount=input.discountBps??0;
+
+      // The group row is locked already. Repeating a request for a member
+      // who holds a seat must not place them on the waiting list.
+      const existing=await client.query<{
+        id:string;status:string;reserved_place:boolean;discount_bps:number;
+      }>(
+        `SELECT id,status,reserved_place,discount_bps
+         FROM dance_group_member
+         WHERE tenant_id=$1 AND group_id=$2 AND student_id=$3 FOR UPDATE`,
+        [context.tenantId,groupId,input.studentId]
+      );
+      const already=existing.rows[0];
+      if(already?.reserved_place&&["TRIAL","ACTIVE","PAUSED"].includes(already.status)){
+        const unchanged=await client.query<{
+          id:string;status:string;reserved_place:boolean;
+        }>(
+          `UPDATE dance_group_member
+           SET status=$4,discount_bps=$5,updated_at=now()
+           WHERE tenant_id=$1 AND group_id=$2 AND student_id=$3
+           RETURNING id,status,reserved_place`,
+          [context.tenantId,groupId,input.studentId,
+           input.status??already.status,
+           input.discountBps??already.discount_bps]
+        );
+        return {waitlisted:false,alreadyEnrolled:true,...unchanged.rows[0]};
       }
 
       const occupied=await client.query<{count:number}>(
@@ -1622,6 +1651,8 @@ export class DanceStudioService {
       keepPlace?:boolean;
     }
   ){
+    if(!input||!["ACTIVE","PAUSED","LEFT"].includes(input.status))
+      throw new BadRequestException("Неизвестный статус участия в группе");
     const scopeIds=await this.scopeIds(context,"dance.write");
     const result=await this.database.withTenantTransaction(
       context,
@@ -1648,6 +1679,18 @@ export class DanceStudioService {
               ? Boolean(input.keepPlace ?? true)
               : false;
         const releasesPlace=member.reserved_place&&!reservedPlace;
+        if(reservedPlace&&!member.reserved_place){
+          const occupied=await client.query<{count:number}>(
+            `SELECT count(*)::integer AS count FROM dance_group_member
+             WHERE tenant_id=$1 AND group_id=$2
+               AND status IN ('TRIAL','ACTIVE','PAUSED') AND reserved_place`,
+            [context.tenantId,groupId]
+          );
+          if((occupied.rows[0]?.count??0)>=group.capacity)
+            throw new ConflictException(
+              "Свободного места больше нет. Используйте лист ожидания или измените вместимость группы"
+            );
+        }
 
         const updated=await client.query(
           `UPDATE dance_group_member
@@ -2674,11 +2717,6 @@ export class DanceStudioService {
       version:number;
     }
   ){
-    if(!input||!["BOOKED","ATTENDED","LATE","NO_SHOW","EXCUSED_ABSENCE",
-      "CANCELLED_IN_TIME","CANCELLED_LATE"].includes(input.status))
-      throw new BadRequestException("Некорректная отметка посещения");
-    if(!Number.isSafeInteger(input.version)||input.version<1)
-      throw new BadRequestException("Некорректная версия записи");
     if(![
       "BOOKED","ATTENDED","LATE","NO_SHOW","EXCUSED_ABSENCE",
       "CANCELLED_IN_TIME","CANCELLED_LATE"
@@ -2732,6 +2770,15 @@ export class DanceStudioService {
           "Участника листа ожидания сначала нужно перевести на свободное место"
         );
       }
+
+      // Never release a paid place after a lesson has begun or the
+      // attendance was marked. Such corrections require audited refunds.
+      if(input.status==="CANCELLED_IN_TIME"&&current.status!=="WAITLIST"&&
+         (new Date(lesson.starts_at).getTime()<=Date.now()||
+          ["ATTENDED","LATE","NO_SHOW","CANCELLED_LATE"].includes(current.status)))
+        throw new ConflictException(
+          "Занятие уже началось или посещение отмечено. Используйте позднюю отмену; возврат оформляется отдельно"
+        );
 
       const releasesSeat=
         input.status==="CANCELLED_IN_TIME" &&
