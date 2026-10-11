@@ -23,9 +23,9 @@ describe("OMS: preserving commercial stock policies",()=>{
     await service.setPolicy(context,{
       warehouseId,skuId,safetyStockMilli:"5000"
     });
-    const write=client.query.mock.calls.find(([sql]:[string])=>
-      sql.includes("INSERT INTO inventory_policy"));
-    expect(write).toBeDefined();
+    const write=client.query.mock.calls.find(call=>
+      String(call[0]).includes("INSERT INTO inventory_policy"));
+    if(!write)throw new Error("OMS policy update not issued");
     expect(write[0]).toContain("ELSE inventory_policy.enabled");
     expect(write[0]).toContain("ELSE inventory_policy.sourcing_priority");
     expect(write[1].slice(-3)).toEqual([true,false,false]);
@@ -33,8 +33,9 @@ describe("OMS: preserving commercial stock policies",()=>{
   it("an explicit disabled state does not overwrite the protected safety quantity",async()=>{
     const {service,client}=harness();
     await service.setPolicy(context,{warehouseId,skuId,enabled:false});
-    const write=client.query.mock.calls.find(([sql]:[string])=>
-      sql.includes("INSERT INTO inventory_policy"));
+    const write=client.query.mock.calls.find(call=>
+      String(call[0]).includes("INSERT INTO inventory_policy"));
+    if(!write)throw new Error("OMS policy update not issued");
     expect(write[1].slice(-3)).toEqual([false,false,true]);
     expect(write[1][5]).toBe(false);
   });
