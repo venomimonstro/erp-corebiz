@@ -9,7 +9,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
-import {isValidDanceDate,assertDanceLessonWindow,validCapacity} from "./dance-validation";
+import {isValidDanceDate,isValidStudentBirthDate,assertDanceLessonWindow,validCapacity} from "./dance-validation";
 
 type DanceScopePermission = "dance.read" | "dance.write";
 type LessonType =
@@ -852,12 +852,8 @@ export class DanceStudioService {
   ) {
     const scopeIds = await this.scopeIds(context, "dance.write");
     if (!input.partyId) throw new BadRequestException("Выберите ученика");
-    if (input.birthDate && !/^\d{4}-\d{2}-\d{2}$/.test(input.birthDate)) {
-      throw new BadRequestException("Некорректная дата рождения");
-    }
-    if (input.birthDate && input.birthDate > new Date().toISOString().slice(0,10)) {
-      throw new BadRequestException("Дата рождения не может быть в будущем");
-    }
+    if(input.birthDate&&!isValidStudentBirthDate(input.birthDate))
+      throw new BadRequestException("Дата рождения неверна: проверьте день, месяц и год");
 
     return this.database.withTenantTransaction(context, async (client) => {
       const party = await client.query(
@@ -2634,6 +2630,13 @@ export class DanceStudioService {
       throw new BadRequestException("Некорректная отметка посещения");
     if(!Number.isSafeInteger(input.version)||input.version<1)
       throw new BadRequestException("Некорректная версия записи");
+    if(![
+      "BOOKED","ATTENDED","LATE","NO_SHOW","EXCUSED_ABSENCE",
+      "CANCELLED_IN_TIME","CANCELLED_LATE"
+    ].includes(input?.status))
+      throw new BadRequestException("Выберите допустимый статус посещения");
+    if(!Number.isSafeInteger(input?.version)||input.version<1)
+      throw new BadRequestException("Обновите журнал: версия участника не указана");
     const scopeIds=await this.scopeIds(context,"dance.write");
     return this.database.withTenantTransaction(context,async client=>{
       const lesson=await this.assertLessonAccess(
