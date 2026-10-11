@@ -758,3 +758,47 @@ WHERE pr.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
       AND e.new_status=pr.review_status
   );
 
+
+-- Russian tax-compliance invariants.
+SELECT 'ACCOUNTING_TAX_PROFILE_OVERLAP' AS code,count(*)::bigint AS affected
+FROM accounting_tax_profile a
+WHERE a.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND a.status='ACTIVE'
+  AND EXISTS(
+    SELECT 1
+    FROM accounting_tax_profile b
+    WHERE b.tenant_id=a.tenant_id
+      AND b.legal_entity_id=a.legal_entity_id
+      AND b.status='ACTIVE'
+      AND b.id<>a.id
+      AND daterange(
+        b.effective_from,coalesce(b.effective_to,'infinity'::date),'[]'
+      ) && daterange(
+        a.effective_from,coalesce(a.effective_to,'infinity'::date),'[]'
+      )
+  )
+UNION ALL
+SELECT 'ACCOUNTING_TAX_OVERDUE_OPEN',count(*)::bigint
+FROM accounting_compliance_obligation o
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND o.due_at<now()
+  AND o.workflow_status NOT IN ('ACCEPTED','PAID','CANCELLED')
+UNION ALL
+SELECT 'ACCOUNTING_TAX_SUBMITTED_WITHOUT_RECEIPT',count(*)::bigint
+FROM accounting_compliance_obligation o
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND o.workflow_status IN ('ACCEPTED','REJECTED')
+  AND NOT EXISTS(
+    SELECT 1
+    FROM accounting_compliance_receipt r
+    WHERE r.tenant_id=o.tenant_id
+      AND r.obligation_id=o.id
+      AND r.receipt_type IN ('ACCEPTED','REJECTED')
+  )
+UNION ALL
+SELECT 'ACCOUNTING_TAX_PACKET_PROFILE_MISMATCH',count(*)::bigint
+FROM accounting_compliance_packet p
+JOIN accounting_compliance_obligation o
+  ON o.tenant_id=p.tenant_id AND o.id=p.obligation_id
+WHERE p.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND p.legal_entity_id<>o.legal_entity_id;
