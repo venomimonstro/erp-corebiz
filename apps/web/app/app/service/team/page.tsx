@@ -53,6 +53,10 @@ type Statement={
   adjustment_minor:string;
   total_minor:string;
   status:string;
+  review_id:string|null;
+  review_status:"PENDING"|"ACKNOWLEDGED"|"DISPUTED"|"RESOLVED"|"WAIVED";
+  employee_comment:string|null;
+  manager_comment:string|null;
 };
 
 type PayrollBatch={
@@ -105,6 +109,16 @@ function rubToMinor(value:string){
 
 function percentLabel(value:number){
   return (value/100).toLocaleString("ru-RU")+"%";
+}
+
+function reviewLabel(value:Statement["review_status"]){
+  return ({
+    PENDING:"Ждёт подтверждения",
+    ACKNOWLEDGED:"Согласовано",
+    DISPUTED:"Есть спор",
+    RESOLVED:"Спор решён",
+    WAIVED:"Подтверждение не требуется"
+  } as Record<string,string>)[value]??value;
 }
 
 function componentLabel(component:Component){
@@ -325,6 +339,87 @@ export default function ServiceTeamPage(){
     }catch(cause){
       setError(
         cause instanceof Error?cause.message:"Не удалось сохранить профиль"
+      );
+    }finally{
+      setPending(false);
+    }
+  }
+
+  async function reviewStatement(
+    statement:Statement,
+    status:"ACKNOWLEDGED"|"DISPUTED"
+  ){
+    let comment="";
+    if(status==="DISPUTED"){
+      comment=window.prompt(
+        "Коротко опишите, с чем не согласны в расчёте"
+      )?.trim()??"";
+      if(comment.length<3) return;
+    }else if(!window.confirm(
+      "Подтвердить расчёт "+statement.employee_name+
+      " на сумму "+money(statement.total_minor)+"?"
+    )){
+      return;
+    }
+
+    setPending(true);
+    setError("");
+    try{
+      await apiRequest(
+        "/service/economics/payroll-statements/"+
+        statement.id+"/review",
+        {
+          method:"POST",
+          body:JSON.stringify({status,comment:comment||undefined})
+        }
+      );
+      setNotice(
+        status==="ACKNOWLEDGED"
+          ?"Ведомость подтверждена."
+          :"Спор зафиксирован и будет виден руководителю."
+      );
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error?cause.message:"Не удалось сохранить согласование"
+      );
+    }finally{
+      setPending(false);
+    }
+  }
+
+  async function resolveReview(
+    statement:Statement,
+    status:"RESOLVED"|"WAIVED"
+  ){
+    if(!statement.review_id) return;
+    const comment=window.prompt(
+      status==="RESOLVED"
+        ?"Опишите решение по спору"
+        :"Укажите, почему подтверждение можно пропустить"
+    )?.trim()??"";
+    if(comment.length<3) return;
+
+    setPending(true);
+    setError("");
+    try{
+      await apiRequest(
+        "/service/economics/payroll-reviews/"+
+        statement.review_id+"/resolve",
+        {
+          method:"POST",
+          body:JSON.stringify({status,comment})
+        }
+      );
+      setNotice(
+        status==="RESOLVED"
+          ?"Спор по ведомости закрыт."
+          :"Ведомость отмечена как управленческое исключение."
+      );
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error?cause.message:"Не удалось закрыть согласование"
       );
     }finally{
       setPending(false);
@@ -569,6 +664,43 @@ export default function ServiceTeamPage(){
             </div>
           </div>
 
+          <div className="studio-score-grid compact">
+            <article>
+              <span>Сумма месяца</span>
+              <strong>{money(
+                statements.reduce(
+                  (sum,item)=>sum+Number(item.total_minor||0),0
+                )
+              )}</strong>
+              <p>{statements.length} ведомостей сформировано.</p>
+            </article>
+            <article>
+              <span>Согласовано</span>
+              <strong>{
+                statements.filter(item=>
+                  ["ACKNOWLEDGED","RESOLVED","WAIVED"].includes(
+                    item.review_status
+                  )
+                ).length
+              }</strong>
+              <p>Готовы к выплатному контуру.</p>
+            </article>
+            <article>
+              <span>Ожидают</span>
+              <strong>{
+                statements.filter(item=>item.review_status==="PENDING").length
+              }</strong>
+              <p>Сотрудник ещё не подтвердил расчёт.</p>
+            </article>
+            <article>
+              <span>Споры</span>
+              <strong>{
+                statements.filter(item=>item.review_status==="DISPUTED").length
+              }</strong>
+              <p>Экспорт заблокирован до решения.</p>
+            </article>
+          </div>
+
           <div className="data-table-wrap">
             <table className="data-table">
               <thead>
@@ -580,6 +712,8 @@ export default function ServiceTeamPage(){
                   <th>Гарантия</th>
                   <th>Итого</th>
                   <th>Статус</th>
+                  <th>Согласование</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -592,11 +726,69 @@ export default function ServiceTeamPage(){
                     <td>{money(item.guarantee_adjustment_minor)}</td>
                     <td><strong>{money(item.total_minor)}</strong></td>
                     <td><span className="status-pill">{item.status}</span></td>
+                    <td>
+                      <span
+                        className={
+                          "status-pill "+
+                          (item.review_status==="DISPUTED"?"danger":"")
+                        }
+                      >
+                        {reviewLabel(item.review_status)}
+                      </span>
+                      {item.employee_comment?(
+                        <small className="table-subtext">
+                          {item.employee_comment}
+                        </small>
+                      ):null}
+                      {item.manager_comment?(
+                        <small className="table-subtext">
+                          Решение: {item.manager_comment}
+                        </small>
+                      ):null}
+                    </td>
+                    <td>
+                      <div className="table-actions">
+                        {item.status==="FINALIZED"&&
+                         item.review_status==="PENDING"?(
+                          <>
+                            <button
+                              className="secondary-button"
+                              disabled={pending}
+                              type="button"
+                              onClick={()=>void reviewStatement(
+                                item,"ACKNOWLEDGED"
+                              )}
+                            >
+                              Согласовать
+                            </button>
+                            <button
+                              className="ghost-button"
+                              disabled={pending}
+                              type="button"
+                              onClick={()=>void reviewStatement(
+                                item,"DISPUTED"
+                              )}
+                            >
+                              Есть вопрос
+                            </button>
+                          </>
+                        ):null}
+                        {item.review_status==="DISPUTED"?(
+                          <button
+                            disabled={pending}
+                            type="button"
+                            onClick={()=>void resolveReview(item,"RESOLVED")}
+                          >
+                            Закрыть спор
+                          </button>
+                        ):null}
+                      </div>
+                    </td>
                   </tr>
                 ))}
                 {!statements.length?(
                   <tr>
-                    <td colSpan={7}>
+                    <td colSpan={9}>
                       <div className="table-empty">
                         <strong>Месяц ещё не закрыт</strong>
                         <span>
