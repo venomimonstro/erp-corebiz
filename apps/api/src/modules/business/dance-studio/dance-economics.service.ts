@@ -1382,8 +1382,20 @@ export class DanceEconomicsService {
            s.id,s.trainer_resource_id,r.name AS trainer_name,
            s.period_from,s.period_to,s.lesson_accrual_minor::text,
            s.base_minor::text,s.guarantee_adjustment_minor::text,
-           s.total_minor::text,s.currency,s.status,s.payroll_batch_id,
-           s.calculation_snapshot,s.finalized_at,s.exported_at
+           s.adjustment_minor::text,s.total_minor::text,s.currency,
+           s.status,s.payroll_batch_id,s.calculation_snapshot,
+           s.finalized_at,s.exported_at,
+           coalesce((
+             SELECT json_agg(json_build_object(
+               'id',a.id,
+               'adjustmentType',a.adjustment_type,
+               'amountMinor',a.amount_minor::text,
+               'reason',a.reason,
+               'createdAt',a.created_at
+             ) ORDER BY a.created_at,a.id)
+             FROM trainer_payroll_adjustment a
+             WHERE a.tenant_id=s.tenant_id AND a.statement_id=s.id
+           ),'[]'::json) AS adjustments
          FROM trainer_payroll_statement s
          JOIN service_resource r
            ON r.tenant_id=s.tenant_id AND r.id=s.trainer_resource_id
@@ -1397,6 +1409,81 @@ export class DanceEconomicsService {
         [context.tenantId,periodFrom,periodTo,scopeIds]
       );
       return result.rows;
+    });
+  }
+
+  async addPayrollAdjustment(
+    context:TenantContext,
+    statementId:string,
+    input:{
+      type:"BONUS"|"DEDUCTION"|"CORRECTION"|"OTHER";
+      amountMinor:string;
+      reason:string;
+    }
+  ){
+    await this.requireAll(context,"dance.write");
+    if(!/^-?\d+$/.test(input.amountMinor)||BigInt(input.amountMinor)===0n){
+      throw new BadRequestException("Некорректная сумма корректировки");
+    }
+    const reason=input.reason?.trim();
+    if(!reason||reason.length<3||reason.length>500){
+      throw new BadRequestException("Укажите причину корректировки");
+    }
+    if(!["BONUS","DEDUCTION","CORRECTION","OTHER"].includes(input.type)){
+      throw new BadRequestException("Некорректный тип корректировки");
+    }
+
+    const raw=BigInt(input.amountMinor);
+    const signed=
+      input.type==="DEDUCTION"
+        ?-(raw<0n?-raw:raw)
+        :raw;
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const statement=await client.query<{
+        id:string;
+        status:string;
+        total_minor:string;
+      }>(
+        `SELECT id,status,total_minor::text
+         FROM trainer_payroll_statement
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,statementId]
+      );
+      const row=statement.rows[0];
+      if(!row) throw new NotFoundException("Ведомость не найдена");
+      if(row.status!=="FINALIZED"){
+        throw new ConflictException(
+          "Корректировать можно только финализированную, но ещё не экспортированную ведомость"
+        );
+      }
+      if(BigInt(row.total_minor)+signed<0n){
+        throw new ConflictException("Корректировка делает зарплату отрицательной");
+      }
+
+      const result=await client.query(
+        `INSERT INTO trainer_payroll_adjustment(
+           tenant_id,statement_id,adjustment_type,amount_minor,reason,
+           created_by_membership_id
+         ) VALUES($1,$2,$3,$4,$5,$6)
+         RETURNING
+           id,statement_id,adjustment_type,amount_minor::text,reason,created_at`,
+        [
+          context.tenantId,statementId,input.type,signed.toString(),reason,
+          context.membershipId
+        ]
+      );
+
+      await this.audit(
+        client,context,"dance.payroll_adjustment_added",
+        "trainer_payroll_statement",statementId,{
+          type:input.type,
+          amountMinor:signed.toString(),
+          reason
+        }
+      );
+      return result.rows[0];
     });
   }
 
