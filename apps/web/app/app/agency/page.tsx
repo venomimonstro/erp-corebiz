@@ -130,7 +130,7 @@ export default function AgencyPage(){
     setBillRows(await apiRequest<StatementRow[]>("/projects/"+id+"/statements"));
   },[]);
   useEffect(()=>{
-    setBillPreview(null);setBillError("");setBillNotice("");
+    setBillPreview(null);setBillError("");setBillNotice("");setBillOverride("");setBillReason("");
     void refreshStatements(billProject).catch(e=>
       setBillError(e instanceof Error?e.message:"Не удалось загрузить периоды")
     );
@@ -310,7 +310,7 @@ export default function AgencyPage(){
               {rows.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
             <input aria-label="Отчётный месяц" type="month" max={lastPeriod()} value={billPeriod}
-              onChange={e=>{setBillPeriod(e.target.value);setBillPreview(null);setBillNotice("");}}/>
+              onChange={e=>{setBillPeriod(e.target.value);setBillPreview(null);setBillNotice("");setBillOverride("");setBillReason("");}}/>
             <button disabled={billBusy||!billProject} onClick={()=>void showPreview()}>Рассчитать период</button>
           </div>
           {billError?<p role="alert" className="studio-message error">{billError}</p>:null}
