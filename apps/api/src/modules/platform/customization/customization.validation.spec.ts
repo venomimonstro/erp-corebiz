@@ -31,6 +31,17 @@ describe("CustomizationService validation boundaries", () => {
     };
   }
 
+  it("rejects malformed industry and generic-profile values without database writes", async () => {
+    const test=subject();
+    await expect(test.service.applyBusinessVertical(context, null as any))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(test.service.applyBusinessVertical(context, ["DANCE_FITNESS"] as any))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(test.service.applyBusinessProfile(context, {} as any))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(test.database.withTenantTransaction).not.toHaveBeenCalled();
+  });
+
   it("rejects unknown capability keys before touching the database", async () => {
     const test = subject();
 
