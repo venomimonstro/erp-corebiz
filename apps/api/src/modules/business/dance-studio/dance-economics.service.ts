@@ -1480,7 +1480,7 @@ export class DanceEconomicsService {
            s.base_minor::text,s.guarantee_adjustment_minor::text,
            s.adjustment_minor::text,s.total_minor::text,s.currency,
            s.status,s.payroll_batch_id,s.calculation_snapshot,
-           s.finalized_at,s.exported_at
+           s.finalized_at,s.exported_at,r.membership_id
          FROM trainer_payroll_statement s
          JOIN service_resource r
            ON r.tenant_id=s.tenant_id AND r.id=s.trainer_resource_id
@@ -1540,10 +1540,30 @@ export class DanceEconomicsService {
         [context.tenantId,statementId]
       );
 
+      let payrollSources:Array<Record<string,unknown>>=[];
+      if(row.payroll_batch_id&&row.membership_id){
+        const sources=await client.query(
+          `SELECT
+             id,source_type,source_key,gross_minor::text,
+             deduction_minor::text,metadata
+           FROM payroll_accrual_component
+           WHERE tenant_id=$1
+             AND batch_id=$2
+             AND employee_ref=$3
+           ORDER BY source_type,source_key`,
+          [
+            context.tenantId,row.payroll_batch_id,
+            String(row.membership_id)
+          ]
+        );
+        payrollSources=sources.rows;
+      }
+
       return {
         statement:row,
         lessons:lessons.rows,
-        adjustments:adjustments.rows
+        adjustments:adjustments.rows,
+        payrollSources
       };
     });
   }
