@@ -453,7 +453,7 @@ export class DanceStudioController {
   }
 
   @Post("payroll-profiles")
-  @RequirePermission("dance.write")
+  @RequirePermission("finance.write")
   async upsertPayrollProfile(
     @Req() req:AuthenticatedRequest,
     @Body() body:any
@@ -476,7 +476,7 @@ export class DanceStudioController {
   }
 
   @Post("compensation-plans/:planId/archive")
-  @RequirePermission("dance.write")
+  @RequirePermission("finance.write")
   async archiveCompensationPlan(
     @Req() req:AuthenticatedRequest,
     @Param("planId") planId:string
@@ -490,7 +490,7 @@ export class DanceStudioController {
   }
 
   @Post("compensation-plans")
-  @RequirePermission("dance.write")
+  @RequirePermission("finance.write")
   async createCompensationPlan(
     @Req() req:AuthenticatedRequest,
     @Body() body:any
@@ -639,7 +639,7 @@ export class DanceStudioController {
   }
 
   @Post("room-statements/finalize")
-  @RequirePermission("dance.write")
+  @RequirePermission("finance.write")
   async finalizeRoomStatements(
     @Req() req:AuthenticatedRequest,
     @Body() body:{month:string}
@@ -664,7 +664,7 @@ export class DanceStudioController {
   }
 
   @Post("room-contracts")
-  @RequirePermission("dance.write")
+  @RequirePermission("finance.write")
   async createRoomContract(
     @Req() req:AuthenticatedRequest,
     @Body() body:any
