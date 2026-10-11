@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
+import { StudioModal } from "../../../../components/studio-modal";
 import { apiRequest } from "../../../../lib/api";
 
 type Customer = {
@@ -59,6 +60,8 @@ export default function ServiceAssetsPage() {
   const [usageValue, setUsageValue] = useState("0");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [usageAsset,setUsageAsset]=useState<Asset|null>(null);
+  const [usageDraft,setUsageDraft]=useState("");
 
   const load = useCallback(async () => {
     setError("");
@@ -118,29 +121,38 @@ export default function ServiceAssetsPage() {
     }
   }
 
-  async function updateUsage(asset: Asset) {
-    const raw = window.prompt(
-      asset.usage_unit === "KM" ? "Текущий пробег, км" : "Текущая наработка",
-      asset.usage_value
-    );
-    if (raw === null) return;
-    const value = raw.trim();
-    if (!/^\d+$/.test(value)) {
+  function openUsage(asset:Asset){
+    setUsageAsset(asset);
+    setUsageDraft(asset.usage_value);
+  }
+
+  async function updateUsage(){
+    if(!usageAsset) return;
+    const value=usageDraft.trim();
+    if(!/^\d+$/.test(value)){
       setError("Введите целое неотрицательное значение");
       return;
     }
-
-    try {
-      await apiRequest("/service/assets/" + asset.id + "/usage", {
-        method: "PATCH",
-        body: JSON.stringify({
-          usageValue: value,
-          usageUnit: asset.usage_unit
+    setPending(true);
+    setError("");
+    try{
+      await apiRequest("/service/assets/"+usageAsset.id+"/usage",{
+        method:"PATCH",
+        body:JSON.stringify({
+          usageValue:value,
+          usageUnit:usageAsset.usage_unit
         })
       });
+      setUsageAsset(null);
       await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось обновить пробег/наработку");
+    }catch(cause){
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось обновить пробег / наработку"
+      );
+    }finally{
+      setPending(false);
     }
   }
 
@@ -282,8 +294,8 @@ export default function ServiceAssetsPage() {
                         : "Ещё не обслуживался"}
                     </td>
                     <td className="table-actions">
-                      <button className="secondary-button" onClick={() => void updateUsage(asset)} type="button">
-                        Пробег
+                      <button className="secondary-button" onClick={() => openUsage(asset)} type="button">
+                        {asset.usage_unit==="KM"?"Пробег":"Наработка"}
                       </button>
                       <button onClick={() => void openHistory(asset)} type="button">
                         История
@@ -305,6 +317,49 @@ export default function ServiceAssetsPage() {
             </table>
           </div>
         </section>
+
+        {usageAsset?(
+          <StudioModal
+            eyebrow="Показатель объекта"
+            title={usageAsset.display_name}
+            description={
+              usageAsset.usage_unit==="KM"
+                ?"Обновите текущий пробег. История обслуживания останется в карточке объекта."
+                :"Обновите текущую наработку объекта."
+            }
+            onClose={()=>setUsageAsset(null)}
+          >
+            <div className="studio-modal-form">
+              <label>
+                <span>
+                  {usageAsset.usage_unit==="KM"?"Пробег, км":"Текущая наработка"}
+                </span>
+                <input
+                  autoFocus
+                  inputMode="numeric"
+                  value={usageDraft}
+                  onChange={event=>setUsageDraft(event.target.value)}
+                />
+              </label>
+              <div className="studio-drawer-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={()=>setUsageAsset(null)}
+                >
+                  Отмена
+                </button>
+                <button
+                  disabled={pending}
+                  type="button"
+                  onClick={()=>void updateUsage()}
+                >
+                  {pending?"Сохраняем…":"Сохранить"}
+                </button>
+              </div>
+            </div>
+          </StudioModal>
+        ):null}
 
         {history ? (
           <section className="section-block">
