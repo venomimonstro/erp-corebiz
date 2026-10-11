@@ -1719,12 +1719,18 @@ export class BookingService {
     context: TenantContext,
     input: {
       serviceId: string;
-      resourceIds: string[];
+      resourceIds?: string[];
+      resources?: Array<{
+        resourceId: string;
+        capacityUnits?: number;
+        zoneId?: string;
+      }>;
       startsAt: string;
       partyId?: string;
       assetId?: string;
       packageId?: string;
       branchId?: string;
+      deliveryFormat?: "INDIVIDUAL" | "GROUP" | "SELF_PRACTICE" | "RENTAL";
       notes?: string;
       source?: "MANUAL" | "PUBLIC_SITE" | "PHONE" | "API" | "IMPORT";
       idempotencyKey?: string;
@@ -1735,11 +1741,38 @@ export class BookingService {
       throw new BadRequestException("Некорректное время записи");
     }
 
-    const resourceIds = Array.from(new Set(input.resourceIds ?? [])).sort();
-    if (!resourceIds.length || resourceIds.length > 10) {
+    const rawAllocations =
+      Array.isArray(input.resources) && input.resources.length
+        ? input.resources.map((item) => ({
+            resourceId: String(item.resourceId ?? "").trim(),
+            capacityUnits: Math.floor(item.capacityUnits ?? 1),
+            zoneId: item.zoneId?.trim() || null
+          }))
+        : (input.resourceIds ?? []).map((resourceId) => ({
+            resourceId: String(resourceId).trim(),
+            capacityUnits: 1,
+            zoneId: null as string | null
+          }));
+
+    if (!rawAllocations.length || rawAllocations.length > 10) {
       throw new BadRequestException("Выберите от 1 до 10 ресурсов");
     }
 
+    const seen = new Set<string>();
+    for (const allocation of rawAllocations) {
+      if (!allocation.resourceId || seen.has(allocation.resourceId)) {
+        throw new BadRequestException("Ресурс в записи должен быть уникальным");
+      }
+      seen.add(allocation.resourceId);
+      if (
+        !Number.isSafeInteger(allocation.capacityUnits) ||
+        allocation.capacityUnits < 1 ||
+        allocation.capacityUnits > 100000
+      ) {
+        throw new BadRequestException("Некорректная доля ресурса");
+      }
+    }
+    const resourceIds = [...seen].sort();
     const scopedMembershipIds = await this.serviceScope(context, "service.write");
 
     return this.database.withTenantTransaction(context, async (client) => {
@@ -1749,12 +1782,11 @@ export class BookingService {
           business_number: string;
           version: number;
         }>(
-          `SELECT id, business_number, version
+          `SELECT id,business_number,version
            FROM service_booking
-           WHERE tenant_id = $1 AND idempotency_key = $2`,
-          [context.tenantId, input.idempotencyKey]
+           WHERE tenant_id=$1 AND idempotency_key=$2`,
+          [context.tenantId, input.idempotencyKey.trim()]
         );
-
         if (existing.rows[0]) {
           await this.assertBookingAccess(
             client,
@@ -1770,26 +1802,137 @@ export class BookingService {
         }
       }
 
-      const service = await this.getService(client, context.tenantId, input.serviceId);
-      const endsAt = new Date(
-        startsAt.getTime() + service.duration_minutes * 60000
+      const service = await this.getService(
+        client,
+        context.tenantId,
+        input.serviceId
       );
+      const resources = await this.lockResources(
+        client,
+        context.tenantId,
+        resourceIds
+      );
+      this.assertResourceScope(resources, scopedMembershipIds);
+      await this.assertRequirements(
+        client,
+        context.tenantId,
+        input.serviceId,
+        resources
+      );
+
+      const employees = resources.filter((resource) => resource.type === "EMPLOYEE");
+      if (employees.length > 1) {
+        throw new BadRequestException(
+          "Для одной записи можно выбрать только одного основного сотрудника"
+        );
+      }
+      const employee = employees[0] ?? null;
+      const deliveryFormat = input.deliveryFormat ?? service.delivery_format;
+      if (
+        !["INDIVIDUAL","GROUP","SELF_PRACTICE","RENTAL"].includes(deliveryFormat)
+      ) {
+        throw new BadRequestException("Некорректный формат услуги");
+      }
+      if (
+        deliveryFormat !== "SELF_PRACTICE" &&
+        deliveryFormat !== "RENTAL" &&
+        !employee
+      ) {
+        throw new BadRequestException("Для услуги необходимо выбрать сотрудника");
+      }
+
+      const localTimezone =
+        employee?.timezone ??
+        resources.find((resource) =>
+          ["ROOM","HALL","WORKPLACE"].includes(resource.type)
+        )?.timezone ??
+        "Europe/Moscow";
+
+      const rule = await this.resolveDeliveryRule(
+        client,
+        context.tenantId,
+        input.serviceId,
+        employee?.id ?? null,
+        input.branchId ?? null,
+        deliveryFormat,
+        startsAt,
+        localTimezone
+      );
+
+      const duration = rule?.duration_minutes ?? service.duration_minutes;
+      const priceMinor = rule?.price_minor ?? service.price_minor;
+      const endsAt = new Date(startsAt.getTime() + duration * 60000);
+
+      const allocations = rawAllocations.map((allocation) => {
+        const resource = resources.find(
+          (candidate) => candidate.id === allocation.resourceId
+        )!;
+        return {
+          ...allocation,
+          capacityUnits:
+            resource.type === "EMPLOYEE"
+              ? 1
+              : allocation.capacityUnits > 1
+                ? allocation.capacityUnits
+                : (rule?.capacity_units ?? allocation.capacityUnits)
+        };
+      });
+
+      for (const allocation of allocations) {
+        const resource = resources.find(
+          (candidate) => candidate.id === allocation.resourceId
+        )!;
+        if (allocation.capacityUnits > resource.capacity) {
+          throw new ConflictException(
+            "Запрошенная доля превышает вместимость ресурса: " + resource.name
+          );
+        }
+        if (allocation.zoneId) {
+          const zone = await client.query<{capacity_units:number}>(
+            `SELECT capacity_units
+             FROM service_resource_zone
+             WHERE tenant_id=$1 AND id=$2 AND resource_id=$3 AND status='ACTIVE'`,
+            [context.tenantId, allocation.zoneId, allocation.resourceId]
+          );
+          if (!zone.rows[0]) {
+            throw new NotFoundException("Зона ресурса не найдена");
+          }
+          if (allocation.capacityUnits > zone.rows[0].capacity_units) {
+            throw new ConflictException("Запрошенная доля превышает вместимость зоны");
+          }
+        }
+
+        const available = await this.resourceAvailable(
+          client,
+          context.tenantId,
+          allocation.resourceId,
+          startsAt,
+          endsAt,
+          service.buffer_before_minutes,
+          service.buffer_after_minutes,
+          allocation.capacityUnits,
+          undefined,
+          allocation.zoneId
+        );
+        if (!available) {
+          throw new ConflictException(
+            "Ресурс недоступен или его свободной вместимости недостаточно: " +
+              resource.name
+          );
+        }
+      }
 
       let effectivePartyId = input.partyId ?? null;
       if (input.assetId) {
-        const asset = await client.query<{
-          party_id: string | null;
-        }>(
+        const asset = await client.query<{party_id:string|null}>(
           `SELECT party_id
            FROM service_asset
            WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
            FOR SHARE`,
           [context.tenantId, input.assetId]
         );
-        const assetRow = asset.rows[0];
-        if (!assetRow) {
-          throw new NotFoundException("Объект обслуживания не найден");
-        }
+        const assetRow=asset.rows[0];
+        if (!assetRow) throw new NotFoundException("Объект обслуживания не найден");
         if (
           effectivePartyId &&
           assetRow.party_id &&
@@ -1799,184 +1942,145 @@ export class BookingService {
             "Объект обслуживания принадлежит другому клиенту"
           );
         }
-        effectivePartyId = effectivePartyId ?? assetRow.party_id;
+        effectivePartyId=effectivePartyId ?? assetRow.party_id;
       }
 
       if (input.packageId) {
-        const packageOwner = await client.query<{
-          party_id: string;
-        }>(
+        const packageOwner=await client.query<{party_id:string}>(
           `SELECT party_id
            FROM service_package
            WHERE tenant_id=$1 AND id=$2
              AND status='ACTIVE'
              AND starts_at<=now()
              AND expires_at>now()`,
-          [context.tenantId, input.packageId]
+          [context.tenantId,input.packageId]
         );
-        const packageRow = packageOwner.rows[0];
-        if (!packageRow) {
-          throw new NotFoundException("Активный абонемент не найден");
-        }
+        const packageRow=packageOwner.rows[0];
+        if (!packageRow) throw new NotFoundException("Активный абонемент не найден");
         if (effectivePartyId && effectivePartyId !== packageRow.party_id) {
-          throw new ConflictException(
-            "Абонемент принадлежит другому клиенту"
+          const beneficiary=await client.query(
+            `SELECT 1 FROM service_package_beneficiary
+             WHERE tenant_id=$1 AND package_id=$2 AND party_id=$3
+               AND status='ACTIVE'`,
+            [context.tenantId,input.packageId,effectivePartyId]
           );
+          if (!beneficiary.rowCount) {
+            throw new ConflictException("Абонемент не действует для выбранного клиента");
+          }
         }
-        effectivePartyId = effectivePartyId ?? packageRow.party_id;
+        effectivePartyId=effectivePartyId ?? packageRow.party_id;
       }
 
       if (effectivePartyId) {
-        const party = await client.query(
+        const party=await client.query(
           `SELECT 1 FROM party
-           WHERE tenant_id = $1 AND id = $2 AND status = 'ACTIVE'`,
-          [context.tenantId, effectivePartyId]
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,effectivePartyId]
         );
         if (!party.rowCount) throw new NotFoundException("Клиент не найден");
       }
 
-      const resources = await this.lockResources(
-        client,
-        context.tenantId,
-        resourceIds
+      const number=await this.nextNumber(
+        client,context.tenantId,"service_booking","BOOK"
       );
-      this.assertResourceScope(resources, scopedMembershipIds);
-
-      await this.assertRequirements(
-        client,
-        context.tenantId,
-        input.serviceId,
-        resources
-      );
-
-      for (const resource of resources) {
-        const available = await this.resourceAvailable(
-          client,
-          context.tenantId,
-          resource.id,
-          startsAt,
-          endsAt,
-          service.buffer_before_minutes,
-          service.buffer_after_minutes,
-          1
-        );
-
-        if (!available) {
-          throw new ConflictException(
-            "Ресурс недоступен в выбранное время: " + resource.name
-          );
-        }
-      }
-
-      const number = await this.nextNumber(
-        client,
-        context.tenantId,
-        "service_booking",
-        "BOOK"
-      );
-
-      const result = await client.query<{
-        id: string;
-        business_number: string;
-        version: number;
+      const result=await client.query<{
+        id:string;
+        business_number:string;
+        version:number;
       }>(
         `INSERT INTO service_booking(
-           tenant_id, business_number, party_id, asset_id, service_id, branch_id,
-           status, source, starts_at, ends_at,
-           price_minor_snapshot, currency,
-           duration_minutes_snapshot,
-           buffer_before_minutes_snapshot,
-           buffer_after_minutes_snapshot,
-           notes, idempotency_key, created_by_membership_id
-         ) VALUES (
-           $1,$2,$3,$4,$5,$6,'CONFIRMED',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
+           tenant_id,business_number,party_id,asset_id,service_id,branch_id,
+           status,source,starts_at,ends_at,price_minor_snapshot,currency,
+           duration_minutes_snapshot,buffer_before_minutes_snapshot,
+           buffer_after_minutes_snapshot,notes,idempotency_key,
+           created_by_membership_id,delivery_rule_id,technology_card_id,
+           delivery_format_snapshot
+         ) VALUES(
+           $1,$2,$3,$4,$5,$6,'CONFIRMED',$7,$8,$9,$10,$11,$12,$13,$14,
+           $15,$16,$17,$18,$19,$20
          )
-         RETURNING id, business_number, version`,
+         RETURNING id,business_number,version`,
         [
-          context.tenantId,
-          number,
-          effectivePartyId,
-          input.assetId ?? null,
-          input.serviceId,
-          input.branchId ?? null,
-          input.source ?? "MANUAL",
-          startsAt,
-          endsAt,
-          service.price_minor,
-          service.currency,
-          service.duration_minutes,
-          service.buffer_before_minutes,
-          service.buffer_after_minutes,
-          input.notes?.trim() || null,
-          input.idempotencyKey?.trim() || null,
-          context.membershipId
+          context.tenantId,number,effectivePartyId,input.assetId ?? null,
+          input.serviceId,input.branchId ?? null,input.source ?? "MANUAL",
+          startsAt,endsAt,priceMinor,service.currency,duration,
+          service.buffer_before_minutes,service.buffer_after_minutes,
+          input.notes?.trim() || null,input.idempotencyKey?.trim() || null,
+          context.membershipId,rule?.id ?? null,rule?.technology_card_id ?? null,
+          deliveryFormat
         ]
       );
-
-      const booking = result.rows[0];
+      const booking=result.rows[0];
       if (!booking) throw new Error("SERVICE_BOOKING_CREATE_FAILED");
 
       if (input.packageId) {
         await this.reservePackageForBooking(
-          client,
-          context.tenantId,
-          input.packageId,
-          booking.id,
-          effectivePartyId,
-          input.serviceId,
-          startsAt
+          client,context.tenantId,input.packageId,booking.id,effectivePartyId,
+          input.serviceId,startsAt,employee?.id ?? null,localTimezone
         );
       }
 
-      for (const resource of resources) {
+      for (const allocation of allocations) {
+        const resource=resources.find(
+          (candidate) => candidate.id === allocation.resourceId
+        )!;
         await client.query(
           `INSERT INTO service_booking_resource(
-             tenant_id, booking_id, resource_id, capacity_units,
+             tenant_id,booking_id,resource_id,capacity_units,zone_id,
              cost_per_hour_minor_snapshot
-           ) VALUES ($1,$2,$3,1,$4)`,
+           ) VALUES($1,$2,$3,$4,$5,$6)`,
           [
-            context.tenantId,
-            booking.id,
-            resource.id,
+            context.tenantId,booking.id,allocation.resourceId,
+            allocation.capacityUnits,allocation.zoneId,
             resource.cost_per_hour_minor
           ]
         );
       }
 
-      await this.attribution.recordConversion(client, context, {
-        partyId: effectivePartyId,
-        sourceType: "SERVICE_BOOKING",
-        sourceId: booking.id,
-        conversionType: "BOOKING",
-        revenueMinor: 0n,
-        currency: service.currency,
-        metadata: {
-          serviceId: input.serviceId,
-          startsAt: startsAt.toISOString()
+      if (rule?.technology_card_id) {
+        await this.seedTechnologyCardMaterials(
+          client,context.tenantId,booking.id,rule.technology_card_id
+        );
+      }
+
+      await this.attribution.recordConversion(client,context,{
+        partyId:effectivePartyId,
+        sourceType:"SERVICE_BOOKING",
+        sourceId:booking.id,
+        conversionType:"BOOKING",
+        revenueMinor:0n,
+        currency:service.currency,
+        metadata:{
+          serviceId:input.serviceId,
+          startsAt:startsAt.toISOString(),
+          deliveryRuleId:rule?.id ?? null,
+          deliveryFormat
         }
       });
 
-      await this.events.enqueue(client, context, {
-        eventName: "service.booking_created",
-        entityType: "SERVICE_BOOKING",
-        entityId: booking.id,
-        payload: {
-          bookingId: booking.id,
+      await this.events.enqueue(client,context,{
+        eventName:"service.booking_created",
+        entityType:"SERVICE_BOOKING",
+        entityId:booking.id,
+        payload:{
+          bookingId:booking.id,
           number,
-          serviceId: input.serviceId,
-          startsAt: startsAt.toISOString(),
-          endsAt: endsAt.toISOString(),
-          partyId: effectivePartyId,
-          assetId: input.assetId ?? null,
-          packageId: input.packageId ?? null,
-          resourceIds
+          serviceId:input.serviceId,
+          startsAt:startsAt.toISOString(),
+          endsAt:endsAt.toISOString(),
+          partyId:effectivePartyId,
+          assetId:input.assetId ?? null,
+          packageId:input.packageId ?? null,
+          deliveryRuleId:rule?.id ?? null,
+          deliveryFormat,
+          resources:allocations
         }
       });
 
       return {
-        id: booking.id,
-        number: booking.business_number,
-        version: booking.version
+        id:booking.id,
+        number:booking.business_number,
+        version:booking.version
       };
     });
   }
