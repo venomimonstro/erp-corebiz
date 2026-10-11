@@ -205,7 +205,12 @@ export const VERTICAL_OPERATIONAL_RULES:readonly VerticalOperationalRule[]=[
     explanation:"По подтверждённому заказу не хватает товаров: срок обещанной поставки прошёл или срок не указан более двух дней",
     permission:"oms.read",
     sql:`SELECT b.id FROM oms_backorder_line b
+      JOIN oms_order o ON o.tenant_id=b.tenant_id AND o.id=b.oms_order_id
+      JOIN sales_order so ON so.tenant_id=o.tenant_id AND so.id=o.sales_order_id
       WHERE b.tenant_id=$1 AND b.status IN ('OPEN','PARTIALLY_ALLOCATED')
+        AND o.state NOT IN ('SHIPPED','CANCELLED')
+        AND so.order_status='CONFIRMED'
+        AND so.fulfillment_status NOT IN ('SHIPPED','CANCELLED')
         AND (b.expected_at<now() OR
           (b.expected_at IS NULL AND b.created_at<now()-interval '2 days'))
       ORDER BY coalesce(b.expected_at,b.created_at),b.id LIMIT 201`
@@ -228,7 +233,7 @@ export const VERTICAL_OPERATIONAL_RULES:readonly VerticalOperationalRule[]=[
   {
     code:"PAYROLL_REVIEW_DISPUTED",domain:"PAYROLL",
     label:"Неурегулированные споры по зарплате",
-    severity:"CRITICAL",href:"/app/dance/team",
+    severity:"CRITICAL",href:"/app/accounting",
     explanation:"Тренер или сотрудник не согласен с расчётом. Проверьте спор до выплаты зарплаты",
     permission:"finance.read",
     sql:`SELECT id FROM payroll_statement_review
