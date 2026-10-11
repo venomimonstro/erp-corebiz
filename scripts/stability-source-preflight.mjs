@@ -426,6 +426,19 @@ async function inspectRequiredHardening(root) {
   {
     path: "scripts/golden-business-journeys.mjs",
     patterns: [
+      /async function automotiveJourney/,
+      /AUTO_SERVICE/,
+      /automotive\/work-orders/,
+      /automotive\/donors/,
+      /automotive\/fitments/,
+      /compatible-parts/,
+      /inventory\/balances/
+    ],
+    message: "Automotive golden business journey is missing"
+  },
+  {
+    path: "scripts/golden-business-journeys.mjs",
+    patterns: [
       /async function danceStudioJourney/,
       /DANCE_FITNESS/,
       /finance\/allocated-payment/,
