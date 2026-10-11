@@ -559,7 +559,7 @@ async function fetchJson(
   }
 }
 
-function normalizeOzonPosting(posting: any): NormalizedOrder | null {
+export function normalizeOzonPosting(posting: any): NormalizedOrder | null {
   const externalOrderId = firstString(
     posting?.posting_number,
     posting?.order_number,
@@ -781,7 +781,7 @@ async function wbStatuses(
   return result;
 }
 
-function normalizeWbOrder(
+export function normalizeWbOrder(
   order: any,
   status: string | undefined
 ): NormalizedOrder | null {
@@ -822,7 +822,9 @@ function normalizeWbOrder(
         externalOfferId: offer,
         title: firstString(order?.article) ?? offer,
         quantityMilli: "1000",
-        unitPriceMinor: toMinor(unitPrice),
+        // Wildberries API returns prices already multiplied by 100.
+        unitPriceMinor: Number.isFinite(Number(unitPrice)) && Number(unitPrice)>=0
+          ?String(Math.round(Number(unitPrice))):"0",
         discountMinor: "0"
       }
     ]
@@ -936,7 +938,7 @@ async function processWildberries(
 }
 
 
-function normalizeYandexOrder(order:any):NormalizedOrder|null{
+export function normalizeYandexOrder(order:any):NormalizedOrder|null{
   if(order?.fake===true||!["FBS","DBS","EXPRESS"].includes(String(order?.programType??"")))return null;
   const externalOrderId=firstString(order?.orderId);
   if(!externalOrderId)return null;
@@ -951,7 +953,11 @@ function normalizeYandexOrder(order:any):NormalizedOrder|null{
       externalLineId:firstString(item?.id)??String(index),
       externalOfferId:offerId,title:firstString(item?.offerName),
       quantityMilli:String(count*1000),
-      unitPriceMinor:toMinor(rawPrice),
+      // Yandex Market's payment.value is for the whole quantity in this line.
+      unitPriceMinor:(()=>{
+        const lineMinor=BigInt(toMinor(rawPrice));
+        return ((lineMinor+BigInt(Math.floor(count/2)))/BigInt(count)).toString();
+      })(),
       discountMinor:"0"
     });
   }
