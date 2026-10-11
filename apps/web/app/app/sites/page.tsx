@@ -727,6 +727,9 @@ export default function SitesPage() {
           </div>
 
           <div className="header-actions">
+            <a className="secondary-button" href="/app/sites/payments">
+              Оплата и доставка
+            </a>
             <button className="secondary-button" onClick={() => void createSite("WEBSITE")}>
               + Сайт
             </button>
