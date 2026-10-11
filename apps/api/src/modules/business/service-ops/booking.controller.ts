@@ -35,6 +35,20 @@ export class BookingController {
     };
   }
 
+  @Post("technology-cards/:cardId/archive")
+  @RequirePermission("service.write")
+  async archiveTechnologyCard(
+    @Req() request:AuthenticatedRequest,
+    @Param("cardId") cardId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.booking.archiveTechnologyCard(
+        this.context(request),cardId
+      )
+    };
+  }
+
   @Post("catalog/:id/requirements")
   @RequirePermission("service.write")
   async addRequirement(
@@ -67,6 +81,20 @@ export class BookingController {
     return {
       ok:true,
       data:await this.booking.createDeliveryRule(this.context(request),body)
+    };
+  }
+
+  @Post("delivery-rules/:ruleId/archive")
+  @RequirePermission("service.write")
+  async archiveDeliveryRule(
+    @Req() request:AuthenticatedRequest,
+    @Param("ruleId") ruleId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.booking.archiveDeliveryRule(
+        this.context(request),ruleId
+      )
     };
   }
 
