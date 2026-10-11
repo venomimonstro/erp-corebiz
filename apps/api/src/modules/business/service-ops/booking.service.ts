@@ -1946,7 +1946,9 @@ export class BookingService {
               ? 1
               : allocation.capacityUnits > 1
                 ? allocation.capacityUnits
-                : (rule?.capacity_units ?? allocation.capacityUnits)
+                : ["ROOM","HALL","WORKPLACE"].includes(resource.type)
+                  ? (rule?.capacity_units ?? allocation.capacityUnits)
+                  : allocation.capacityUnits
         };
       });
 
