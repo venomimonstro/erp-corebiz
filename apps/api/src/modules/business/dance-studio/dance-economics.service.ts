@@ -124,14 +124,41 @@ export class DanceEconomicsService {
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
-           p.id,p.trainer_resource_id,r.name AS trainer_name,p.lesson_type,
+           p.id,p.trainer_resource_id,r.name AS trainer_name,
+           p.service_id,svc.name AS service_name,
+           p.lesson_type,p.dance_program_id,dp.name AS program_name,
+           p.dance_group_id,dg.name AS group_name,
+           p.branch_id,b.name AS branch_name,
            p.calculation_type,p.fixed_minor::text,p.hourly_minor::text,
            p.percent_bps,p.per_attendee_minor::text,p.threshold_count,
            p.threshold_extra_minor::text,p.revenue_basis,p.priority,
-           p.currency,p.valid_from,p.valid_to,p.status,p.metadata
+           p.minimum_guarantee_minor::text,p.guarantee_period,
+           p.currency,p.valid_from,p.valid_to,p.status,p.metadata,
+           coalesce((
+             SELECT json_agg(json_build_object(
+               'id',c.id,
+               'componentType',c.component_type,
+               'amountMinor',c.amount_minor::text,
+               'percentBps',c.percent_bps,
+               'thresholdCount',c.threshold_count,
+               'revenueBasis',c.revenue_basis,
+               'priority',c.priority,
+               'metadata',c.metadata
+             ) ORDER BY c.priority,c.id)
+             FROM trainer_compensation_component c
+             WHERE c.tenant_id=p.tenant_id AND c.plan_id=p.id
+           ),'[]'::json) AS components
          FROM trainer_compensation_plan p
          JOIN service_resource r
            ON r.tenant_id=p.tenant_id AND r.id=p.trainer_resource_id
+         LEFT JOIN service_catalog_item svc
+           ON svc.tenant_id=p.tenant_id AND svc.id=p.service_id
+         LEFT JOIN dance_program dp
+           ON dp.tenant_id=p.tenant_id AND dp.id=p.dance_program_id
+         LEFT JOIN dance_group dg
+           ON dg.tenant_id=p.tenant_id AND dg.id=p.dance_group_id
+         LEFT JOIN branch b
+           ON b.tenant_id=p.tenant_id AND b.id=p.branch_id
          WHERE p.tenant_id=$1 AND p.status='ACTIVE'
          ORDER BY r.name,p.priority,p.valid_from DESC`,
         [context.tenantId]
@@ -144,8 +171,13 @@ export class DanceEconomicsService {
     context:TenantContext,
     input:{
       trainerResourceId:string;
+      serviceId?:string;
       lessonType?:string;
-      calculationType:"FIXED"|"HOURLY"|"PERCENT"|"ATTENDEE"|"TIERED";
+      danceProgramId?:string;
+      danceGroupId?:string;
+      branchId?:string;
+      calculationType:
+        "FIXED"|"HOURLY"|"PERCENT"|"ATTENDEE"|"TIERED"|"COMPOSITE";
       fixedMinor?:string;
       hourlyMinor?:string;
       percentBps?:number;
@@ -153,6 +185,19 @@ export class DanceEconomicsService {
       thresholdCount?:number;
       thresholdExtraMinor?:string;
       revenueBasis?:"LIST"|"BILLED"|"PAID"|"EARNED";
+      minimumGuaranteeMinor?:string;
+      guaranteePeriod?:"DAY"|"MONTH";
+      components?:Array<{
+        componentType:
+          "FIXED_PER_LESSON"|"HOURLY"|"PERCENT"|"PER_ATTENDEE"|
+          "TIER_BONUS"|"DAILY_BASE"|"MONTHLY_BASE";
+        amountMinor?:string;
+        percentBps?:number;
+        thresholdCount?:number;
+        revenueBasis?:"LIST"|"BILLED"|"PAID"|"EARNED";
+        priority?:number;
+        metadata?:Record<string,unknown>;
+      }>;
       priority?:number;
       validFrom?:string;
       validTo?:string;
@@ -164,67 +209,168 @@ export class DanceEconomicsService {
       input.fixedMinor??"0",
       input.hourlyMinor??"0",
       input.perAttendeeMinor??"0",
-      input.thresholdExtraMinor??"0"
+      input.thresholdExtraMinor??"0",
+      input.minimumGuaranteeMinor??"0"
     ];
-    if(money.some(v=>!/^\d+$/.test(v)))
+    if(money.some(value=>!/^\d+$/.test(value))){
       throw new BadRequestException("Некорректная денежная ставка");
+    }
+
     const percent=Math.floor(input.percentBps??0);
-    if(percent<0||percent>10000) throw new BadRequestException("Некорректный процент");
     const priority=Math.floor(input.priority??100);
     const threshold=Math.floor(input.thresholdCount??0);
-    if(priority<1||priority>100000||threshold<0||threshold>10000)
+    if(
+      percent<0||percent>10000||
+      priority<1||priority>100000||
+      threshold<0||threshold>100000
+    ){
       throw new BadRequestException("Некорректные параметры правила");
+    }
     const from=input.validFrom??new Date().toISOString().slice(0,10);
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||
-       (input.validTo&&!/^\d{4}-\d{2}-\d{2}$/.test(input.validTo)))
+    if(
+      !/^\d{4}-\d{2}-\d{2}$/.test(from)||
+      (input.validTo&&!/^\d{4}-\d{2}-\d{2}$/.test(input.validTo))
+    ){
       throw new BadRequestException("Некорректный период правила");
+    }
+    if((input.components?.length??0)>30){
+      throw new BadRequestException("Слишком много компонентов зарплаты");
+    }
+
+    const components=(input.components??[]).map((component,index)=>{
+      const amount=component.amountMinor??"0";
+      const bps=Math.floor(component.percentBps??0);
+      const componentThreshold=Math.floor(component.thresholdCount??0);
+      const componentPriority=Math.floor(component.priority??100+index);
+      if(!/^\d+$/.test(amount)){
+        throw new BadRequestException("Некорректная ставка компонента");
+      }
+      if(
+        bps<0||bps>10000||
+        componentThreshold<0||componentThreshold>100000||
+        componentPriority<1||componentPriority>100000
+      ){
+        throw new BadRequestException("Некорректный компонент зарплаты");
+      }
+      return {
+        ...component,
+        amountMinor:amount,
+        percentBps:bps,
+        thresholdCount:componentThreshold,
+        priority:componentPriority,
+        revenueBasis:component.revenueBasis??"EARNED"
+      };
+    });
+    if(input.calculationType==="COMPOSITE"&&!components.length){
+      throw new BadRequestException(
+        "Для составной зарплаты добавьте хотя бы один компонент"
+      );
+    }
 
     return this.database.withTenantTransaction(context,async client=>{
       const trainer=await client.query(
-        "SELECT 1 FROM service_resource WHERE tenant_id=$1 AND id=$2 AND type='EMPLOYEE' AND status='ACTIVE'",
+        `SELECT 1 FROM service_resource
+         WHERE tenant_id=$1 AND id=$2
+           AND type='EMPLOYEE' AND status='ACTIVE'`,
         [context.tenantId,input.trainerResourceId]
       );
       if(!trainer.rowCount) throw new NotFoundException("Тренер не найден");
 
-      const overlap=await client.query(
-        `SELECT 1
-         FROM trainer_compensation_plan
-         WHERE tenant_id=$1
-           AND trainer_resource_id=$2
-           AND lesson_type IS NOT DISTINCT FROM $3::text
-           AND priority=$4
-           AND status='ACTIVE'
-           AND daterange(valid_from,valid_to,'[]')
-               && daterange($5::date,$6::date,'[]')
-         LIMIT 1`,
-        [
-          context.tenantId,input.trainerResourceId,input.lessonType??null,
-          priority,from,input.validTo??null
-        ]
-      );
-      if(overlap.rowCount){
-        throw new ConflictException(
-          "Для тренера уже есть активное правило с таким типом занятия и приоритетом на этот период"
+      if(input.serviceId){
+        const service=await client.query(
+          `SELECT 1 FROM service_catalog_item
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,input.serviceId]
         );
+        if(!service.rowCount) throw new NotFoundException("Услуга не найдена");
+      }
+      if(input.danceProgramId){
+        const program=await client.query(
+          `SELECT 1 FROM dance_program
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,input.danceProgramId]
+        );
+        if(!program.rowCount) throw new NotFoundException("Направление не найдено");
+      }
+      if(input.danceGroupId){
+        const group=await client.query<{program_id:string}>(
+          `SELECT program_id FROM dance_group
+           WHERE tenant_id=$1 AND id=$2 AND status<>'ARCHIVED'`,
+          [context.tenantId,input.danceGroupId]
+        );
+        if(!group.rows[0]) throw new NotFoundException("Группа не найдена");
+        if(
+          input.danceProgramId &&
+          group.rows[0].program_id!==input.danceProgramId
+        ){
+          throw new ConflictException("Группа относится к другому направлению");
+        }
+      }
+      if(input.branchId){
+        const branch=await client.query(
+          `SELECT 1 FROM branch
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,input.branchId]
+        );
+        if(!branch.rowCount) throw new NotFoundException("Филиал не найден");
       }
 
-      const row=await client.query(
-        `INSERT INTO trainer_compensation_plan(
-           tenant_id,trainer_resource_id,lesson_type,calculation_type,
-           fixed_minor,hourly_minor,percent_bps,per_attendee_minor,
-           threshold_count,threshold_extra_minor,revenue_basis,priority,
-           valid_from,valid_to,metadata
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-         RETURNING id,status`,
-        [
-          context.tenantId,input.trainerResourceId,input.lessonType??null,
-          input.calculationType,input.fixedMinor??"0",input.hourlyMinor??"0",
-          percent,input.perAttendeeMinor??"0",threshold,
-          input.thresholdExtraMinor??"0",input.revenueBasis??"EARNED",
-          priority,from,input.validTo??null,JSON.stringify(input.metadata??{})
-        ]
-      );
-      return row.rows[0];
+      try{
+        const row=await client.query<{id:string;status:string}>(
+          `INSERT INTO trainer_compensation_plan(
+             tenant_id,trainer_resource_id,service_id,lesson_type,
+             dance_program_id,dance_group_id,branch_id,calculation_type,
+             fixed_minor,hourly_minor,percent_bps,per_attendee_minor,
+             threshold_count,threshold_extra_minor,revenue_basis,priority,
+             minimum_guarantee_minor,guarantee_period,
+             valid_from,valid_to,metadata
+           ) VALUES(
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+             $17,$18,$19,$20,$21
+           )
+           RETURNING id,status`,
+          [
+            context.tenantId,input.trainerResourceId,input.serviceId??null,
+            input.lessonType??null,input.danceProgramId??null,
+            input.danceGroupId??null,input.branchId??null,
+            input.calculationType,input.fixedMinor??"0",input.hourlyMinor??"0",
+            percent,input.perAttendeeMinor??"0",threshold,
+            input.thresholdExtraMinor??"0",input.revenueBasis??"EARNED",
+            priority,input.minimumGuaranteeMinor??"0",
+            input.guaranteePeriod??"MONTH",from,input.validTo??null,
+            JSON.stringify(input.metadata??{})
+          ]
+        );
+        const plan=row.rows[0];
+        if(!plan) throw new Error("TRAINER_COMP_PLAN_CREATE_FAILED");
+
+        for(const component of components){
+          await client.query(
+            `INSERT INTO trainer_compensation_component(
+               tenant_id,plan_id,component_type,amount_minor,percent_bps,
+               threshold_count,revenue_basis,priority,metadata
+             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+            [
+              context.tenantId,plan.id,component.componentType,
+              component.amountMinor,component.percentBps,
+              component.thresholdCount,component.revenueBasis,
+              component.priority,JSON.stringify(component.metadata??{})
+            ]
+          );
+        }
+        return plan;
+      }catch(error){
+        const message=error instanceof Error?error.message:String(error);
+        if(
+          message.includes("Trainer compensation rules overlap")||
+          message.includes("trainer_compensation_component")
+        ){
+          throw new ConflictException(
+            "Для тренера уже есть пересекающееся правило зарплаты с таким приоритетом"
+          );
+        }
+        throw error;
+      }
     });
   }
 
