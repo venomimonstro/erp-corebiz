@@ -261,6 +261,8 @@ export class AutomotiveService {
       complaint?:string;
       promisedAt?:string|null;
       mileageOutKm?:number|null;
+      authorizationLimitMinor?:string;
+      authorizationNote?:string;
     }
   ) {
     const requestedStatus=input.status?.trim().toUpperCase()||null;
@@ -291,6 +293,17 @@ export class AutomotiveService {
       );
       const row=current.rows[0];
       if(!row) throw new NotFoundException("Заказ-наряд не найден");
+      if(["DELIVERED","CANCELLED"].includes(row.status))
+        throw new BadRequestException("Закрытый заказ-наряд изменяется только корректирующим документом");
+      if(input.authorizationLimitMinor!==undefined){
+        if(!/^\\d{1,15}$/.test(input.authorizationLimitMinor)||
+           BigInt(input.authorizationLimitMinor)<=0n)
+          throw new BadRequestException("Лимит должен быть положительной суммой в копейках");
+        if(!input.authorizationNote?.trim()||
+           input.authorizationNote.trim().length<10)
+          throw new BadRequestException("Укажите основание согласования суммы с клиентом");
+      }
+
 
       if(
         requestedStatus &&
