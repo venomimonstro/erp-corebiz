@@ -181,6 +181,7 @@ export default function AgencyPage(){
         <div className="agency-hero-actions">
           <a className="secondary-button" href="/app/crm/deals">Воронка продаж</a>
           <a className="secondary-button" href="/app/agency/team">Команда и ставки</a>
+          <a className="secondary-button" href="/app/agency/contracts">Договоры и продления</a>
           <a className="button-link" href="/app/projects?create=1">+ Новый проект</a>
         </div>
       </header>
