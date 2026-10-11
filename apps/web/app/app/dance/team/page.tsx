@@ -1065,6 +1065,61 @@ export default function DanceTeamPage() {
 
         <DanceWorkspaceNav active="team" />
 
+        <section className="payroll-pipeline" aria-label="Статус зарплаты месяца">
+          {[
+            {
+              key:"CALCULATED",
+              title:"1. Месяц рассчитан",
+              hint:"Ведомости тренеров сформированы",
+              done:trainerStatements.some((item)=>
+                ["FINALIZED","EXPORTED","PAID"].includes(item.status)
+              )
+            },
+            {
+              key:"EXPORTED",
+              title:"2. Передано в payroll",
+              hint:"Начисления собраны в общий payroll",
+              done:Boolean(currentPayrollBatch)
+            },
+            {
+              key:"APPROVED",
+              title:"3. Payroll утверждён",
+              hint:"Суммы зафиксированы для выплаты",
+              done:Boolean(
+                currentPayrollBatch &&
+                ["APPROVED","PAID"].includes(currentPayrollBatch.status)
+              )
+            },
+            {
+              key:"PAID",
+              title:"4. Выплачено",
+              hint:currentPayrollBatch?.paid_at
+                ? new Date(currentPayrollBatch.paid_at).toLocaleDateString("ru-RU")
+                : "После фактической выплаты",
+              done:currentPayrollBatch?.status==="PAID"
+            }
+          ].map((step,index)=>(
+            <article
+              key={step.key}
+              className={
+                "payroll-pipeline-step "+
+                (step.done?"done":
+                  index===0||
+                  (index===1&&trainerStatements.length)||
+                  (index===2&&currentPayrollBatch?.status==="DRAFT")||
+                  (index===3&&currentPayrollBatch?.status==="APPROVED")
+                    ?"current":"")
+              }
+            >
+              <span>{step.done?"✓":String(index+1).padStart(2,"0")}</span>
+              <div>
+                <strong>{step.title}</strong>
+                <small>{step.hint}</small>
+              </div>
+            </article>
+          ))}
+        </section>
+
         {error ? <div className="studio-message error"><strong>Тренеры и залы</strong><span>{error}</span></div> : null}
         {notice ? <div className="studio-message success"><strong>Готово</strong><span>{notice}</span></div> : null}
 
