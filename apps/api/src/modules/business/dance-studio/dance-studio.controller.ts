@@ -398,7 +398,7 @@ export class DanceStudioController {
   }
 
   @Get("charges")
-  @RequirePermission("dance.read")
+  @RequirePermission("finance.read")
   async charges(
     @Req() req:AuthenticatedRequest,
     @Query("studentId") studentId?:string
@@ -410,7 +410,7 @@ export class DanceStudioController {
   }
 
   @Post("students/:studentId/charges")
-  @RequirePermission("dance.write")
+  @RequirePermission("finance.write")
   async createCharge(
     @Req() req:AuthenticatedRequest,
     @Param("studentId") studentId:string,
@@ -552,7 +552,7 @@ export class DanceStudioController {
   }
 
   @Post("payroll-reviews/:reviewId/resolve")
-  @RequirePermission("dance.write")
+  @RequirePermission("finance.write")
   async resolvePayrollReview(
     @Req() req:AuthenticatedRequest,
     @Param("reviewId") reviewId:string,
@@ -570,7 +570,7 @@ export class DanceStudioController {
   }
 
   @Post("payroll-statements/:statementId/adjustments")
-  @RequirePermission("dance.write")
+  @RequirePermission("finance.write")
   async addPayrollAdjustment(
     @Req() req:AuthenticatedRequest,
     @Param("statementId") statementId:string,
@@ -589,7 +589,7 @@ export class DanceStudioController {
   }
 
   @Post("compensation/approve")
-  @RequirePermission("dance.write")
+  @RequirePermission("finance.write")
   async approveCompensation(
     @Req() req:AuthenticatedRequest,
     @Body() body:{from:string;to:string}
