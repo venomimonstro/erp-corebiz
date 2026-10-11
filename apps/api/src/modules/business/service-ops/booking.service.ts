@@ -544,10 +544,33 @@ export class BookingService {
     return this.database.withTenantTransaction(context,async client=>{
       await client.query(
         `UPDATE service_waitlist_entry
-         SET status='EXPIRED',updated_at=now()
+         SET status=CASE
+               WHEN desired_to<now() THEN 'EXPIRED'
+               ELSE 'WAITING'
+             END,
+             offered_starts_at=CASE
+               WHEN desired_to<now() THEN offered_starts_at
+               ELSE NULL
+             END,
+             offer_expires_at=CASE
+               WHEN desired_to<now() THEN offer_expires_at
+               ELSE NULL
+             END,
+             source_booking_id=CASE
+               WHEN desired_to<now() THEN source_booking_id
+               ELSE NULL
+             END,
+             updated_at=now()
          WHERE tenant_id=$1
-           AND status IN ('WAITING','OFFERED')
-           AND desired_to<now()`,
+           AND (
+             (status IN ('WAITING','OFFERED') AND desired_to<now())
+             OR (
+               status='OFFERED'
+               AND offer_expires_at IS NOT NULL
+               AND offer_expires_at<=now()
+               AND desired_to>=now()
+             )
+           )`,
         [context.tenantId]
       );
       const result=await client.query(
@@ -2124,6 +2147,7 @@ export class BookingService {
       partyId?: string;
       assetId?: string;
       packageId?: string;
+      waitlistId?: string;
       branchId?: string;
       deliveryFormat?: "INDIVIDUAL" | "GROUP" | "SELF_PRACTICE" | "RENTAL";
       notes?: string;
@@ -2410,6 +2434,60 @@ export class BookingService {
       const booking=result.rows[0];
       if (!booking) throw new Error("SERVICE_BOOKING_CREATE_FAILED");
 
+      if(input.waitlistId){
+        const waitlist=await client.query<{
+          party_id:string;
+          service_id:string;
+          preferred_employee_resource_id:string|null;
+          desired_from:Date;
+          desired_to:Date;
+          status:string;
+          offered_starts_at:Date|null;
+          offer_expires_at:Date|null;
+        }>(
+          `SELECT
+             party_id,service_id,preferred_employee_resource_id,
+             desired_from,desired_to,status,offered_starts_at,offer_expires_at
+           FROM service_waitlist_entry
+           WHERE tenant_id=$1 AND id=$2
+           FOR UPDATE`,
+          [context.tenantId,input.waitlistId]
+        );
+        const entry=waitlist.rows[0];
+        if(!entry||!["WAITING","OFFERED"].includes(entry.status)){
+          throw new ConflictException("Запись листа ожидания уже недоступна");
+        }
+        if(
+          entry.party_id!==effectivePartyId||
+          entry.service_id!==input.serviceId||
+          startsAt<entry.desired_from||
+          startsAt>=entry.desired_to||
+          (
+            entry.preferred_employee_resource_id &&
+            entry.preferred_employee_resource_id!==employee?.id
+          )||
+          (
+            entry.status==="OFFERED" &&
+            (
+              !entry.offered_starts_at ||
+              entry.offered_starts_at.getTime()!==startsAt.getTime() ||
+              !entry.offer_expires_at ||
+              entry.offer_expires_at.getTime()<=Date.now()
+            )
+          )
+        ){
+          throw new ConflictException(
+            "Новая запись не соответствует условиям листа ожидания"
+          );
+        }
+        await client.query(
+          `UPDATE service_waitlist_entry
+           SET status='BOOKED',booked_booking_id=$3,updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,input.waitlistId,booking.id]
+        );
+      }
+
       if (input.packageId) {
         await this.reservePackageForBooking(
           client,context.tenantId,input.packageId,booking.id,effectivePartyId,
@@ -2482,6 +2560,7 @@ export class BookingService {
           partyId:effectivePartyId,
           assetId:input.assetId ?? null,
           packageId:input.packageId ?? null,
+          waitlistId:input.waitlistId ?? null,
           deliveryRuleId:rule?.id ?? null,
           deliveryFormat,
           resources:allocations
