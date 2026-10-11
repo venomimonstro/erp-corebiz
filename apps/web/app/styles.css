@@ -4004,3 +4004,33 @@ button, .primary, .secondary { font: inherit; }
   .operations-filters{flex-wrap:nowrap;overflow:auto;scroll-snap-type:x proximity}
   .operations-filters button{white-space:nowrap;flex:0 0 auto;scroll-snap-align:start}
 }
+
+/* Merchant launch workspace: factual readiness, not a green "live" badge. */
+.store-launch{border:1px solid #e5e9ec;background:#fff;border-radius:19px;
+  padding:23px 26px;margin:0 0 20px;box-shadow:0 8px 28px rgba(20,34,45,.035)}
+.store-launch-top{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}
+.store-launch-top h2{font-size:22px;line-height:1.2;letter-spacing:-.035em;
+  margin:6px 0 8px;color:#202a32}
+.store-launch-top p{font-size:13px;color:#66747f;line-height:1.55;margin:0}
+.store-launch-top-actions{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+.store-launch-top-actions a,.store-launch-top-actions button{font-size:12px;min-height:37px}
+.store-launch-progress{display:flex;gap:12px;align-items:center;margin:23px 0 12px;
+  border-bottom:1px solid #e9ecee;padding-bottom:14px;font-size:12px;color:#6b7680}
+.store-launch-progress strong{font-size:17px;color:#29333b;white-space:nowrap}
+.store-launch-checks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.store-launch-checks>div{padding:14px 15px;border:1px solid #e9edf0;border-radius:12px;
+  background:#fbfcfc;min-height:69px}
+.store-launch-checks strong{display:block;color:#343f47;font-weight:650;font-size:12px;
+  line-height:1.5}
+.store-launch-checks small{display:block;margin:6px 0 0;color:#7b8790;font-size:11px;line-height:1.5}
+.store-launch-checks .store-launch-done{background:#f8fbf9;border-color:#e2ebe5}
+.store-launch-warning{margin-top:14px;padding:15px 17px;border-radius:12px;
+  border:1px solid #e7e8e9;background:#fafafa}
+.store-launch-warning strong{font-size:13px;color:#383d42}
+.store-launch-warning p{font-size:12px;margin:5px 0 8px;color:#656d72}
+.store-launch-warning ul{display:grid;gap:5px;margin:0;padding-left:18px;
+  font-size:11px;color:#737a80;line-height:1.5}
+@media(max-width:900px){.store-launch-checks{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.store-launch{padding:18px 15px}.store-launch-top{flex-direction:column}
+  .store-launch-checks{grid-template-columns:1fr}.store-launch-progress{align-items:flex-start;
+  flex-direction:column;gap:4px}}
