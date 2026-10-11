@@ -183,6 +183,15 @@ export default function DanceStudentsPage() {
     });
   },[students,financeFilter]);
 
+  useEffect(() => {
+    if (
+      filteredStudents.length &&
+      !filteredStudents.some((student) => student.id === selectedId)
+    ) {
+      setSelectedId(filteredStudents[0]!.id);
+    }
+  },[filteredStudents,selectedId]);
+
   const selected = students.find((item) => item.id === selectedId) ?? null;
   const selectedCharges = charges.filter((item) => item.student_id === selectedId);
   const selectedPackages = packages.filter(
