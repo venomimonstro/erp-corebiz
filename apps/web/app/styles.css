@@ -3855,3 +3855,19 @@ button, .primary, .secondary { font: inherit; }
   .dance-segment-nav button{white-space:normal;padding:9px 7px;font-size:11px}
 }
 @media(prefers-reduced-motion:reduce){.dance-segment-nav button{transition:none}}
+
+
+/* Search and queue filters for dance operators */
+.dance-list-filter{min-height:39px;max-width:320px;width:100%;
+  border:1px solid #e2e5e8;border-radius:11px;background:#fff;
+  padding:9px 12px;font-size:12px;color:#202327}
+.dance-list-filter:focus-visible{outline:2px solid #6f7d90;outline-offset:2px}
+.dance-list-tabs{display:flex;align-items:center;gap:5px;flex-wrap:wrap;
+  padding:4px;border:1px solid #e7e9eb;border-radius:12px;background:#f7f8f9}
+.dance-list-tabs button{appearance:none;border:0;background:transparent;cursor:pointer;
+  border-radius:9px;color:#6b737c;font-size:11px;font-weight:600;
+  padding:9px 13px;transition:background .15s,color .15s}
+.dance-list-tabs button:hover{background:#fff;color:#202327}
+.dance-list-tabs button.active{background:#fff;color:#202327;box-shadow:0 1px 5px rgba(20,24,28,.08)}
+@media(max-width:670px){.dance-list-tabs{width:100%;overflow-x:auto;flex-wrap:nowrap}
+  .dance-list-tabs button{white-space:nowrap;padding:9px 11px}}
