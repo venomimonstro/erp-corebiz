@@ -384,6 +384,7 @@ export class DanceEconomicsService {
            c.pricing_type,c.hourly_rate_minor::text,c.monthly_minor::text,
            c.slot_minor::text,c.minimum_billable_minutes,
            c.cancellation_charge_bps,c.payment_term_days,
+           c.capacity_units,c.zone_id,z.name AS zone_name,
            c.currency,c.valid_from,c.valid_to,
            c.status,c.metadata
          FROM room_rental_contract c
@@ -391,6 +392,8 @@ export class DanceEconomicsService {
            ON r.tenant_id=c.tenant_id AND r.id=c.room_resource_id
          LEFT JOIN party p
            ON p.tenant_id=c.tenant_id AND p.id=c.counterparty_party_id
+         LEFT JOIN service_resource_zone z
+           ON z.tenant_id=c.tenant_id AND z.id=c.zone_id
          WHERE c.tenant_id=$1 AND c.status='ACTIVE'
          ORDER BY r.name,c.valid_from DESC`,
         [context.tenantId]
@@ -1256,7 +1259,10 @@ export class DanceEconomicsService {
          RETURNING a.id`,
         [context.tenantId,from,to,context.membershipId]
       );
-      return {approved:result.rowCount};
+      const statements=await this.buildTrainerPayrollStatementsTx(
+        client,context.tenantId,from,to
+      );
+      return {approved:result.rowCount,statements};
     });
   }
 
@@ -1273,43 +1279,48 @@ export class DanceEconomicsService {
       );
       if(!batch.rowCount) throw new ConflictException("Payroll batch не найден или уже утверждён");
 
+      const periodFrom=from.toISOString().slice(0,10);
+      const periodTo=new Date(to.getTime()-86400000).toISOString().slice(0,10);
+
       const missing=await client.query(
-        `SELECT a.id
-         FROM trainer_compensation_accrual a
-         JOIN dance_lesson l
-           ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
+        `SELECT s.id
+         FROM trainer_payroll_statement s
          JOIN service_resource r
-           ON r.tenant_id=a.tenant_id AND r.id=a.trainer_resource_id
-         WHERE a.tenant_id=$1 AND a.status='APPROVED'
-           AND l.starts_at>=$2 AND l.starts_at<$3
+           ON r.tenant_id=s.tenant_id AND r.id=s.trainer_resource_id
+         WHERE s.tenant_id=$1
+           AND s.period_from=$2::date AND s.period_to=$3::date
+           AND s.status='FINALIZED'
            AND r.membership_id IS NULL
          LIMIT 1`,
-        [context.tenantId,from,to]
+        [context.tenantId,periodFrom,periodTo]
       );
       if(missing.rowCount)
         throw new ConflictException("У одного из тренеров не привязан сотрудник tenant membership");
 
-      const accruals=await client.query<{
-        id:string;membership_id:string;amount_minor:string;
+      const statements=await client.query<{
+        id:string;
+        trainer_resource_id:string;
+        membership_id:string;
+        total_minor:string;
       }>(
-        `SELECT a.id,r.membership_id,a.amount_minor::text
-         FROM trainer_compensation_accrual a
-         JOIN dance_lesson l
-           ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
+        `SELECT
+           s.id,s.trainer_resource_id,r.membership_id,s.total_minor::text
+         FROM trainer_payroll_statement s
          JOIN service_resource r
-           ON r.tenant_id=a.tenant_id AND r.id=a.trainer_resource_id
-         WHERE a.tenant_id=$1 AND a.status='APPROVED'
-           AND l.starts_at>=$2 AND l.starts_at<$3
-         ORDER BY a.id
-         FOR UPDATE OF a`,
-        [context.tenantId,from,to]
+           ON r.tenant_id=s.tenant_id AND r.id=s.trainer_resource_id
+         WHERE s.tenant_id=$1
+           AND s.period_from=$2::date AND s.period_to=$3::date
+           AND s.status='FINALIZED'
+         ORDER BY s.id
+         FOR UPDATE OF s`,
+        [context.tenantId,periodFrom,periodTo]
       );
 
       const totals=new Map<string,bigint>();
-      for(const accrual of accruals.rows){
+      for(const statement of statements.rows){
         totals.set(
-          accrual.membership_id,
-          (totals.get(accrual.membership_id)??0n)+BigInt(accrual.amount_minor)
+          statement.membership_id,
+          (totals.get(statement.membership_id)??0n)+BigInt(statement.total_minor)
         );
       }
 
@@ -1319,26 +1330,188 @@ export class DanceEconomicsService {
              tenant_id,batch_id,employee_ref,gross_minor,deduction_minor
            ) VALUES($1,$2,$3,$4,0)
            ON CONFLICT(tenant_id,batch_id,employee_ref)
-           DO UPDATE SET gross_minor=
-             payroll_accrual_line.gross_minor+EXCLUDED.gross_minor`,
+           DO UPDATE SET gross_minor=EXCLUDED.gross_minor`,
           [context.tenantId,input.batchId,membershipId,grossMinor.toString()]
         );
       }
 
-      const ids=accruals.rows.map((row)=>row.id);
-      let exported=0;
-      if(ids.length){
-        const updated=await client.query(
-          `UPDATE trainer_compensation_accrual
-           SET status='EXPORTED',payroll_batch_id=$3
-           WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND status='APPROVED'
-           RETURNING id`,
-          [context.tenantId,ids,input.batchId]
+      const statementIds=statements.rows.map((row)=>row.id);
+      if(statementIds.length){
+        await client.query(
+          `UPDATE trainer_payroll_statement
+           SET status='EXPORTED',payroll_batch_id=$3,exported_at=now(),updated_at=now()
+           WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND status='FINALIZED'`,
+          [context.tenantId,statementIds,input.batchId]
         );
-        exported=updated.rowCount;
       }
-      return {trainers:totals.size,accruals:exported};
+
+      const exportedAccruals=await client.query(
+        `UPDATE trainer_compensation_accrual a
+         SET status='EXPORTED',payroll_batch_id=$4
+         FROM dance_lesson l
+         WHERE a.tenant_id=$1
+           AND l.tenant_id=a.tenant_id AND l.id=a.lesson_id
+           AND l.starts_at>=$2 AND l.starts_at<$3
+           AND a.status='APPROVED'
+         RETURNING a.id`,
+        [context.tenantId,from,to,input.batchId]
+      );
+
+      return {
+        trainers:totals.size,
+        accruals:exportedAccruals.rowCount,
+        statements:statementIds.length
+      };
     });
+  }
+
+  private async buildTrainerPayrollStatementsTx(
+    client:PoolClient,
+    tenantId:string,
+    from:Date,
+    to:Date
+  ){
+    const periodFrom=from.toISOString().slice(0,10);
+    const periodTo=new Date(to.getTime()-86400000).toISOString().slice(0,10);
+
+    const trainers=await client.query<{
+      trainer_resource_id:string;
+      currency:string;
+      lesson_accrual_minor:string;
+      plan_ids:string[];
+    }>(
+      `SELECT
+         a.trainer_resource_id,
+         min(a.currency)::text AS currency,
+         coalesce(sum(a.amount_minor),0)::text AS lesson_accrual_minor,
+         array_agg(DISTINCT a.plan_id) FILTER (WHERE a.plan_id IS NOT NULL) AS plan_ids
+       FROM trainer_compensation_accrual a
+       JOIN dance_lesson l
+         ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
+       WHERE a.tenant_id=$1
+         AND l.starts_at>=$2 AND l.starts_at<$3
+         AND a.status IN ('APPROVED','EXPORTED')
+       GROUP BY a.trainer_resource_id`,
+      [tenantId,from,to]
+    );
+
+    const output:Array<Record<string,unknown>>=[];
+    for(const row of trainers.rows){
+      const planIds=row.plan_ids??[];
+      let base=0n;
+      let guarantee=0n;
+      const baseSnapshot:Array<Record<string,unknown>>=[];
+
+      if(planIds.length){
+        const plans=await client.query<{
+          id:string;
+          minimum_guarantee_minor:string;
+        }>(
+          `SELECT id,minimum_guarantee_minor::text
+           FROM trainer_compensation_plan
+           WHERE tenant_id=$1 AND id=ANY($2::uuid[])`,
+          [tenantId,planIds]
+        );
+        for(const plan of plans.rows){
+          const value=BigInt(plan.minimum_guarantee_minor);
+          if(value>guarantee) guarantee=value;
+        }
+
+        const components=await client.query<{
+          id:string;
+          plan_id:string;
+          component_type:"DAILY_BASE"|"MONTHLY_BASE";
+          amount_minor:string;
+        }>(
+          `SELECT id,plan_id,component_type,amount_minor::text
+           FROM trainer_compensation_component
+           WHERE tenant_id=$1
+             AND plan_id=ANY($2::uuid[])
+             AND component_type IN ('DAILY_BASE','MONTHLY_BASE')
+           ORDER BY priority,id`,
+          [tenantId,planIds]
+        );
+
+        for(const component of components.rows){
+          if(component.component_type==="MONTHLY_BASE"){
+            const amount=BigInt(component.amount_minor);
+            base+=amount;
+            baseSnapshot.push({
+              componentId:component.id,
+              componentType:component.component_type,
+              units:1,
+              amountMinor:amount.toString()
+            });
+            continue;
+          }
+
+          const worked=await client.query<{days:number}>(
+            `SELECT count(DISTINCT (l.starts_at AT TIME ZONE l.timezone)::date)::integer AS days
+             FROM trainer_compensation_accrual a
+             JOIN dance_lesson l
+               ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
+             WHERE a.tenant_id=$1
+               AND a.trainer_resource_id=$2
+               AND a.plan_id=$3
+               AND l.starts_at>=$4 AND l.starts_at<$5
+               AND a.status IN ('APPROVED','EXPORTED')`,
+            [tenantId,row.trainer_resource_id,component.plan_id,from,to]
+          );
+          const units=Math.max(0,worked.rows[0]?.days??0);
+          const amount=BigInt(component.amount_minor)*BigInt(units);
+          base+=amount;
+          baseSnapshot.push({
+            componentId:component.id,
+            componentType:component.component_type,
+            units,
+            amountMinor:amount.toString()
+          });
+        }
+      }
+
+      const lesson=BigInt(row.lesson_accrual_minor);
+      const subtotal=lesson+base;
+      const adjustment=guarantee>subtotal?guarantee-subtotal:0n;
+      const total=subtotal+adjustment;
+
+      const statement=await client.query(
+        `INSERT INTO trainer_payroll_statement(
+           tenant_id,trainer_resource_id,period_from,period_to,
+           lesson_accrual_minor,base_minor,guarantee_adjustment_minor,
+           total_minor,currency,status,calculation_snapshot,finalized_at
+         ) VALUES(
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,'FINALIZED',$10,now()
+         )
+         ON CONFLICT(tenant_id,trainer_resource_id,period_from,period_to)
+         DO UPDATE SET
+           lesson_accrual_minor=EXCLUDED.lesson_accrual_minor,
+           base_minor=EXCLUDED.base_minor,
+           guarantee_adjustment_minor=EXCLUDED.guarantee_adjustment_minor,
+           total_minor=EXCLUDED.total_minor,
+           currency=EXCLUDED.currency,
+           status='FINALIZED',
+           calculation_snapshot=EXCLUDED.calculation_snapshot,
+           finalized_at=now(),
+           updated_at=now()
+         WHERE trainer_payroll_statement.status IN ('DRAFT','FINALIZED')
+         RETURNING id,trainer_resource_id,lesson_accrual_minor::text,
+                   base_minor::text,guarantee_adjustment_minor::text,
+                   total_minor::text,status`,
+        [
+          tenantId,row.trainer_resource_id,periodFrom,periodTo,
+          lesson.toString(),base.toString(),adjustment.toString(),
+          total.toString(),row.currency,
+          JSON.stringify({
+            planIds,
+            lessonAccrualMinor:lesson.toString(),
+            baseComponents:baseSnapshot,
+            minimumGuaranteeMinor:guarantee.toString()
+          })
+        ]
+      );
+      if(statement.rows[0]) output.push(statement.rows[0]);
+    }
+    return output;
   }
 
   private async createChargeTx(
@@ -1631,20 +1804,66 @@ export class DanceEconomicsService {
       revenue.earned;
 
     let amount=0n;
-    switch(plan.calculation_type){
-      case "FIXED":
-        amount=BigInt(plan.fixed_minor); break;
-      case "HOURLY":
-        amount=(BigInt(plan.hourly_minor)*BigInt(duration)+59n)/60n; break;
-      case "PERCENT":
-        amount=(eligible*BigInt(plan.percent_bps)+9999n)/10000n; break;
-      case "ATTENDEE":
-        amount=BigInt(plan.fixed_minor)+
-          BigInt(plan.per_attendee_minor)*BigInt(attendedCount); break;
-      case "TIERED":
-        amount=BigInt(plan.fixed_minor)+
-          BigInt(plan.threshold_extra_minor)*
-          BigInt(Math.max(0,attendedCount-plan.threshold_count)); break;
+    const componentSnapshot:Array<Record<string,unknown>>=[];
+    if(plan.calculation_type==="COMPOSITE"){
+      const components=await client.query<any>(
+        `SELECT *
+         FROM trainer_compensation_component
+         WHERE tenant_id=$1 AND plan_id=$2
+         ORDER BY priority,id`,
+        [tenantId,plan.id]
+      );
+      for(const component of components.rows){
+        const componentEligible=
+          component.revenue_basis==="PAID"?revenue.paid:
+          component.revenue_basis==="LIST"?revenue.list:
+          component.revenue_basis==="BILLED"?revenue.billed:
+          revenue.earned;
+        let value=0n;
+        switch(component.component_type){
+          case "FIXED_PER_LESSON":
+            value=BigInt(component.amount_minor); break;
+          case "HOURLY":
+            value=(BigInt(component.amount_minor)*BigInt(duration)+59n)/60n; break;
+          case "PERCENT":
+            value=(componentEligible*BigInt(component.percent_bps)+9999n)/10000n; break;
+          case "PER_ATTENDEE":
+            value=BigInt(component.amount_minor)*BigInt(attendedCount); break;
+          case "TIER_BONUS":
+            value=BigInt(component.amount_minor)*
+              BigInt(Math.max(0,attendedCount-component.threshold_count)); break;
+          case "DAILY_BASE":
+          case "MONTHLY_BASE":
+            value=0n; break;
+        }
+        amount+=value;
+        componentSnapshot.push({
+          id:component.id,
+          type:component.component_type,
+          amountMinor:value.toString(),
+          configuredAmountMinor:String(component.amount_minor),
+          percentBps:component.percent_bps,
+          thresholdCount:component.threshold_count,
+          revenueBasis:component.revenue_basis,
+          eligibleRevenueMinor:componentEligible.toString()
+        });
+      }
+    }else{
+      switch(plan.calculation_type){
+        case "FIXED":
+          amount=BigInt(plan.fixed_minor); break;
+        case "HOURLY":
+          amount=(BigInt(plan.hourly_minor)*BigInt(duration)+59n)/60n; break;
+        case "PERCENT":
+          amount=(eligible*BigInt(plan.percent_bps)+9999n)/10000n; break;
+        case "ATTENDEE":
+          amount=BigInt(plan.fixed_minor)+
+            BigInt(plan.per_attendee_minor)*BigInt(attendedCount); break;
+        case "TIERED":
+          amount=BigInt(plan.fixed_minor)+
+            BigInt(plan.threshold_extra_minor)*
+            BigInt(Math.max(0,attendedCount-plan.threshold_count)); break;
+      }
     }
     return {
       amount,
@@ -1662,7 +1881,9 @@ export class DanceEconomicsService {
         percentBps:plan.percent_bps,
         perAttendeeMinor:String(plan.per_attendee_minor),
         thresholdCount:plan.threshold_count,
-        thresholdExtraMinor:String(plan.threshold_extra_minor)
+        thresholdExtraMinor:String(plan.threshold_extra_minor),
+        minimumGuaranteeMinor:String(plan.minimum_guarantee_minor??0),
+        components:componentSnapshot
       }
     };
   }
