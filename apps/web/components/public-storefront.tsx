@@ -138,7 +138,7 @@ export function PublicStorefront({
       const params = new URLSearchParams({ limit: String(pageSize) });
       if (needle) params.set("q", needle);
       void request<Catalog>(
-        "/storefront/" + encodeURIComponent(publicSlug) + "/catalog?" + params
+        "/storefront/" + encodeURIComponent(publicSlug) + "/catalog?" + params.toString()
       ).then((result) => {
         if (active) { setCatalog(result); setError(""); }
       }).catch((cause) => {
@@ -157,7 +157,7 @@ export function PublicStorefront({
       });
       if (search.trim()) params.set("q", search.trim());
       const page = await request<Catalog>(
-        "/storefront/" + encodeURIComponent(publicSlug) + "/catalog?" + params
+        "/storefront/" + encodeURIComponent(publicSlug) + "/catalog?" + params.toString()
       );
       setCatalog((current) => current?.nextCursor === catalog.nextCursor
         ? { ...current, products: [...current.products, ...page.products],
