@@ -9,6 +9,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 
 type TaxRegime =
+  | "NPD"
   | "USN_INCOME"
   | "USN_INCOME_EXPENSE"
   | "OSNO"
@@ -19,7 +20,7 @@ type VatMode = "NO_VAT" | "VAT_5" | "VAT_7" | "VAT_22" | "VAT_MIXED";
 
 type TaxProfileInput = {
   legalEntityId:string;
-  entityKind:"ORGANIZATION"|"IP";
+  entityKind:"ORGANIZATION"|"IP"|"INDIVIDUAL";
   taxRegime:TaxRegime;
   vatMode?:VatMode;
   hasEmployees?:boolean;
@@ -65,11 +66,11 @@ export class ComplianceService {
     if(!input?.legalEntityId) {
       throw new BadRequestException("Выберите юридическое лицо");
     }
-    if(!["ORGANIZATION","IP"].includes(input.entityKind)) {
+    if(!["ORGANIZATION","IP","INDIVIDUAL"].includes(input.entityKind)) {
       throw new BadRequestException("Некорректный тип налогоплательщика");
     }
     if(![
-      "USN_INCOME","USN_INCOME_EXPENSE","OSNO","AUSN","OTHER"
+      "NPD","USN_INCOME","USN_INCOME_EXPENSE","OSNO","AUSN","OTHER"
     ].includes(input.taxRegime)) {
       throw new BadRequestException("Некорректный налоговый режим");
     }
@@ -188,6 +189,292 @@ export class ComplianceService {
         ]
       );
       return created.rows[0];
+    });
+  }
+
+  async npdOverview(
+    context:TenantContext,
+    legalEntityId:string,
+    year:number
+  ){
+    if(!Number.isSafeInteger(year)||year<2024||year>2100){
+      throw new BadRequestException("Некорректный год");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const profile=await client.query<any>(
+        `SELECT *
+         FROM accounting_tax_profile
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+           AND status='ACTIVE' AND tax_regime='NPD'
+         ORDER BY effective_from DESC LIMIT 1`,
+        [context.tenantId,legalEntityId]
+      );
+      const p=profile.rows[0];
+      if(!p) throw new ConflictException("Для этого налогоплательщика НПД не настроен");
+      if(!["IP","INDIVIDUAL"].includes(p.entity_kind)){
+        throw new ConflictException("НПД доступен только физлицу или ИП");
+      }
+
+      const totals=await client.query<any>(
+        `SELECT
+           coalesce(sum(amount_minor) FILTER (
+             WHERE fiscal_status='REGISTERED'
+               AND buyer_kind='PERSON'
+           ),0)::text AS person_income_minor,
+           coalesce(sum(amount_minor) FILTER (
+             WHERE fiscal_status='REGISTERED'
+               AND buyer_kind IN ('ORGANIZATION','IP')
+           ),0)::text AS business_income_minor,
+           coalesce(sum(amount_minor) FILTER (
+             WHERE fiscal_status='REGISTERED'
+           ),0)::text AS year_income_minor,
+           coalesce(sum(calculated_tax_minor) FILTER (
+             WHERE fiscal_status='REGISTERED'
+           ),0)::text AS estimated_tax_minor,
+           count(*) FILTER (
+             WHERE fiscal_status='DRAFT'
+           )::integer AS draft_receipts,
+           count(*) FILTER (
+             WHERE fiscal_status='ERROR'
+           )::integer AS error_receipts
+         FROM accounting_npd_receipt
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+           AND operation_date>=make_date($3,1,1)
+           AND operation_date<make_date($3+1,1,1)`,
+        [context.tenantId,legalEntityId,year]
+      );
+
+      const months=await client.query(
+        `SELECT
+           period_key,date_from,date_to,
+           person_income_minor::text,business_income_minor::text,
+           gross_income_minor::text,estimated_tax_minor::text,
+           official_tax_minor::text,benefit_minor::text,
+           payable_minor::text,source,status
+         FROM accounting_npd_month
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+           AND date_from>=make_date($3,1,1)
+           AND date_from<make_date($3+1,1,1)
+           AND status<>'SUPERSEDED'
+         ORDER BY date_from`,
+        [context.tenantId,legalEntityId,year]
+      );
+
+      const receipts=await client.query(
+        `SELECT
+           r.id,r.operation_date,r.buyer_kind,r.description,
+           r.amount_minor::text,r.tax_rate_bps,
+           r.calculated_tax_minor::text,r.fiscal_status,
+           r.external_receipt_id,r.external_receipt_url,r.registered_at,
+           r.cancellation_reason,p.display_name AS buyer_name
+         FROM accounting_npd_receipt r
+         LEFT JOIN party p
+           ON p.tenant_id=r.tenant_id AND p.id=r.buyer_party_id
+         WHERE r.tenant_id=$1 AND r.legal_entity_id=$2
+           AND r.operation_date>=make_date($3,1,1)
+           AND r.operation_date<make_date($3+1,1,1)
+         ORDER BY r.operation_date DESC,r.created_at DESC
+         LIMIT 500`,
+        [context.tenantId,legalEntityId,year]
+      );
+
+      const row=totals.rows[0]??{};
+      const limitMinor="240000000";
+      return {
+        profile:p,
+        totals:{
+          ...row,
+          annual_limit_minor:limitMinor,
+          remaining_limit_minor:(
+            240000000n-BigInt(row.year_income_minor??"0")>0n
+              ?240000000n-BigInt(row.year_income_minor??"0")
+              :0n
+          ).toString()
+        },
+        months:months.rows,
+        receipts:receipts.rows
+      };
+    });
+  }
+
+  async registerNpdReceipt(
+    context:TenantContext,
+    input:{
+      legalEntityId:string;
+      operationDate:string;
+      buyerKind:"PERSON"|"ORGANIZATION"|"IP";
+      buyerPartyId?:string;
+      description:string;
+      amountMinor:string;
+      sourceType?:string;
+      sourceId?:string;
+    }
+  ){
+    const operationDate=new Date(input.operationDate);
+    if(Number.isNaN(operationDate.getTime())){
+      throw new BadRequestException("Некорректная дата дохода");
+    }
+    if(!["PERSON","ORGANIZATION","IP"].includes(input.buyerKind)){
+      throw new BadRequestException("Некорректный тип покупателя");
+    }
+    if(!/^\d+$/.test(input.amountMinor)||BigInt(input.amountMinor)<=0n){
+      throw new BadRequestException("Некорректная сумма дохода");
+    }
+    if(!input.description?.trim()){
+      throw new BadRequestException("Укажите наименование услуги или товара");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const profile=await client.query<any>(
+        `SELECT id,entity_kind
+         FROM accounting_tax_profile
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+           AND status='ACTIVE' AND tax_regime='NPD'
+           AND effective_from<=($3::timestamptz)::date
+           AND (effective_to IS NULL OR effective_to>=($3::timestamptz)::date)
+         ORDER BY effective_from DESC LIMIT 1`,
+        [context.tenantId,input.legalEntityId,operationDate]
+      );
+      const p=profile.rows[0];
+      if(!p) throw new ConflictException("На дату дохода нет активного профиля НПД");
+      if(!["IP","INDIVIDUAL"].includes(p.entity_kind)){
+        throw new ConflictException("НПД доступен только физлицу или ИП");
+      }
+
+      const rate=input.buyerKind==="PERSON"?400:600;
+      const amount=BigInt(input.amountMinor);
+      const tax=(amount*BigInt(rate))/10000n;
+      const result=await client.query(
+        `INSERT INTO accounting_npd_receipt(
+           tenant_id,legal_entity_id,tax_profile_id,
+           source_type,source_id,operation_date,buyer_kind,buyer_party_id,
+           description,amount_minor,tax_rate_bps,calculated_tax_minor,
+           created_by_membership_id
+         ) VALUES(
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
+         )
+         RETURNING *`,
+        [
+          context.tenantId,input.legalEntityId,p.id,
+          input.sourceType?.trim()||"MANUAL",
+          input.sourceId??null,operationDate,input.buyerKind,
+          input.buyerPartyId??null,input.description.trim(),
+          input.amountMinor,rate,tax.toString(),context.membershipId
+        ]
+      );
+      return result.rows[0];
+    });
+  }
+
+  async confirmNpdReceipt(
+    context:TenantContext,
+    receiptId:string,
+    input:{
+      externalReceiptId:string;
+      externalReceiptUrl?:string;
+      connectorProvider?:string;
+    }
+  ){
+    if(!input.externalReceiptId?.trim()){
+      throw new BadRequestException("Укажите номер чека из «Мой налог»");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `UPDATE accounting_npd_receipt
+         SET fiscal_status='REGISTERED',
+             external_receipt_id=$3,
+             external_receipt_url=$4,
+             connector_provider=$5,
+             registered_at=now(),updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+           AND fiscal_status IN ('DRAFT','READY','ERROR')
+         RETURNING *`,
+        [
+          context.tenantId,receiptId,input.externalReceiptId.trim(),
+          input.externalReceiptUrl?.trim()||null,
+          input.connectorProvider?.trim()||"MANUAL"
+        ]
+      );
+      if(!result.rows[0]) throw new NotFoundException("Чек НПД не найден или уже закрыт");
+      return result.rows[0];
+    });
+  }
+
+  async rebuildNpdMonths(
+    context:TenantContext,
+    legalEntityId:string,
+    year:number
+  ){
+    if(!Number.isSafeInteger(year)||year<2024||year>2100){
+      throw new BadRequestException("Некорректный год");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const profile=await client.query<{id:string}>(
+        `SELECT id FROM accounting_tax_profile
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+           AND status='ACTIVE' AND tax_regime='NPD'
+         ORDER BY effective_from DESC LIMIT 1`,
+        [context.tenantId,legalEntityId]
+      );
+      const profileId=profile.rows[0]?.id;
+      if(!profileId) throw new ConflictException("НПД не настроен");
+
+      let rebuilt=0;
+      for(let month=1;month<=12;month++){
+        const from=`${year}-${String(month).padStart(2,"0")}-01`;
+        const next=month===12
+          ?`${year+1}-01-01`
+          :`${year}-${String(month+1).padStart(2,"0")}-01`;
+        const totals=await client.query<any>(
+          `SELECT
+             coalesce(sum(amount_minor) FILTER (
+               WHERE buyer_kind='PERSON' AND fiscal_status='REGISTERED'
+             ),0)::bigint AS person_income,
+             coalesce(sum(amount_minor) FILTER (
+               WHERE buyer_kind IN ('ORGANIZATION','IP')
+                 AND fiscal_status='REGISTERED'
+             ),0)::bigint AS business_income,
+             coalesce(sum(calculated_tax_minor) FILTER (
+               WHERE fiscal_status='REGISTERED'
+             ),0)::bigint AS tax
+           FROM accounting_npd_receipt
+           WHERE tenant_id=$1 AND legal_entity_id=$2
+             AND operation_date>=$3::date
+             AND operation_date<$4::date`,
+          [context.tenantId,legalEntityId,from,next]
+        );
+        const t=totals.rows[0];
+        const person=BigInt(t?.person_income??0);
+        const business=BigInt(t?.business_income??0);
+        const tax=BigInt(t?.tax??0);
+        await client.query(
+          `UPDATE accounting_npd_month
+           SET status='SUPERSEDED',updated_at=now()
+           WHERE tenant_id=$1 AND legal_entity_id=$2
+             AND period_key=$3 AND status='ESTIMATED'`,
+          [context.tenantId,legalEntityId,`${year}-${String(month).padStart(2,"0")}`]
+        );
+        await client.query(
+          `INSERT INTO accounting_npd_month(
+             tenant_id,legal_entity_id,tax_profile_id,period_key,
+             date_from,date_to,person_income_minor,business_income_minor,
+             gross_income_minor,estimated_tax_minor,payable_minor,
+             calculation_snapshot
+           ) VALUES(
+             $1,$2,$3,$4,$5::date,($6::date-1),
+             $7,$8,$9,$10,$10,$11
+           )`,
+          [
+            context.tenantId,legalEntityId,profileId,
+            `${year}-${String(month).padStart(2,"0")}`,
+            from,next,person.toString(),business.toString(),
+            (person+business).toString(),tax.toString(),
+            JSON.stringify({rates:{personBps:400,businessBps:600}})
+          ]
+        );
+        rebuilt++;
+      }
+      return {rebuilt};
     });
   }
 
