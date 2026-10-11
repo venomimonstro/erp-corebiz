@@ -1467,6 +1467,87 @@ export class DanceEconomicsService {
     });
   }
 
+  async payrollStatementDetails(
+    context:TenantContext,
+    statementId:string
+  ){
+    const scopeIds=await this.scopeIds(context,"dance.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      const statement=await client.query(
+        `SELECT
+           s.id,s.trainer_resource_id,r.name AS trainer_name,
+           s.period_from,s.period_to,s.lesson_accrual_minor::text,
+           s.base_minor::text,s.guarantee_adjustment_minor::text,
+           s.adjustment_minor::text,s.total_minor::text,s.currency,
+           s.status,s.payroll_batch_id,s.calculation_snapshot,
+           s.finalized_at,s.exported_at
+         FROM trainer_payroll_statement s
+         JOIN service_resource r
+           ON r.tenant_id=s.tenant_id AND r.id=s.trainer_resource_id
+         WHERE s.tenant_id=$1 AND s.id=$2
+           AND (
+             $3::uuid[] IS NULL
+             OR r.membership_id=ANY($3::uuid[])
+           )`,
+        [context.tenantId,statementId,scopeIds]
+      );
+      const row=statement.rows[0];
+      if(!row) throw new NotFoundException("Ведомость не найдена");
+
+      const lessons=await client.query(
+        `SELECT
+           a.id AS accrual_id,a.lesson_id,
+           l.starts_at,l.ends_at,l.lesson_type,
+           coalesce(g.name,l.lesson_type) AS lesson_name,
+           p.name AS program_name,
+           svc.name AS service_name,
+           a.attended_count,
+           a.eligible_revenue_minor::text,
+           a.amount_minor::text,
+           a.currency,a.status,a.rule_snapshot,
+           cp.id AS plan_id,cp.calculation_type,cp.revenue_basis
+         FROM trainer_compensation_accrual a
+         JOIN dance_lesson l
+           ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
+         LEFT JOIN dance_group g
+           ON g.tenant_id=l.tenant_id AND g.id=l.group_id
+         LEFT JOIN dance_program p
+           ON p.tenant_id=g.tenant_id AND p.id=g.program_id
+         LEFT JOIN service_booking b
+           ON b.tenant_id=l.tenant_id AND b.id=l.host_booking_id
+         LEFT JOIN service_catalog_item svc
+           ON svc.tenant_id=b.tenant_id AND svc.id=b.service_id
+         LEFT JOIN trainer_compensation_plan cp
+           ON cp.tenant_id=a.tenant_id AND cp.id=a.plan_id
+         WHERE a.tenant_id=$1
+           AND a.trainer_resource_id=$2
+           AND (l.starts_at AT TIME ZONE l.timezone)::date
+               BETWEEN $3::date AND $4::date
+           AND a.status IN ('APPROVED','EXPORTED')
+         ORDER BY l.starts_at,a.id`,
+        [
+          context.tenantId,row.trainer_resource_id,
+          row.period_from,row.period_to
+        ]
+      );
+
+      const adjustments=await client.query(
+        `SELECT
+           id,adjustment_type,amount_minor::text,reason,created_at
+         FROM trainer_payroll_adjustment
+         WHERE tenant_id=$1 AND statement_id=$2
+         ORDER BY created_at,id`,
+        [context.tenantId,statementId]
+      );
+
+      return {
+        statement:row,
+        lessons:lessons.rows,
+        adjustments:adjustments.rows
+      };
+    });
+  }
+
   async addPayrollAdjustment(
     context:TenantContext,
     statementId:string,
