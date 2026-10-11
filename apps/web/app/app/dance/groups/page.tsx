@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
 import { DanceWorkspaceNav } from "../../../../components/dance-workspace-nav";
 import { StudioModal } from "../../../../components/studio-modal";
@@ -165,6 +165,9 @@ export default function DanceGroupsPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   const [zones, setZones] = useState<Record<string, Zone[]>>({});
+  const zoneRequests=useRef(new Set<string>());
+  const [groupSearch,setGroupSearch]=useState("");
+  const [lessonFilter,setLessonFilter]=useState<"OPEN"|"TODAY"|"WEEK"|"ALL">("OPEN");
   const [services, setServices] = useState<Service[]>([]);
   const [packages, setPackages] = useState<Pack[]>([]);
   const [makeupCredits, setMakeupCredits] = useState<MakeupCredit[]>([]);
@@ -261,18 +264,6 @@ export default function DanceGroupsPage() {
       setLessons(lessonRows);
       setStudents(studentRows);
       setResources(resourceRows);
-      const roomRows=resourceRows.filter((item)=>
-        ["ROOM","HALL","WORKPLACE"].includes(item.type)
-      );
-      const zoneRows=await Promise.all(
-        roomRows.map(async (room)=>[
-          room.id,
-          await apiRequest<Zone[]>(
-            "/service/resources/"+room.id+"/zones"
-          )
-        ] as const)
-      );
-      setZones(Object.fromEntries(zoneRows));
       setServices(serviceRows);
       setPackages(packageRows);
       setMakeupCredits(makeupRows);
@@ -310,6 +301,26 @@ export default function DanceGroupsPage() {
     }
   }, []);
 
+  // Room zones are only requested when an editor actually needs them.
+  // A studio with 150 rooms should not create 150 network calls on page open.
+  useEffect(()=>{
+    const ids=[
+      groupModal?groupRoomId:"",
+      lessonModal?lessonRoomId:"",
+      editLessonModal?editRoomId:""
+    ].filter(Boolean);
+    for(const roomId of new Set(ids)){
+      if(zoneRequests.current.has(roomId))continue;
+      zoneRequests.current.add(roomId);
+      void apiRequest<Zone[]>("/service/resources/"+roomId+"/zones")
+        .then(items=>setZones(current=>({...current,[roomId]:items})))
+        .catch(e=>{
+          zoneRequests.current.delete(roomId);
+          setError(e instanceof Error?e.message:"Не удалось загрузить зоны зала");
+        });
+    }
+  },[groupModal,groupRoomId,lessonModal,lessonRoomId,editLessonModal,editRoomId]);
+
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { void loadRoster(selectedGroupId); }, [selectedGroupId, loadRoster]);
   useEffect(() => { void loadParticipants(selectedLessonId); }, [selectedLessonId, loadParticipants]);
@@ -318,10 +329,27 @@ export default function DanceGroupsPage() {
   const selectedLesson = lessons.find((item) => item.id === selectedLessonId) ?? null;
   const trainers = resources.filter((item) => item.type === "EMPLOYEE");
   const rooms = resources.filter((item) => ["ROOM", "HALL", "WORKPLACE"].includes(item.type));
-  const upcoming = useMemo(
-    () => lessons.filter((lesson) => new Date(lesson.ends_at).getTime() >= Date.now()),
-    [lessons]
-  );
+  const filteredGroups=useMemo(()=>{
+    const query=groupSearch.trim().toLocaleLowerCase("ru-RU");
+    return query?groups.filter(group=>
+      [group.name,group.program_name,group.trainer_name??"",group.room_name??""]
+        .some(value=>value.toLocaleLowerCase("ru-RU").includes(query))):groups;
+  },[groups,groupSearch]);
+  const upcoming=useMemo(()=>{
+    const now=Date.now();
+    const day=new Date().toDateString();
+    const weekEnd=now+7*86400000;
+    return lessons.filter(lesson=>{
+      const start=new Date(lesson.starts_at).getTime();
+      const end=new Date(lesson.ends_at).getTime();
+      const closed=["COMPLETED","CANCELLED_BY_STUDIO","CANCELLED_BY_TRAINER"]
+        .includes(lesson.status);
+      if(lessonFilter==="OPEN")return !closed&&end<now;
+      if(lessonFilter==="TODAY")return new Date(start).toDateString()===day;
+      if(lessonFilter==="WEEK")return start>=now&&start<weekEnd;
+      return true;
+    }).sort((a,b)=>Date.parse(a.starts_at)-Date.parse(b.starts_at));
+  },[lessons,lessonFilter]);
 
   function openProgramModal() {
     if (!services.length) {
@@ -1013,12 +1041,17 @@ export default function DanceGroupsPage() {
         {notice ? <div className="studio-message success"><strong>Готово</strong><span>{notice}</span></div> : null}
 
         <section className="section-block">
-          <div className="section-heading"><div><p className="muted">Постоянные группы</p><h2>Загрузка</h2></div></div>
+          <div className="section-heading">
+            <div><p className="muted">Постоянные группы</p><h2>Группы студии</h2></div>
+            <input className="dance-list-filter" type="search" aria-label="Найти группу"
+              placeholder="Название, направление, тренер…" value={groupSearch}
+              onChange={event=>setGroupSearch(event.target.value)}/>
+          </div>
           <div className="data-table-wrap">
             <table className="data-table">
               <thead><tr><th>Группа</th><th>Тренер</th><th>Зал</th><th>Участники</th><th>Break-even</th><th>Waitlist</th><th></th></tr></thead>
               <tbody>
-                {groups.map((group) => (
+                {filteredGroups.map((group) => (
                   <tr key={group.id}>
                     <td><strong>{group.name}</strong><small>{group.program_name}</small></td>
                     <td>{group.trainer_name ?? "—"}</td>
@@ -1091,7 +1124,18 @@ export default function DanceGroupsPage() {
         ) : null}
 
         <section className="section-block">
-          <div className="section-heading"><div><p className="muted">Календарь</p><h2>Предстоящие занятия</h2></div></div>
+          <div className="section-heading">
+            <div><p className="muted">Работа с занятиями</p><h2>Расписание и журналы</h2></div>
+            <div className="dance-list-tabs" role="group" aria-label="Фильтр занятий">
+              {[
+                ["OPEN","Нужно закрыть"],["TODAY","Сегодня"],
+                ["WEEK","7 дней"],["ALL","Все"]
+              ].map(([key,label])=>
+                <button key={key} type="button" aria-pressed={lessonFilter===key}
+                  className={lessonFilter===key?"active":""}
+                  onClick={()=>setLessonFilter(key as typeof lessonFilter)}>{label}</button>)}
+            </div>
+          </div>
           <div className="data-table-wrap">
             <table className="data-table">
               <thead><tr><th>Дата</th><th>Занятие</th><th>Тренер / зал</th><th>Запись</th><th>Экономика</th><th></th></tr></thead>
@@ -1106,6 +1150,10 @@ export default function DanceGroupsPage() {
                     <td><button className="secondary-button" onClick={() => setSelectedLessonId(lesson.id)} type="button">Журнал</button></td>
                   </tr>
                 ))}
+                {!upcoming.length?<tr><td colSpan={6}>
+                  <div className="table-empty"><strong>Занятий по этому фильтру нет</strong>
+                    <span>Попробуйте вкладку «Сегодня» или «Все».</span></div>
+                </td></tr>:null}
               </tbody>
             </table>
           </div>
