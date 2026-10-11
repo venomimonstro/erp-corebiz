@@ -15,7 +15,7 @@ type TaxRegime =
   | "AUSN"
   | "OTHER";
 
-type VatMode = "NO_VAT" | "VAT_5" | "VAT_7" | "VAT_20" | "VAT_MIXED";
+type VatMode = "NO_VAT" | "VAT_5" | "VAT_7" | "VAT_22" | "VAT_MIXED";
 
 type TaxProfileInput = {
   legalEntityId:string;
@@ -72,7 +72,7 @@ export class ComplianceService {
       throw new BadRequestException("Некорректный налоговый режим");
     }
     const vatMode=input.vatMode??"NO_VAT";
-    if(!["NO_VAT","VAT_5","VAT_7","VAT_20","VAT_MIXED"].includes(vatMode)) {
+    if(!["NO_VAT","VAT_5","VAT_7","VAT_22","VAT_MIXED"].includes(vatMode)) {
       throw new BadRequestException("Некорректный режим НДС");
     }
     for(const rate of [input.usnRateBps,input.usnMinimumTaxBps]) {
@@ -112,7 +112,7 @@ export class ComplianceService {
                has_employees=$6,tax_region_code=$7,tax_office_code=$8,
                ens_enabled=$9,okved_primary=$10,kpp=$11,oktmo=$12,
                reporting_mode=$13,risk_tolerance=$14,
-               usn_rate_bps=$15,usn_minimum_tax_bps=$16,
+               usn_rate_bps=$15,usn_min_tax_bps=$16,
                updated_by_membership_id=$17,updated_at=now()
            WHERE tenant_id=$1 AND id=$2
            RETURNING *`,
@@ -149,7 +149,7 @@ export class ComplianceService {
            tenant_id,legal_entity_id,entity_kind,tax_regime,vat_mode,
            has_employees,tax_region_code,tax_office_code,ens_enabled,
            okved_primary,kpp,oktmo,reporting_mode,risk_tolerance,
-           usn_rate_bps,usn_minimum_tax_bps,effective_from,
+           usn_rate_bps,usn_min_tax_bps,effective_from,
            created_by_membership_id,updated_by_membership_id
          ) VALUES(
            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18
@@ -363,13 +363,13 @@ export class ComplianceService {
         profile.tax_regime==="USN_INCOME_EXPENSE" &&
         input.calculationType==="USN_ANNUAL"
       ) {
-        if(!profile.usn_minimum_tax_bps) {
+        if(!profile.usn_min_tax_bps) {
           throw new ConflictException(
             "Укажите подтверждённую ставку минимального налога УСН"
           );
         }
         minimumTax=
-          income*BigInt(profile.usn_minimum_tax_bps)/10000n;
+          income*BigInt(profile.usn_min_tax_bps)/10000n;
         if(minimumTax>calculated) calculated=minimumTax;
       }
 
@@ -387,7 +387,7 @@ export class ComplianceService {
       const formula={
         regime:profile.tax_regime,
         rateBps:profile.usn_rate_bps,
-        minimumTaxBps:profile.usn_minimum_tax_bps,
+        minimumTaxBps:profile.usn_min_tax_bps,
         minimumTaxMinor:minimumTax.toString()
       };
 
