@@ -159,6 +159,49 @@ export class PayrollService {
     });
   }
 
+  private async assertNoOpenPayrollDisputes(
+    client:any,
+    tenantId:string,
+    batchId:string
+  ){
+    const disputed=await client.query(
+      `SELECT pr.id
+       FROM payroll_statement_review pr
+       WHERE pr.tenant_id=$1
+         AND pr.review_status='DISPUTED'
+         AND (
+           (
+             pr.statement_kind='DANCE_TRAINER'
+             AND EXISTS(
+               SELECT 1
+               FROM trainer_payroll_statement s
+               WHERE s.tenant_id=pr.tenant_id
+                 AND s.id=pr.statement_id
+                 AND s.payroll_batch_id=$2
+             )
+           )
+           OR
+           (
+             pr.statement_kind='SERVICE_EMPLOYEE'
+             AND EXISTS(
+               SELECT 1
+               FROM service_employee_payroll_statement s
+               WHERE s.tenant_id=pr.tenant_id
+                 AND s.id=pr.statement_id
+                 AND s.payroll_batch_id=$2
+             )
+           )
+         )
+       LIMIT 1`,
+      [tenantId,batchId]
+    );
+    if(disputed.rowCount){
+      throw new ConflictException(
+        "Payroll содержит спорную ведомость. Закройте спор до утверждения или выплаты."
+      );
+    }
+  }
+
   async markPaid(
     ctx:TenantContext,
     batchId:string,
@@ -209,6 +252,8 @@ export class PayrollService {
         );
       }
 
+      await this.assertNoOpenPayrollDisputes(client,ctx.tenantId,batchId);
+
       const result=await client.query<{
         paid_at:Date;
         payment_reference:string|null;
@@ -258,6 +303,8 @@ export class PayrollService {
       if(row.status!=="DRAFT"){
         throw new ConflictException("Payroll batch cannot be approved");
       }
+
+      await this.assertNoOpenPayrollDisputes(client,ctx.tenantId,batchId);
 
       const lines=await client.query<{count:number}>(
         `SELECT count(*)::integer AS count
