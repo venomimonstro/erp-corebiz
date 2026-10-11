@@ -9,6 +9,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
+import { InventoryService } from "../inventory/inventory.service";
 
 type DancePermission = "dance.read" | "dance.write";
 
@@ -16,7 +17,8 @@ type DancePermission = "dance.read" | "dance.write";
 export class DanceEconomicsService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly authorization: AuthorizationService
+    private readonly authorization: AuthorizationService,
+    private readonly inventory: InventoryService
   ) {}
 
   async charges(context:TenantContext,studentId?:string){
