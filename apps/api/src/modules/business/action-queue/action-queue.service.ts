@@ -6,6 +6,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { GoLiveService } from "../../platform/go-live/go-live.service";
 import { VERTICAL_OPERATIONAL_RULE_BY_CODE } from "../dashboard/vertical-operational-rules";
+import {DashboardService} from "../dashboard/dashboard.service";
 
 type QueueItem = {
   sourceKey: string;
@@ -21,7 +22,8 @@ type QueueItem = {
 export class ActionQueueService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly goLive: GoLiveService
+    private readonly goLive: GoLiveService,
+    private readonly dashboard: DashboardService
   ) {}
 
   async queue(
@@ -32,6 +34,36 @@ export class ActionQueueService {
       state: "UNREAD" | "READ";
     }>;
   }> {
+    // Refresh once per 15 minutes when an owner opens the workspace. Other
+    // employees do not trigger full-company scans or gain financial access.
+    try {
+      const refresh=await this.database.withTenantTransaction(context,async client=>{
+        const owner=await client.query<{permitted:boolean}>(
+          `SELECT EXISTS(
+            SELECT 1 FROM membership_role mr JOIN role_permission rp
+            ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
+            WHERE mr.tenant_id=$1 AND mr.membership_id=$2
+              AND rp.permission_code IN ('dashboard.owner.read','*')
+          ) AS permitted`,
+          [context.tenantId,context.membershipId]
+        );
+        if(!owner.rows[0]?.permitted)return false;
+        const updated=await client.query<{checked_at:Date|null}>(
+          `SELECT max(source_updated_at) AS checked_at
+           FROM tenant_analytics_snapshot
+           WHERE tenant_id=$1 AND metric_code='BANK_UNMATCHED'`,
+          [context.tenantId]
+        );
+        const checked=updated.rows[0]?.checked_at;
+        return !checked||checked.getTime()<Date.now()-15*60_000;
+      });
+      if(refresh)await this.dashboard.operational(context);
+    }catch(error){
+      // The personal queue must remain usable during diagnostics failures.
+      process.stderr.write("[action-queue] operational scan unavailable: "+
+        (error instanceof Error?error.message:String(error)).slice(0,140)+"\n");
+    }
+
     const base = await this.database.withTenantTransaction(
       context,
       async (client) => {
