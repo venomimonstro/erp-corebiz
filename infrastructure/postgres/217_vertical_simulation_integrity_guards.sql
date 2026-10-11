@@ -18,12 +18,12 @@ DECLARE v_old_day date;
 DECLARE v_tenant uuid;
 DECLARE v_project uuid;
 BEGIN
-  IF TG_OP='UPDATE' AND (
-    OLD.project_id IS DISTINCT FROM NEW.project_id OR
-    OLD.tenant_id IS DISTINCT FROM NEW.tenant_id
-  ) THEN
-    RAISE EXCEPTION 'Project accounting entries cannot be reassigned'
-      USING ERRCODE='23514';
+  IF TG_OP='UPDATE' THEN
+    IF OLD.project_id IS DISTINCT FROM NEW.project_id OR
+       OLD.tenant_id IS DISTINCT FROM NEW.tenant_id THEN
+      RAISE EXCEPTION 'Project accounting entries cannot be reassigned'
+        USING ERRCODE='23514';
+    END IF;
   END IF;
   IF TG_OP='DELETE' THEN
     v_tenant:=OLD.tenant_id;
