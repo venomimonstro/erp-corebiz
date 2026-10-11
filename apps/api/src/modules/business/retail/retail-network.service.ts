@@ -198,12 +198,13 @@ export class RetailNetworkService {
          JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
          WHERE s.tenant_id=$1 AND s.id=ANY($2::uuid[])
            AND s.status='ACTIVE' AND v.status='ACTIVE' AND p.status='ACTIVE'
-           AND s.currency='RUB' AND s.sale_price_minor>0`,
+           AND s.currency='RUB' AND s.sale_price_minor>0
+           AND s.track_inventory=true`,
         [ctx.tenantId,Array.from(new Set(input.lines.map(l=>l.skuId)))]
       ));
     if((validPrices.rows[0]?.count??0)!==
        new Set(input.lines.map(l=>l.skuId)).size)
-      throw new ConflictException("Найдены товары без действующей цены или снятые с продажи");
+      throw new ConflictException("Для розничного резерва нужны активные SKU с ценой и складским учётом");
     if(input.channel==="CLICK_COLLECT"&&!loc.pickup_enabled)
       throw new ConflictException("Самовывоз из этой точки недоступен");
     if(input.channel==="COUNTER"){
