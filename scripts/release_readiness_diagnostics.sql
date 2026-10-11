@@ -520,3 +520,33 @@ WHERE b.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     b.paid_at IS NULL
     OR b.paid_by_membership_id IS NULL
   );
+
+
+SELECT 'DANCE_GROUP_ROOM_ALLOCATION_INVALID' AS code,count(*)::bigint AS affected
+FROM dance_group g
+LEFT JOIN service_resource r
+  ON r.tenant_id=g.tenant_id AND r.id=g.room_resource_id
+LEFT JOIN service_resource_zone z
+  ON z.tenant_id=g.tenant_id AND z.id=g.room_zone_id
+WHERE g.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND g.status<>'ARCHIVED'
+  AND (
+    (g.room_resource_id IS NULL AND g.room_zone_id IS NOT NULL)
+    OR (
+      g.room_resource_id IS NOT NULL
+      AND (
+        r.id IS NULL
+        OR r.type NOT IN ('ROOM','HALL','WORKPLACE')
+        OR g.room_capacity_units>r.capacity
+      )
+    )
+    OR (
+      g.room_zone_id IS NOT NULL
+      AND (
+        z.id IS NULL
+        OR z.resource_id<>g.room_resource_id
+        OR z.status<>'ACTIVE'
+        OR g.room_capacity_units>z.capacity_units
+      )
+    )
+  );
