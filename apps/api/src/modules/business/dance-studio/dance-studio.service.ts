@@ -3544,18 +3544,38 @@ export class DanceStudioService {
            AND (lesson_type IS NULL OR lesson_type=$3)
            AND (dance_program_id IS NULL OR dance_program_id=$4)
            AND (dance_group_id IS NULL OR dance_group_id=$5)
+           AND (service_id IS NULL OR service_id=$6)
+           AND (
+             trainer_resource_id IS NULL OR
+             trainer_resource_id=$7::uuid
+           )
+           AND extract(
+             isodow FROM ($8::timestamptz AT TIME ZONE $9)
+           )::smallint=ANY(weekdays)
+           AND (
+             extract(hour FROM ($8::timestamptz AT TIME ZONE $9))::int*60+
+             extract(minute FROM ($8::timestamptz AT TIME ZONE $9))::int
+           )>=start_minute
+           AND (
+             extract(hour FROM ($8::timestamptz AT TIME ZONE $9))::int*60+
+             extract(minute FROM ($8::timestamptz AT TIME ZONE $9))::int
+           )<end_minute
          ORDER BY
            (
              CASE WHEN lesson_type IS NULL THEN 0 ELSE 1 END +
              CASE WHEN dance_program_id IS NULL THEN 0 ELSE 2 END +
-             CASE WHEN dance_group_id IS NULL THEN 0 ELSE 4 END
+             CASE WHEN dance_group_id IS NULL THEN 0 ELSE 4 END +
+             CASE WHEN service_id IS NULL THEN 0 ELSE 8 END +
+             CASE WHEN trainer_resource_id IS NULL THEN 0 ELSE 16 END
            ) DESC,
            priority,id
          LIMIT 1
          FOR UPDATE`,
         [
           tenantId,packageId,lesson.lesson_type,
-          lesson.program_id??null,lesson.group_id??null
+          lesson.program_id??null,lesson.group_id??null,
+          lesson.service_id,lesson.trainer_resource_id??null,
+          lesson.starts_at,lesson.timezone??"Europe/Moscow"
         ]
       );
       const bucket=entitlement.rows[0];
