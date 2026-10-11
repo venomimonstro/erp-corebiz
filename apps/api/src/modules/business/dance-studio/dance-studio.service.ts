@@ -2214,6 +2214,283 @@ export class DanceStudioService {
     });
   }
 
+  private async resolveDanceDeliveryRule(
+    client:PoolClient,
+    tenantId:string,
+    serviceId:string,
+    trainerResourceId:string|null,
+    branchId:string|null,
+    deliveryFormat:"INDIVIDUAL"|"GROUP"|"SELF_PRACTICE"|"RENTAL",
+    startsAt:Date,
+    timezone:string
+  ):Promise<{
+    id:string;
+    price_minor:string|null;
+    duration_minutes:number|null;
+    capacity_units:number;
+    technology_card_id:string|null;
+    employee_resource_id:string|null;
+  }|null>{
+    const result=await client.query<{
+      id:string;
+      price_minor:string|null;
+      duration_minutes:number|null;
+      capacity_units:number;
+      technology_card_id:string|null;
+      employee_resource_id:string|null;
+    }>(
+      `SELECT
+         r.id,r.price_minor::text,r.duration_minutes,r.capacity_units,
+         r.technology_card_id,r.employee_resource_id
+       FROM service_delivery_rule r
+       WHERE r.tenant_id=$1
+         AND r.service_id=$2
+         AND r.status='ACTIVE'
+         AND r.delivery_format=$3
+         AND (
+           r.employee_resource_id IS NULL OR
+           r.employee_resource_id=$4::uuid
+         )
+         AND (r.branch_id IS NULL OR r.branch_id=$5::uuid)
+         AND r.valid_from<=($6::timestamptz AT TIME ZONE $7)::date
+         AND (
+           r.valid_to IS NULL OR
+           r.valid_to>=($6::timestamptz AT TIME ZONE $7)::date
+         )
+         AND extract(
+           isodow FROM ($6::timestamptz AT TIME ZONE $7)
+         )::smallint=ANY(r.weekdays)
+         AND (
+           extract(hour FROM ($6::timestamptz AT TIME ZONE $7))::int*60+
+           extract(minute FROM ($6::timestamptz AT TIME ZONE $7))::int
+         )>=r.start_minute
+         AND (
+           extract(hour FROM ($6::timestamptz AT TIME ZONE $7))::int*60+
+           extract(minute FROM ($6::timestamptz AT TIME ZONE $7))::int
+         )<r.end_minute
+       ORDER BY
+         (r.employee_resource_id IS NOT NULL) DESC,
+         (r.branch_id IS NOT NULL) DESC,
+         r.priority,r.valid_from DESC,r.id
+       LIMIT 1`,
+      [
+        tenantId,serviceId,deliveryFormat,trainerResourceId,
+        branchId,startsAt,timezone
+      ]
+    );
+    const row=result.rows[0]??null;
+
+    if(trainerResourceId&&(!row||row.employee_resource_id===null)){
+      const restricted=await client.query(
+        `SELECT 1
+         FROM service_delivery_rule r
+         WHERE r.tenant_id=$1
+           AND r.service_id=$2
+           AND r.status='ACTIVE'
+           AND r.delivery_format=$3
+           AND r.employee_resource_id IS NOT NULL
+           AND (r.branch_id IS NULL OR r.branch_id=$4::uuid)
+           AND r.valid_from<=($5::timestamptz AT TIME ZONE $6)::date
+           AND (
+             r.valid_to IS NULL OR
+             r.valid_to>=($5::timestamptz AT TIME ZONE $6)::date
+           )
+           AND extract(
+             isodow FROM ($5::timestamptz AT TIME ZONE $6)
+           )::smallint=ANY(r.weekdays)
+         LIMIT 1`,
+        [tenantId,serviceId,deliveryFormat,branchId,startsAt,timezone]
+      );
+      if(restricted.rowCount&&!row){
+        throw new ConflictException(
+          "Выбранный тренер не оказывает эту услугу в указанное время"
+        );
+      }
+    }
+    return row;
+  }
+
+  private async assertDanceResourceAvailable(
+    client:PoolClient,
+    tenantId:string,
+    resourceId:string,
+    startsAt:Date,
+    endsAt:Date,
+    bufferBefore:number,
+    bufferAfter:number,
+    capacityUnits:number,
+    zoneId:string|null,
+    ignoreBookingId?:string
+  ):Promise<void>{
+    const reservedStart=new Date(startsAt.getTime()-bufferBefore*60000);
+    const reservedEnd=new Date(endsAt.getTime()+bufferAfter*60000);
+
+    const schedule=await client.query(
+      `SELECT
+         NOT EXISTS(
+           SELECT 1 FROM service_resource_schedule any_schedule
+           WHERE any_schedule.tenant_id=r.tenant_id
+             AND any_schedule.resource_id=r.id
+         )
+         OR EXISTS(
+           SELECT 1 FROM service_resource_schedule sc
+           WHERE sc.tenant_id=r.tenant_id
+             AND sc.resource_id=r.id
+             AND sc.weekday=extract(
+               isodow FROM ($3::timestamptz AT TIME ZONE r.timezone)
+             )
+             AND (
+               extract(hour FROM ($3::timestamptz AT TIME ZONE r.timezone))::int*60+
+               extract(minute FROM ($3::timestamptz AT TIME ZONE r.timezone))::int
+             )>=sc.start_minute
+             AND (
+               extract(hour FROM ($4::timestamptz AT TIME ZONE r.timezone))::int*60+
+               extract(minute FROM ($4::timestamptz AT TIME ZONE r.timezone))::int
+             )<=sc.end_minute
+             AND (
+               sc.valid_from IS NULL OR
+               sc.valid_from<=($3::timestamptz AT TIME ZONE r.timezone)::date
+             )
+             AND (
+               sc.valid_to IS NULL OR
+               sc.valid_to>=($3::timestamptz AT TIME ZONE r.timezone)::date
+             )
+         ) AS available
+       FROM service_resource r
+       WHERE r.tenant_id=$1 AND r.id=$2 AND r.status='ACTIVE'`,
+      [tenantId,resourceId,reservedStart,reservedEnd]
+    );
+    if(!schedule.rows[0]?.available){
+      throw new ConflictException("Ресурс вне рабочего расписания");
+    }
+
+    const parent=await client.query<{
+      name:string;
+      capacity:number;
+      occupied:string;
+      blocked:string;
+    }>(
+      `SELECT
+         r.name,r.capacity,
+         coalesce((
+           SELECT sum(br.capacity_units)
+           FROM service_booking_resource br
+           JOIN service_booking b
+             ON b.tenant_id=br.tenant_id AND b.id=br.booking_id
+           WHERE br.tenant_id=r.tenant_id
+             AND br.resource_id=r.id
+             AND b.status IN ('DRAFT','CONFIRMED','ARRIVED','IN_SERVICE')
+             AND b.id<>coalesce(
+               $5::uuid,'00000000-0000-0000-0000-000000000000'::uuid
+             )
+             AND (
+               b.starts_at-make_interval(
+                 mins=>b.buffer_before_minutes_snapshot
+               )
+             )<$4
+             AND (
+               b.ends_at+make_interval(
+                 mins=>b.buffer_after_minutes_snapshot
+               )
+             )>$3
+         ),0)::text AS occupied,
+         coalesce((
+           SELECT sum(
+             CASE
+               WHEN rb.capacity_units IS NOT NULL THEN rb.capacity_units
+               WHEN rb.zone_id IS NULL THEN r.capacity
+               ELSE z.capacity_units
+             END
+           )
+           FROM service_resource_block rb
+           LEFT JOIN service_resource_zone z
+             ON z.tenant_id=rb.tenant_id AND z.id=rb.zone_id
+           WHERE rb.tenant_id=r.tenant_id
+             AND rb.resource_id=r.id
+             AND rb.starts_at<$4
+             AND rb.ends_at>$3
+         ),0)::text AS blocked
+       FROM service_resource r
+       WHERE r.tenant_id=$1 AND r.id=$2
+       FOR UPDATE`,
+      [
+        tenantId,resourceId,reservedStart,reservedEnd,
+        ignoreBookingId??null
+      ]
+    );
+    const row=parent.rows[0];
+    if(
+      !row ||
+      Number(row.occupied)+Number(row.blocked)+capacityUnits>row.capacity
+    ){
+      throw new ConflictException(
+        "Недостаточно свободной вместимости ресурса"+(row?.name?": "+row.name:"")
+      );
+    }
+
+    if(zoneId){
+      const zone=await client.query<{
+        name:string;
+        capacity_units:number;
+        occupied:string;
+        blocked:string;
+      }>(
+        `SELECT
+           z.name,z.capacity_units,
+           coalesce((
+             SELECT sum(br.capacity_units)
+             FROM service_booking_resource br
+             JOIN service_booking b
+               ON b.tenant_id=br.tenant_id AND b.id=br.booking_id
+             WHERE br.tenant_id=z.tenant_id
+               AND br.resource_id=z.resource_id
+               AND br.zone_id=z.id
+               AND b.status IN ('DRAFT','CONFIRMED','ARRIVED','IN_SERVICE')
+               AND b.id<>coalesce(
+                 $5::uuid,'00000000-0000-0000-0000-000000000000'::uuid
+               )
+               AND (
+                 b.starts_at-make_interval(
+                   mins=>b.buffer_before_minutes_snapshot
+                 )
+               )<$4
+               AND (
+                 b.ends_at+make_interval(
+                   mins=>b.buffer_after_minutes_snapshot
+                 )
+               )>$3
+           ),0)::text AS occupied,
+           coalesce((
+             SELECT sum(coalesce(rb.capacity_units,z.capacity_units))
+             FROM service_resource_block rb
+             WHERE rb.tenant_id=z.tenant_id
+               AND rb.resource_id=z.resource_id
+               AND rb.zone_id=z.id
+               AND rb.starts_at<$4
+               AND rb.ends_at>$3
+           ),0)::text AS blocked
+         FROM service_resource_zone z
+         WHERE z.tenant_id=$1
+           AND z.id=$6
+           AND z.resource_id=$2
+           AND z.status='ACTIVE'`,
+        [
+          tenantId,resourceId,reservedStart,reservedEnd,
+          ignoreBookingId??null,zoneId
+        ]
+      );
+      const z=zone.rows[0];
+      if(
+        !z ||
+        Number(z.occupied)+Number(z.blocked)+capacityUnits>z.capacity_units
+      ){
+        throw new ConflictException(
+          "Недостаточно свободной вместимости зоны"+(z?.name?": "+z.name:"")
+        );
+      }
+    }
+  }
+
   private async createLessonTx(
     client:PoolClient,
     context:TenantContext,
@@ -2224,6 +2501,8 @@ export class DanceStudioService {
       serviceId?:string;
       trainerResourceId?:string;
       roomResourceId?:string;
+      roomZoneId?:string;
+      roomCapacityUnits?:number;
       startsAt:string;
       durationMinutes?:number;
       capacity?:number;
@@ -2231,10 +2510,13 @@ export class DanceStudioService {
     }
   ){
     const key=input.idempotencyKey?.trim();
-    if(!key||key.length<8||key.length>160)
+    if(!key||key.length<8||key.length>160){
       throw new BadRequestException("Некорректный ключ идемпотентности");
+    }
     const startsAt=new Date(input.startsAt);
-    if(Number.isNaN(startsAt.getTime())) throw new BadRequestException("Некорректное время урока");
+    if(Number.isNaN(startsAt.getTime())){
+      throw new BadRequestException("Некорректное время урока");
+    }
 
     await client.query(
       "SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))",
@@ -2257,13 +2539,34 @@ export class DanceStudioService {
       );
     }
 
-    const serviceId=input.serviceId??group?.service_id;
-    const trainerId=input.trainerResourceId??group?.trainer_resource_id;
-    const roomId=input.roomResourceId??group?.room_resource_id??null;
-    const capacity=Math.floor(input.capacity??group?.capacity??1);
     const lessonType=input.lessonType??(group?"GROUP":"INDIVIDUAL");
-    if(!serviceId||!trainerId) throw new BadRequestException("Укажите услугу и тренера");
-    if(capacity<1||capacity>500) throw new BadRequestException("Некорректная вместимость");
+    const serviceId=input.serviceId??group?.service_id;
+    let trainerId=input.trainerResourceId??group?.trainer_resource_id??null;
+    const roomId=input.roomResourceId??group?.room_resource_id??null;
+    const roomZoneId=input.roomZoneId??null;
+    const capacity=Math.floor(input.capacity??group?.capacity??1);
+
+    if(lessonType==="SELF_PRACTICE"&&!input.trainerResourceId){
+      trainerId=null;
+    }
+    if(!serviceId){
+      throw new BadRequestException("Укажите услугу");
+    }
+    if(
+      !trainerId &&
+      !["SELF_PRACTICE","RENTAL_EVENT"].includes(lessonType)
+    ){
+      throw new BadRequestException("Укажите тренера");
+    }
+    if(
+      ["SELF_PRACTICE","RENTAL_EVENT"].includes(lessonType) &&
+      !roomId
+    ){
+      throw new BadRequestException("Для этого формата необходимо выбрать зал");
+    }
+    if(capacity<1||capacity>500){
+      throw new BadRequestException("Некорректная вместимость занятия");
+    }
 
     const service=await client.query<{
       duration_minutes:number;
@@ -2272,133 +2575,230 @@ export class DanceStudioService {
       price_minor:string;
       currency:string;
     }>(
-      `SELECT duration_minutes,buffer_before_minutes,buffer_after_minutes,
-              price_minor::text,currency
+      `SELECT
+         duration_minutes,buffer_before_minutes,buffer_after_minutes,
+         price_minor::text,currency
        FROM service_catalog_item
        WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
       [context.tenantId,serviceId]
     );
     const sr=service.rows[0];
     if(!sr) throw new NotFoundException("Услуга не найдена");
-    const duration=Math.floor(input.durationMinutes??sr.duration_minutes);
-    if(duration<5||duration>1440) throw new BadRequestException("Некорректная длительность");
-    const endsAt=new Date(startsAt.getTime()+duration*60000);
 
-    const resources=Array.from(new Set([trainerId,roomId].filter(Boolean) as string[])).sort();
+    const resourceIds=Array.from(
+      new Set([trainerId,roomId].filter(Boolean) as string[])
+    ).sort();
     const resourceRows=await client.query<{
-      id:string;type:string;name:string;membership_id:string|null;
+      id:string;
+      type:string;
+      name:string;
+      membership_id:string|null;
+      branch_id:string|null;
+      capacity:number;
+      cost_per_hour_minor:string;
       timezone:string;
     }>(
-      `SELECT id,type,name,membership_id,timezone
+      `SELECT
+         id,type,name,membership_id,branch_id,capacity,
+         cost_per_hour_minor::text,timezone
        FROM service_resource
        WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND status='ACTIVE'
        ORDER BY id
        FOR UPDATE`,
-      [context.tenantId,resources]
+      [context.tenantId,resourceIds]
     );
-    if(resourceRows.rowCount!==resources.length)
+    if(resourceRows.rowCount!==resourceIds.length){
       throw new NotFoundException("Тренер или зал не найден");
-    const trainer=resourceRows.rows.find(r=>r.id===trainerId);
-    if(!trainer||trainer.type!=="EMPLOYEE")
-      throw new BadRequestException("Тренер должен быть ресурсом EMPLOYEE");
-    if(scopeIds && (!trainer.membership_id||!scopeIds.includes(trainer.membership_id)))
-      throw new ForbiddenException("Тренер вне доступной области");
-    if(roomId){
-      const room=resourceRows.rows.find(r=>r.id===roomId);
-      if(!room||!["ROOM","HALL","WORKPLACE"].includes(room.type))
-        throw new BadRequestException("Зал должен быть ресурсом ROOM/HALL");
     }
+
+    const trainer=trainerId
+      ? resourceRows.rows.find(row=>row.id===trainerId)
+      : null;
+    if(trainerId&&(!trainer||trainer.type!=="EMPLOYEE")){
+      throw new BadRequestException("Тренер должен быть ресурсом EMPLOYEE");
+    }
+    if(
+      trainer &&
+      scopeIds &&
+      (!trainer.membership_id||!scopeIds.includes(trainer.membership_id))
+    ){
+      throw new ForbiddenException("Тренер вне доступной области");
+    }
+
+    const room=roomId
+      ? resourceRows.rows.find(row=>row.id===roomId)
+      : null;
+    if(roomId&&(!room||!["ROOM","HALL","WORKPLACE"].includes(room.type))){
+      throw new BadRequestException("Зал должен быть ресурсом ROOM/HALL");
+    }
+
     const lessonTimezone=
-      (roomId
-        ? resourceRows.rows.find(r=>r.id===roomId)?.timezone
-        : undefined) ??
-      trainer.timezone ??
-      "Europe/Moscow";
+      room?.timezone??trainer?.timezone??"Europe/Moscow";
+    const branchId=
+      group?.branch_id??trainer?.branch_id??room?.branch_id??null;
+    const deliveryFormat:
+      "INDIVIDUAL"|"GROUP"|"SELF_PRACTICE"|"RENTAL"=
+      lessonType==="SELF_PRACTICE"
+        ?"SELF_PRACTICE"
+        :lessonType==="RENTAL_EVENT"
+          ?"RENTAL"
+          :(
+            group||
+            ["GROUP","MASTER_CLASS","OPEN_CLASS","REHEARSAL"].includes(lessonType)
+          )
+            ?"GROUP"
+            :"INDIVIDUAL";
 
-    const blocked=await client.query(
-      `SELECT r.name
-       FROM service_resource r
-       WHERE r.tenant_id=$1 AND r.id=ANY($2::uuid[])
-         AND (
-           EXISTS (
-             SELECT 1
-             FROM service_resource_block rb
-             WHERE rb.tenant_id=r.tenant_id AND rb.resource_id=r.id
-               AND rb.starts_at < $4 AND rb.ends_at > $3
-           )
-           OR EXISTS (
-             SELECT 1
-             FROM service_booking_resource br
-             JOIN service_booking b
-               ON b.tenant_id=br.tenant_id AND b.id=br.booking_id
-             WHERE br.tenant_id=r.tenant_id AND br.resource_id=r.id
-               AND b.status IN ('DRAFT','CONFIRMED','ARRIVED','IN_SERVICE')
-               AND b.starts_at < $4 + make_interval(mins=>$6)
-               AND b.ends_at > $3 - make_interval(mins=>$5)
-           )
-         )`,
-      [
-        context.tenantId,resources,startsAt,endsAt,
-        sr.buffer_before_minutes,sr.buffer_after_minutes
-      ]
+    const rule=await this.resolveDanceDeliveryRule(
+      client,context.tenantId,serviceId,trainerId,branchId,
+      deliveryFormat,startsAt,lessonTimezone
     );
-    if(blocked.rowCount)
-      throw new ConflictException("Конфликт расписания: "+blocked.rows[0].name);
 
-    const number=await this.nextNumber(client,context.tenantId,"service_booking","BOOK");
+    const duration=Math.floor(
+      input.durationMinutes??rule?.duration_minutes??sr.duration_minutes
+    );
+    if(duration<5||duration>1440){
+      throw new BadRequestException("Некорректная длительность");
+    }
+    const endsAt=new Date(startsAt.getTime()+duration*60000);
+    const roomCapacityUnits=roomId
+      ? Math.floor(input.roomCapacityUnits??rule?.capacity_units??1)
+      : 0;
+    if(roomId&&(
+      roomCapacityUnits<1||
+      !Number.isSafeInteger(roomCapacityUnits)||
+      roomCapacityUnits>(room?.capacity??0)
+    )){
+      throw new BadRequestException("Некорректная доля зала");
+    }
+    if(roomZoneId&&!roomId){
+      throw new BadRequestException("Зона указана без зала");
+    }
+
+    if(trainerId){
+      await this.assertDanceResourceAvailable(
+        client,context.tenantId,trainerId,startsAt,endsAt,
+        sr.buffer_before_minutes,sr.buffer_after_minutes,
+        1,null
+      );
+    }
+    if(roomId){
+      await this.assertDanceResourceAvailable(
+        client,context.tenantId,roomId,startsAt,endsAt,
+        sr.buffer_before_minutes,sr.buffer_after_minutes,
+        roomCapacityUnits,roomZoneId
+      );
+    }
+
+    const number=await this.nextNumber(
+      client,context.tenantId,"service_booking","BOOK"
+    );
     const booking=await client.query<{id:string;version:number}>(
       `INSERT INTO service_booking(
          tenant_id,business_number,party_id,service_id,branch_id,
          status,source,starts_at,ends_at,price_minor_snapshot,currency,
          duration_minutes_snapshot,buffer_before_minutes_snapshot,
          buffer_after_minutes_snapshot,notes,idempotency_key,
-         created_by_membership_id
+         created_by_membership_id,delivery_rule_id,technology_card_id,
+         delivery_format_snapshot
        ) VALUES(
-         $1,$2,NULL,$3,$4,'CONFIRMED','API',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+         $1,$2,NULL,$3,$4,'CONFIRMED','API',$5,$6,$7,$8,$9,$10,$11,
+         $12,$13,$14,$15,$16,$17
        )
        RETURNING id,version`,
       [
-        context.tenantId,number,serviceId,group?.branch_id??null,
-        startsAt,endsAt,sr.price_minor,sr.currency,duration,
+        context.tenantId,number,serviceId,branchId,
+        startsAt,endsAt,rule?.price_minor??sr.price_minor,sr.currency,duration,
         sr.buffer_before_minutes,sr.buffer_after_minutes,
-        group?"Групповое занятие: "+group.name:"Занятие студии",
-        "dance:"+key,context.membershipId
+        group?"Групповое занятие: "+group.name:
+          lessonType==="SELF_PRACTICE"?"Самостоятельная практика":
+          lessonType==="RENTAL_EVENT"?"Аренда зала":"Занятие студии",
+        "dance:"+key,context.membershipId,
+        rule?.id??null,rule?.technology_card_id??null,deliveryFormat
       ]
     );
     const br=booking.rows[0];
     if(!br) throw new Error("DANCE_HOST_BOOKING_CREATE_FAILED");
-    for(const resourceId of resources){
+
+    if(trainer){
       await client.query(
         `INSERT INTO service_booking_resource(
-           tenant_id,booking_id,resource_id,capacity_units
-         ) VALUES($1,$2,$3,1)`,
-        [context.tenantId,br.id,resourceId]
+           tenant_id,booking_id,resource_id,capacity_units,
+           cost_per_hour_minor_snapshot
+         ) VALUES($1,$2,$3,1,$4)`,
+        [
+          context.tenantId,br.id,trainer.id,
+          trainer.cost_per_hour_minor
+        ]
+      );
+    }
+    if(room){
+      await client.query(
+        `INSERT INTO service_booking_resource(
+           tenant_id,booking_id,resource_id,capacity_units,zone_id,
+           cost_per_hour_minor_snapshot
+         ) VALUES($1,$2,$3,$4,$5,$6)`,
+        [
+          context.tenantId,br.id,room.id,roomCapacityUnits,roomZoneId,
+          room.cost_per_hour_minor
+        ]
+      );
+    }
+
+    if(rule?.technology_card_id){
+      await client.query(
+        `INSERT INTO service_booking_material(
+           tenant_id,booking_id,warehouse_id,sku_id,
+           planned_quantity_milli,unit_cost_minor_snapshot
+         )
+         SELECT
+           l.tenant_id,$3,l.warehouse_id,l.sku_id,
+           (
+             l.quantity_milli*(10000::bigint+l.waste_bps::bigint)+9999
+           )/10000,
+           s.cost_price_minor
+         FROM service_technology_card_line l
+         JOIN sku s
+           ON s.tenant_id=l.tenant_id AND s.id=l.sku_id
+         WHERE l.tenant_id=$1 AND l.card_id=$2 AND s.status='ACTIVE'`,
+        [context.tenantId,rule.technology_card_id,br.id]
       );
     }
 
     const lesson=await client.query(
       `INSERT INTO dance_lesson(
          tenant_id,group_id,host_booking_id,lesson_type,
-         trainer_resource_id,room_resource_id,starts_at,ends_at,
-         capacity,status,currency,timezone,created_by_membership_id
+         trainer_resource_id,room_resource_id,room_zone_id,room_capacity_units,
+         starts_at,ends_at,capacity,status,currency,timezone,
+         created_by_membership_id
        ) VALUES(
-         $1,$2,$3,$4,$5,$6,$7,$8,$9,'OPEN_FOR_BOOKING',$10,$11,$12
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+         'OPEN_FOR_BOOKING',$12,$13,$14
        )
-       RETURNING id,status,version,timezone`,
+       RETURNING
+         id,status,version,timezone,room_capacity_units,room_zone_id`,
       [
         context.tenantId,input.groupId??null,br.id,lessonType,trainerId,
-        roomId,startsAt,endsAt,capacity,sr.currency,lessonTimezone,
+        roomId,roomZoneId,roomId?roomCapacityUnits:1,
+        startsAt,endsAt,capacity,sr.currency,lessonTimezone,
         context.membershipId
       ]
     );
     const row=lesson.rows[0];
     if(!row) throw new Error("DANCE_LESSON_CREATE_FAILED");
-    await this.audit(client,context,"dance.lesson_created","dance_lesson",row.id,{
-      groupId:input.groupId??null,
-      startsAt:startsAt.toISOString(),
-      trainerResourceId:trainerId,
-      roomResourceId:roomId
-    });
+
+    await this.audit(
+      client,context,"dance.lesson_created","dance_lesson",row.id,{
+        groupId:input.groupId??null,
+        lessonType,
+        startsAt:startsAt.toISOString(),
+        trainerResourceId:trainerId,
+        roomResourceId:roomId,
+        roomZoneId,
+        roomCapacityUnits:roomId?roomCapacityUnits:0,
+        deliveryRuleId:rule?.id??null
+      }
+    );
     return row;
   }
 
