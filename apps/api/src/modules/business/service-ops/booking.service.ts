@@ -2246,147 +2246,193 @@ export class BookingService {
     input: {
       startsAt: string;
       resourceIds?: string[];
+      resources?: Array<{
+        resourceId:string;
+        capacityUnits?:number;
+        zoneId?:string;
+      }>;
       version: number;
     }
   ): Promise<{ version: number }> {
-    const startsAt = new Date(input.startsAt);
-    if (Number.isNaN(startsAt.getTime())) {
+    const startsAt=new Date(input.startsAt);
+    if(Number.isNaN(startsAt.getTime())){
       throw new BadRequestException("Некорректное время записи");
     }
+    if(!Number.isSafeInteger(input.version)||input.version<1){
+      throw new BadRequestException("Некорректная версия записи");
+    }
 
-    const scopedMembershipIds = await this.serviceScope(context, "service.write");
-
-    return this.database.withTenantTransaction(context, async (client) => {
+    const scopedMembershipIds=await this.serviceScope(context,"service.write");
+    return this.database.withTenantTransaction(context,async client=>{
       await this.assertBookingAccess(
-        client,
-        context.tenantId,
-        bookingId,
-        scopedMembershipIds
+        client,context.tenantId,bookingId,scopedMembershipIds
       );
-      const bookingResult = await client.query<{
-        id: string;
-        service_id: string;
-        status: BookingStatus;
-        duration_minutes_snapshot: number;
-        buffer_before_minutes_snapshot: number;
-        buffer_after_minutes_snapshot: number;
-        version: number;
+      const bookingResult=await client.query<{
+        id:string;
+        service_id:string;
+        status:BookingStatus;
+        duration_minutes_snapshot:number;
+        buffer_before_minutes_snapshot:number;
+        buffer_after_minutes_snapshot:number;
+        version:number;
       }>(
-        `SELECT id, service_id, status,
-                duration_minutes_snapshot,
-                buffer_before_minutes_snapshot,
-                buffer_after_minutes_snapshot,
-                version
+        `SELECT
+           id,service_id,status,duration_minutes_snapshot,
+           buffer_before_minutes_snapshot,buffer_after_minutes_snapshot,version
          FROM service_booking
-         WHERE tenant_id = $1 AND id = $2
+         WHERE tenant_id=$1 AND id=$2
          FOR UPDATE`,
-        [context.tenantId, bookingId]
+        [context.tenantId,bookingId]
       );
-
-      const booking = bookingResult.rows[0];
-      if (!booking) throw new NotFoundException("Запись не найдена");
-      if (booking.version !== input.version) {
+      const booking=bookingResult.rows[0];
+      if(!booking) throw new NotFoundException("Запись не найдена");
+      if(booking.version!==input.version){
         throw new ConflictException("Запись уже была изменена");
       }
-      if (["COMPLETED", "CANCELLED", "NO_SHOW"].includes(booking.status)) {
-        throw new BadRequestException("Эту запись нельзя перенести");
+      if(!["DRAFT","CONFIRMED"].includes(booking.status)){
+        throw new BadRequestException(
+          "Перенос доступен только до начала оказания услуги"
+        );
       }
 
-      let resourceIds = input.resourceIds?.length
-        ? Array.from(new Set(input.resourceIds)).sort()
-        : (
-            await client.query<{ resource_id: string }>(
-              `SELECT resource_id
-               FROM service_booking_resource
-               WHERE tenant_id = $1 AND booking_id = $2
-               ORDER BY resource_id`,
-              [context.tenantId, bookingId]
-            )
-          ).rows.map((row) => row.resource_id);
+      let allocations:Array<{
+        resourceId:string;
+        capacityUnits:number;
+        zoneId:string|null;
+      }>;
 
-      const resources = await this.lockResources(
-        client,
-        context.tenantId,
-        resourceIds
+      if(Array.isArray(input.resources)&&input.resources.length){
+        allocations=input.resources.map(item=>({
+          resourceId:String(item.resourceId??"").trim(),
+          capacityUnits:Math.floor(item.capacityUnits??1),
+          zoneId:item.zoneId?.trim()||null
+        }));
+      }else if(input.resourceIds?.length){
+        allocations=Array.from(new Set(input.resourceIds)).map(resourceId=>({
+          resourceId,
+          capacityUnits:1,
+          zoneId:null
+        }));
+      }else{
+        allocations=(
+          await client.query<{
+            resource_id:string;
+            capacity_units:number;
+            zone_id:string|null;
+          }>(
+            `SELECT resource_id,capacity_units,zone_id
+             FROM service_booking_resource
+             WHERE tenant_id=$1 AND booking_id=$2
+             ORDER BY resource_id`,
+            [context.tenantId,bookingId]
+          )
+        ).rows.map(row=>({
+          resourceId:row.resource_id,
+          capacityUnits:row.capacity_units,
+          zoneId:row.zone_id
+        }));
+      }
+
+      if(!allocations.length||allocations.length>10){
+        throw new BadRequestException("Выберите от 1 до 10 ресурсов");
+      }
+      const seen=new Set<string>();
+      for(const allocation of allocations){
+        if(!allocation.resourceId||seen.has(allocation.resourceId)){
+          throw new BadRequestException("Ресурс в записи должен быть уникальным");
+        }
+        seen.add(allocation.resourceId);
+        if(
+          !Number.isSafeInteger(allocation.capacityUnits)||
+          allocation.capacityUnits<1||allocation.capacityUnits>100000
+        ){
+          throw new BadRequestException("Некорректная доля ресурса");
+        }
+      }
+
+      const resourceIds=[...seen].sort();
+      const resources=await this.lockResources(
+        client,context.tenantId,resourceIds
       );
-      this.assertResourceScope(resources, scopedMembershipIds);
-
-      const endsAt = new Date(
-        startsAt.getTime() + booking.duration_minutes_snapshot * 60000
-      );
-
+      this.assertResourceScope(resources,scopedMembershipIds);
       await this.assertRequirements(
-        client,
-        context.tenantId,
-        booking.service_id,
-        resources
+        client,context.tenantId,booking.service_id,resources
       );
 
-      for (const resource of resources) {
-        const available = await this.resourceAvailable(
-          client,
-          context.tenantId,
-          resource.id,
-          startsAt,
-          endsAt,
+      const endsAt=new Date(
+        startsAt.getTime()+booking.duration_minutes_snapshot*60000
+      );
+
+      for(const allocation of allocations){
+        const resource=resources.find(
+          candidate=>candidate.id===allocation.resourceId
+        )!;
+        if(resource.type==="EMPLOYEE"&&allocation.capacityUnits!==1){
+          throw new BadRequestException(
+            "Сотрудник бронируется одной единицей вместимости"
+          );
+        }
+        if(allocation.capacityUnits>resource.capacity){
+          throw new ConflictException(
+            "Запрошенная доля превышает вместимость ресурса: "+resource.name
+          );
+        }
+        const available=await this.resourceAvailable(
+          client,context.tenantId,resource.id,startsAt,endsAt,
           booking.buffer_before_minutes_snapshot,
           booking.buffer_after_minutes_snapshot,
-          1,
-          bookingId
+          allocation.capacityUnits,bookingId,allocation.zoneId
         );
-
-        if (!available) {
+        if(!available){
           throw new ConflictException(
-            "Ресурс недоступен в выбранное время: " + resource.name
+            "Ресурс недоступен или его вместимости недостаточно: "+resource.name
           );
         }
       }
 
       await client.query(
         `DELETE FROM service_booking_resource
-         WHERE tenant_id = $1 AND booking_id = $2`,
-        [context.tenantId, bookingId]
+         WHERE tenant_id=$1 AND booking_id=$2`,
+        [context.tenantId,bookingId]
       );
-
-      for (const resource of resources) {
+      for(const allocation of allocations){
+        const resource=resources.find(
+          candidate=>candidate.id===allocation.resourceId
+        )!;
         await client.query(
           `INSERT INTO service_booking_resource(
-             tenant_id, booking_id, resource_id, capacity_units,
+             tenant_id,booking_id,resource_id,capacity_units,zone_id,
              cost_per_hour_minor_snapshot
-           ) VALUES ($1,$2,$3,1,$4)`,
+           ) VALUES($1,$2,$3,$4,$5,$6)`,
           [
-            context.tenantId,
-            bookingId,
-            resource.id,
+            context.tenantId,bookingId,allocation.resourceId,
+            allocation.capacityUnits,allocation.zoneId,
             resource.cost_per_hour_minor
           ]
         );
       }
 
-      const update = await client.query<{ version: number }>(
+      const update=await client.query<{version:number}>(
         `UPDATE service_booking
-         SET starts_at = $3,
-             ends_at = $4,
-             version = version + 1,
-             updated_at = now()
-         WHERE tenant_id = $1 AND id = $2
+         SET starts_at=$3,ends_at=$4,version=version+1,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
          RETURNING version`,
-        [context.tenantId, bookingId, startsAt, endsAt]
+        [context.tenantId,bookingId,startsAt,endsAt]
       );
 
-      await this.events.enqueue(client, context, {
-        eventName: "service.booking_rescheduled",
-        entityType: "SERVICE_BOOKING",
-        entityId: bookingId,
-        payload: {
+      await this.events.enqueue(client,context,{
+        eventName:"service.booking_rescheduled",
+        entityType:"SERVICE_BOOKING",
+        entityId:bookingId,
+        payload:{
           bookingId,
-          startsAt: startsAt.toISOString(),
-          endsAt: endsAt.toISOString(),
-          resourceIds
+          startsAt:startsAt.toISOString(),
+          endsAt:endsAt.toISOString(),
+          resources:allocations
         }
       });
 
-      return { version: update.rows[0]!.version };
+      return {version:update.rows[0]!.version};
     });
   }
 
