@@ -2248,3 +2248,58 @@ button, .primary, .secondary { font: inherit; }
 @media (max-width:560px) {
   .payroll-pipeline { grid-template-columns:1fr; }
 }
+
+/* Commercial payroll review */
+.studio-score-grid.compact article {
+  min-height:118px;
+  padding:15px 16px;
+}
+.statement-status-stack {
+  display:flex !important;
+  grid-template-columns:none !important;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap:5px !important;
+}
+.status-pill.danger {
+  border-color:#ead6d1;
+  background:#fff5f2;
+  color:#914e42;
+}
+.table-actions {
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  align-items:center;
+  justify-content:flex-end;
+}
+.table-actions button {
+  min-height:32px;
+  padding:7px 10px;
+  border-radius:9px;
+  font-size:9px;
+  white-space:nowrap;
+}
+.table-subtext {
+  display:block;
+  max-width:260px;
+  margin-top:5px;
+  color:#858c93;
+  font-size:8px;
+  line-height:1.4;
+}
+.trainer-statement-grid .studio-hero-actions {
+  display:flex !important;
+  grid-template-columns:none !important;
+  flex-wrap:wrap;
+  gap:6px !important;
+}
+.trainer-statement-grid .studio-hero-actions button {
+  flex:1 1 130px;
+  margin:0;
+}
+@media (max-width:760px) {
+  .table-actions { justify-content:flex-start; }
+  .statement-status-stack { justify-content:flex-start; }
+}
+
