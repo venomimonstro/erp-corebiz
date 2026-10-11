@@ -1652,27 +1652,9 @@ export default function DanceTeamPage() {
                 ) : null}
                 {statement.status === "FINALIZED" &&
                 statement.review_status === "PENDING" ? (
-                  <div className="studio-hero-actions">
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() =>
-                        void reviewStatement(statement, "ACKNOWLEDGED")
-                      }
-                    >
-                      Согласовать
-                    </button>
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      disabled={pending}
-                      onClick={() =>
-                        void reviewStatement(statement, "DISPUTED")
-                      }
-                    >
-                      Есть вопрос
-                    </button>
-                  </div>
+                  <span className="muted">
+                    Ждём подтверждения тренера в его личном кабинете
+                  </span>
                 ) : null}
                 {statement.review_status === "DISPUTED" ? (
                   <button
