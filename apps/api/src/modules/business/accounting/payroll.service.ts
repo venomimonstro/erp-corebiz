@@ -81,6 +81,41 @@ export class PayrollService {
     });
   }
 
+  async batchLines(ctx:TenantContext,batchId:string) {
+    return this.db.withTenantTransaction(ctx,async client=>{
+      const batch=await client.query(
+        `SELECT 1 FROM payroll_accrual_batch
+         WHERE tenant_id=$1 AND id=$2`,
+        [ctx.tenantId,batchId]
+      );
+      if(!batch.rowCount) throw new NotFoundException("Payroll batch not found");
+
+      const lines=await client.query(
+        `SELECT
+           l.id,l.employee_ref,l.gross_minor::text,l.deduction_minor::text,
+           coalesce((
+             SELECT json_agg(json_build_object(
+               'id',c.id,
+               'sourceType',c.source_type,
+               'sourceKey',c.source_key,
+               'grossMinor',c.gross_minor::text,
+               'deductionMinor',c.deduction_minor::text,
+               'metadata',c.metadata
+             ) ORDER BY c.source_type,c.source_key)
+             FROM payroll_accrual_component c
+             WHERE c.tenant_id=l.tenant_id
+               AND c.batch_id=l.batch_id
+               AND c.employee_ref=l.employee_ref
+           ),'[]'::json) AS components
+         FROM payroll_accrual_line l
+         WHERE l.tenant_id=$1 AND l.batch_id=$2
+         ORDER BY l.employee_ref`,
+        [ctx.tenantId,batchId]
+      );
+      return lines.rows;
+    });
+  }
+
   async batchSummary(ctx:TenantContext,batchId:string) {
     return this.db.withTenantTransaction(ctx,async client=>{
       const batch=await client.query(
