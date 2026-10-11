@@ -124,4 +124,26 @@ describe("ApiRateLimitGuard", () => {
 
     expect(redis.acquireSemaphore).not.toHaveBeenCalled();
   });
+  it("uses one rate bucket for many object ids on the same route",async()=>{
+    const reflector={
+      getAllAndOverride:jest.fn(()=> "NORMAL")
+    } as unknown as Reflector;
+    const guard=new ApiRateLimitGuard(redis as any,reflector,pressure as any);
+    const first="11111111-1111-4111-8111-111111111111";
+    const second="22222222-2222-4222-8222-222222222222";
+    await guard.canActivate(context("NORMAL",{
+      method:"GET",path:"/api/v1/projects/"+first,
+      route:{path:"/api/v1/projects/:projectId"}
+    }));
+    await guard.canActivate(context("NORMAL",{
+      method:"GET",path:"/api/v1/projects/"+second,
+      route:{path:"/api/v1/projects/:projectId"}
+    }));
+    expect(redis.incrementWindow).toHaveBeenCalledTimes(4);
+    expect(redis.incrementWindow.mock.calls[0]?.[0])
+      .toBe(redis.incrementWindow.mock.calls[2]?.[0]);
+    expect(redis.incrementWindow.mock.calls[1]?.[0])
+      .toBe(redis.incrementWindow.mock.calls[3]?.[0]);
+  });
+
 });
