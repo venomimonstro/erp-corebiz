@@ -2,7 +2,16 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
+import { StudioModal } from "../../../../components/studio-modal";
 import { apiRequest } from "../../../../lib/api";
+
+type Zone = {
+  id: string;
+  resource_id: string;
+  name: string;
+  code: string | null;
+  capacity_units: number;
+};
 
 type Resource = {
   id: string;
@@ -35,6 +44,11 @@ function money(value: string, currency: string): string {
 export default function ResourcesPage() {
   const [resources, setResources] = useState<Resource[]>([]);
   const [error, setError] = useState("");
+  const [zoneResource, setZoneResource] = useState<Resource | null>(null);
+  const [zones, setZones] = useState<Zone[]>([]);
+  const [zoneName, setZoneName] = useState("");
+  const [zoneCapacity, setZoneCapacity] = useState("1");
+  const [zonePending, setZonePending] = useState(false);
 
   const load = useCallback(async () => {
     setError("");
@@ -48,6 +62,65 @@ export default function ResourcesPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function openZones(resource: Resource) {
+    setZoneResource(resource);
+    setZoneName("");
+    setZoneCapacity("1");
+    setError("");
+    try {
+      setZones(
+        await apiRequest<Zone[]>("/service/resources/" + resource.id + "/zones")
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Не удалось загрузить зоны"
+      );
+    }
+  }
+
+  async function createZone() {
+    if (!zoneResource) return;
+    const name=zoneName.trim();
+    const capacity=Number(zoneCapacity);
+    if (!name) {
+      setError("Укажите название зоны");
+      return;
+    }
+    if (
+      !Number.isSafeInteger(capacity) ||
+      capacity < 1 ||
+      capacity > zoneResource.capacity
+    ) {
+      setError("Проверьте вместимость зоны");
+      return;
+    }
+
+    setZonePending(true);
+    setError("");
+    try {
+      await apiRequest("/service/resources/" + zoneResource.id + "/zones", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          capacityUnits: capacity
+        })
+      });
+      setZones(
+        await apiRequest<Zone[]>(
+          "/service/resources/" + zoneResource.id + "/zones"
+        )
+      );
+      setZoneName("");
+      setZoneCapacity("1");
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Не удалось создать зону"
+      );
+    } finally {
+      setZonePending(false);
+    }
+  }
 
   async function createResource() {
     const name = window.prompt("Название ресурса");
@@ -237,6 +310,15 @@ export default function ResourcesPage() {
               </dl>
 
               <div className="header-actions">
+                {["ROOM","HALL","WORKPLACE"].includes(resource.type) ? (
+                  <button
+                    className="secondary-button"
+                    onClick={() => void openZones(resource)}
+                    type="button"
+                  >
+                    Зоны зала
+                  </button>
+                ) : null}
                 <button
                   className="secondary-button"
                   onClick={() => void setSchedule(resource)}
@@ -263,6 +345,96 @@ export default function ResourcesPage() {
             </div>
           ) : null}
         </div>
+        {zoneResource ? (
+          <StudioModal
+            eyebrow="Совместное использование"
+            title={"Зоны · " + zoneResource.name}
+            description="Разделите большой зал на части. Каждая зона может бронироваться отдельно, а суммарная вместимость не превысит вместимость всего зала."
+            onClose={() => setZoneResource(null)}
+            footer={
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setZoneResource(null)}
+              >
+                Готово
+              </button>
+            }
+          >
+            <div className="studio-form-section">
+              <header>
+                <strong>Текущая структура</strong>
+                <span>
+                  Вместимость всего ресурса: {zoneResource.capacity}
+                </span>
+              </header>
+
+              <div className="studio-zone-list">
+                {zones.map((zone) => (
+                  <article key={zone.id}>
+                    <div>
+                      <strong>{zone.name}</strong>
+                      <span>{zone.capacity_units} мест / единиц</span>
+                    </div>
+                    <b>
+                      {Math.round(
+                        zone.capacity_units / zoneResource.capacity * 100
+                      )}%
+                    </b>
+                  </article>
+                ))}
+                {!zones.length ? (
+                  <div className="studio-zone-empty">
+                    <strong>Зон пока нет</strong>
+                    <span>
+                      Создайте, например, «Секция A» и «Секция B».
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="studio-divider" />
+
+            <div className="studio-form-section">
+              <header>
+                <strong>Добавить часть зала</strong>
+                <span>
+                  Можно использовать реальные зоны или условные единицы
+                  вместимости.
+                </span>
+              </header>
+              <div className="studio-form-grid">
+                <label>
+                  <span>Название</span>
+                  <input
+                    value={zoneName}
+                    placeholder="Например, Секция A"
+                    onChange={(event) => setZoneName(event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Вместимость</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={zoneResource.capacity}
+                    value={zoneCapacity}
+                    onChange={(event) => setZoneCapacity(event.target.value)}
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                disabled={zonePending}
+                onClick={() => void createZone()}
+              >
+                {zonePending ? "Добавляем…" : "Добавить зону"}
+              </button>
+            </div>
+          </StudioModal>
+        ) : null}
+
       </section>
     </main>
   );
