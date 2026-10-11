@@ -488,7 +488,8 @@ async function inspectRequiredHardening(root) {
     "183_service_booking_charge_integrity.sql",
     "184_service_booking_charge_deferred_fix.sql",
     "185_dance_group_room_allocation.sql",
-    "185_payroll_payment_lifecycle.sql"
+    "185_payroll_payment_lifecycle.sql",
+    "186_service_employee_economics.sql"
   ];
 
   for (const name of requiredMigrations) {
@@ -510,6 +511,43 @@ async function inspectRequiredHardening(root) {
   }
 }
 
+
+async function inspectUniversalServiceEconomics(root) {
+  const files = [
+    [
+      resolve(root,"apps/api/src/modules/business/service-ops/service-economics.service.ts"),
+      [
+        /service_booking_profitability/,
+        /service_employee_compensation_plan/,
+        /PERCENT_MARGIN/,
+        /minimum_guarantee_minor/,
+        /finalizePayroll/
+      ]
+    ],
+    [
+      resolve(root,"apps/web/app/app/service/team/page.tsx"),
+      [
+        /Команда \/ экономика/,
+        /Правило оплаты/,
+        /Месячная ведомость/,
+        /PERCENT_REVENUE/
+      ]
+    ]
+  ];
+  for (const [file,patterns] of files) {
+    try {
+      const source=await readFile(file,"utf8");
+      for (const pattern of patterns) {
+        if (!pattern.test(source)) {
+          add("BLOCK",file,"universal service economics flow is incomplete: "+pattern);
+        }
+      }
+    } catch {
+      add("BLOCK",file,"universal service economics source is missing");
+    }
+  }
+}
+
 export async function inspectSource(root = ROOT) {
   findings.length = 0;
 
@@ -525,6 +563,7 @@ export async function inspectSource(root = ROOT) {
 
   inspectAppModule(appModule, appSource);
   await inspectRequiredHardening(root);
+  await inspectUniversalServiceEconomics(root);
 
   for (const file of apiFiles) {
     if (!/\.(ts|tsx)$/.test(file)) continue;
