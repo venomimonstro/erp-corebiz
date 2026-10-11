@@ -13,15 +13,20 @@ type EntityType = "PRODUCTS" | "CUSTOMERS";
 type SourceRow = Record<string, string>;
 
 const PRODUCT_ALIASES: Record<string, string[]> = {
-  name: ["name", "название", "товар", "product", "product name", "наименование"],
-  sku: ["sku", "артикул", "код", "код товара", "vendor code"],
-  barcode: ["barcode", "штрихкод", "штрих-код", "ean"],
-  salePrice: ["price", "цена", "цена продажи", "sale price", "розничная цена"],
-  costPrice: ["cost", "себестоимость", "закупочная цена", "cost price"]
+  name: ["name", "название", "товар", "product", "product name", "наименование",
+    "номенклатура", "наименование номенклатуры", "название номенклатуры"],
+  sku: ["sku", "артикул", "код", "код товара", "vendor code",
+    "артикул 1с", "код 1с", "код 1c", "код номенклатуры", "внешний код"],
+  barcode: ["barcode", "штрихкод", "штрих-код", "ean", "ean13", "штрихкод ean13"],
+  salePrice: ["price", "цена", "цена продажи", "sale price", "розничная цена",
+    "цена розничная", "розничная цена руб", "цена продажи руб", "цена руб"],
+  costPrice: ["cost", "себестоимость", "закупочная цена", "cost price",
+    "учетная цена", "учётная цена", "себестоимость руб", "закупочная цена руб"]
 };
 
 const CUSTOMER_ALIASES: Record<string, string[]> = {
-  displayName: ["name", "название", "клиент", "фио", "company", "компания", "контрагент"],
+  displayName: ["name", "название", "клиент", "фио", "company", "компания", "контрагент",
+    "наименование контрагента", "наименование клиента", "полное наименование"],
   email: ["email", "e-mail", "почта", "электронная почта"],
   phone: ["phone", "телефон", "mobile", "мобильный"],
   type: ["type", "тип", "вид"]
@@ -40,6 +45,14 @@ export class MigrationService {
       idempotencyKey: string;
     }
   ): Promise<Record<string, unknown>> {
+    if (!input || typeof input !== "object" || Array.isArray(input) ||
+        !["PRODUCTS","CUSTOMERS"].includes(input.entityType) ||
+        typeof input.filename !== "string" ||
+        typeof input.contentBase64 !== "string" ||
+        typeof input.idempotencyKey !== "string" ||
+        input.idempotencyKey.length > 160) {
+      throw new BadRequestException("Некорректные параметры импорта");
+    }
     if (!input.idempotencyKey?.trim()) {
       throw new BadRequestException("Требуется ключ идемпотентности");
     }
