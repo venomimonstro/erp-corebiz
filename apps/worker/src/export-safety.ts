@@ -10,7 +10,7 @@ export function csvCell(value:unknown):string{
   if(isUserString){
     // Leading tabs/CRs sometimes bypass spreadsheet formula detection.
     // Retain the original content, but force spreadsheet text mode.
-    if(/^[\\s\\u0000-\\u001f]*[=+\\-@]/u.test(raw))
+    if(/^[\s\u0000-\u001f]*[=+\-@]/u.test(raw))
       raw="'"+raw;
   }
   return '"'+raw.replace(/"/g,'""')+'"';
