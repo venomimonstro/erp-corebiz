@@ -86,6 +86,8 @@ describe("dance: simultaneous capacity and cancellation safeguards",()=>{
 
   it("preserves an early cancellation and frees the seat for the waitlist",async()=>{
     const {studio}=harness(async sql=>{
+      if(sql.includes("FROM dance_lesson_participant")&&sql.includes("SKIP LOCKED"))
+        return {rows:[]};
       if(sql.includes("FROM dance_lesson_participant")&&sql.includes("FOR UPDATE"))
         return {rows:[{
           id:"participant-1",student_id:studentId,package_id:null,
@@ -95,8 +97,6 @@ describe("dance: simultaneous capacity and cancellation safeguards",()=>{
       if(sql.includes("UPDATE dance_lesson_participant"))return {
         rows:[{id:"participant-1",version:4,status:"CANCELLED_IN_TIME"}]
       };
-      if(sql.includes("FROM dance_lesson_participant")&&sql.includes("SKIP LOCKED"))
-        return {rows:[]};
       throw new Error("Unexpected query: "+sql.slice(0,90));
     });
     (studio as any).assertLessonAccess=jest.fn().mockResolvedValue({
