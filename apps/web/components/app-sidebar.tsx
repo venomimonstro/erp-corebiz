@@ -65,6 +65,7 @@ const permissionByKey: Record<string,string> = {
   "wms-portal": "wms.read",
   workflows: "workflow.read",
   "owner-assistant": "dashboard.owner.read",
+  "commerce-decisions": "dashboard.owner.read",
   operations: "dashboard.owner.read",
   customization: "customization.manage",
   "release-readiness": "release.read",
@@ -169,6 +170,7 @@ const sections: Section[] = [
     ["/app/service/packages", "Абонементы", "service-packages"]
   ] },
   { title: "Онлайн-торговля", items: [
+    ["/app/commerce", "Магазин сегодня", "commerce-decisions"],
     ["/app/ecommerce", "Хаб маркетплейсов", "ecommerce"],
     ["/app/channels", "Каналы продаж", "channels"],
     ["/app/oms", "Управление заказами", "oms"],
