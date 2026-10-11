@@ -43,8 +43,13 @@ type Lesson = {
   ends_at: string;
   capacity: number;
   status: string;
+  trainer_resource_id: string | null;
   trainer_name: string | null;
+  room_resource_id: string | null;
   room_name: string | null;
+  room_zone_id: string | null;
+  room_zone_name: string | null;
+  room_capacity_units: number;
   booked_count: number;
   attended_count: number;
   waitlist: number;
@@ -66,6 +71,14 @@ type Resource = {
   id: string;
   name: string;
   type: string;
+  capacity: number;
+};
+
+type Zone = {
+  id: string;
+  resource_id: string;
+  name: string;
+  capacity_units: number;
 };
 
 type Service = {
@@ -146,6 +159,7 @@ export default function DanceGroupsPage() {
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
+  const [zones, setZones] = useState<Record<string, Zone[]>>({});
   const [services, setServices] = useState<Service[]>([]);
   const [packages, setPackages] = useState<Pack[]>([]);
   const [makeupCredits, setMakeupCredits] = useState<MakeupCredit[]>([]);
@@ -197,6 +211,8 @@ export default function DanceGroupsPage() {
   const [editStartsAt, setEditStartsAt] = useState("");
   const [editTrainerId, setEditTrainerId] = useState("");
   const [editRoomId, setEditRoomId] = useState("");
+  const [editRoomZoneId, setEditRoomZoneId] = useState("");
+  const [editRoomCapacityUnits, setEditRoomCapacityUnits] = useState("1");
   const [editCapacity, setEditCapacity] = useState("1");
 
   const [cancelLessonModal, setCancelLessonModal] = useState(false);
@@ -208,6 +224,8 @@ export default function DanceGroupsPage() {
   const [lessonServiceId, setLessonServiceId] = useState("");
   const [lessonTrainerId, setLessonTrainerId] = useState("");
   const [lessonRoomId, setLessonRoomId] = useState("");
+  const [lessonRoomZoneId, setLessonRoomZoneId] = useState("");
+  const [lessonRoomCapacityUnits, setLessonRoomCapacityUnits] = useState("1");
   const [lessonStartsAt, setLessonStartsAt] = useState(new Date(Date.now() + 86400000).toISOString().slice(0, 16));
   const [lessonChargeRub, setLessonChargeRub] = useState("");
   const [lessonPackageId, setLessonPackageId] = useState("");
@@ -235,6 +253,18 @@ export default function DanceGroupsPage() {
       setLessons(lessonRows);
       setStudents(studentRows);
       setResources(resourceRows);
+      const roomRows=resourceRows.filter((item)=>
+        ["ROOM","HALL","WORKPLACE"].includes(item.type)
+      );
+      const zoneRows=await Promise.all(
+        roomRows.map(async (room)=>[
+          room.id,
+          await apiRequest<Zone[]>(
+            "/service/resources/"+room.id+"/zones"
+          )
+        ] as const)
+      );
+      setZones(Object.fromEntries(zoneRows));
       setServices(serviceRows);
       setPackages(packageRows);
       setMakeupCredits(makeupRows);
@@ -605,6 +635,8 @@ export default function DanceGroupsPage() {
         : (current) => current || trainers[0]?.id || ""
     );
     setLessonRoomId((current) => current || rooms[0]?.id || "");
+    setLessonRoomZoneId("");
+    setLessonRoomCapacityUnits("1");
     setLessonPackageId("");
     setLessonChargeRub("");
   }
@@ -614,6 +646,7 @@ export default function DanceGroupsPage() {
     const service=services.find((item)=>item.id===lessonServiceId);
     const trainer=trainers.find((item)=>item.id===lessonTrainerId);
     const room=rooms.find((item)=>item.id===lessonRoomId);
+    const roomCapacityUnits=Number(lessonRoomCapacityUnits);
     if(!lessonModal||!student||!service){
       setError("Выберите ученика и услугу");
       return;
@@ -624,6 +657,27 @@ export default function DanceGroupsPage() {
     }
     if(lessonModal==="SELF_PRACTICE"&&!room){
       setError("Для самостоятельной практики выберите зал");
+      return;
+    }
+    if(
+      room &&
+      (
+        !Number.isSafeInteger(roomCapacityUnits)||
+        roomCapacityUnits<1||
+        roomCapacityUnits>room.capacity
+      )
+    ){
+      setError("Проверьте занимаемую вместимость зала");
+      return;
+    }
+    const selectedZone=(zones[lessonRoomId]??[]).find(
+      (zone)=>zone.id===lessonRoomZoneId
+    );
+    if(
+      selectedZone &&
+      roomCapacityUnits>selectedZone.capacity_units
+    ){
+      setError("Занимаемая вместимость больше выбранной зоны");
       return;
     }
     const startDate=new Date(lessonStartsAt);
@@ -650,6 +704,8 @@ export default function DanceGroupsPage() {
           serviceId:service.id,
           trainerResourceId:lessonModal==="INDIVIDUAL"?trainer?.id:undefined,
           roomResourceId:room?.id,
+          roomZoneId:lessonRoomZoneId||undefined,
+          roomCapacityUnits:room?roomCapacityUnits:undefined,
           startsAt:startDate.toISOString(),
           durationMinutes:service.duration_minutes,
           capacity:1,
@@ -757,11 +813,11 @@ export default function DanceGroupsPage() {
     setEditStartsAt(
       new Date(selectedLesson.starts_at).toISOString().slice(0,16)
     );
-    setEditTrainerId(
-      trainers.find((item)=>item.name===selectedLesson.trainer_name)?.id??""
-    );
-    setEditRoomId(
-      rooms.find((item)=>item.name===selectedLesson.room_name)?.id??""
+    setEditTrainerId(selectedLesson.trainer_resource_id??"");
+    setEditRoomId(selectedLesson.room_resource_id??"");
+    setEditRoomZoneId(selectedLesson.room_zone_id??"");
+    setEditRoomCapacityUnits(
+      String(selectedLesson.room_capacity_units??1)
     );
     setEditCapacity(String(selectedLesson.capacity));
     setEditLessonModal(true);
@@ -771,8 +827,25 @@ export default function DanceGroupsPage() {
     if(!selectedLesson)return;
     const start=new Date(editStartsAt);
     const capacity=Number(editCapacity);
+    const roomCapacityUnits=Number(editRoomCapacityUnits);
+    const room=rooms.find((item)=>item.id===editRoomId);
+    const zone=(zones[editRoomId]??[]).find(
+      (item)=>item.id===editRoomZoneId
+    );
     if(Number.isNaN(start.getTime())||!Number.isSafeInteger(capacity)||capacity<1){
       setError("Проверьте дату, время и вместимость");
+      return;
+    }
+    if(
+      room &&
+      (
+        !Number.isSafeInteger(roomCapacityUnits)||
+        roomCapacityUnits<1||
+        roomCapacityUnits>room.capacity||
+        (zone&&roomCapacityUnits>zone.capacity_units)
+      )
+    ){
+      setError("Проверьте долю или зону зала");
       return;
     }
     const durationMinutes=Math.max(
@@ -791,8 +864,13 @@ export default function DanceGroupsPage() {
           body:JSON.stringify({
             startsAt:start.toISOString(),
             durationMinutes,
-            trainerResourceId:editTrainerId||undefined,
+            trainerResourceId:
+              selectedLesson.lesson_type==="SELF_PRACTICE"
+                ? null
+                : editTrainerId||null,
             roomResourceId:editRoomId||null,
+            roomZoneId:editRoomId ? editRoomZoneId||null : null,
+            roomCapacityUnits:editRoomId ? roomCapacityUnits : undefined,
             capacity,
             version:selectedLesson.version
           })
