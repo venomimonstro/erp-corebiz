@@ -4,6 +4,7 @@ import {
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { commercialCheckoutChecks } from "./commercial-checkout-policy";
 
 type Check = {
   code: string;
@@ -438,6 +439,66 @@ export class GoLiveService {
             : "Открытых исключений: " + warningCount,
         href: "/app/operations"
       });
+
+      // "Business flow exists" is not commercial acceptance. All money,
+      // fiscal, return and carrier journeys need verified recent E2E evidence.
+      if([
+        "ECOMMERCE_STORE","OMNICHANNEL_RETAIL","RETAIL_STORE",
+        "MARKETPLACE_SELLER"
+      ].includes(verticalCode??"")){
+        const external=await client.query<{
+          storefront_published:boolean;
+          merchant_configured:boolean;
+          fiscal_configured:boolean;
+          delivery_configured:boolean;
+          retail_locations:number;
+        }>(
+          `SELECT
+             EXISTS(
+               SELECT 1 FROM site s
+               JOIN storefront_config sc ON sc.tenant_id=s.tenant_id
+                 AND sc.site_id=s.id AND sc.enabled
+               JOIN site_page p ON p.tenant_id=s.tenant_id
+                 AND p.site_id=s.id AND p.slug='/' AND p.status='ACTIVE'
+               JOIN site_page_version v ON v.tenant_id=p.tenant_id
+                 AND v.id=p.published_version_id AND v.status='PUBLISHED'
+               WHERE s.tenant_id=$1 AND s.status='ACTIVE'
+             ) AS storefront_published,
+             EXISTS(
+               SELECT 1 FROM commerce_merchant_config m
+               JOIN site s ON s.tenant_id=m.tenant_id AND s.id=m.site_id
+               WHERE m.tenant_id=$1 AND m.enabled AND s.status='ACTIVE'
+             ) AS merchant_configured,
+             EXISTS(
+               SELECT 1 FROM commerce_merchant_config m
+               JOIN site s ON s.tenant_id=m.tenant_id AND s.id=m.site_id
+               WHERE m.tenant_id=$1 AND m.enabled AND m.fiscal_enabled
+                 AND s.status='ACTIVE'
+             ) AS fiscal_configured,
+             EXISTS(
+               SELECT 1 FROM commerce_delivery_method d
+               JOIN site s ON s.tenant_id=d.tenant_id AND s.id=d.site_id
+               WHERE d.tenant_id=$1 AND d.active AND s.status='ACTIVE'
+             ) AS delivery_configured,
+             (SELECT count(*)::integer FROM retail_location l
+              WHERE l.tenant_id=$1 AND l.status='ACTIVE') AS retail_locations`,
+          [context.tenantId]
+        );
+        const x=external.rows[0];
+        checks.push(...commercialCheckoutChecks({
+          verticalCode,
+          storefrontPublished:x?.storefront_published===true,
+          merchantConfigured:x?.merchant_configured===true,
+          fiscalConfigured:x?.fiscal_configured===true,
+          deliveryMethodConfigured:x?.delivery_configured===true,
+          activeRetailLocations:x?.retail_locations??0,
+          evidence:(component,kind)=>{
+            const record=evidenceMap.get(component+":"+kind);
+            return record?.outcome==="PASS" &&
+              record.executed_at.getTime()>=freshAfter;
+          }
+        }));
+      }
 
       const blockers = checks.filter(
         (check) => check.blocking && !check.ok
