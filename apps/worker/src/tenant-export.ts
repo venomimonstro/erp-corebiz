@@ -79,6 +79,7 @@ const EXPORT_ENTITIES: ExportEntity[] = [
   { table: "service_resource_zone", label: "service_resource_zones" },
   { table: "trainer_compensation_plan", label: "trainer_compensation_plans" },
   { table: "trainer_compensation_component", label: "trainer_compensation_components" },
+  { table: "trainer_payroll_profile", label: "trainer_payroll_profiles" },
   { table: "trainer_payroll_statement", label: "trainer_payroll_statements" },
   { table: "trainer_payroll_adjustment", label: "trainer_payroll_adjustments" },
   { table: "trainer_compensation_accrual", label: "trainer_compensation_accruals" },
@@ -104,6 +105,7 @@ const EXPORT_ENTITIES: ExportEntity[] = [
   { table: "accounting_entry", label: "accounting_entries" },
   { table: "accounting_entry_line", label: "accounting_entry_lines" },
   { table: "payroll_accrual_batch", label: "payroll_batches" },
+  { table: "payroll_accrual_component", label: "payroll_accrual_components" },
   { table: "payroll_accrual_line", label: "payroll_lines" }
 ];
 
