@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -41,6 +42,27 @@ export class AuthController {
       ok: true,
       data: { auth: result.auth }
     };
+  }
+
+  @Public()
+  @Post("register-invited")
+  async registerInvited(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:unknown,
+    @Res({passthrough:true}) response:Response
+  ):Promise<ApiSuccess<{auth:unknown}>>{
+    await this.rateLimit.assertRegistrationAllowed(request.ip??"unknown");
+    if(!body || typeof body!=="object" || Array.isArray(body))
+      throw new BadRequestException("Некорректные данные");
+    const b=body as Record<string,unknown>;
+    if(typeof b.email!=="string"||typeof b.password!=="string"||
+       typeof b.invitationToken!=="string")
+      throw new BadRequestException("Укажите email, пароль и приглашение");
+    const result=await this.authService.registerInvited({
+      email:b.email,password:b.password,invitationToken:b.invitationToken
+    });
+    setSessionCookie(response,result.token);
+    return {ok:true,data:{auth:result.auth}};
   }
 
   @Public()
