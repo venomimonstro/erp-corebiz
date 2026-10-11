@@ -436,38 +436,41 @@ export default function DanceStudentsPage() {
   return (
     <main className="app-shell">
       <AppSidebar active="dance-students" />
-      <section className="workspace workspace-wide">
-        <header className="workspace-header">
+      <section className="workspace workspace-wide studio-premium">
+        <header className="studio-hero compact">
           <div>
-            <p className="muted">Студия / Ученики и деньги</p>
-            <h1>Ученики, родители и долги</h1>
-            <p className="workspace-summary">
-              Кто занимается, кто платит, сколько начислено, оплачено и осталось.
+            <span className="studio-eyebrow">Клиенты и финансы</span>
+            <h1>Ученики и семьи</h1>
+            <p>
+              Ребёнок, плательщик, абонементы, начисления, долг и отработки
+              собраны в одной рабочей карточке.
             </p>
           </div>
-          <div className="header-actions">
-            <a className="secondary-button" href="/app/dance">Обзор</a>
-            <button onClick={() => void addStudent()} type="button">+ Ученик</button>
+          <div className="studio-hero-actions">
+            <a className="secondary-button" href="/app/service/packages">Тарифы</a>
+            <button onClick={openStudentModal} type="button">+ Ученик</button>
           </div>
         </header>
 
         <DanceWorkspaceNav active="students" />
 
-        {error ? <div className="inline-error"><strong>Ученики</strong><span>{error}</span></div> : null}
+        {error ? <div className="studio-message error"><strong>Ученики</strong><span>{error}</span></div> : null}
+        {notice ? <div className="studio-message success"><strong>Готово</strong><span>{notice}</span></div> : null}
 
-        <div className="settings-card">
-          <label>
-            Ученик{" "}
-            <select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
-              <option value="">Выберите ученика</option>
-              {students.map((student) => (
-                <option key={student.id} value={student.id}>
-                  {student.display_name} · долг {money(student.debt_minor)}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+        <section className="studio-client-switcher">
+          <div>
+            <span>Карточка ученика</span>
+            <strong>{students.length} учеников в студии</strong>
+          </div>
+          <select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
+            <option value="">Выберите ученика</option>
+            {students.map((student) => (
+              <option key={student.id} value={student.id}>
+                {student.display_name} · долг {money(student.debt_minor)}
+              </option>
+            ))}
+          </select>
+        </section>
 
         {selected ? (
           <>
@@ -495,14 +498,14 @@ export default function DanceStudentsPage() {
             </div>
 
             <div className="header-actions" style={{ marginBottom: 20, flexWrap: "wrap" }}>
-              <button className="secondary-button" onClick={() => void addPayer()} type="button">
-                Назначить плательщика
+              <button className="secondary-button" onClick={openPayerModal} type="button">
+                Плательщик
               </button>
-              <button className="secondary-button" onClick={() => void issuePackage()} type="button">
-                Выдать абонемент
+              <button className="secondary-button" onClick={openPackageModal} type="button">
+                + Абонемент
               </button>
-              <button className="secondary-button" onClick={() => void addCharge()} type="button">
-                Начислить
+              <button className="secondary-button" onClick={openChargeModal} type="button">
+                + Начисление
               </button>
               <button disabled={pending || !payerOpenCharges.length} onClick={() => void payFamilyDebt()} type="button">
                 Оплатить долги семьи
@@ -618,6 +621,138 @@ export default function DanceStudentsPage() {
             <span>Создайте клиента в CRM и добавьте его как ученика студии.</span>
           </div>
         )}
+        {studentModal ? (
+          <StudioModal
+            eyebrow="Новый ученик"
+            title="Добавить ученика в студию"
+            description="Выберите клиента из CRM. Родителя-плательщика можно назначить сразу."
+            onClose={() => setStudentModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setStudentModal(false)}>Отмена</button>
+                <button disabled={pending} type="button" onClick={() => void addStudent()}>{pending ? "Сохраняем…" : "Добавить ученика"}</button>
+              </>
+            }
+          >
+            <div className="studio-form-section">
+              <div className="studio-form-grid">
+                <label>
+                  <span>Ученик / клиент CRM</span>
+                  <select value={studentPartyId} onChange={(event) => setStudentPartyId(event.target.value)}>
+                    <option value="">Выберите клиента</option>
+                    {customers.map((customer) => (
+                      <option key={customer.id} value={customer.id}>
+                        {customer.displayName}{customer.phone ? " · " + customer.phone : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Дата рождения</span>
+                  <input type="date" value={studentBirthDate} onChange={(event) => setStudentBirthDate(event.target.value)} />
+                </label>
+              </div>
+              <label>
+                <span>Родитель / плательщик</span>
+                <select value={studentPayerId} onChange={(event) => setStudentPayerId(event.target.value)}>
+                  <option value="">Ученик платит сам / назначить позже</option>
+                  {customers.filter((customer) => customer.id !== studentPartyId).map((customer) => (
+                    <option key={customer.id} value={customer.id}>{customer.displayName}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </StudioModal>
+        ) : null}
+
+        {payerModal && selected ? (
+          <StudioModal
+            eyebrow="Семья"
+            title="Кто оплачивает занятия"
+            description={"Основной плательщик для " + selected.display_name + ". Новые начисления будут связаны с ним."}
+            onClose={() => setPayerModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setPayerModal(false)}>Отмена</button>
+                <button disabled={pending} type="button" onClick={() => void addPayer()}>{pending ? "Сохраняем…" : "Назначить"}</button>
+              </>
+            }
+          >
+            <label>
+              <span>Плательщик</span>
+              <select value={payerPartyId} onChange={(event) => setPayerPartyId(event.target.value)}>
+                <option value="">Выберите клиента</option>
+                {customers.filter((customer) => customer.id !== selected.party_id).map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.displayName}{customer.phone ? " · " + customer.phone : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </StudioModal>
+        ) : null}
+
+        {chargeModal && selected ? (
+          <StudioModal
+            eyebrow="Финансы"
+            title="Новое начисление"
+            description={"Начисление для " + selected.display_name + (selected.payer_name ? ". Плательщик: " + selected.payer_name : "")}
+            onClose={() => setChargeModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setChargeModal(false)}>Отмена</button>
+                <button disabled={pending} type="button" onClick={() => void addCharge()}>{pending ? "Сохраняем…" : "Начислить"}</button>
+              </>
+            }
+          >
+            <div className="studio-form-grid">
+              <label>
+                <span>Сумма, ₽</span>
+                <input autoFocus inputMode="decimal" placeholder="6 000" value={chargeRub} onChange={(event) => setChargeRub(event.target.value)} />
+              </label>
+              <label>
+                <span>Оплатить до</span>
+                <input type="date" value={chargeDueAt} onChange={(event) => setChargeDueAt(event.target.value)} />
+              </label>
+            </div>
+            <label>
+              <span>За что начисление</span>
+              <input placeholder="Например, обучение за октябрь" value={chargeNote} onChange={(event) => setChargeNote(event.target.value)} />
+            </label>
+          </StudioModal>
+        ) : null}
+
+        {packageModal && selected ? (
+          <StudioModal
+            eyebrow="Абонемент"
+            title="Выдать готовый тариф"
+            description="Цена, срок и правила посещения уже заданы в конструкторе тарифов."
+            onClose={() => setPackageModal(false)}
+            footer={
+              <>
+                <a className="secondary-button" href="/app/service/packages">Настроить тарифы</a>
+                <button disabled={pending || !packagePlanId} type="button" onClick={() => void issuePackage()}>{pending ? "Выдаём…" : "Выдать абонемент"}</button>
+              </>
+            }
+          >
+            <label>
+              <span>Тариф</span>
+              <select value={packagePlanId} onChange={(event) => setPackagePlanId(event.target.value)}>
+                <option value="">Выберите тариф</option>
+                {plans.map((plan) => (
+                  <option key={plan.id} value={plan.id}>
+                    {plan.name} · {plan.visit_limit === null ? "безлимит" : plan.visit_limit + " посещ."} · {money(plan.price_minor)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="student-package-summary">
+              <span>Ученик</span><strong>{selected.display_name}</strong>
+              <span>Плательщик</span><strong>{selected.payer_name ?? selected.display_name}</strong>
+            </div>
+          </StudioModal>
+        ) : null}
+
       </section>
     </main>
   );
