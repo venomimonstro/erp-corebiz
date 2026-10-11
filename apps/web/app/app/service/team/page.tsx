@@ -55,6 +55,16 @@ type Statement={
   status:string;
 };
 
+type PayrollBatch={
+  id:string;
+  legal_entity_id:string;
+  legal_entity_name:string;
+  period_from:string;
+  period_to:string;
+  status:string;
+  currency:string;
+};
+
 type EconomicsRow={
   id:string;
   name:string;
@@ -125,6 +135,9 @@ export default function ServiceTeamPage(){
   const [pending,setPending]=useState(false);
   const [showRule,setShowRule]=useState(false);
   const [showProfile,setShowProfile]=useState(false);
+  const [payrollBatches,setPayrollBatches]=useState<PayrollBatch[]>([]);
+  const [showExport,setShowExport]=useState(false);
+  const [payrollBatchId,setPayrollBatchId]=useState("");
 
   const [employeeId,setEmployeeId]=useState("");
   const [serviceId,setServiceId]=useState("");
@@ -142,7 +155,8 @@ export default function ServiceTeamPage(){
     setError("");
     try{
       const [
-        resourceRows,serviceRows,planRows,profileRows,statementRows,economicsRows
+        resourceRows,serviceRows,planRows,profileRows,statementRows,economicsRows,
+        payrollBatchRows
       ]=await Promise.all([
         apiRequest<Resource[]>("/service/resources"),
         apiRequest<Service[]>("/service/catalog"),
@@ -151,7 +165,10 @@ export default function ServiceTeamPage(){
         apiRequest<Statement[]>(
           "/service/economics/payroll-statements?month="+encodeURIComponent(month)
         ),
-        apiRequest<Economics>("/service/economics")
+        apiRequest<Economics>("/service/economics"),
+        apiRequest<PayrollBatch[]>(
+          "/service/economics/payroll-batches?month="+encodeURIComponent(month)
+        )
       ]);
       setResources(resourceRows);
       setServices(serviceRows);
@@ -159,6 +176,13 @@ export default function ServiceTeamPage(){
       setProfiles(profileRows);
       setStatements(statementRows);
       setEconomics(economicsRows);
+      setPayrollBatches(payrollBatchRows);
+      if(
+        payrollBatchId &&
+        !payrollBatchRows.some(item=>item.id===payrollBatchId)
+      ){
+        setPayrollBatchId("");
+      }
     }catch(cause){
       setError(
         cause instanceof Error
@@ -301,6 +325,36 @@ export default function ServiceTeamPage(){
     }catch(cause){
       setError(
         cause instanceof Error?cause.message:"Не удалось сохранить профиль"
+      );
+    }finally{
+      setPending(false);
+    }
+  }
+
+  async function exportPayroll(){
+    if(!payrollBatchId){
+      setError("Выберите черновик зарплатной ведомости");
+      return;
+    }
+    setPending(true);
+    setError("");
+    try{
+      const result=await apiRequest<{statements:number;accruals:number}>(
+        "/service/economics/payroll-statements/export",
+        {
+          method:"POST",
+          body:JSON.stringify({month,batchId:payrollBatchId})
+        }
+      );
+      setShowExport(false);
+      setNotice(
+        "В общий зарплатный контур передано ведомостей: "+
+        result.statements+". Начислений: "+result.accruals+"."
+      );
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error?cause.message:"Не удалось передать зарплату"
       );
     }finally{
       setPending(false);
@@ -501,6 +555,14 @@ export default function ServiceTeamPage(){
                 value={month}
                 onChange={event=>setMonth(event.target.value)}
               />
+              <button
+                className="secondary-button"
+                disabled={pending||!statements.some(item=>item.status==="FINALIZED")}
+                type="button"
+                onClick={()=>setShowExport(true)}
+              >
+                В общий payroll
+              </button>
               <button disabled={pending} type="button" onClick={()=>void finalize()}>
                 {pending?"Закрываем…":"Закрыть месяц"}
               </button>
@@ -549,6 +611,68 @@ export default function ServiceTeamPage(){
             </table>
           </div>
         </section>
+
+        {showExport?(
+          <StudioModal
+            eyebrow="Payroll ledger"
+            title="Передать ведомость в выплату"
+            description="CoreBiz не дублирует зарплату: салонная ведомость становится источником общего бухгалтерского payroll batch."
+            onClose={()=>setShowExport(false)}
+          >
+            <div className="studio-modal-form">
+              {payrollBatches.length?(
+                <label>
+                  <span>Черновик payroll за {month}</span>
+                  <select
+                    value={payrollBatchId}
+                    onChange={event=>setPayrollBatchId(event.target.value)}
+                  >
+                    <option value="">Выберите юридическое лицо</option>
+                    {payrollBatches.map(item=>(
+                      <option key={item.id} value={item.id}>
+                        {item.legal_entity_name} · {item.currency}
+                      </option>
+                    ))}
+                  </select>
+                  <small>
+                    После экспорта утвердите batch в бухгалтерии. При отметке
+                    выплаты статус ведомости автоматически станет PAID.
+                  </small>
+                </label>
+              ):(
+                <div className="studio-empty">
+                  <span>03</span>
+                  <strong>Нет черновика payroll за этот месяц</strong>
+                  <p>
+                    Создайте зарплатный batch для нужного юридического лица
+                    в разделе бухгалтерии, затем вернитесь сюда.
+                  </p>
+                  <a className="button-link" href="/app/accounting">
+                    Открыть бухгалтерию
+                  </a>
+                </div>
+              )}
+              <div className="studio-drawer-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={()=>setShowExport(false)}
+                >
+                  Отмена
+                </button>
+                {payrollBatches.length?(
+                  <button
+                    disabled={pending||!payrollBatchId}
+                    type="button"
+                    onClick={()=>void exportPayroll()}
+                  >
+                    {pending?"Передаём…":"Передать в payroll"}
+                  </button>
+                ):null}
+              </div>
+            </div>
+          </StudioModal>
+        ):null}
 
         {showRule?(
           <StudioModal
