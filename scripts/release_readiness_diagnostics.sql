@@ -968,7 +968,9 @@ JOIN accounting_tax_profile p
   ON p.tenant_id=o.tenant_id AND p.id=o.tax_profile_id
 WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
   AND p.compliance_enabled=false
+  AND p.compliance_disabled_at IS NOT NULL
   AND o.workflow_status NOT IN ('PLANNED','CANCELLED')
+  AND o.updated_at>p.compliance_disabled_at
 UNION ALL
 SELECT 'ACCOUNTING_COMPLIANCE_DISABLED_WITHOUT_REASON',count(*)::bigint
 FROM accounting_tax_profile p
