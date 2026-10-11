@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"worker: no tests yet\"",
+    "test": "tsx --test src/stock-allocation.spec.ts",
     "lint": "tsc --noEmit"
   },
   "devDependencies": {
