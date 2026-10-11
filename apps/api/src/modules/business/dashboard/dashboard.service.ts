@@ -1194,6 +1194,7 @@ export class DashboardService {
         );
       }
 
+      const truncatedRules=new Set<string>();
       const currentIssues = new Map<string, Set<string>>([
         ["BANK_UNMATCHED", new Set<string>()],
         ["VAT_UNREGISTERED", new Set<string>()],
@@ -1208,10 +1209,14 @@ export class DashboardService {
            ON s.tenant_id=l.tenant_id AND s.id=l.statement_id
          WHERE l.tenant_id=$1
            AND l.payment_id IS NULL
-           AND s.status='IMPORTED'`,
+           AND s.status='IMPORTED'
+         ORDER BY l.id
+         LIMIT 201`,
         [context.tenantId]
       );
-      for (const row of unmatched.rows) {
+      if(unmatched.rows.length>OPERATIONAL_SCAN_LIMIT)
+        truncatedRules.add("BANK_UNMATCHED");
+      for (const row of unmatched.rows.slice(0,OPERATIONAL_SCAN_LIMIT)) {
         currentIssues.get("BANK_UNMATCHED")!.add(row.id);
       }
 
@@ -1225,10 +1230,14 @@ export class DashboardService {
              FROM accounting_vat_register r
              WHERE r.tenant_id=d.tenant_id
                AND r.vat_document_id=d.id
-           )`,
+           )
+         ORDER BY d.id
+         LIMIT 201`,
         [context.tenantId]
       );
-      for (const row of vat.rows) {
+      if(vat.rows.length>OPERATIONAL_SCAN_LIMIT)
+        truncatedRules.add("VAT_UNREGISTERED");
+      for (const row of vat.rows.slice(0,OPERATIONAL_SCAN_LIMIT)) {
         currentIssues.get("VAT_UNREGISTERED")!.add(row.id);
       }
 
@@ -1243,27 +1252,34 @@ export class DashboardService {
              WHERE c.tenant_id=p.tenant_id
                AND c.period_id=p.id
                AND c.status<>'DONE'
-           )`,
+           )
+         ORDER BY p.id
+         LIMIT 201`,
         [context.tenantId]
       );
-      for (const row of close.rows) {
+      if(close.rows.length>OPERATIONAL_SCAN_LIMIT)
+        truncatedRules.add("CLOSE_BLOCKED");
+      for (const row of close.rows.slice(0,OPERATIONAL_SCAN_LIMIT)) {
         currentIssues.get("CLOSE_BLOCKED")!.add(row.id);
       }
 
       const payroll = await client.query<{ id: string }>(
         `SELECT id
          FROM payroll_accrual_batch
-         WHERE tenant_id=$1 AND status='DRAFT'`,
+         WHERE tenant_id=$1 AND status='DRAFT'
+         ORDER BY id
+         LIMIT 201`,
         [context.tenantId]
       );
-      for (const row of payroll.rows) {
+      if(payroll.rows.length>OPERATIONAL_SCAN_LIMIT)
+        truncatedRules.add("PAYROLL_DRAFT");
+      for (const row of payroll.rows.slice(0,OPERATIONAL_SCAN_LIMIT)) {
         currentIssues.get("PAYROLL_DRAFT")!.add(row.id);
       }
 
       // Covers all installed verticals via their real domain events and
       // transaction states, not synthetic "ready" percentages. Scans include
       // a sentinel row to avoid falsely resolving issues in large tenants.
-      const truncatedRules=new Set<string>();
       for(const rule of VERTICAL_OPERATIONAL_RULES){
         const found=await client.query<{id:string}>(rule.sql,[context.tenantId]);
         if(found.rows.length>OPERATIONAL_SCAN_LIMIT)
