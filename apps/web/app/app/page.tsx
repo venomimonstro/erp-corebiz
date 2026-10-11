@@ -8,6 +8,7 @@ type WorkspaceContext = {
   roles: string[];
   permissions: Array<{ code: string; scope: string }>;
   profileCode: string;
+  verticalCode: string | null;
   workspace:
     | "OWNER"
     | "ADMIN"
@@ -94,6 +95,39 @@ const queueLabels: Record<Dashboard["queue"][number]["type"], string> = {
   DEAL_NO_NEXT_ACTION: "CRM",
   OVERDUE_OBLIGATION: "Финансы",
   STOCK_RISK: "Склад"
+};
+
+const nicheHome:Record<string,{label:string;href:string;detail:string}>={
+  DANCE_FITNESS:{label:"Открыть студию",href:"/app/dance",
+    detail:"Занятия, ученики, абонементы, долги и зарплата тренеров"},
+  AUTO_SERVICE:{label:"Открыть автосервис",href:"/app/automotive",
+    detail:"Автомобили, заказ-наряды и запчасти"},
+  AUTO_PARTS_DISMANTLING:{label:"Открыть авторазбор",href:"/app/automotive",
+    detail:"Доноры, детали и себестоимость"},
+  BEAUTY_SALON:{label:"Сегодня в салоне",href:"/app/service",
+    detail:"Записи, мастера и повторные визиты"},
+  NAIL_SALON:{label:"Сегодня в студии",href:"/app/service",
+    detail:"Календарь, рабочие места и выручка"},
+  BARBERSHOP:{label:"Сегодня в барбершопе",href:"/app/service",
+    detail:"Барберы, кресла и календарь"},
+  PROFESSIONAL_SERVICES:{label:"Открыть проекты",href:"/app/projects",
+    detail:"Задачи, этапы и работа с клиентами"},
+  WEB_STUDIO:{label:"Открыть проекты",href:"/app/agency",
+    detail:"Проекты, команда и рентабельность"},
+  WEB_MARKETING_AGENCY:{label:"Открыть агентство",href:"/app/agency",
+    detail:"Клиенты, бюджеты и задачи"},
+  MARKETING_AGENCY:{label:"Открыть агентство",href:"/app/agency",
+    detail:"Клиенты, проекты и экономика"},
+  WAREHOUSE_3PL:{label:"Открыть склад",href:"/app/wms",
+    detail:"Приёмка, задания, владельцы товара"},
+  ECOMMERCE_STORE:{label:"Магазин сегодня",href:"/app/commerce",
+    detail:"Остатки, заказы, закупки и проблемы"},
+  MARKETPLACE_SELLER:{label:"Каналы продаж",href:"/app/ecommerce",
+    detail:"Ozon/WB, товары и сопоставления"},
+  RETAIL_STORE:{label:"Продажи и остатки",href:"/app/inventory/stock",
+    detail:"Приёмка, остатки и кассовые операции"},
+  WHOLESALE_B2B:{label:"Оптовые заказы",href:"/app/sales/orders",
+    detail:"Кредитные условия, заказы и дебиторка"}
 };
 
 const workspaceLabels: Record<WorkspaceContext["workspace"]|"PROJECTS", {
@@ -216,6 +250,8 @@ export default function AppHomePage() {
     ];
   }, [dashboard]);
 
+  const currentNiche=context?.verticalCode?nicheHome[context.verticalCode]:null;
+
   const workspaceCopy = context
     ? (workspaceLabels[(member?.workspace??context.workspace)
           as keyof typeof workspaceLabels]??workspaceLabels.VIEWER)
@@ -237,6 +273,21 @@ export default function AppHomePage() {
             Обновить
           </button>
         </header>
+
+        {currentNiche && (context?.workspace==="OWNER"||
+          context?.workspace==="ADMIN") ? (
+          <section className="first-day-direct">
+            <div><strong>Ваше рабочее место</strong>
+              <p>{currentNiche.detail}</p>
+            </div>
+            <a className="button-link" href={currentNiche.href}>
+              {currentNiche.label} →
+            </a>
+            <a href="/app/start" className="secondary-button">
+              План первого запуска
+            </a>
+          </section>
+        ):null}
 
         {error ? (
           <div className="inline-error">
