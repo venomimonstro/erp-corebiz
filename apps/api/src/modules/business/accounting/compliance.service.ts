@@ -1131,10 +1131,13 @@ export class ComplianceService {
   async ensSnapshots(context:TenantContext,legalEntityId:string) {
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
-        `SELECT *
+        `SELECT
+           id,legal_entity_id,snapshot_at AS as_of,
+           balance_minor::text,upcoming_minor::text,overdue_minor::text,
+           source,external_reference,details,created_at
          FROM accounting_ens_snapshot
          WHERE tenant_id=$1 AND legal_entity_id=$2
-         ORDER BY as_of DESC
+         ORDER BY snapshot_at DESC
          LIMIT 100`,
         [context.tenantId,legalEntityId]
       );
@@ -1156,15 +1159,25 @@ export class ComplianceService {
       throw new BadRequestException("Некорректный баланс ЕНС");
     }
     return this.database.withTenantTransaction(context,async client=>{
+      const source=
+        input.source==="FNS_LK"||input.source==="REPORTING_OPERATOR"
+          ?"FNS_CONNECTOR"
+          :input.source==="IMPORT"
+            ?"IMPORT"
+            :"MANUAL";
       const result=await client.query(
         `INSERT INTO accounting_ens_snapshot(
-           tenant_id,legal_entity_id,balance_minor,source,
-           external_reference,details,created_by_membership_id
-         ) VALUES($1,$2,$3,$4,$5,$6,$7)
-         RETURNING *`,
+           tenant_id,legal_entity_id,balance_minor,upcoming_minor,
+           overdue_minor,source,external_reference,details,
+           created_by_membership_id
+         ) VALUES($1,$2,$3,0,0,$4,$5,$6,$7)
+         RETURNING
+           id,legal_entity_id,snapshot_at AS as_of,
+           balance_minor::text,upcoming_minor::text,overdue_minor::text,
+           source,external_reference,details,created_at`,
         [
-          context.tenantId,input.legalEntityId,input.balanceMinor,
-          input.source??"MANUAL",input.externalReference?.trim()||null,
+          context.tenantId,input.legalEntityId,input.balanceMinor,source,
+          input.externalReference?.trim()||null,
           JSON.stringify(input.details??{}),context.membershipId
         ]
       );
