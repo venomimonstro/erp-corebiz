@@ -18,11 +18,13 @@ type TaxProfile={
   id:string;
   entity_kind:"ORGANIZATION"|"IP";
   tax_regime:"USN_INCOME"|"USN_INCOME_EXPENSE"|"OSNO"|"AUSN"|"OTHER";
-  vat_mode:"NO_VAT"|"VAT_5"|"VAT_7"|"VAT_20"|"VAT_MIXED";
+  vat_mode:"NO_VAT"|"VAT_5"|"VAT_7"|"VAT_22"|"VAT_MIXED";
   has_employees:boolean;
   ens_enabled:boolean;
   reporting_mode:"ASSISTED"|"SEMI_AUTOMATIC"|"EXTERNAL_ACCOUNTANT";
   risk_tolerance:"CONSERVATIVE"|"STANDARD";
+  compliance_enabled:boolean;
+  compliance_disabled_reason:string|null;
   kpp:string|null;
   oktmo:string|null;
   tax_office_code:string|null;
@@ -128,6 +130,8 @@ export default function AccountingTaxesPage(){
   const [taxRegime,setTaxRegime]=useState<TaxProfile["tax_regime"]>("USN_INCOME");
   const [vatMode,setVatMode]=useState<TaxProfile["vat_mode"]>("NO_VAT");
   const [hasEmployees,setHasEmployees]=useState(false);
+  const [complianceEnabled,setComplianceEnabled]=useState(true);
+  const [complianceDisabledReason,setComplianceDisabledReason]=useState("");
   const [kpp,setKpp]=useState("");
   const [oktmo,setOktmo]=useState("");
   const [taxOfficeCode,setTaxOfficeCode]=useState("");
@@ -159,6 +163,8 @@ export default function AccountingTaxesPage(){
         setTaxRegime(data.profile.tax_regime);
         setVatMode(data.profile.vat_mode);
         setHasEmployees(data.profile.has_employees);
+        setComplianceEnabled(data.profile.compliance_enabled!==false);
+        setComplianceDisabledReason(data.profile.compliance_disabled_reason??"");
         setKpp(data.profile.kpp??"");
         setOktmo(data.profile.oktmo??"");
         setTaxOfficeCode(data.profile.tax_office_code??"");
@@ -193,17 +199,27 @@ export default function AccountingTaxesPage(){
         method:"POST",
         body:JSON.stringify({
           legalEntityId,entityKind,taxRegime,vatMode,hasEmployees,
+          complianceEnabled,
+          complianceDisabledReason:complianceEnabled
+            ?undefined
+            :(complianceDisabledReason.trim()||"Регламентированный налоговый контур отключён владельцем"),
           kpp:kpp||undefined,oktmo:oktmo||undefined,
           taxOfficeCode:taxOfficeCode||undefined,
           ensEnabled:true,reportingMode:"ASSISTED",riskTolerance:"CONSERVATIVE"
         })
       });
-      await apiRequest("/accounting/compliance/calendar/build",{
-        method:"POST",
-        body:JSON.stringify({legalEntityId,year})
-      });
+      if(complianceEnabled){
+        await apiRequest("/accounting/compliance/calendar/build",{
+          method:"POST",
+          body:JSON.stringify({legalEntityId,year})
+        });
+      }
       setShowProfile(false);
-      setNotice("Налоговый профиль сохранён. Календарь обязательств собран.");
+      setNotice(
+        complianceEnabled
+          ?"Налоговый профиль сохранён. Календарь обязательств собран."
+          :"Налоговый профиль сохранён. Регламентированный контур выключен; управленческий и бухгалтерский учёт продолжают работать."
+      );
       await load();
     }catch(cause){
       setError(cause instanceof Error?cause.message:"Не удалось сохранить налоговый профиль");
@@ -339,7 +355,14 @@ export default function AccountingTaxesPage(){
             >
               Налоговый профиль
             </button>
-            <button type="button" onClick={()=>void rebuild()} disabled={busy}>
+            <button
+              type="button"
+              onClick={()=>void rebuild()}
+              disabled={busy||overview?.profile?.compliance_enabled===false}
+              title={overview?.profile?.compliance_enabled===false
+                ?"Сначала включите налоговый контур в профиле"
+                :undefined}
+            >
               Обновить календарь
             </button>
           </div>
@@ -408,7 +431,7 @@ export default function AccountingTaxesPage(){
                   <option value="NO_VAT">Без НДС</option>
                   <option value="VAT_5">НДС 5%</option>
                   <option value="VAT_7">НДС 7%</option>
-                  <option value="VAT_20">НДС 20%</option>
+                  <option value="VAT_22">НДС 22%</option>
                   <option value="VAT_MIXED">Смешанные ставки</option>
                 </select>
               </label>
@@ -422,6 +445,29 @@ export default function AccountingTaxesPage(){
                   <option value="YES">Есть сотрудники</option>
                 </select>
               </label>
+              <label>
+                <span>Налоговый контур</span>
+                <select
+                  value={complianceEnabled?"ENABLED":"DISABLED"}
+                  onChange={e=>setComplianceEnabled(e.target.value==="ENABLED")}
+                >
+                  <option value="ENABLED">Включён — контролировать ФНС и сроки</option>
+                  <option value="DISABLED">Выключен — только внутренний учёт</option>
+                </select>
+              </label>
+              {!complianceEnabled?(
+                <label className="studio-form-wide">
+                  <span>Почему отключён</span>
+                  <input
+                    value={complianceDisabledReason}
+                    onChange={e=>setComplianceDisabledReason(e.target.value)}
+                    placeholder="Например: отчётность ведёт внешний бухгалтер"
+                  />
+                  <small className="muted">
+                    Отключение не удаляет операции и не исключает их из бухгалтерских данных.
+                  </small>
+                </label>
+              ):null}
               <label>
                 <span>КПП</span>
                 <input value={kpp} onChange={e=>setKpp(e.target.value)} placeholder="Для организации" />
@@ -441,6 +487,19 @@ export default function AccountingTaxesPage(){
                 <button type="submit" disabled={busy}>Сохранить и собрать календарь</button>
               </div>
             </form>
+          </section>
+        ):null}
+
+        {overview?.profile?.compliance_enabled===false?(
+          <section className="studio-section">
+            <div className="studio-message">
+              <strong>Регламентированный контур выключен</strong>
+              <span>
+                CoreBiz продолжает вести деньги, P&L, склад и бухгалтерские данные,
+                но не создаёт новые задачи ФНС и не переводит документы к отправке.
+                Включить можно в «Налоговый профиль».
+              </span>
+            </div>
           </section>
         ):null}
 
