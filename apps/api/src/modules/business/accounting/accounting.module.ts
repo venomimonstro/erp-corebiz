@@ -5,9 +5,11 @@ import { VatController } from "./vat.controller";
 import { VatService } from "./vat.service";
 import { PayrollController } from "./payroll.controller";
 import { PayrollService } from "./payroll.service";
+import { TaxComplianceController } from "./tax-compliance.controller";
+import { TaxComplianceService } from "./tax-compliance.service";
 
 @Module({
-  controllers:[AccountingController,VatController,PayrollController],
-  providers:[AccountingService,VatService,PayrollService]
+  controllers:[AccountingController,VatController,PayrollController,TaxComplianceController],
+  providers:[AccountingService,VatService,PayrollService,TaxComplianceService]
 })
 export class AccountingModule {}
