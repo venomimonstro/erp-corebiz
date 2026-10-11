@@ -1187,13 +1187,13 @@ export class DanceStudioService {
         input.roomZoneId===undefined
           ?group.room_zone_id
           :input.roomZoneId;
-      const roomUnits=Math.floor(
-        input.roomCapacityUnits??group.room_capacity_units??1
-      );
-      const capacity=Math.floor(input.capacity??group.capacity);
-      const breakEven=Math.floor(
-        input.breakEvenMembers??group.break_even_members
-      );
+      const roomUnits=input.roomCapacityUnits??group.room_capacity_units??1;
+      const capacity=input.capacity??group.capacity;
+      const breakEven=input.breakEvenMembers??group.break_even_members;
+      if(!validCapacity(capacity,1,500)||!validCapacity(breakEven,1,capacity))
+        throw new BadRequestException("Размер группы и точка окупаемости должны быть целыми числами");
+      if(!validCapacity(roomUnits,1,100000))
+        throw new BadRequestException("Загрузка зала должна быть целым числом");
       const startsOn=input.startsOn??group.starts_on;
       const endsOn=
         input.endsOn===undefined?group.ends_on:input.endsOn;
@@ -1211,10 +1211,10 @@ export class DanceStudioService {
       if(roomZoneId&&!roomId){
         throw new BadRequestException("Зона указана без зала");
       }
-      if(startsOn&&!/^\d{4}-\d{2}-\d{2}$/.test(String(startsOn))){
+      if(startsOn&&!isValidDanceDate(String(startsOn))){
         throw new BadRequestException("Некорректная дата старта");
       }
-      if(endsOn&&!/^\d{4}-\d{2}-\d{2}$/.test(String(endsOn))){
+      if(endsOn&&!isValidDanceDate(String(endsOn))){
         throw new BadRequestException("Некорректная дата окончания");
       }
       if(endsOn&&startsOn&&String(endsOn)<String(startsOn)){
