@@ -96,6 +96,7 @@ export default function AutomotivePage(){
   const [orderComplaint,setOrderComplaint]=useState("");
   const [orderPromise,setOrderPromise]=useState("");
   const [orderMileage,setOrderMileage]=useState("");
+  const [orderBudget,setOrderBudget]=useState("");
 
   const [dMake,setDMake]=useState("");
   const [dModel,setDModel]=useState("");
@@ -154,10 +155,11 @@ export default function AutomotivePage(){
         body:JSON.stringify({
           vehicleId:orderVehicleId,complaint:orderComplaint||undefined,
           promisedAt:orderPromise||undefined,
-          mileageInKm:orderMileage?Number(orderMileage):undefined
+          mileageInKm:orderMileage?Number(orderMileage):undefined,
+          authorizationLimitMinor:orderBudget?String(Math.round(Number(orderBudget.replace(",","."))*100)):undefined
         })
       });
-      setOrderComplaint("");setOrderPromise("");setOrderMileage("");
+      setOrderComplaint("");setOrderPromise("");setOrderMileage("");setOrderBudget("");
       setShowOrderForm(false);setNotice("Заказ-наряд создан.");await load();
     }catch(cause){setError(cause instanceof Error?cause.message:"Не удалось создать заказ-наряд");}
     finally{setBusy(false);}
@@ -358,6 +360,7 @@ export default function AutomotivePage(){
                 <label className="studio-form-wide"><span>Что беспокоит клиента</span><input value={orderComplaint} onChange={e=>setOrderComplaint(e.target.value)} placeholder="Стук спереди, заменить масло..." /></label>
                 <label><span>Обещали к</span><input type="datetime-local" value={orderPromise} onChange={e=>setOrderPromise(e.target.value)} /></label>
                 <label><span>Пробег при приёмке</span><input type="number" value={orderMileage} onChange={e=>setOrderMileage(e.target.value)} /></label>
+                <label><span>Согласованный лимит, ₽</span><input type="number" min="0" step="0.01" value={orderBudget} onChange={e=>setOrderBudget(e.target.value)} placeholder="Например, 15000" /></label>
                 <div className="studio-form-actions"><button type="submit" disabled={busy}>Создать заказ-наряд</button></div>
               </form>
             ):null}
