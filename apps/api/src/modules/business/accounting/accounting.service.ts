@@ -372,4 +372,741 @@ export class AccountingService {
     });
   }
 
+  async taxProfile(context:TenantContext,legalEntityId:string) {
+    if(!legalEntityId) throw new BadRequestException("Не выбрано юридическое лицо");
+    return this.database.withTenantTransaction(context,async client=>{
+      const entity=await client.query(
+        "SELECT 1 FROM legal_entity WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,legalEntityId]
+      );
+      if(!entity.rowCount) throw new NotFoundException("Юридическое лицо не найдено");
+      const result=await client.query(
+        `SELECT
+           id,legal_entity_id,entity_kind,tax_regime,vat_mode,has_employees,
+           tax_region_code,tax_office_code,kpp,oktmo,okved_primary,
+           ens_enabled,reporting_mode,risk_tolerance,status,
+           effective_from,effective_to,updated_at
+         FROM accounting_tax_profile
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+           AND status='ACTIVE'
+           AND effective_from<=current_date
+           AND (effective_to IS NULL OR effective_to>=current_date)
+         ORDER BY effective_from DESC,id DESC
+         LIMIT 1`,
+        [context.tenantId,legalEntityId]
+      );
+      return result.rows[0]??null;
+    });
+  }
+
+  async saveTaxProfile(context:TenantContext,input:{
+    legalEntityId:string;
+    entityKind:"ORGANIZATION"|"IP";
+    taxRegime:"USN_INCOME"|"USN_INCOME_EXPENSE"|"OSNO"|"AUSN"|"OTHER";
+    vatMode?:"NO_VAT"|"VAT_5"|"VAT_7"|"VAT_20"|"VAT_MIXED";
+    hasEmployees?:boolean;
+    taxRegionCode?:string;
+    taxOfficeCode?:string;
+    kpp?:string;
+    oktmo?:string;
+    okvedPrimary?:string;
+    ensEnabled?:boolean;
+    reportingMode?:"ASSISTED"|"SEMI_AUTOMATIC"|"EXTERNAL_ACCOUNTANT";
+    riskTolerance?:"CONSERVATIVE"|"STANDARD";
+    effectiveFrom?:string;
+  }) {
+    if(!input.legalEntityId ||
+       !["ORGANIZATION","IP"].includes(input.entityKind) ||
+       !["USN_INCOME","USN_INCOME_EXPENSE","OSNO","AUSN","OTHER"].includes(input.taxRegime)) {
+      throw new BadRequestException("Некорректный налоговый профиль");
+    }
+    const effectiveFrom=input.effectiveFrom??new Date().toISOString().slice(0,10);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom)) {
+      throw new BadRequestException("Некорректная дата налогового режима");
+    }
+    const vatMode=input.vatMode??"NO_VAT";
+    const reportingMode=input.reportingMode??"ASSISTED";
+    const riskTolerance=input.riskTolerance??"CONSERVATIVE";
+    if(!["NO_VAT","VAT_5","VAT_7","VAT_20","VAT_MIXED"].includes(vatMode) ||
+       !["ASSISTED","SEMI_AUTOMATIC","EXTERNAL_ACCOUNTANT"].includes(reportingMode) ||
+       !["CONSERVATIVE","STANDARD"].includes(riskTolerance)) {
+      throw new BadRequestException("Некорректные параметры налогового профиля");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const entity=await client.query(
+        "SELECT 1 FROM legal_entity WHERE tenant_id=$1 AND id=$2 FOR SHARE",
+        [context.tenantId,input.legalEntityId]
+      );
+      if(!entity.rowCount) throw new NotFoundException("Юридическое лицо не найдено");
+
+      await client.query(
+        `UPDATE accounting_tax_profile
+         SET effective_to=$3::date-1,updated_by_membership_id=$4,updated_at=now()
+         WHERE tenant_id=$1 AND legal_entity_id=$2 AND status='ACTIVE'
+           AND effective_from<$3::date
+           AND (effective_to IS NULL OR effective_to>=$3::date)`,
+        [context.tenantId,input.legalEntityId,effectiveFrom,context.membershipId]
+      );
+
+      const existing=await client.query<{id:string}>(
+        `SELECT id FROM accounting_tax_profile
+         WHERE tenant_id=$1 AND legal_entity_id=$2 AND effective_from=$3::date
+         FOR UPDATE`,
+        [context.tenantId,input.legalEntityId,effectiveFrom]
+      );
+
+      if(existing.rows[0]){
+        const updated=await client.query(
+          `UPDATE accounting_tax_profile
+           SET entity_kind=$4,tax_regime=$5,vat_mode=$6,has_employees=$7,
+               tax_region_code=$8,tax_office_code=$9,kpp=$10,oktmo=$11,
+               okved_primary=$12,ens_enabled=$13,reporting_mode=$14,
+               risk_tolerance=$15,status='ACTIVE',effective_to=NULL,
+               updated_by_membership_id=$16,updated_at=now()
+           WHERE tenant_id=$1 AND legal_entity_id=$2 AND id=$3
+           RETURNING *`,
+          [
+            context.tenantId,input.legalEntityId,existing.rows[0].id,
+            input.entityKind,input.taxRegime,vatMode,Boolean(input.hasEmployees),
+            input.taxRegionCode?.trim()||null,input.taxOfficeCode?.trim()||null,
+            input.kpp?.trim()||null,input.oktmo?.trim()||null,
+            input.okvedPrimary?.trim()||null,input.ensEnabled!==false,
+            reportingMode,riskTolerance,context.membershipId
+          ]
+        );
+        return updated.rows[0];
+      }
+
+      const inserted=await client.query(
+        `INSERT INTO accounting_tax_profile(
+           tenant_id,legal_entity_id,entity_kind,tax_regime,vat_mode,
+           has_employees,tax_region_code,tax_office_code,kpp,oktmo,
+           okved_primary,ens_enabled,reporting_mode,risk_tolerance,
+           effective_from,created_by_membership_id,updated_by_membership_id
+         ) VALUES(
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16
+         )
+         RETURNING *`,
+        [
+          context.tenantId,input.legalEntityId,input.entityKind,input.taxRegime,
+          vatMode,Boolean(input.hasEmployees),input.taxRegionCode?.trim()||null,
+          input.taxOfficeCode?.trim()||null,input.kpp?.trim()||null,
+          input.oktmo?.trim()||null,input.okvedPrimary?.trim()||null,
+          input.ensEnabled!==false,reportingMode,riskTolerance,effectiveFrom,
+          context.membershipId
+        ]
+      );
+      return inserted.rows[0];
+    });
+  }
+
+  async buildComplianceCalendar(
+    context:TenantContext,
+    legalEntityId:string,
+    year:number
+  ) {
+    if(!Number.isSafeInteger(year)||year<2024||year>2100){
+      throw new BadRequestException("Некорректный год налогового календаря");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const profileResult=await client.query<{
+        id:string;
+        entity_kind:"ORGANIZATION"|"IP";
+        tax_regime:string;
+        vat_mode:string;
+        has_employees:boolean;
+      }>(
+        `SELECT id,entity_kind,tax_regime,vat_mode,has_employees
+         FROM accounting_tax_profile
+         WHERE tenant_id=$1 AND legal_entity_id=$2 AND status='ACTIVE'
+           AND effective_from<=make_date($3,12,31)
+           AND (effective_to IS NULL OR effective_to>=make_date($3,1,1))
+         ORDER BY effective_from DESC,id DESC
+         LIMIT 1`,
+        [context.tenantId,legalEntityId,year]
+      );
+      const profile=profileResult.rows[0];
+      if(!profile){
+        throw new ConflictException(
+          "Сначала настройте налоговый профиль юридического лица"
+        );
+      }
+
+      const items:Array<{
+        code:string;
+        title:string;
+        authority:"FNS"|"SFR"|"ROSSTAT"|"OTHER";
+        type:"FILE"|"PAY"|"NOTIFY"|"RECONCILE";
+        due:string;
+        periodKey:string;
+        formCode?:string;
+        sourceUrl:string;
+      }>=[];
+
+      const push=(item:(typeof items)[number])=>items.push(item);
+      const iso=(month:number,day:number)=>{
+        const d=new Date(Date.UTC(year,month-1,day,12,0,0));
+        return d.toISOString();
+      };
+      const nextMonthIso=(month:number,day:number)=>{
+        const d=new Date(Date.UTC(year,month,day,12,0,0));
+        return d.toISOString();
+      };
+      const ens="https://www.nalog.gov.ru/rn23/ens/";
+      const usn="https://www.nalog.gov.ru/rn77/yul/organization_pays_taxes/simplified_system/";
+
+      if(profile.tax_regime.startsWith("USN_")){
+        if(profile.entity_kind==="ORGANIZATION"){
+          push({
+            code:"USN_ANNUAL_DECLARATION_ORG",
+            title:"Декларация по УСН за "+String(year-1),
+            authority:"FNS",type:"FILE",due:iso(3,25),
+            periodKey:String(year-1),formCode:"USN_DECLARATION",sourceUrl:usn
+          });
+          push({
+            code:"USN_ANNUAL_PAYMENT_ORG",
+            title:"Доплатить налог по УСН за "+String(year-1),
+            authority:"FNS",type:"PAY",due:iso(3,28),
+            periodKey:String(year-1),sourceUrl:usn
+          });
+        }else{
+          push({
+            code:"USN_ANNUAL_DECLARATION_IP",
+            title:"Декларация по УСН за "+String(year-1),
+            authority:"FNS",type:"FILE",due:iso(4,25),
+            periodKey:String(year-1),formCode:"USN_DECLARATION",sourceUrl:usn
+          });
+          push({
+            code:"USN_ANNUAL_PAYMENT_IP",
+            title:"Доплатить налог по УСН за "+String(year-1),
+            authority:"FNS",type:"PAY",due:iso(4,28),
+            periodKey:String(year-1),sourceUrl:usn
+          });
+        }
+
+        for(const [month,quarter] of [[4,1],[7,2],[10,3]] as const){
+          push({
+            code:"USN_ADVANCE_NOTIFICATION",
+            title:"Уведомление по авансу УСН за "+quarter+" квартал",
+            authority:"FNS",type:"NOTIFY",due:iso(month,25),
+            periodKey:year+"-Q"+quarter,formCode:"KND_1110355",sourceUrl:ens
+          });
+          push({
+            code:"USN_ADVANCE_PAYMENT",
+            title:"Авансовый платёж УСН за "+quarter+" квартал",
+            authority:"FNS",type:"PAY",due:iso(month,28),
+            periodKey:year+"-Q"+quarter,sourceUrl:ens
+          });
+        }
+      }
+
+      if(profile.vat_mode!=="NO_VAT"){
+        for(const quarter of [1,2,3,4]){
+          const month=quarter*3+1;
+          const dueYear=month>12?year+1:year;
+          const dueMonth=month>12?1:month;
+          const d=new Date(Date.UTC(dueYear,dueMonth-1,25,12,0,0));
+          push({
+            code:"VAT_DECLARATION",
+            title:"Декларация по НДС за "+quarter+" квартал",
+            authority:"FNS",type:"FILE",due:d.toISOString(),
+            periodKey:year+"-Q"+quarter,formCode:"VAT_DECLARATION",
+            sourceUrl:"https://www.nalog.gov.ru/"
+          });
+        }
+      }
+
+      if(profile.has_employees){
+        for(let month=1;month<=12;month++){
+          const mm=String(month).padStart(2,"0");
+          push({
+            code:"NDFL_1_22_NOTIFICATION",
+            title:"Уведомление по НДФЛ за 1–22 "+mm,
+            authority:"FNS",type:"NOTIFY",due:iso(month,25),
+            periodKey:year+"-"+mm+"-01-22",formCode:"KND_1110355",sourceUrl:ens
+          });
+          push({
+            code:"NDFL_1_22_PAYMENT",
+            title:"Уплатить НДФЛ за 1–22 "+mm,
+            authority:"FNS",type:"PAY",due:iso(month,28),
+            periodKey:year+"-"+mm+"-01-22",sourceUrl:ens
+          });
+          if(month<12){
+            push({
+              code:"NDFL_23_EOM_NOTIFICATION",
+              title:"Уведомление по НДФЛ за 23–конец "+mm,
+              authority:"FNS",type:"NOTIFY",due:nextMonthIso(month,3),
+              periodKey:year+"-"+mm+"-23-EOM",formCode:"KND_1110355",sourceUrl:ens
+            });
+            push({
+              code:"NDFL_23_EOM_PAYMENT",
+              title:"Уплатить НДФЛ за 23–конец "+mm,
+              authority:"FNS",type:"PAY",due:nextMonthIso(month,5),
+              periodKey:year+"-"+mm+"-23-EOM",sourceUrl:ens
+            });
+          }
+          push({
+            code:"INSURANCE_NOTIFICATION",
+            title:"Уведомление по страховым взносам за "+mm,
+            authority:"FNS",type:"NOTIFY",due:nextMonthIso(month,25),
+            periodKey:year+"-"+mm,formCode:"KND_1110355",sourceUrl:ens
+          });
+          push({
+            code:"INSURANCE_PAYMENT",
+            title:"Уплатить страховые взносы за "+mm,
+            authority:"FNS",type:"PAY",due:nextMonthIso(month,28),
+            periodKey:year+"-"+mm,sourceUrl:ens
+          });
+        }
+      }
+
+      let created=0;
+      for(const item of items){
+        const rule=await client.query<{id:string}>(
+          `SELECT id FROM accounting_regulatory_rule
+           WHERE code=$1 AND status='ACTIVE'
+             AND effective_from<=$2::date
+             AND (effective_to IS NULL OR effective_to>=$2::date)
+           ORDER BY version DESC LIMIT 1`,
+          [item.code,item.due.slice(0,10)]
+        );
+        const inserted=await client.query(
+          `INSERT INTO accounting_compliance_obligation(
+             tenant_id,legal_entity_id,tax_profile_id,rule_id,
+             authority,obligation_type,code,title,period_key,due_at,
+             form_code,source_url,source_effective_at,
+             calculation_status,workflow_status,source_snapshot
+           ) VALUES(
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now(),
+             'REVIEW_REQUIRED','PLANNED',$13
+           )
+           ON CONFLICT(tenant_id,legal_entity_id,code,period_key) DO NOTHING
+           RETURNING id`,
+          [
+            context.tenantId,legalEntityId,profile.id,rule.rows[0]?.id??null,
+            item.authority,item.type,item.code,item.title,item.periodKey,
+            item.due,item.formCode??null,item.sourceUrl,
+            JSON.stringify({
+              generatedBy:"COREBIZ_REGULATORY_CALENDAR",
+              generatedAt:new Date().toISOString(),
+              year,
+              note:
+                "Срок создан по нормативному правилу. Перед отправкой система должна сверить переносы выходных/праздников и актуальную редакцию формы."
+            })
+          ]
+        );
+        if(inserted.rowCount) created++;
+      }
+
+      return {created,total:items.length,profileId:profile.id};
+    });
+  }
+
+  async complianceOverview(
+    context:TenantContext,
+    legalEntityId:string,
+    from?:string,
+    to?:string
+  ) {
+    const dateFrom=from&&/^\d{4}-\d{2}-\d{2}$/.test(from)
+      ?from
+      :new Date().toISOString().slice(0,10);
+    const defaultTo=new Date(Date.now()+120*86400000).toISOString().slice(0,10);
+    const dateTo=to&&/^\d{4}-\d{2}-\d{2}$/.test(to)?to:defaultTo;
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const profile=await client.query(
+        `SELECT
+           id,entity_kind,tax_regime,vat_mode,has_employees,ens_enabled,
+           reporting_mode,risk_tolerance,kpp,oktmo,tax_office_code,
+           effective_from,effective_to
+         FROM accounting_tax_profile
+         WHERE tenant_id=$1 AND legal_entity_id=$2 AND status='ACTIVE'
+           AND effective_from<=current_date
+           AND (effective_to IS NULL OR effective_to>=current_date)
+         ORDER BY effective_from DESC LIMIT 1`,
+        [context.tenantId,legalEntityId]
+      );
+
+      const obligations=await client.query(
+        `SELECT
+           o.id,o.authority,o.obligation_type,o.code,o.title,o.period_key,
+           o.due_at,o.amount_minor::text,o.currency,o.calculation_status,
+           o.workflow_status,o.form_code,o.source_url,o.review_note,
+           o.external_provider,o.external_reference,o.rejection_reason,
+           o.packet_id,
+           p.validation_status AS packet_validation_status,
+           p.signature_status AS packet_signature_status,
+           CASE
+             WHEN o.workflow_status IN ('ACCEPTED','PAID','CANCELLED') THEN 'DONE'
+             WHEN o.due_at<now() THEN 'OVERDUE'
+             WHEN o.due_at<now()+interval '7 days' THEN 'URGENT'
+             WHEN o.due_at<now()+interval '30 days' THEN 'UPCOMING'
+             ELSE 'LATER'
+           END AS urgency
+         FROM accounting_compliance_obligation o
+         LEFT JOIN accounting_compliance_packet p
+           ON p.tenant_id=o.tenant_id AND p.id=o.packet_id
+         WHERE o.tenant_id=$1
+           AND o.legal_entity_id=$2
+           AND o.due_at >= $3::date
+           AND o.due_at < $4::date + interval '1 day'
+         ORDER BY
+           CASE
+             WHEN o.workflow_status IN ('ACCEPTED','PAID','CANCELLED') THEN 1
+             ELSE 0
+           END,
+           o.due_at,o.id`,
+        [context.tenantId,legalEntityId,dateFrom,dateTo]
+      );
+
+      const connectors=await client.query(
+        `SELECT
+           id,provider,status,supports_filing,supports_receipts,
+           certificate_valid_to,last_verified_at,last_error
+         FROM accounting_reporting_connector
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+           AND status<>'DISABLED'
+         ORDER BY provider`,
+        [context.tenantId,legalEntityId]
+      );
+
+      const counts=obligations.rows.reduce<Record<string,number>>(
+        (acc,row:any)=>{
+          acc.total=(acc.total??0)+1;
+          acc[row.urgency]=(acc[row.urgency]??0)+1;
+          return acc;
+        },{}
+      );
+
+      return {
+        profile:profile.rows[0]??null,
+        counts,
+        obligations:obligations.rows,
+        connectors:connectors.rows
+      };
+    });
+  }
+
+  async prepareCompliancePacket(
+    context:TenantContext,
+    obligationId:string
+  ) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const obligation=await client.query<{
+        id:string;
+        legal_entity_id:string;
+        tax_profile_id:string;
+        obligation_type:string;
+        code:string;
+        title:string;
+        period_key:string;
+        due_at:Date;
+        form_code:string|null;
+        source_url:string|null;
+        workflow_status:string;
+      }>(
+        `SELECT
+           id,legal_entity_id,tax_profile_id,obligation_type,code,title,
+           period_key,due_at,form_code,source_url,workflow_status
+         FROM accounting_compliance_obligation
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,obligationId]
+      );
+      const o=obligation.rows[0];
+      if(!o) throw new NotFoundException("Налоговая задача не найдена");
+      if(["ACCEPTED","PAID","CANCELLED"].includes(o.workflow_status)){
+        throw new ConflictException("Завершённую налоговую задачу нельзя пересобрать");
+      }
+
+      const profile=await client.query(
+        `SELECT
+           entity_kind,tax_regime,vat_mode,kpp,oktmo,tax_office_code,
+           tax_region_code,ens_enabled
+         FROM accounting_tax_profile
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,o.tax_profile_id]
+      );
+      const entity=await client.query(
+        `SELECT id,name,inn
+         FROM legal_entity
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,o.legal_entity_id]
+      );
+
+      const packetKind=
+        o.obligation_type==="PAY"?"PAYMENT_INSTRUCTION":
+        o.form_code==="KND_1110355"?"FNS_NOTIFICATION":
+        o.obligation_type==="FILE"?"FNS_DECLARATION":"OTHER";
+
+      const missing:string[]=[];
+      const p:any=profile.rows[0]??{};
+      const e:any=entity.rows[0]??{};
+      if(!e.inn) missing.push("ИНН");
+      if(o.form_code==="KND_1110355"){
+        if(p.entity_kind==="ORGANIZATION"&&!p.kpp) missing.push("КПП");
+        if(!p.oktmo) missing.push("ОКТМО");
+        missing.push("КБК и подтверждённая сумма для строки уведомления");
+      }
+
+      const payload={
+        schema:"corebiz.accounting.compliance.packet.v1",
+        generatedAt:new Date().toISOString(),
+        legalEntity:{id:e.id,name:e.name,inn:e.inn??null},
+        taxProfile:p,
+        obligation:{
+          id:o.id,code:o.code,title:o.title,periodKey:o.period_key,
+          dueAt:o.due_at,formCode:o.form_code,sourceUrl:o.source_url
+        },
+        requiredBeforeSubmission:missing
+      };
+
+      const validationStatus=
+        missing.length?"REVIEW_REQUIRED":"VALID";
+      const signatureStatus=
+        o.obligation_type==="FILE"||o.obligation_type==="NOTIFY"
+          ?"SIGNATURE_REQUIRED"
+          :"UNSIGNED";
+
+      const packet=await client.query<{id:string}>(
+        `INSERT INTO accounting_compliance_packet(
+           tenant_id,legal_entity_id,obligation_id,packet_kind,format,
+           form_code,schema_version,payload,validation_status,
+           validation_errors,signature_status,created_by_membership_id
+         ) VALUES(
+           $1,$2,$3,$4,'JSON',$5,'1',$6,$7,$8,$9,$10
+         )
+         ON CONFLICT(tenant_id,obligation_id,packet_kind)
+         DO UPDATE SET
+           payload=EXCLUDED.payload,
+           validation_status=EXCLUDED.validation_status,
+           validation_errors=EXCLUDED.validation_errors,
+           signature_status=CASE
+             WHEN accounting_compliance_packet.signature_status='SIGNED'
+               THEN accounting_compliance_packet.signature_status
+             ELSE EXCLUDED.signature_status
+           END,
+           updated_at=now()
+         RETURNING id`,
+        [
+          context.tenantId,o.legal_entity_id,o.id,packetKind,o.form_code,
+          JSON.stringify(payload),validationStatus,JSON.stringify(missing),
+          signatureStatus,context.membershipId
+        ]
+      );
+
+      await client.query(
+        `UPDATE accounting_compliance_obligation
+         SET packet_id=$3,
+             calculation_status=CASE
+               WHEN $4::text='VALID' THEN 'CALCULATED'
+               ELSE 'REVIEW_REQUIRED'
+             END,
+             workflow_status=CASE
+               WHEN workflow_status='PLANNED' THEN 'READY'
+               ELSE workflow_status
+             END,
+             review_note=CASE
+               WHEN cardinality($5::text[])>0
+                 THEN array_to_string($5::text[],'; ')
+               ELSE NULL
+             END,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,o.id,packet.rows[0]!.id,validationStatus,missing]
+      );
+
+      await client.query(
+        `INSERT INTO accounting_compliance_event(
+           tenant_id,obligation_id,event_type,actor_membership_id,payload
+         ) VALUES($1,$2,'PACKET_PREPARED',$3,$4)`,
+        [
+          context.tenantId,o.id,context.membershipId,
+          JSON.stringify({packetId:packet.rows[0]!.id,validationStatus,missing})
+        ]
+      );
+
+      return {
+        packetId:packet.rows[0]!.id,
+        validationStatus,
+        signatureStatus,
+        missing,
+        payload
+      };
+    });
+  }
+
+  async complianceTransition(context:TenantContext,input:{
+    obligationId:string;
+    action:"APPROVE"|"SUBMIT"|"ACCEPT"|"REJECT"|"MARK_PAID"|"REOPEN";
+    externalProvider?:string;
+    externalReference?:string;
+    rejectionReason?:string;
+    note?:string;
+  }) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{
+        id:string;
+        workflow_status:string;
+        obligation_type:string;
+        packet_id:string|null;
+      }>(
+        `SELECT id,workflow_status,obligation_type,packet_id
+         FROM accounting_compliance_obligation
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,input.obligationId]
+      );
+      const row=result.rows[0];
+      if(!row) throw new NotFoundException("Налоговая задача не найдена");
+
+      let next=row.workflow_status;
+      if(input.action==="APPROVE"){
+        if(row.workflow_status!=="READY") {
+          throw new ConflictException("Сначала подготовьте и проверьте пакет");
+        }
+        if(row.packet_id){
+          const packet=await client.query<{validation_status:string}>(
+            `SELECT validation_status
+             FROM accounting_compliance_packet
+             WHERE tenant_id=$1 AND id=$2`,
+            [context.tenantId,row.packet_id]
+          );
+          if(packet.rows[0]?.validation_status!=="VALID"){
+            throw new ConflictException(
+              "Пакет требует проверки: заполните обязательные реквизиты и суммы"
+            );
+          }
+        }
+        next="APPROVED";
+      } else if(input.action==="SUBMIT"){
+        if(row.workflow_status!=="APPROVED"){
+          throw new ConflictException("Перед отправкой задача должна быть утверждена");
+        }
+        if(!input.externalProvider?.trim()||!input.externalReference?.trim()){
+          throw new BadRequestException(
+            "Для отправки нужен провайдер и внешний идентификатор/квитанция"
+          );
+        }
+        next="SUBMITTED";
+      } else if(input.action==="ACCEPT"){
+        if(row.workflow_status!=="SUBMITTED"){
+          throw new ConflictException("Принять можно только отправленный документ");
+        }
+        next="ACCEPTED";
+      } else if(input.action==="REJECT"){
+        if(row.workflow_status!=="SUBMITTED"||!input.rejectionReason?.trim()){
+          throw new BadRequestException("Для отказа требуется причина ФНС/оператора");
+        }
+        next="REJECTED";
+      } else if(input.action==="MARK_PAID"){
+        if(!["APPROVED","SUBMITTED"].includes(row.workflow_status) ||
+           row.obligation_type!=="PAY"){
+          throw new ConflictException("Эту задачу нельзя отметить оплаченной");
+        }
+        next="PAID";
+      } else if(input.action==="REOPEN"){
+        if(row.workflow_status!=="REJECTED"){
+          throw new ConflictException("Повторная подготовка доступна после отказа");
+        }
+        next="READY";
+      } else {
+        throw new BadRequestException("Неизвестное действие налогового workflow");
+      }
+
+      const approved=["APPROVED","SUBMITTED","ACCEPTED","PAID"].includes(next);
+      const updated=await client.query(
+        `UPDATE accounting_compliance_obligation
+         SET workflow_status=$3,
+             approved_by_membership_id=CASE
+               WHEN $4 THEN coalesce(approved_by_membership_id,$5::uuid)
+               ELSE approved_by_membership_id
+             END,
+             approved_at=CASE
+               WHEN $4 THEN coalesce(approved_at,now())
+               ELSE approved_at
+             END,
+             external_provider=coalesce($6,external_provider),
+             external_reference=coalesce($7,external_reference),
+             rejection_reason=CASE
+               WHEN $3='REJECTED' THEN $8
+               WHEN $3='READY' THEN NULL
+               ELSE rejection_reason
+             END,
+             completed_at=CASE
+               WHEN $3 IN ('ACCEPTED','PAID') THEN now()
+               ELSE completed_at
+             END,
+             review_note=coalesce($9,review_note),
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING id,workflow_status,completed_at`,
+        [
+          context.tenantId,row.id,next,approved,context.membershipId,
+          input.externalProvider?.trim()||null,
+          input.externalReference?.trim()||null,
+          input.rejectionReason?.trim()||null,input.note?.trim()||null
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO accounting_compliance_event(
+           tenant_id,obligation_id,event_type,actor_membership_id,
+           previous_status,new_status,payload
+         ) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+        [
+          context.tenantId,row.id,input.action,context.membershipId,
+          row.workflow_status,next,
+          JSON.stringify({
+            provider:input.externalProvider??null,
+            externalReference:input.externalReference??null,
+            note:input.note??null
+          })
+        ]
+      );
+
+      if(input.action==="ACCEPT"||input.action==="REJECT"){
+        await client.query(
+          `INSERT INTO accounting_compliance_receipt(
+             tenant_id,obligation_id,provider,external_reference,receipt_type,payload
+           ) VALUES($1,$2,$3,$4,$5,$6)
+           ON CONFLICT DO NOTHING`,
+          [
+            context.tenantId,row.id,
+            input.externalProvider?.trim()||"MANUAL",
+            input.externalReference?.trim()||("manual:"+row.id+":"+next),
+            input.action==="ACCEPT"?"ACCEPTED":"REJECTED",
+            JSON.stringify({reason:input.rejectionReason??null})
+          ]
+        );
+      }
+
+      return updated.rows[0];
+    });
+  }
+
+  async complianceHistory(context:TenantContext,obligationId:string) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const exists=await client.query(
+        `SELECT 1 FROM accounting_compliance_obligation
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,obligationId]
+      );
+      if(!exists.rowCount) throw new NotFoundException("Налоговая задача не найдена");
+      const result=await client.query(
+        `SELECT
+           id,event_type,actor_membership_id,previous_status,new_status,
+           payload,created_at
+         FROM accounting_compliance_event
+         WHERE tenant_id=$1 AND obligation_id=$2
+         ORDER BY created_at DESC,id DESC`,
+        [context.tenantId,obligationId]
+      );
+      return result.rows;
+    });
+  }
+
 }
