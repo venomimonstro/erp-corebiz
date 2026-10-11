@@ -149,6 +149,7 @@ export default function BookingsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedService, setSelectedService] = useState("");
   const [selectedResource, setSelectedResource] = useState("");
+  const [selectedSupportResource,setSelectedSupportResource]=useState("");
   const [selectedZone, setSelectedZone] = useState("");
   const [selectedCapacityUnits, setSelectedCapacityUnits] = useState("1");
   const [resourceZones, setResourceZones] = useState<ResourceZone[]>([]);
@@ -223,21 +224,27 @@ export default function BookingsPage() {
   useEffect(() => {
     setSelectedZone("");
     setSelectedCapacityUnits("1");
-    if (!selectedResource) {
+    const spaceResourceId=spaceMode
+      ?selectedResource
+      :selectedSupportResource;
+    if(!spaceResourceId){
       setResourceZones([]);
       return;
     }
-    const resource = resources.find((item) => item.id === selectedResource);
-    if (!resource || !["ROOM","HALL","WORKPLACE","EQUIPMENT","OTHER"].includes(resource.type)) {
+    const resource=resources.find(item=>item.id===spaceResourceId);
+    if(
+      !resource ||
+      !["ROOM","HALL","WORKPLACE","EQUIPMENT","OTHER"].includes(resource.type)
+    ){
       setResourceZones([]);
       return;
     }
     void apiRequest<ResourceZone[]>(
-      "/service/resources/" + encodeURIComponent(selectedResource) + "/zones"
+      "/service/resources/"+encodeURIComponent(spaceResourceId)+"/zones"
     )
       .then(setResourceZones)
-      .catch(() => setResourceZones([]));
-  }, [selectedResource, resources]);
+      .catch(()=>setResourceZones([]));
+  }, [selectedResource,selectedSupportResource,resources,spaceMode]);
 
   useEffect(() => {
     if (!selectedCustomer) {
@@ -301,6 +308,10 @@ export default function BookingsPage() {
     () => resources.find((item) => item.id === selectedResource) ?? null,
     [resources, selectedResource]
   );
+  const activeSupportResource=useMemo(
+    ()=>resources.find(item=>item.id===selectedSupportResource)??null,
+    [resources,selectedSupportResource]
+  );
   const spaceMode =
     activeService?.delivery_format === "SELF_PRACTICE" ||
     activeService?.delivery_format === "RENTAL";
@@ -317,6 +328,13 @@ export default function BookingsPage() {
     }
     return resources.filter((item) => item.type === "EMPLOYEE");
   }, [activeService, resources]);
+
+  const supportResources=useMemo(
+    ()=>resources.filter(item=>
+      ["ROOM","HALL","WORKPLACE","EQUIPMENT","OTHER"].includes(item.type)
+    ),
+    [resources]
+  );
 
   const grouped = useMemo(() => {
     const map = new Map<string, Booking[]>();
@@ -514,11 +532,24 @@ export default function BookingsPage() {
         method: "POST",
         body: JSON.stringify({
           serviceId: selectedService,
-          resources: [{
-            resourceId: selectedResource,
-            capacityUnits: Number(selectedCapacityUnits || "1"),
-            zoneId: selectedZone || undefined
-          }],
+          resources: [
+            {
+              resourceId:selectedResource,
+              capacityUnits:spaceMode
+                ?Number(selectedCapacityUnits||"1")
+                :1,
+              zoneId:spaceMode?(selectedZone||undefined):undefined
+            },
+            ...(
+              !spaceMode&&selectedSupportResource
+                ?[{
+                  resourceId:selectedSupportResource,
+                  capacityUnits:Number(selectedCapacityUnits||"1"),
+                  zoneId:selectedZone||undefined
+                }]
+                :[]
+            )
+          ],
           deliveryFormat: activeService?.delivery_format,
           startsAt: parsed.toISOString(),
           partyId: selectedCustomer || undefined,
@@ -687,6 +718,55 @@ export default function BookingsPage() {
                   ))}
                 </select>
               </label>
+              {!spaceMode?(
+                <label>Рабочее место / кабинет{" "}
+                  <select
+                    value={selectedSupportResource}
+                    onChange={(e)=>{
+                      setSelectedSupportResource(e.target.value);
+                      setSelectedZone("");
+                      setSelectedCapacityUnits("1");
+                    }}
+                  >
+                    <option value="">Не требуется</option>
+                    {supportResources.map(item=>(
+                      <option key={item.id} value={item.id}>
+                        {item.name} · {item.capacity} ед.
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ):null}
+              {!spaceMode && selectedSupportResource ? (
+                <>
+                  <label>Зона{" "}
+                    <select
+                      value={selectedZone}
+                      onChange={(e)=>setSelectedZone(e.target.value)}
+                    >
+                      <option value="">Без зоны / общий ресурс</option>
+                      {resourceZones.map(zone=>(
+                        <option key={zone.id} value={zone.id}>
+                          {zone.name} · {zone.capacity_units} ед.
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>Сколько места занимает{" "}
+                    <input
+                      type="number"
+                      min="1"
+                      max={
+                        selectedZone
+                          ?resourceZones.find(zone=>zone.id===selectedZone)?.capacity_units
+                          :activeSupportResource?.capacity
+                      }
+                      value={selectedCapacityUnits}
+                      onChange={(e)=>setSelectedCapacityUnits(e.target.value)}
+                    />
+                  </label>
+                </>
+              ):null}
               {spaceMode && selectedResource ? (
                 <>
                   <label>Зона{" "}
