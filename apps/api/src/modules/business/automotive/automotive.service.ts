@@ -355,6 +355,8 @@ export class AutomotiveService {
              ELSE promised_at
            END,
            mileage_out_km=$8,
+           authorization_limit_minor=CASE WHEN $9::boolean
+             THEN $10::bigint ELSE authorization_limit_minor END,
            completed_at=CASE
              WHEN coalesce($3,status)='DELIVERED' THEN coalesce(completed_at,now())
              ELSE completed_at
@@ -366,7 +368,9 @@ export class AutomotiveService {
           context.tenantId,workOrderId,requestedStatus,
           input.diagnosis===undefined?null:input.diagnosis.trim(),
           input.complaint===undefined?null:input.complaint.trim(),
-          input.promisedAt!==undefined,input.promisedAt??null,mileageOut
+          input.promisedAt!==undefined,input.promisedAt??null,mileageOut,
+          input.authorizationLimitMinor!==undefined,
+          input.authorizationLimitMinor??null
         ]
       );
 
