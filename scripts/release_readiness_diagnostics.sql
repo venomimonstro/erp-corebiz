@@ -501,8 +501,7 @@ WHERE c.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     WHERE r.tenant_id=c.tenant_id
       AND r.booking_id=c.booking_id
       AND r.state IN ('RESERVED','CONSUMED')
-  );
-
+  )
 UNION ALL
 SELECT 'PAYROLL_PAID_BATCH_STATEMENT_DRIFT',count(*)::bigint
 FROM trainer_payroll_statement s
@@ -549,4 +548,83 @@ WHERE g.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
         OR g.room_capacity_units>z.capacity_units
       )
     )
+  );
+
+
+-- Universal service economics / beauty, barber and nail salary invariants.
+SELECT 'SERVICE_COMPLETED_WITHOUT_PROFITABILITY' AS code,count(*)::bigint AS affected
+FROM service_booking b
+WHERE b.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND b.status='COMPLETED'
+  AND NOT EXISTS(
+    SELECT 1
+    FROM service_booking_profitability p
+    WHERE p.tenant_id=b.tenant_id AND p.booking_id=b.id
+  )
+UNION ALL
+SELECT 'SERVICE_PROFITABILITY_FORMULA_MISMATCH',count(*)::bigint
+FROM service_booking_profitability p
+WHERE p.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND p.contribution_margin_minor<>(
+    p.revenue_minor-
+    p.material_cost_minor-
+    p.employee_cost_minor-
+    p.resource_cost_minor-
+    p.other_cost_minor
+  )
+UNION ALL
+SELECT 'SERVICE_EMPLOYEE_PLAN_OVERLAP',count(*)::bigint
+FROM service_employee_compensation_plan a
+JOIN service_employee_compensation_plan b
+  ON b.tenant_id=a.tenant_id
+ AND b.employee_resource_id=a.employee_resource_id
+ AND b.service_id IS NOT DISTINCT FROM a.service_id
+ AND b.delivery_format IS NOT DISTINCT FROM a.delivery_format
+ AND b.branch_id IS NOT DISTINCT FROM a.branch_id
+ AND b.priority=a.priority
+ AND b.id>a.id
+ AND a.status='ACTIVE'
+ AND b.status='ACTIVE'
+ AND daterange(a.valid_from,a.valid_to,'[]')
+     && daterange(b.valid_from,b.valid_to,'[]')
+WHERE a.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+UNION ALL
+SELECT 'SERVICE_EMPLOYEE_PROFILE_OVERLAP',count(*)::bigint
+FROM service_employee_payroll_profile a
+JOIN service_employee_payroll_profile b
+  ON b.tenant_id=a.tenant_id
+ AND b.employee_resource_id=a.employee_resource_id
+ AND b.id>a.id
+ AND a.status='ACTIVE'
+ AND b.status='ACTIVE'
+ AND daterange(a.valid_from,a.valid_to,'[]')
+     && daterange(b.valid_from,b.valid_to,'[]')
+WHERE a.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+UNION ALL
+SELECT 'SERVICE_EMPLOYEE_STATEMENT_TOTAL_MISMATCH',count(*)::bigint
+FROM service_employee_payroll_statement st
+WHERE st.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND st.status<>'CANCELLED'
+  AND st.total_minor<>(
+    st.variable_minor+
+    st.monthly_base_minor+
+    st.daily_base_minor+
+    st.guarantee_adjustment_minor+
+    st.adjustment_minor
+  )
+UNION ALL
+SELECT 'SERVICE_MATERIAL_CONSUMPTION_OVER_PLAN',count(*)::bigint
+FROM service_booking_material m
+WHERE m.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND m.consumed_quantity_milli>m.planned_quantity_milli
+UNION ALL
+SELECT 'SERVICE_EMPLOYEE_ACCRUAL_WITHOUT_PROFITABILITY',count(*)::bigint
+FROM service_employee_booking_accrual a
+WHERE a.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND NOT EXISTS(
+    SELECT 1
+    FROM service_booking_profitability p
+    WHERE p.tenant_id=a.tenant_id
+      AND p.booking_id=a.booking_id
+      AND p.employee_resource_id=a.employee_resource_id
   );
