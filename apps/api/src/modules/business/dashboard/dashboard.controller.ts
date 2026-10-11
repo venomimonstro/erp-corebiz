@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Req } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Patch, Req } from "@nestjs/common";
 import type { ApiSuccess, TenantContext } from "@corebiz/contracts";
 import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
@@ -35,9 +35,12 @@ export class DashboardController {
     @Req() request: AuthenticatedRequest,
     @Body() body: { dismissed: boolean }
   ): Promise<ApiSuccess<{ updated: true }>> {
+    if (!body || typeof body.dismissed !== "boolean") {
+      throw new BadRequestException("Параметр dismissed должен быть boolean");
+    }
     await this.dashboard.dismissActivation(
       this.context(request),
-      Boolean(body.dismissed)
+      body.dismissed
     );
     return { ok: true, data: { updated: true } };
   }
