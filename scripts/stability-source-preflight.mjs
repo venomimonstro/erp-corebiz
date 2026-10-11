@@ -472,6 +472,28 @@ async function inspectRequiredHardening(root) {
     message: "Owner accounting compliance center is incomplete"
   },
   {
+    path: "apps/api/src/modules/business/accounting/compliance.service.ts",
+    patterns: [
+      /complianceLines/,
+      /saveComplianceLine/,
+      /KND_1110355/,
+      /recordProviderSignature/,
+      /recordReceipt/
+    ],
+    message: "Structured FNS compliance flow is incomplete"
+  },
+  {
+    path: "apps/web/components/accounting-compliance-center.tsx",
+    patterns: [
+      /КНД 1110355/,
+      /КБК/,
+      /ОКТМО/,
+      /Подтвердить КЭП/,
+      /Принято ФНС/
+    ],
+    message: "Owner FNS filing workflow UI is incomplete"
+  },
+  {
     path: "apps/worker/src/tenant-export.ts",
     patterns: [
       /dance_students/,
@@ -488,7 +510,8 @@ async function inspectRequiredHardening(root) {
       /accounting_tax_calculations/,
       /accounting_compliance_packets/,
       /accounting_tax_payment_classifications/,
-      /accounting_tax_ledger_items/
+      /accounting_tax_ledger_items/,
+      /accounting_compliance_lines/
     ],
     message: "Dance studio tenant export coverage is missing"
   }
@@ -567,7 +590,8 @@ async function inspectRequiredHardening(root) {
     "194_tax_cash_basis_dimensions.sql",
     "195_accounting_compliance_integrity.sql",
     "195_accounting_signature_evidence.sql",
-    "196_cash_account_legal_entity.sql"
+    "196_cash_account_legal_entity.sql",
+    "197_accounting_compliance_lines.sql"
   ];
 
   for (const name of requiredMigrations) {
