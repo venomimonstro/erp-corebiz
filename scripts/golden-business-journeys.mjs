@@ -335,7 +335,7 @@ async function serviceJourney() {
   const customer = await request("POST", "/crm/customers", {
     type: "PERSON",
     displayName: "Golden service client",
-    phone: "+7999000" + runId.slice(0, 4)
+    email: "golden-service-" + runId + "@example.test"
   });
 
   const windows = Array.from({ length: 7 }, (_, index) => ({
