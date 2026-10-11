@@ -1931,3 +1931,76 @@ button, .primary, .secondary { font: inherit; }
   font-size:13px;
   line-height:1.45;
 }
+
+
+/* Explainable payroll + service booking finance */
+.payroll-breakdown-grid {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;
+}
+.payroll-breakdown-grid > article {
+  display:grid;
+  gap:5px;
+  min-width:0;
+  padding:12px;
+  border:1px solid #e4e7e9;
+  border-radius:12px;
+  background:#fff;
+}
+.payroll-breakdown-grid span,
+.payroll-breakdown-grid small {
+  color:#858c93;
+  font-size:9px;
+}
+.payroll-breakdown-grid strong {
+  font-size:17px;
+  letter-spacing:-.035em;
+}
+.payroll-lesson-list { display:grid; gap:7px; }
+.payroll-lesson-list > article {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto auto;
+  gap:14px;
+  align-items:center;
+  padding:11px 12px;
+  border:1px solid #e5e8ea;
+  border-radius:12px;
+  background:#fff;
+}
+.payroll-lesson-list > article > div { display:grid; gap:3px; }
+.payroll-lesson-list span,
+.payroll-lesson-list small { color:#858c93; font-size:9px; }
+.payroll-lesson-list > article > strong { font-size:14px; }
+.booking-resource-summary {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:8px;
+}
+.booking-resource-summary > div {
+  display:grid;
+  gap:4px;
+  padding:11px 12px;
+  border:1px solid #e4e7e9;
+  border-radius:12px;
+  background:#fff;
+}
+.booking-resource-summary span { color:#858c93; font-size:9px; }
+.inline-success {
+  display:flex;
+  gap:10px;
+  align-items:center;
+  margin:0 0 14px;
+  padding:11px 13px;
+  border:1px solid #dfe5e1;
+  border-radius:12px;
+  background:#f7faf8;
+  color:#4f5953;
+  font-size:10px;
+}
+.inline-success strong { color:#222a25; }
+@media (max-width:760px) {
+  .payroll-breakdown-grid { grid-template-columns:1fr; }
+  .payroll-lesson-list > article { grid-template-columns:1fr; gap:7px; }
+  .booking-resource-summary { grid-template-columns:1fr; }
+}
