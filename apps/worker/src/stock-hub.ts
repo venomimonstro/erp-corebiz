@@ -19,11 +19,17 @@ type PublishJob={
 };
 
 function credentials(ciphertext:string):Record<string,unknown>{
-  const secret=process.env.SESSION_SECRET?.trim();
-  if(!secret)throw new Error("SESSION_SECRET_REQUIRED");
   const [version,iv,tag,body]=ciphertext.split(".");
-  if(version!=="v1"||!iv||!tag||!body)throw new Error("CHANNEL_CREDENTIAL_FORMAT");
-  const key=createHash("sha256").update(secret+"|corebiz-channels-v1").digest();
+  if(!["v1","v2"].includes(version)||!iv||!tag||!body)
+    throw new Error("CHANNEL_CREDENTIAL_FORMAT");
+  const secret=version==="v2"
+    ?process.env.CHANNEL_ENCRYPTION_KEY?.trim()
+    :process.env.SESSION_SECRET?.trim();
+  if(!secret)throw new Error(version==="v2"
+    ?"CHANNEL_ENCRYPTION_KEY_REQUIRED_FOR_V2"
+    :"SESSION_SECRET_REQUIRED_FOR_LEGACY_CHANNEL_KEY");
+  const key=createHash("sha256").update(secret+
+    (version==="v2"?"|corebiz-channels-v2":"|corebiz-channels-v1")).digest();
   const decipher=createDecipheriv("aes-256-gcm",key,Buffer.from(iv,"base64url"));
   decipher.setAuthTag(Buffer.from(tag,"base64url"));
   return JSON.parse(Buffer.concat([
