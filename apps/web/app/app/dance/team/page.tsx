@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
 import { DanceWorkspaceNav } from "../../../../components/dance-workspace-nav";
+import { StudioModal } from "../../../../components/studio-modal";
 import { apiRequest } from "../../../../lib/api";
 
 type Customer = {
@@ -113,6 +114,16 @@ export default function DanceTeamPage() {
   const [payroll, setPayroll] = useState<PayrollBatch[]>([]);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [planModal, setPlanModal] = useState(false);
+  const [planTrainerId, setPlanTrainerId] = useState("");
+  const [planScheme, setPlanScheme] = useState<
+    "FIXED" | "HOURLY" | "PERCENT" | "ATTENDEE" | "COMPOSITE"
+  >("FIXED");
+  const [planLessonType, setPlanLessonType] = useState("");
+  const [planBaseRub, setPlanBaseRub] = useState("1500");
+  const [planPercent, setPlanPercent] = useState("40");
+  const [planPerAttendeeRub, setPlanPerAttendeeRub] = useState("100");
+  const [planGuaranteeRub, setPlanGuaranteeRub] = useState("0");
 
   const load = useCallback(async () => {
     setError("");
@@ -190,76 +201,85 @@ export default function DanceTeamPage() {
     return [...map.entries()];
   }, [accruals]);
 
-  async function createPlan() {
-    if (!trainers.length) return;
-    const trainer = trainers[
-      Number(window.prompt(
-        "Тренер:\n" + trainers.map((item, i) => `${i + 1}. ${item.name}`).join("\n"),
-        "1"
-      )) - 1
-    ];
-    if (!trainer) return;
+  function openPlanModal() {
+    setPlanTrainerId((current) => current || trainers[0]?.id || "");
+    setPlanModal(true);
+  }
 
-    const calculationType = (
-      window.prompt("Схема: FIXED, HOURLY, PERCENT, ATTENDEE или TIERED", "FIXED") ?? "FIXED"
-    ).trim().toUpperCase();
-    if (!["FIXED", "HOURLY", "PERCENT", "ATTENDEE", "TIERED"].includes(calculationType)) {
-      setError("Неизвестная схема");
+  async function createPlan() {
+    if (!planTrainerId) {
+      setError("Выберите тренера");
       return;
     }
-    const lessonType = (
-      window.prompt(
-        "Тип урока: GROUP / INDIVIDUAL / TRIAL / MASTER_CLASS или пусто = любой",
-        ""
-      ) ?? ""
-    ).trim().toUpperCase();
 
-    let fixedMinor = "0";
-    let hourlyMinor = "0";
-    let percentBps = 0;
-    let perAttendeeMinor = "0";
-    let thresholdCount = 0;
-    let thresholdExtraMinor = "0";
-
-    if (calculationType === "FIXED") {
-      fixedMinor = String(Math.round(Number((window.prompt("Фикс за урок, ₽", "1500") ?? "0").replace(",", ".")) * 100));
-    } else if (calculationType === "HOURLY") {
-      hourlyMinor = String(Math.round(Number((window.prompt("Ставка ₽/час", "1500") ?? "0").replace(",", ".")) * 100));
-    } else if (calculationType === "PERCENT") {
-      percentBps = Math.round(Number((window.prompt("Процент", "40") ?? "0").replace(",", ".")) * 100);
-    } else if (calculationType === "ATTENDEE") {
-      fixedMinor = String(Math.round(Number((window.prompt("База за урок, ₽", "800") ?? "0").replace(",", ".")) * 100));
-      perAttendeeMinor = String(Math.round(Number((window.prompt("За каждого пришедшего, ₽", "100") ?? "0").replace(",", ".")) * 100));
-    } else {
-      fixedMinor = String(Math.round(Number((window.prompt("База, ₽", "1200") ?? "0").replace(",", ".")) * 100));
-      thresholdCount = Number(window.prompt("Порог учеников", "8") ?? "8");
-      thresholdExtraMinor = String(Math.round(Number((window.prompt("За каждого сверх порога, ₽", "100") ?? "0").replace(",", ".")) * 100));
+    const baseRub = Number(planBaseRub.replace(",", "."));
+    const percent = Number(planPercent.replace(",", "."));
+    const perAttendeeRub = Number(planPerAttendeeRub.replace(",", "."));
+    const guaranteeRub = Number(planGuaranteeRub.replace(",", "."));
+    if (
+      !Number.isFinite(baseRub) || baseRub < 0 ||
+      !Number.isFinite(percent) || percent < 0 || percent > 100 ||
+      !Number.isFinite(perAttendeeRub) || perAttendeeRub < 0 ||
+      !Number.isFinite(guaranteeRub) || guaranteeRub < 0
+    ) {
+      setError("Проверьте денежные условия правила");
+      return;
     }
 
-    const revenueBasis =
-      calculationType === "PERCENT"
-        ? ((window.prompt("База процента: EARNED, PAID, BILLED или LIST", "EARNED") ?? "EARNED").trim().toUpperCase())
-        : "EARNED";
+    const baseMinor = String(Math.round(baseRub * 100));
+    const components =
+      planScheme === "COMPOSITE"
+        ? [
+            {
+              componentType: "MONTHLY_BASE",
+              amountMinor: baseMinor,
+              priority: 100
+            },
+            {
+              componentType: "PERCENT",
+              percentBps: Math.round(percent * 100),
+              revenueBasis: "EARNED",
+              priority: 110
+            }
+          ]
+        : undefined;
 
+    setPending(true);
+    setError("");
     try {
       await apiRequest("/dance/compensation-plans", {
         method: "POST",
         body: JSON.stringify({
-          trainerResourceId: trainer.id,
-          lessonType: lessonType || undefined,
-          calculationType,
-          fixedMinor,
-          hourlyMinor,
-          percentBps,
-          perAttendeeMinor,
-          thresholdCount,
-          thresholdExtraMinor,
-          revenueBasis
+          trainerResourceId: planTrainerId,
+          lessonType: planLessonType || undefined,
+          calculationType: planScheme,
+          fixedMinor:
+            planScheme === "FIXED" || planScheme === "ATTENDEE"
+              ? baseMinor
+              : "0",
+          hourlyMinor: planScheme === "HOURLY" ? baseMinor : "0",
+          percentBps:
+            planScheme === "PERCENT" ? Math.round(percent * 100) : 0,
+          perAttendeeMinor:
+            planScheme === "ATTENDEE"
+              ? String(Math.round(perAttendeeRub * 100))
+              : "0",
+          revenueBasis: "EARNED",
+          minimumGuaranteeMinor: String(Math.round(guaranteeRub * 100)),
+          guaranteePeriod: "MONTH",
+          components
         })
       });
+      setPlanModal(false);
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось создать правило зарплаты");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось сохранить правило зарплаты"
+      );
+    } finally {
+      setPending(false);
     }
   }
 
@@ -460,7 +480,7 @@ export default function DanceTeamPage() {
             </p>
           </div>
           <div className="header-actions">
-            <button className="secondary-button" onClick={() => void createPlan()} type="button">+ Правило зарплаты</button>
+            <button className="secondary-button" onClick={openPlanModal} type="button">+ Правило зарплаты</button>
             <button className="secondary-button" onClick={() => void createRoomContract()} type="button">+ Аренда зала</button>
             <button className="secondary-button" disabled={pending} onClick={() => void finalizeRoomMonth()} type="button">Закрыть аренду месяца</button>
             <button disabled={pending} onClick={() => void approveMonth()} type="button">Утвердить месяц</button>
@@ -608,6 +628,150 @@ export default function DanceTeamPage() {
             </table>
           </div>
         </section>
+        {planModal ? (
+          <StudioModal
+            eyebrow="Зарплата тренера"
+            title="Новое правило начисления"
+            description="Настройте понятную схему. CoreBiz сам применит её к подходящим занятиям и сохранит расчёт в закрытом уроке."
+            onClose={() => setPlanModal(false)}
+            footer={
+              <>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setPlanModal(false)}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => void createPlan()}
+                >
+                  {pending ? "Сохраняем…" : "Сохранить правило"}
+                </button>
+              </>
+            }
+          >
+            <div className="studio-form-section">
+              <header>
+                <strong>Кому и когда действует</strong>
+                <span>Можно ограничить правило конкретным типом занятия.</span>
+              </header>
+              <div className="studio-form-grid">
+                <label>
+                  <span>Тренер</span>
+                  <select
+                    value={planTrainerId}
+                    onChange={(event) => setPlanTrainerId(event.target.value)}
+                  >
+                    <option value="">Выберите тренера</option>
+                    {trainers.map((trainer) => (
+                      <option key={trainer.id} value={trainer.id}>
+                        {trainer.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Тип занятия</span>
+                  <select
+                    value={planLessonType}
+                    onChange={(event) => setPlanLessonType(event.target.value)}
+                  >
+                    <option value="">Все занятия</option>
+                    <option value="GROUP">Групповые</option>
+                    <option value="INDIVIDUAL">Индивидуальные</option>
+                    <option value="TRIAL">Пробные</option>
+                    <option value="MASTER_CLASS">Мастер-классы</option>
+                    <option value="SELF_PRACTICE">Самостоятельная практика</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div className="studio-form-section">
+              <header>
+                <strong>Как считать зарплату</strong>
+                <span>Выберите привычную бизнес-схему, без технических кодов.</span>
+              </header>
+              <div className="studio-choice-grid">
+                {[
+                  ["FIXED", "За занятие", "Фиксированная сумма за проведённый урок"],
+                  ["HOURLY", "За часы", "Ставка зависит от длительности занятия"],
+                  ["PERCENT", "Процент", "Доля от реализации занятия"],
+                  ["ATTENDEE", "База + ученик", "Фикс плюс доплата за пришедшего"],
+                  ["COMPOSITE", "Оклад + процент", "Месячная база и процент от реализации"]
+                ].map(([value, label, hint]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={
+                      "studio-choice " + (planScheme === value ? "active" : "")
+                    }
+                    onClick={() => setPlanScheme(value as typeof planScheme)}
+                  >
+                    <strong>{label}</strong>
+                    <span>{hint}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="studio-divider" />
+
+            <div className="studio-form-grid">
+              <label>
+                <span>
+                  {planScheme === "HOURLY"
+                    ? "Ставка за час, ₽"
+                    : planScheme === "COMPOSITE"
+                      ? "Оклад в месяц, ₽"
+                      : planScheme === "PERCENT"
+                        ? "Фиксированная часть, ₽"
+                        : "Базовая сумма, ₽"}
+                </span>
+                <input
+                  inputMode="decimal"
+                  value={planBaseRub}
+                  onChange={(event) => setPlanBaseRub(event.target.value)}
+                />
+              </label>
+
+              {(planScheme === "PERCENT" || planScheme === "COMPOSITE") ? (
+                <label>
+                  <span>Процент от реализации, %</span>
+                  <input
+                    inputMode="decimal"
+                    value={planPercent}
+                    onChange={(event) => setPlanPercent(event.target.value)}
+                  />
+                </label>
+              ) : null}
+
+              {planScheme === "ATTENDEE" ? (
+                <label>
+                  <span>Доплата за пришедшего, ₽</span>
+                  <input
+                    inputMode="decimal"
+                    value={planPerAttendeeRub}
+                    onChange={(event) => setPlanPerAttendeeRub(event.target.value)}
+                  />
+                </label>
+              ) : null}
+
+              <label>
+                <span>Минимальная гарантия в месяц, ₽</span>
+                <input
+                  inputMode="decimal"
+                  value={planGuaranteeRub}
+                  onChange={(event) => setPlanGuaranteeRub(event.target.value)}
+                />
+              </label>
+            </div>
+          </StudioModal>
+        ) : null}
+
       </section>
     </main>
   );
