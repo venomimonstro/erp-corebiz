@@ -48,6 +48,42 @@ describe("public commerce safeguards", () => {
     expect(database.withTenantTransaction).not.toHaveBeenCalled();
   });
 
+  it("allows an archived SKU to be removed from an existing cart", async () => {
+    const query = jest.fn(async (sql: string) => {
+      if (sql.includes("FOR UPDATE")) return {
+        rows: [{ status: "OPEN", expires_at: cart.expires_at }], rowCount: 1
+      };
+      if (sql.includes("DELETE FROM storefront_cart_line")) return { rows: [], rowCount: 1 };
+      throw new Error("Archived cart removal must not query SKU availability: " + sql);
+    });
+    const database = {
+      withTenantTransaction: jest.fn(async (_context: unknown, callback: any) =>
+        callback({ query }))
+    };
+    const service = new StorefrontService(
+      database as any, {} as any, {} as any, {} as any
+    );
+    jest.spyOn(service as any, "resolveCart").mockResolvedValue(cart);
+    jest.spyOn(service, "cart").mockResolvedValue({ lines: [], status: "OPEN" });
+    await expect(service.setLine("cart_key", {
+      skuId: "66666666-6666-4666-8666-666666666666", quantityMilli: "0"
+    })).resolves.toMatchObject({ status: "OPEN" });
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects malformed public contacts before any order side effects", async () => {
+    const database = { withTenantTransaction: jest.fn(), query: jest.fn() };
+    const service = new StorefrontService(database as any, {} as any, {} as any, {} as any);
+    await expect(service.checkout("any-key", {
+      idempotencyKey: "attempt-one", name: "Buyer", email: "not-an-email"
+    })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.checkout("any-key", {
+      idempotencyKey: "attempt-one", name: "Buyer", phone: "abc"
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(database.withTenantTransaction).not.toHaveBeenCalled();
+    expect(database.query).not.toHaveBeenCalled();
+  });
+
   it("rejects cart edits when checkout owns the cart row", async () => {
     const query = jest.fn(async (sql: string) => {
       if (sql.includes("FOR UPDATE")) {
