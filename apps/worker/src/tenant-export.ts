@@ -170,12 +170,21 @@ const PAGE_SIZE = 5000;
 async function tenantTransaction<T>(
   pool: Pool,
   tenantId: string,
-  callback: (client: PoolClient) => Promise<T>
+  callback: (client: PoolClient) => Promise<T>,
+  readOnlySnapshot = false
 ): Promise<T> {
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
+    if(readOnlySnapshot){
+      // Consistent as-of-start snapshot across all tables: do not combine
+      // invoices from one moment with payments from another.
+      await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+      await client.query("SET LOCAL statement_timeout = '45s'");
+      await client.query("SET LOCAL lock_timeout = '5s'");
+      await client.query("SET LOCAL idle_in_transaction_session_timeout = '60s'");
+    }
     await client.query(
       "SELECT set_config('app.tenant_id',$1,true)",
       [tenantId]
@@ -401,7 +410,7 @@ async function buildArtifact(pool:Pool,job:ExportJob):Promise<{
         (job.format==="JSON_GZIP"?".json.gz":".csv.gz"),
       contentType:"application/gzip"
     };
-  });
+  },true);
 }
 
 async function succeed(
