@@ -53,6 +53,8 @@ describe("cross-vertical operational scenarios",()=>{
     ["DANCE_UNCLOSED","OPEN_FOR_BOOKING","ends_at"],
     ["MARKETPLACE_UNMAPPED","NEEDS_MAPPING","FAILED"],
     ["MARKETPLACE_STOCK_BLOCKED","BLOCKED","publish_enabled"],
+    ["MARKETPLACE_EXCESS_PUBLICATION","published_units","safety_stock_milli"],
+    ["MARKETPLACE_ORDER_FEED_STALE","last_synced_at","publish_enabled"],
     ["AUTOMOTIVE_OVERDUE","promised_at","DELIVERED"],
     ["PROJECT_DELIVERABLE_OVERDUE","due_at","APPROVED"],
     ["WMS_TASK_FAILED","FAILED","CLAIMED"],
@@ -66,4 +68,22 @@ describe("cross-vertical operational scenarios",()=>{
     expect(rule.sql).toContain(condition);
     expect(rule.sql).toContain(exclusion);
   });
+  it("marketplace risk checks partition exposures by tenant, SKU and warehouse",()=>{
+    const rule=VERTICAL_OPERATIONAL_RULE_BY_CODE.get("MARKETPLACE_EXCESS_PUBLICATION")!;
+    expect(rule.severity).toBe("CRITICAL");
+    expect(rule.sql).toContain("sum(coalesce(t.published_units,0))");
+    expect(rule.sql).toContain("GROUP BY l.tenant_id,l.warehouse_id,l.sku_id");
+    expect(rule.sql).toContain("p.enabled=false");
+    expect(rule.sql).toContain("coalesce(b.reserved_milli,0)");
+    expect(rule.sql).toContain("coalesce(p.safety_stock_milli,0)");
+    expect(rule.sql).toContain("l.publish_enabled");
+  });
+  it("only escalates stale order feeds of actively publishing listings",()=>{
+    const rule=VERTICAL_OPERATIONAL_RULE_BY_CODE.get("MARKETPLACE_ORDER_FEED_STALE")!;
+    expect(rule.sql).toContain("l.enabled AND l.publish_enabled");
+    expect(rule.sql).toContain("c.status='ACTIVE'");
+    expect(rule.sql).toContain("c.last_synced_at IS NULL");
+    expect(rule.sql).toContain("interval '10 minutes'");
+  });
+
 });
