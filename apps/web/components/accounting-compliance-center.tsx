@@ -12,16 +12,17 @@ type TaxProfile = {
   ens_enabled:boolean;
   reporting_mode:"ASSISTED"|"SEMI_AUTOMATIC"|"EXTERNAL_ACCOUNTANT";
   usn_rate_bps:number|null;
-  usn_minimum_tax_bps:number|null;
+  usn_min_tax_bps:number|null;
   oktmo:string|null;
   tax_office_code:string|null;
 };
 
 type Obligation = {
   id:string;
+  code:string;
   title:string;
   authority:string;
-  obligation_type:string;
+  obligation_type:"FILE"|"PAY"|"NOTIFY"|"RECONCILE";
   due_at:string;
   amount_minor:string|null;
   workflow_status:string;
@@ -49,6 +50,30 @@ type EnsSnapshot = {
   source:string;
 };
 
+type CashAccount = {
+  id:string;
+  name:string;
+  kind:string;
+  currency:string;
+  legal_entity_id:string|null;
+  assignment_state:"THIS_ENTITY"|"UNASSIGNED"|"OTHER_ENTITY";
+  is_default:boolean;
+};
+
+type TaxCalculation = {
+  id:string;
+  tax_code:string;
+  period_key:string;
+  taxable_income_minor:string;
+  deductible_expense_minor:string;
+  taxable_base_minor:string;
+  calculated_tax_minor:string;
+  advances_minor:string;
+  tax_due_minor:string;
+  status:string;
+  obligation_id?:string|null;
+};
+
 type Props = {
   legalEntityId:string;
   legalEntityName:string;
@@ -56,12 +81,11 @@ type Props = {
 };
 
 function rub(value:string|number|null|undefined) {
-  const numberValue=Number(value??0)/100;
   return new Intl.NumberFormat("ru-RU",{
     style:"currency",
     currency:"RUB",
     maximumFractionDigits:0
-  }).format(numberValue);
+  }).format(Number(value??0)/100);
 }
 
 function date(value:string) {
@@ -73,8 +97,7 @@ function date(value:string) {
 }
 
 function daysUntil(value:string) {
-  const due=new Date(value).getTime();
-  return Math.ceil((due-Date.now())/86400000);
+  return Math.ceil((new Date(value).getTime()-Date.now())/86400000);
 }
 
 function statusLabel(value:string) {
@@ -88,9 +111,12 @@ function statusLabel(value:string) {
     PAID:"Оплачено",
     CANCELLED:"Отменено",
     REVIEW_REQUIRED:"Нужно проверить",
-    CONFIRMED:"Расчёт подтверждён",
+    CONFIRMED:"Подтверждено",
     NOT_CALCULATED:"Не рассчитано",
-    CALCULATED:"Рассчитано"
+    CALCULATED:"Рассчитано",
+    DRAFT:"Черновик",
+    INCLUDED:"Учтено",
+    EXCLUDED:"Исключено"
   };
   return labels[value]??value;
 }
@@ -104,10 +130,22 @@ export function AccountingComplianceCenter({
   const [obligations,setObligations]=useState<Obligation[]>([]);
   const [ledger,setLedger]=useState<LedgerItem[]>([]);
   const [ens,setEns]=useState<EnsSnapshot[]>([]);
+  const [cashAccounts,setCashAccounts]=useState<CashAccount[]>([]);
+  const [calculation,setCalculation]=useState<TaxCalculation|null>(null);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [showProfile,setShowProfile]=useState(false);
+  const [entityKind,setEntityKind]=useState<"ORGANIZATION"|"IP">("ORGANIZATION");
+  const [taxRegime,setTaxRegime]=useState<TaxProfile["tax_regime"]>("USN_INCOME");
+  const [vatMode,setVatMode]=useState<TaxProfile["vat_mode"]>("NO_VAT");
+  const [hasEmployees,setHasEmployees]=useState(false);
+  const [usnRate,setUsnRate]=useState("6");
+  const [usnMinRate,setUsnMinRate]=useState("1");
+  const [reductionsRub,setReductionsRub]=useState("0");
+  const [calculationNote,setCalculationNote]=useState(
+    "Налоговая книга и сумма проверены владельцем."
+  );
 
   const load=useCallback(async()=>{
     if(!legalEntityId) return;
@@ -119,7 +157,13 @@ export function AccountingComplianceCenter({
       const from=new Date();
       from.setMonth(from.getMonth()-1);
 
-      const [profileRow,obligationRows,ledgerRows,ensRows]=await Promise.all([
+      const [
+        profileRow,
+        obligationRows,
+        ledgerRows,
+        ensRows,
+        accountRows
+      ]=await Promise.all([
         apiRequest<TaxProfile|null>(
           "/accounting/compliance/profile?legalEntityId="+
           encodeURIComponent(legalEntityId)
@@ -137,15 +181,39 @@ export function AccountingComplianceCenter({
         apiRequest<EnsSnapshot[]>(
           "/accounting/compliance/ens?legalEntityId="+
           encodeURIComponent(legalEntityId)
+        ),
+        apiRequest<CashAccount[]>(
+          "/accounting/compliance/cash-accounts?legalEntityId="+
+          encodeURIComponent(legalEntityId)
         )
       ]);
+
       setProfile(profileRow);
       setObligations(obligationRows);
       setLedger(ledgerRows);
       setEns(ensRows);
-      if(!profileRow) setShowProfile(true);
+      setCashAccounts(accountRows);
+
+      if(profileRow){
+        setEntityKind(profileRow.entity_kind);
+        setTaxRegime(profileRow.tax_regime);
+        setVatMode(profileRow.vat_mode);
+        setHasEmployees(profileRow.has_employees);
+        if(profileRow.usn_rate_bps){
+          setUsnRate(String(profileRow.usn_rate_bps/100));
+        }
+        if(profileRow.usn_min_tax_bps){
+          setUsnMinRate(String(profileRow.usn_min_tax_bps/100));
+        }
+      }else{
+        setShowProfile(true);
+      }
     }catch(cause){
-      setError(cause instanceof Error?cause.message:"Не удалось загрузить налоговый центр");
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось загрузить налоговый центр"
+      );
     }finally{
       setBusy(false);
     }
@@ -168,45 +236,32 @@ export function AccountingComplianceCenter({
     item=>item.tax_treatment==="REVIEW_REQUIRED"
   ).length;
   const ensLatest=ens[0]??null;
+  const assignedAccounts=cashAccounts.filter(
+    account=>account.assignment_state==="THIS_ENTITY"
+  );
+  const unassignedAccounts=cashAccounts.filter(
+    account=>account.assignment_state==="UNASSIGNED"
+  );
+  const usnPayObligation=active.find(
+    item=>item.obligation_type==="PAY"&&item.code.includes("USN")
+  )??null;
 
-  async function configureProfile() {
-    const entityKind=(window.prompt(
-      "Тип: ORGANIZATION или IP",
-      profile?.entity_kind??"ORGANIZATION"
-    )??"").trim().toUpperCase();
-    if(!["ORGANIZATION","IP"].includes(entityKind)) return;
-
-    const taxRegime=(window.prompt(
-      "Режим: USN_INCOME, USN_INCOME_EXPENSE, OSNO, AUSN или OTHER",
-      profile?.tax_regime??"USN_INCOME"
-    )??"").trim().toUpperCase();
-    if(![
-      "USN_INCOME","USN_INCOME_EXPENSE","OSNO","AUSN","OTHER"
-    ].includes(taxRegime)) return;
-
-    const vatMode=(window.prompt(
-      "НДС: NO_VAT, VAT_5, VAT_7, VAT_22 или VAT_MIXED",
-      profile?.vat_mode??"NO_VAT"
-    )??"NO_VAT").trim().toUpperCase();
-
-    const hasEmployees=window.confirm("Есть сотрудники, по которым компания является налоговым агентом?");
-    let usnRateBps:number|null=null;
-    let usnMinimumTaxBps:number|null=null;
-
-    if(taxRegime.startsWith("USN_")){
-      const rate=window.prompt(
-        "Ставка УСН в базисных пунктах. Например 6% = 600. Проверьте ставку для своего региона.",
-        String(profile?.usn_rate_bps??(taxRegime==="USN_INCOME"?600:1500))
-      );
-      if(rate&&/^\d+$/.test(rate)) usnRateBps=Number(rate);
-
-      if(taxRegime==="USN_INCOME_EXPENSE"){
-        const minimum=window.prompt(
-          "Ставка минимального налога в базисных пунктах. Например 1% = 100.",
-          String(profile?.usn_minimum_tax_bps??100)
-        );
-        if(minimum&&/^\d+$/.test(minimum)) usnMinimumTaxBps=Number(minimum);
-      }
+  async function saveProfile() {
+    const rate=Number(usnRate.replace(",","."));
+    const minimumRate=Number(usnMinRate.replace(",","."));
+    if(
+      taxRegime.startsWith("USN_") &&
+      (!Number.isFinite(rate)||rate<=0||rate>100)
+    ){
+      setError("Проверьте ставку УСН");
+      return;
+    }
+    if(
+      taxRegime==="USN_INCOME_EXPENSE" &&
+      (!Number.isFinite(minimumRate)||minimumRate<=0||minimumRate>100)
+    ){
+      setError("Проверьте ставку минимального налога");
+      return;
     }
 
     setBusy(true);
@@ -223,15 +278,23 @@ export function AccountingComplianceCenter({
           ensEnabled:true,
           reportingMode:"ASSISTED",
           riskTolerance:"CONSERVATIVE",
-          usnRateBps,
-          usnMinimumTaxBps
+          usnRateBps:taxRegime.startsWith("USN_")
+            ?Math.round(rate*100)
+            :null,
+          usnMinimumTaxBps:taxRegime==="USN_INCOME_EXPENSE"
+            ?Math.round(minimumRate*100)
+            :null
         })
       });
       setNotice("Налоговый профиль сохранён");
       setShowProfile(false);
       await load();
     }catch(cause){
-      setError(cause instanceof Error?cause.message:"Не удалось сохранить налоговый профиль");
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось сохранить налоговый профиль"
+      );
     }finally{
       setBusy(false);
     }
@@ -243,24 +306,73 @@ export function AccountingComplianceCenter({
     end.setMonth(end.getMonth()+12);
     setBusy(true);
     try{
-      await apiRequest("/accounting/compliance/calendar/generate",{
-        method:"POST",
-        body:JSON.stringify({
-          legalEntityId,
-          from:start.toISOString().slice(0,10),
-          to:end.toISOString().slice(0,10)
-        })
-      });
-      setNotice("Налоговый календарь обновлён на 12 месяцев");
+      const result=await apiRequest<{created:number}>(
+        "/accounting/compliance/calendar/generate",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            legalEntityId,
+            from:start.toISOString().slice(0,10),
+            to:end.toISOString().slice(0,10)
+          })
+        }
+      );
+      setNotice(
+        result.created
+          ?"Добавлено обязательств: "+result.created
+          :"Календарь уже актуален"
+      );
       await load();
     }catch(cause){
-      setError(cause instanceof Error?cause.message:"Не удалось обновить календарь");
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось обновить календарь"
+      );
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  async function assignCashAccount(
+    accountId:string,
+    assign:boolean
+  ) {
+    setBusy(true);
+    try{
+      await apiRequest(
+        "/accounting/compliance/cash-accounts/"+accountId+"/assign",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            legalEntityId:assign?legalEntityId:null
+          })
+        }
+      );
+      setNotice(
+        assign
+          ?"Денежный счёт привязан к юрлицу"
+          :"Привязка денежного счёта снята"
+      );
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось изменить привязку счёта"
+      );
     }finally{
       setBusy(false);
     }
   }
 
   async function syncLedger() {
+    if(!assignedAccounts.length){
+      setError(
+        "Сначала привяжите хотя бы один банковский или кассовый счёт к этому юрлицу"
+      );
+      return;
+    }
     setBusy(true);
     try{
       const result=await apiRequest<{added:number}>(
@@ -272,12 +384,16 @@ export function AccountingComplianceCenter({
       );
       setNotice(
         result.added
-          ? "Добавлено движений в налоговую книгу: "+result.added
+          ?"Добавлено движений в налоговую книгу: "+result.added
           :"Новых движений нет"
       );
       await load();
     }catch(cause){
-      setError(cause instanceof Error?cause.message:"Не удалось обновить налоговую книгу");
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось обновить налоговую книгу"
+      );
     }finally{
       setBusy(false);
     }
@@ -287,26 +403,108 @@ export function AccountingComplianceCenter({
     item:LedgerItem,
     treatment:"INCLUDED"|"EXCLUDED"
   ) {
-    const reason=window.prompt(
+    const reason=
       treatment==="INCLUDED"
-        ?"Почему движение учитывается для налога?"
-        :"Почему движение исключается из налоговой базы?",
-      treatment==="INCLUDED"
-        ?"Подтверждено первичными документами"
-        :"Не относится к налоговой базе"
-    );
-    if(!reason?.trim()) return;
+        ?"Проверено: подтверждено первичными документами"
+        :"Проверено: не относится к налоговой базе";
     try{
       await apiRequest(
         "/accounting/compliance/tax-ledger/"+item.id+"/review",
         {
           method:"POST",
-          body:JSON.stringify({treatment,reason:reason.trim()})
+          body:JSON.stringify({treatment,reason})
         }
       );
       await load();
     }catch(cause){
-      setError(cause instanceof Error?cause.message:"Не удалось подтвердить движение");
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось подтвердить движение"
+      );
+    }
+  }
+
+  async function calculateUsn() {
+    if(!profile?.tax_regime.startsWith("USN_")){
+      setError("Расчёт УСН доступен только для профиля УСН");
+      return;
+    }
+    if(reviewCount>0){
+      setError(
+        "Сначала разберите операции со статусом «Проверить»: они могут изменить сумму налога"
+      );
+      return;
+    }
+    const year=new Date().getFullYear();
+    const reductions=Number(reductionsRub.replace(",","."));
+    if(!Number.isFinite(reductions)||reductions<0){
+      setError("Проверьте сумму уменьшений");
+      return;
+    }
+
+    setBusy(true);
+    try{
+      const result=await apiRequest<TaxCalculation>(
+        "/accounting/compliance/calculations/usn-preview",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            legalEntityId,
+            periodFrom:year+"-01-01",
+            periodTo:new Date().toISOString().slice(0,10),
+            calculationType:"USN_ADVANCE",
+            reductionsMinor:String(Math.round(reductions*100)),
+            obligationId:usnPayObligation?.id??undefined
+          })
+        }
+      );
+      setCalculation(result);
+      setNotice("Предварительный расчёт УСН обновлён");
+    }catch(cause){
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось рассчитать УСН"
+      );
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  async function confirmCalculation() {
+    if(!calculation) return;
+    if(calculationNote.trim().length<8){
+      setError("Добавьте комментарий к проверке расчёта");
+      return;
+    }
+    setBusy(true);
+    try{
+      await apiRequest(
+        "/accounting/compliance/calculations/"+
+          calculation.id+
+          "/confirm",
+        {
+          method:"POST",
+          body:JSON.stringify({
+            obligationId:
+              calculation.obligation_id??
+              usnPayObligation?.id??
+              undefined,
+            note:calculationNote.trim()
+          })
+        }
+      );
+      setNotice("Расчёт подтверждён и зафиксирован");
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось подтвердить расчёт"
+      );
+    }finally{
+      setBusy(false);
     }
   }
 
@@ -316,10 +514,16 @@ export function AccountingComplianceCenter({
         "/accounting/compliance/obligations/"+item.id+"/packet",
         {method:"POST",body:"{}"}
       );
-      setNotice("Пакет подготовлен. Перед отправкой его нужно проверить.");
+      setNotice(
+        "Пакет подготовлен. Перед подписью его нужно проверить."
+      );
       await load();
     }catch(cause){
-      setError(cause instanceof Error?cause.message:"Не удалось подготовить пакет");
+      setError(
+        cause instanceof Error
+          ?cause.message
+          :"Не удалось подготовить пакет"
+      );
     }
   }
 
@@ -330,8 +534,9 @@ export function AccountingComplianceCenter({
           <span className="compliance-eyebrow">Налоговый центр</span>
           <h2>Что нужно сделать и когда</h2>
           <p>
-            CoreBiz собирает движения, формирует календарь и готовит пакет.
-            Перед юридически значимой отправкой система требует проверку и подтверждение.
+            CoreBiz собирает движения, считает предварительные налоги,
+            формирует календарь и готовит пакет. Юридически значимая отправка
+            выполняется только после проверки, подписи и подтверждения оператора.
           </p>
         </div>
         <div className="compliance-hero-actions">
@@ -341,7 +546,7 @@ export function AccountingComplianceCenter({
             disabled={busy}
             onClick={()=>setShowProfile(value=>!value)}
           >
-            {profile?"Настройки налогов":"Настроить налоги"}
+            {profile?"Налоговый профиль":"Настроить налоги"}
           </button>
           <button
             type="button"
@@ -367,20 +572,111 @@ export function AccountingComplianceCenter({
       ):null}
 
       {showProfile?(
-        <section className="compliance-setup-card">
-          <div>
-            <span className="compliance-step">1</span>
+        <section className="section-block compliance-profile-card">
+          <div className="section-heading">
             <div>
-              <strong>Укажите налоговый режим компании</strong>
-              <p>
-                {legalEntityName} · ИНН {inn??"не указан"}.
-                Ставки УСН подтверждаются отдельно, потому что они могут зависеть от региона.
-              </p>
+              <p className="muted">Настройка один раз</p>
+              <h3>Как {legalEntityName} платит налоги</h3>
             </div>
+            <span className="tax-safety-chip">
+              ИНН {inn??"не указан"}
+            </span>
           </div>
-          <button type="button" onClick={()=>void configureProfile()}>
-            Настроить за 2 минуты
-          </button>
+
+          <div className="compliance-profile-grid">
+            <label>
+              <span>Тип</span>
+              <select
+                value={entityKind}
+                onChange={event=>
+                  setEntityKind(
+                    event.target.value as "ORGANIZATION"|"IP"
+                  )
+                }
+              >
+                <option value="ORGANIZATION">Организация</option>
+                <option value="IP">ИП</option>
+              </select>
+            </label>
+            <label>
+              <span>Налоговый режим</span>
+              <select
+                value={taxRegime}
+                onChange={event=>
+                  setTaxRegime(
+                    event.target.value as TaxProfile["tax_regime"]
+                  )
+                }
+              >
+                <option value="USN_INCOME">УСН · Доходы</option>
+                <option value="USN_INCOME_EXPENSE">
+                  УСН · Доходы минус расходы
+                </option>
+                <option value="OSNO">ОСНО</option>
+                <option value="AUSN">АУСН</option>
+                <option value="OTHER">Другой</option>
+              </select>
+            </label>
+            <label>
+              <span>НДС</span>
+              <select
+                value={vatMode}
+                onChange={event=>
+                  setVatMode(
+                    event.target.value as TaxProfile["vat_mode"]
+                  )
+                }
+              >
+                <option value="NO_VAT">Без НДС / освобождение</option>
+                <option value="VAT_5">5%</option>
+                <option value="VAT_7">7%</option>
+                <option value="VAT_22">22%</option>
+                <option value="VAT_MIXED">Смешанный</option>
+              </select>
+            </label>
+            {taxRegime.startsWith("USN_")?(
+              <label>
+                <span>Ставка УСН, %</span>
+                <input
+                  inputMode="decimal"
+                  value={usnRate}
+                  onChange={event=>setUsnRate(event.target.value)}
+                />
+              </label>
+            ):null}
+            {taxRegime==="USN_INCOME_EXPENSE"?(
+              <label>
+                <span>Минимальный налог, %</span>
+                <input
+                  inputMode="decimal"
+                  value={usnMinRate}
+                  onChange={event=>setUsnMinRate(event.target.value)}
+                />
+              </label>
+            ):null}
+            <label className="compliance-checkbox">
+              <input
+                type="checkbox"
+                checked={hasEmployees}
+                onChange={event=>setHasEmployees(event.target.checked)}
+              />
+              <span>Есть сотрудники / выплаты физлицам</span>
+            </label>
+          </div>
+
+          <div className="compliance-profile-footer">
+            <p>
+              Ставка не подставляется «навечно»: для УСН её нужно подтвердить
+              с учётом региона. Основная ставка НДС для операций 2026 года — 22%.
+            </p>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={()=>void saveProfile()}
+            >
+              Сохранить профиль
+            </button>
+          </div>
         </section>
       ):null}
 
@@ -399,7 +695,9 @@ export function AccountingComplianceCenter({
         <article className={urgent.length?"attention":""}>
           <span>На 7 дней</span>
           <strong>{urgent.length}</strong>
-          <small>{urgent.length?"нужны действия":"ничего срочного"}</small>
+          <small>
+            {urgent.length?"нужны действия":"ничего срочного"}
+          </small>
         </article>
         <article className={reviewCount?"attention":""}>
           <span>Проверить в налоговой книге</span>
@@ -414,7 +712,9 @@ export function AccountingComplianceCenter({
               :"Нет данных"}
           </strong>
           <small>
-            {ensLatest?"на "+date(ensLatest.as_of):"добавьте снимок из ФНС/оператора"}
+            {ensLatest
+              ?"на "+date(ensLatest.as_of)
+              :"добавьте снимок из ФНС/оператора"}
           </small>
         </article>
       </div>
@@ -423,10 +723,17 @@ export function AccountingComplianceCenter({
         <div className="section-heading">
           <div>
             <p className="muted">Приоритет</p>
-            <h3>{next?.title??"На ближайший период обязательств нет"}</h3>
+            <h3>
+              {next?.title??"На ближайший период обязательств нет"}
+            </h3>
           </div>
           {next?(
-            <span className={"status-pill compliance-status "+next.workflow_status.toLowerCase()}>
+            <span
+              className={
+                "status-pill compliance-status "+
+                next.workflow_status.toLowerCase()
+              }
+            >
               {statusLabel(next.workflow_status)}
             </span>
           ):null}
@@ -449,12 +756,19 @@ export function AccountingComplianceCenter({
               </strong>
               <p>
                 Расчёт: {statusLabel(next.calculation_status)}.
-                {next.amount_minor!==null?" Сумма "+rub(next.amount_minor)+".":""}
+                {next.amount_minor!==null
+                  ?" Сумма "+rub(next.amount_minor)+"."
+                  :""}
               </p>
             </div>
             <div className="table-actions">
-              {["PLANNED","REJECTED"].includes(next.workflow_status)?(
-                <button type="button" onClick={()=>void preparePacket(next)}>
+              {["PLANNED","REJECTED"].includes(
+                next.workflow_status
+              )?(
+                <button
+                  type="button"
+                  onClick={()=>void preparePacket(next)}
+                >
                   Подготовить
                 </button>
               ):null}
@@ -472,10 +786,151 @@ export function AccountingComplianceCenter({
           </div>
         ):(
           <p className="workspace-summary">
-            Настройте профиль и обновите календарь. CoreBiz покажет обязательства на год вперёд.
+            Настройте профиль и обновите календарь. CoreBiz покажет
+            обязательства на год вперёд.
           </p>
         )}
       </section>
+
+      <div className="compliance-grid">
+        <section className="section-block">
+          <div className="section-heading">
+            <div>
+              <p className="muted">Деньги → налоги</p>
+              <h3>Счета этого юрлица</h3>
+            </div>
+            <span className="tax-safety-chip">
+              привязано {assignedAccounts.length}
+            </span>
+          </div>
+
+          <div className="compliance-account-list">
+            {assignedAccounts.map(account=>(
+              <article key={account.id}>
+                <div>
+                  <strong>{account.name}</strong>
+                  <span>{account.kind} · {account.currency}</span>
+                </div>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={()=>void assignCashAccount(account.id,false)}
+                >
+                  Отвязать
+                </button>
+              </article>
+            ))}
+            {unassignedAccounts.map(account=>(
+              <article key={account.id}>
+                <div>
+                  <strong>{account.name}</strong>
+                  <span>Не распределён · {account.currency}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={()=>void assignCashAccount(account.id,true)}
+                >
+                  Привязать
+                </button>
+              </article>
+            ))}
+            {!assignedAccounts.length&&!unassignedAccounts.length?(
+              <div className="table-empty">
+                <strong>Нет денежных счетов</strong>
+                <span>
+                  Создайте банковский или кассовый счёт в разделе «Финансы».
+                </span>
+              </div>
+            ):null}
+          </div>
+        </section>
+
+        <section className="section-block compliance-usn-card">
+          <div className="section-heading">
+            <div>
+              <p className="muted">Предварительный налог</p>
+              <h3>Расчёт УСН</h3>
+            </div>
+            <span className="tax-safety-chip">
+              {reviewCount?"сначала проверка":"можно считать"}
+            </span>
+          </div>
+
+          {profile?.tax_regime.startsWith("USN_")?(
+            <>
+              <div className="compliance-usn-controls">
+                <label>
+                  <span>Уменьшения / авансы, ₽</span>
+                  <input
+                    inputMode="decimal"
+                    value={reductionsRub}
+                    onChange={event=>
+                      setReductionsRub(event.target.value)
+                    }
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={busy||reviewCount>0}
+                  onClick={()=>void calculateUsn()}
+                >
+                  Рассчитать с начала года
+                </button>
+              </div>
+
+              {calculation?(
+                <div className="compliance-calculation">
+                  <div>
+                    <span>Доход учтён</span>
+                    <strong>
+                      {rub(calculation.taxable_income_minor)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Расход принят</span>
+                    <strong>
+                      {rub(calculation.deductible_expense_minor)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Предварительно к уплате</span>
+                    <strong>{rub(calculation.tax_due_minor)}</strong>
+                  </div>
+                  <div className="compliance-calculation-confirm">
+                    <input
+                      value={calculationNote}
+                      onChange={event=>
+                        setCalculationNote(event.target.value)
+                      }
+                      placeholder="Комментарий к проверке"
+                    />
+                    <button
+                      type="button"
+                      disabled={
+                        busy||
+                        calculation.status==="CONFIRMED"||
+                        reviewCount>0
+                      }
+                      onClick={()=>void confirmCalculation()}
+                    >
+                      Подтвердить расчёт
+                    </button>
+                  </div>
+                </div>
+              ):(
+                <p className="workspace-summary">
+                  CoreBiz использует только подтверждённые строки налоговой
+                  книги. Спорные расходы не уменьшают налог автоматически.
+                </p>
+              )}
+            </>
+          ):(
+            <p className="workspace-summary">
+              Блок появится после выбора УСН в налоговом профиле.
+            </p>
+          )}
+        </section>
+      </div>
 
       <div className="compliance-grid">
         <section className="section-block">
@@ -495,35 +950,46 @@ export function AccountingComplianceCenter({
           </div>
 
           <div className="compliance-ledger-list">
-            {ledger.slice(0,10).map(item=>(
+            {ledger.slice(0,12).map(item=>(
               <article key={item.id}>
                 <div>
-                  <small>{item.recognition_date} · {item.payment_number??"движение"}</small>
-                  <strong>{item.party_name??item.category_code??item.direction}</strong>
+                  <small>
+                    {item.recognition_date} ·
+                    {" "+(item.payment_number??"движение")}
+                  </small>
+                  <strong>
+                    {item.party_name??item.category_code??item.direction}
+                  </strong>
                   <span>
-                    {item.direction==="INCOME"?"Доход":"Расход"} · {rub(item.amount_minor)}
+                    {item.direction==="INCOME"?"Доход":"Расход"}
+                    {" · "+rub(item.amount_minor)}
                   </span>
                 </div>
                 <div className="compliance-ledger-action">
-                  <span className={"status-pill "+item.tax_treatment.toLowerCase()}>
-                    {item.tax_treatment==="REVIEW_REQUIRED"
-                      ?"Проверить"
-                      :item.tax_treatment==="INCLUDED"
-                        ?"Учтено"
-                        :"Исключено"}
+                  <span
+                    className={
+                      "status-pill "+
+                      item.tax_treatment.toLowerCase()
+                    }
+                  >
+                    {statusLabel(item.tax_treatment)}
                   </span>
                   {item.tax_treatment==="REVIEW_REQUIRED"?(
                     <div className="table-actions">
                       <button
                         type="button"
-                        onClick={()=>void reviewLedger(item,"INCLUDED")}
+                        onClick={()=>
+                          void reviewLedger(item,"INCLUDED")
+                        }
                       >
                         Учесть
                       </button>
                       <button
                         className="secondary-button"
                         type="button"
-                        onClick={()=>void reviewLedger(item,"EXCLUDED")}
+                        onClick={()=>
+                          void reviewLedger(item,"EXCLUDED")
+                        }
                       >
                         Исключить
                       </button>
@@ -536,7 +1002,7 @@ export function AccountingComplianceCenter({
               <div className="table-empty">
                 <strong>Налоговая книга пока пустая</strong>
                 <span>
-                  Привяжите банковский/кассовый счёт к юрлицу и нажмите
+                  Привяжите денежный счёт и нажмите
                   «Собрать из финансов».
                 </span>
               </div>
@@ -552,20 +1018,25 @@ export function AccountingComplianceCenter({
             </div>
           </div>
           <div className="compliance-timeline">
-            {active.slice(0,8).map(item=>(
+            {active.slice(0,10).map(item=>(
               <article key={item.id}>
                 <div className="compliance-date-badge">
                   <strong>
-                    {new Date(item.due_at).toLocaleDateString("ru-RU",{day:"2-digit"})}
+                    {new Date(item.due_at).toLocaleDateString(
+                      "ru-RU",{day:"2-digit"}
+                    )}
                   </strong>
                   <span>
-                    {new Date(item.due_at).toLocaleDateString("ru-RU",{month:"short"})}
+                    {new Date(item.due_at).toLocaleDateString(
+                      "ru-RU",{month:"short"}
+                    )}
                   </span>
                 </div>
                 <div>
                   <strong>{item.title}</strong>
                   <span>
-                    {item.authority} · {statusLabel(item.workflow_status)}
+                    {item.authority}
+                    {" · "+statusLabel(item.workflow_status)}
                   </span>
                 </div>
                 {daysUntil(item.due_at)<=7?(
@@ -578,10 +1049,11 @@ export function AccountingComplianceCenter({
       </div>
 
       <p className="compliance-disclaimer">
-        Расчёты в налоговом центре являются предварительными до подтверждения.
-        Отправка отчётности должна подтверждаться квалифицированной подписью и
-        квитанцией оператора/ФНС. CoreBiz хранит нормативный источник и версию
-        правила для каждой обязанности.
+        Налоговые расчёты являются предварительными до подтверждения.
+        Календарь хранит версию нормативного правила; переносы из-за
+        официальных праздничных дней требуют обновлённого производственного
+        календаря. Электронная отправка считается завершённой только после
+        подтверждённой подписи и квитанции оператора/ФНС.
       </p>
     </div>
   );
