@@ -920,10 +920,10 @@ export class SalesService {
     const scope = await this.authorization.resolveScope(context, "sales.write");
     if (!scope) throw new BadRequestException("Недостаточно прав");
 
+    const allowedMembershipIds=
+      await this.authorization.membershipIdsForScope(context,scope);
     return this.inventory.reserveOrder(context, {
-      orderId,
-      warehouseId,
-      idempotencyKey
+      orderId,warehouseId,idempotencyKey,allowedMembershipIds
     });
   }
 
@@ -935,9 +935,10 @@ export class SalesService {
     const scope = await this.authorization.resolveScope(context, "sales.write");
     if (!scope) throw new BadRequestException("Недостаточно прав");
 
+    const allowedMembershipIds=
+      await this.authorization.membershipIdsForScope(context,scope);
     return this.inventory.shipOrder(context, {
-      orderId,
-      idempotencyKey
+      orderId,idempotencyKey,allowedMembershipIds
     });
   }
 

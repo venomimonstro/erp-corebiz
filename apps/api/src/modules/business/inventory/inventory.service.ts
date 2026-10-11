@@ -702,6 +702,7 @@ export class InventoryService {
       orderId: string;
       warehouseId?: string;
       idempotencyKey: string;
+      allowedMembershipIds?: string[] | null;
     }
   ): Promise<{
     orderId: string;
@@ -727,8 +728,9 @@ export class InventoryService {
          JOIN inventory_owner o
            ON o.tenant_id=so.tenant_id AND o.id=so.inventory_owner_id
          WHERE so.tenant_id = $1 AND so.id = $2
+           AND ($3::uuid[] IS NULL OR so.responsible_membership_id = ANY($3::uuid[]))
          FOR UPDATE OF so`,
-        [context.tenantId, input.orderId]
+        [context.tenantId,input.orderId,input.allowedMembershipIds??null]
       );
 
       const order = orderResult.rows[0];
@@ -1200,6 +1202,7 @@ export class InventoryService {
     input: {
       orderId: string;
       idempotencyKey: string;
+      allowedMembershipIds?: string[] | null;
     },
     options?: {
       allowWms?: boolean;
@@ -1218,8 +1221,9 @@ export class InventoryService {
         `SELECT id, order_status, fulfillment_status
          FROM sales_order
          WHERE tenant_id = $1 AND id = $2
+           AND ($3::uuid[] IS NULL OR responsible_membership_id = ANY($3::uuid[]))
          FOR UPDATE`,
-        [context.tenantId, input.orderId]
+        [context.tenantId,input.orderId,input.allowedMembershipIds??null]
       );
 
       const row = order.rows[0];
