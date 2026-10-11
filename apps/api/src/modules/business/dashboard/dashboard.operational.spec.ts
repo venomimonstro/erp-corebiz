@@ -54,12 +54,13 @@ describe("owner control across all verticals",()=>{
     const inserted=calls.filter(c=>
       c.sql.includes("INSERT INTO tenant_operational_issue")&&
       c.args[1]==="SALES_UNFULFILLED");
-    expect(inserted).toHaveLength(200);
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0]?.args[2]).toHaveLength(200);
     const resolveSales=calls.find(c=>
       c.sql.includes("UPDATE tenant_operational_issue")&&
       c.args[1]==="SALES_UNFULFILLED");
     expect(resolveSales).toBeUndefined();
-    expect(new Set(inserted.map(c=>String(c.args[2]))).size).toBe(200);
+    expect(new Set(inserted[0]?.args[2] as string[]).size).toBe(200);
   });
 
   it("reconciles all sales incidents when scan is known complete",async()=>{
