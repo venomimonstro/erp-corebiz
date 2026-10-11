@@ -738,6 +738,129 @@ export class ServiceEconomicsService {
     });
   }
 
+  async exportPayrollToBatch(
+    context:TenantContext,
+    input:{batchId:string;month?:string}
+  ){
+    await this.requireAll(context,"service.write");
+    if(!input.batchId){
+      throw new BadRequestException("Выберите payroll batch");
+    }
+    const period=this.monthBounds(input.month);
+    return this.database.withTenantTransaction(context,async client=>{
+      const batch=await client.query<{
+        period_from:string;
+        period_to:string;
+      }>(
+        `SELECT period_from::text,period_to::text
+         FROM payroll_accrual_batch
+         WHERE tenant_id=$1 AND id=$2 AND status='DRAFT'
+         FOR UPDATE`,
+        [context.tenantId,input.batchId]
+      );
+      const batchRow=batch.rows[0];
+      if(!batchRow){
+        throw new ConflictException(
+          "Payroll batch не найден или уже утверждён"
+        );
+      }
+      if(
+        batchRow.period_from!==period.from||
+        batchRow.period_to!==period.to
+      ){
+        throw new ConflictException(
+          "Период payroll batch не совпадает с выбранным месяцем"
+        );
+      }
+
+      const statements=await client.query<{
+        id:string;
+        employee_resource_id:string;
+        membership_id:string|null;
+        total_minor:string;
+        currency:string;
+      }>(
+        `SELECT
+           s.id,s.employee_resource_id,r.membership_id,
+           s.total_minor::text,s.currency
+         FROM service_employee_payroll_statement s
+         JOIN service_resource r
+           ON r.tenant_id=s.tenant_id AND r.id=s.employee_resource_id
+         WHERE s.tenant_id=$1
+           AND s.period_from=$2::date
+           AND s.period_to=$3::date
+           AND s.status='FINALIZED'
+         ORDER BY s.id
+         FOR UPDATE OF s`,
+        [context.tenantId,period.from,period.to]
+      );
+
+      for(const statement of statements.rows){
+        const employeeRef=
+          statement.membership_id ??
+          "service-resource:"+statement.employee_resource_id;
+        await client.query(
+          `INSERT INTO payroll_accrual_component(
+             tenant_id,batch_id,employee_ref,source_type,source_key,
+             gross_minor,deduction_minor,metadata
+           ) VALUES(
+             $1,$2,$3,'SERVICE_EMPLOYEE_STATEMENT',$4,$5,0,$6
+           )
+           ON CONFLICT(
+             tenant_id,batch_id,employee_ref,source_type,source_key
+           )
+           DO UPDATE SET
+             gross_minor=EXCLUDED.gross_minor,
+             deduction_minor=0,
+             metadata=EXCLUDED.metadata,
+             updated_at=now()`,
+          [
+            context.tenantId,input.batchId,employeeRef,statement.id,
+            statement.total_minor,
+            JSON.stringify({
+              statementId:statement.id,
+              employeeResourceId:statement.employee_resource_id,
+              periodFrom:period.from,
+              periodTo:period.to,
+              currency:statement.currency
+            })
+          ]
+        );
+      }
+
+      const ids=statements.rows.map(row=>row.id);
+      if(ids.length){
+        await client.query(
+          `UPDATE service_employee_payroll_statement
+           SET status='EXPORTED',payroll_batch_id=$3,
+               exported_at=now(),updated_at=now()
+           WHERE tenant_id=$1
+             AND id=ANY($2::uuid[])
+             AND status='FINALIZED'`,
+          [context.tenantId,ids,input.batchId]
+        );
+      }
+
+      const accruals=await client.query(
+        `UPDATE service_employee_booking_accrual a
+         SET status='EXPORTED',payroll_batch_id=$4
+         FROM service_booking b
+         WHERE a.tenant_id=$1
+           AND b.tenant_id=a.tenant_id AND b.id=a.booking_id
+           AND b.starts_at::date BETWEEN $2::date AND $3::date
+           AND a.status IN ('CALCULATED','APPROVED')
+         RETURNING a.id`,
+        [context.tenantId,period.from,period.to,input.batchId]
+      );
+
+      return {
+        statements:ids.length,
+        accruals:accruals.rowCount??0,
+        batchId:input.batchId
+      };
+    });
+  }
+
   private monthBounds(month?:string){
     const value=month?.trim()||new Date().toISOString().slice(0,7);
     if(!/^\d{4}-\d{2}$/.test(value)){
