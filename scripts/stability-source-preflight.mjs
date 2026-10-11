@@ -295,8 +295,12 @@ async function inspectRequiredHardening(root) {
       /trainer_compensation_component/,
       /trainer_payroll_statement/,
       /trainer_payroll_adjustment/,
+      /trainer_payroll_profile/,
+      /payroll_accrual_component/,
       /addPayrollAdjustment/,
+      /payrollProfiles/,
       /MONTHLY_BASE/,
+      /DANCE_TRAINER_STATEMENT/,
       /payroll_batch_id/,
       /service_booking_material/
     ],
@@ -339,6 +343,8 @@ async function inspectRequiredHardening(root) {
       /dance_lessons/,
       /payment_allocations/,
       /trainer_compensation_accruals/,
+      /trainer_payroll_profiles/,
+      /payroll_accrual_components/,
       /room_rental_statements/
     ],
     message: "Dance studio tenant export coverage is missing"
@@ -395,7 +401,10 @@ async function inspectRequiredHardening(root) {
     "177_shared_capacity_integrity.sql",
     "178_trainer_payroll_export_lifecycle.sql",
     "179_trainer_payroll_tenant_integrity.sql",
-    "179_trainer_payroll_adjustments.sql"
+    "179_trainer_payroll_adjustments.sql",
+    "180_payroll_accrual_components.sql",
+    "181_trainer_payroll_profile.sql",
+    "182_payroll_component_guard_fix.sql"
   ];
 
   for (const name of requiredMigrations) {
