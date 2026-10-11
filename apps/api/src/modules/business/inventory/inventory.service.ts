@@ -147,6 +147,9 @@ export class InventoryService {
     physicalMilli: string;
     reservedMilli: string;
     availableMilli: string;
+    sellableMilli:string;
+    safetyStockMilli:string;
+    sourcingEnabled:boolean;
   }>> {
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query<{
@@ -158,6 +161,9 @@ export class InventoryService {
         physical_milli: string;
         reserved_milli: string;
         available_milli: string;
+        sellable_milli:string;
+        safety_stock_milli:string;
+        sourcing_enabled:boolean;
       }>(
         `SELECT
            b.warehouse_id,
@@ -167,8 +173,15 @@ export class InventoryService {
            p.name AS product_name,
            b.physical_milli::text,
            b.reserved_milli::text,
-           (b.physical_milli - b.reserved_milli)::text AS available_milli
+           (b.physical_milli - b.reserved_milli)::text AS available_milli,
+           coalesce(ip.safety_stock_milli,0)::text AS safety_stock_milli,
+           coalesce(ip.enabled,true) AS sourcing_enabled,
+           CASE WHEN coalesce(ip.enabled,true)=false THEN '0'
+             ELSE greatest(b.physical_milli-b.reserved_milli-
+                 coalesce(ip.safety_stock_milli,0),0)::text END AS sellable_milli
          FROM inventory_balance b
+         LEFT JOIN inventory_policy ip ON ip.tenant_id=b.tenant_id
+           AND ip.warehouse_id=b.warehouse_id AND ip.sku_id=b.sku_id
          JOIN warehouse w
            ON w.tenant_id = b.tenant_id AND w.id = b.warehouse_id
          JOIN sku s
@@ -190,7 +203,10 @@ export class InventoryService {
         productName: row.product_name,
         physicalMilli: row.physical_milli,
         reservedMilli: row.reserved_milli,
-        availableMilli: row.available_milli
+        availableMilli:row.available_milli,
+        sellableMilli:row.sellable_milli,
+        safetyStockMilli:row.safety_stock_milli,
+        sourcingEnabled:row.sourcing_enabled
       }));
     });
   }

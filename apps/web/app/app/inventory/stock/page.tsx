@@ -21,6 +21,9 @@ type Balance = {
   physicalMilli: string;
   reservedMilli: string;
   availableMilli: string;
+  sellableMilli:string;
+  safetyStockMilli:string;
+  sourcingEnabled:boolean;
 };
 
 type StockCountLine = {
@@ -245,7 +248,7 @@ export default function StockPage() {
             <p className="muted">Склад / Inventory Ledger</p>
             <h1>Остатки</h1>
             <p className="workspace-summary">
-              Физический · резерв · доступно
+              Физический остаток, резервы и количество, которое можно безопасно продать
             </p>
           </div>
 
@@ -294,7 +297,7 @@ export default function StockPage() {
                   <th>SKU</th>
                   <th>Физически</th>
                   <th>Резерв</th>
-                  <th>Доступно</th>
+                  <th>Доступно к продаже</th>
                   <th></th>
                 </tr>
               </thead>
@@ -305,7 +308,14 @@ export default function StockPage() {
                     <td>{item.sku}</td>
                     <td>{quantity(item.physicalMilli)}</td>
                     <td>{quantity(item.reservedMilli)}</td>
-                    <td><strong>{quantity(item.availableMilli)}</strong></td>
+                    <td>
+                      <strong>{item.sourcingEnabled?quantity(item.sellableMilli):"Продажи отключены"}</strong>
+                      <small style={{display:"block",color:"var(--muted, #818891)",marginTop:4}}>
+                        Без резерва: {quantity(item.availableMilli)}
+                        {BigInt(item.safetyStockMilli)>0n
+                          ?" · страховой запас: "+quantity(item.safetyStockMilli):""}
+                      </small>
+                    </td>
                     <td className="table-actions">
                       <button
                         className="secondary-button"
