@@ -40,7 +40,7 @@ export class StorefrontController{
 
   @Public()
   @Post(":siteCode/carts")
-  @ApiCost("WEBHOOK")
+  @ApiCost("PUBLIC_CART")
   async cartCreate(@Param("siteCode") code:string):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.storefront.createCart(code)};
   }
@@ -54,14 +54,14 @@ export class StorefrontController{
 
   @Public()
   @Put("carts/:cartKey/lines")
-  @ApiCost("WEBHOOK")
+  @ApiCost("PUBLIC_CART")
   async line(@Param("cartKey") key:string,@Body() body:any):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.storefront.setLine(key,body)};
   }
 
   @Public()
   @Post("carts/:cartKey/checkout")
-  @ApiCost("WEBHOOK")
+  @ApiCost("PUBLIC_CHECKOUT")
   async checkout(@Param("cartKey") key:string,@Body() body:any):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.storefront.checkout(key,body)};
   }
