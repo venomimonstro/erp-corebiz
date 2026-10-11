@@ -832,8 +832,8 @@ export default function SitesPage() {
                   <small>Каталог, корзина и checkout</small>
                 </button>
                 <a className="site-store-enable" href="/app/migration">
-                  Импортировать из 1С / Excel
-                  <small>Проверка файла → предпросмотр → перенос</small>
+                  Импорт товаров и клиентов
+                  <small>CSV / Excel → проверка → загрузка</small>
                 </a>
                 <button
                   className="site-store-enable"
