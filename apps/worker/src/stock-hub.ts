@@ -9,6 +9,7 @@ type ListingRow={
   external_warehouse_id:string|null;external_stock_id:string|null;
   published_units:number|null;target_units:number|null;status:string|null;
   credentials_ready:boolean;mapping_active:boolean;connection_status:string;
+  fresh_order_feed:boolean;
 };
 type PublishJob={
   tenant_id:string;listing_id:string;connection_id:string;provider:string;
@@ -51,7 +52,8 @@ async function reconcile(pool:Pool,key:PoolKey):Promise<void>{
               l.external_warehouse_id,l.external_stock_id,
               t.published_units,t.target_units,t.status,
               (c.credentials_ciphertext IS NOT NULL) AS credentials_ready,
-              (m.status='ACTIVE') AS mapping_active,c.status AS connection_status
+              (m.status='ACTIVE') AS mapping_active,c.status AS connection_status,
+              (c.last_synced_at>now()-interval '10 minutes') AS fresh_order_feed
        FROM channel_stock_listing l JOIN channel_connection c
          ON c.tenant_id=l.tenant_id AND c.id=l.connection_id
        JOIN channel_product_mapping m ON m.tenant_id=l.tenant_id AND m.id=l.mapping_id
@@ -99,7 +101,7 @@ async function reconcile(pool:Pool,key:PoolKey):Promise<void>{
     const ls:MarketListing[]=rows.rows.map(l=>({
       id:l.id,priority:l.priority,
       enabled:l.enabled&&l.mapping_active&&l.connection_status==="ACTIVE"&&
-        l.credentials_ready&&!blocked.has(l.connection_id)&&
+        l.credentials_ready&&l.fresh_order_feed&&!blocked.has(l.connection_id)&&
         (l.provider!=="WILDBERRIES"||Boolean(l.external_stock_id)),
       publishEnabled:l.publish_enabled,
       externalWarehouseId:l.external_warehouse_id,provider:l.provider
@@ -255,6 +257,9 @@ export async function processStockHubOnce(pool:Pool):Promise<boolean>{
   if(dirty.rows[0]){await reconcile(pool,dirty.rows[0]);return true;}
   const job=await pool.query<PublishJob>("SELECT * FROM corebiz_claim_stock_target()");
   if(job.rows[0]){await publish(pool,job.rows[0]);return true;}
+  const scheduled=await pool.query<{corebiz_schedule_fbs_stock_poll:number}>(
+    "SELECT corebiz_schedule_fbs_stock_poll()");
+  if((scheduled.rows[0]?.corebiz_schedule_fbs_stock_poll??0)>0)return true;
   // Recheck active FBS pools periodically even without local stock writes.
   const periodic=await pool.query(`INSERT INTO channel_stock_dirty(tenant_id,warehouse_id,sku_id)
     SELECT tenant_id,warehouse_id,sku_id FROM (
