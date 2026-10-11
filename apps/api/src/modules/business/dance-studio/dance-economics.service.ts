@@ -1494,6 +1494,34 @@ export class DanceEconomicsService {
     await this.requireAll(context,"dance.write");
     const {from,to}=this.dateRange(input.from,input.to);
     return this.database.withTenantTransaction(context,async client=>{
+      const periodFrom=from.toISOString().slice(0,10);
+      const periodTo=new Date(to.getTime()-86400000).toISOString().slice(0,10);
+      const locked=await client.query(
+        `SELECT 1
+         FROM trainer_payroll_statement s
+         WHERE s.tenant_id=$1
+           AND s.period_from=$2::date
+           AND s.period_to=$3::date
+           AND s.status IN ('EXPORTED','PAID')
+           AND EXISTS(
+             SELECT 1
+             FROM trainer_compensation_accrual a
+             JOIN dance_lesson l
+               ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
+             WHERE a.tenant_id=s.tenant_id
+               AND a.trainer_resource_id=s.trainer_resource_id
+               AND a.status='CALCULATED'
+               AND l.starts_at>=$4 AND l.starts_at<$5
+           )
+         LIMIT 1`,
+        [context.tenantId,periodFrom,periodTo,from,to]
+      );
+      if(locked.rowCount){
+        throw new ConflictException(
+          "Ведомость периода уже экспортирована в payroll. Поздние начисления оформите корректировкой в новом периоде."
+        );
+      }
+
       const result=await client.query(
         `UPDATE trainer_compensation_accrual a
          SET status='APPROVED',approved_at=now(),approved_by_membership_id=$4
@@ -1527,6 +1555,10 @@ export class DanceEconomicsService {
 
       const periodFrom=from.toISOString().slice(0,10);
       const periodTo=new Date(to.getTime()-86400000).toISOString().slice(0,10);
+
+      await this.buildTrainerPayrollStatementsTx(
+        client,context.tenantId,from,to
+      );
 
       const missing=await client.query(
         `SELECT s.id
