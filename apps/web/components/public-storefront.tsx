@@ -122,7 +122,10 @@ export function PublicStorefront({
           return current;
         }
         if (current.status === "CHECKED_OUT") {
-          setSuccess("Предыдущий заказ уже принят. Повторно оформлять его не нужно.");
+          setSuccess("Заказ принят. Оплачивайте только после подтверждения суммы и доставки.");
+          setCart(current);
+          setPaymentCartKey(current.cartKey);
+          return current;
         }
       } catch {
         window.localStorage.removeItem(storageKey);
