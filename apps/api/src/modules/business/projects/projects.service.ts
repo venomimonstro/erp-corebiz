@@ -214,7 +214,11 @@ export class ProjectsService {
       partyId?: string;
       sourceDealId?: string;
       responsibleMembershipId?: string;
-      billingMode?: "FIXED" | "TIME_AND_MATERIAL" | "INTERNAL";
+      billingMode?: "FIXED" | "TIME_AND_MATERIAL" | "RETAINER" | "MILESTONE" | "INTERNAL";
+      projectType?: string;
+      monthlyRetainerMinor?: string;
+      mediaBudgetMinor?: string;
+      targetMarginBps?: number;
       currency?: string;
       budgetMinor?: string;
       hourlyRateMinor?: string;
@@ -233,7 +237,7 @@ export class ProjectsService {
       throw new BadRequestException("Некорректное название проекта");
     }
     const billingMode = input.billingMode ?? "FIXED";
-    if (!["FIXED","TIME_AND_MATERIAL","INTERNAL"].includes(billingMode)) {
+    if (!["FIXED","TIME_AND_MATERIAL","RETAINER","MILESTONE","INTERNAL"].includes(billingMode)) {
       throw new BadRequestException("Некорректная модель биллинга");
     }
     const currency = input.currency?.trim().toUpperCase() || "RUB";
@@ -244,6 +248,17 @@ export class ProjectsService {
     const hourlyRateMinor = input.hourlyRateMinor ?? "0";
     if (!/^\d+$/.test(budgetMinor) || !/^\d+$/.test(hourlyRateMinor)) {
       throw new BadRequestException("Некорректный бюджет или ставка");
+    }
+    const monthlyRetainerMinor=input.monthlyRetainerMinor??"0";
+    const mediaBudgetMinor=input.mediaBudgetMinor??"0";
+    if(!/^\d+$/.test(monthlyRetainerMinor)||!/^\d+$/.test(mediaBudgetMinor)){
+      throw new BadRequestException("Некорректный ретейнер или рекламный бюджет");
+    }
+    const targetMarginBps=input.targetMarginBps===undefined
+      ?null
+      :Math.floor(input.targetMarginBps);
+    if(targetMarginBps!==null&&(targetMarginBps<0||targetMarginBps>10000)){
+      throw new BadRequestException("Целевая маржа должна быть от 0 до 100%");
     }
     const estimatedMinutes = Number(input.estimatedMinutes ?? 0);
     if (!Number.isSafeInteger(estimatedMinutes) || estimatedMinutes < 0) {
@@ -345,9 +360,11 @@ export class ProjectsService {
              tenant_id,business_number,source_deal_id,party_id,
              responsible_membership_id,name,code,status,billing_mode,
              currency,budget_minor,hourly_rate_minor,estimated_minutes,
-             starts_on,due_on,notes,created_by_membership_id
+             starts_on,due_on,notes,project_type,monthly_retainer_minor,
+             media_budget_minor,target_margin_bps,created_by_membership_id
            ) VALUES (
-             $1,$2,$3,$4,$5,$6,$7,'PLANNED',$8,$9,$10,$11,$12,$13,$14,$15,$16
+             $1,$2,$3,$4,$5,$6,$7,'PLANNED',$8,$9,$10,$11,$12,$13,$14,$15,$16,
+             $17,$18,$19,$20
            )
            ON CONFLICT (tenant_id,source_deal_id)
              WHERE source_deal_id IS NOT NULL
@@ -369,6 +386,10 @@ export class ProjectsService {
             input.startsOn ?? null,
             input.dueOn ?? null,
             input.notes?.trim() || null,
+            input.projectType?.trim()||null,
+            monthlyRetainerMinor,
+            mediaBudgetMinor,
+            targetMarginBps,
             context.membershipId
           ]
         );
@@ -873,4 +894,240 @@ export class ProjectsService {
         error.code === "23505"
     );
   }
+  async agencyOverview(context:TenantContext) {
+    const scoped=await this.membershipIdsForScope(context,"projects.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           p.id,p.business_number,p.name,p.status,p.billing_mode,p.project_type,
+           p.currency,p.budget_minor::text,p.monthly_retainer_minor::text,
+           p.media_budget_minor::text,p.target_margin_bps,p.due_on,
+           party.display_name AS party_name,
+           coalesce(t.actual_minutes,0)::integer AS actual_minutes,
+           coalesce(t.labor_cost_minor,0)::text AS labor_cost_minor,
+           coalesce(d.pending,0)::integer AS pending_deliverables,
+           coalesce(d.overdue,0)::integer AS overdue_deliverables,
+           coalesce(a.pending,0)::integer AS pending_approvals,
+           coalesce(a.overdue,0)::integer AS overdue_approvals
+         FROM work_project p
+         LEFT JOIN party
+           ON party.tenant_id=p.tenant_id AND party.id=p.party_id
+         LEFT JOIN LATERAL(
+           SELECT
+             coalesce(sum(e.minutes),0) AS actual_minutes,
+             coalesce(sum(
+               coalesce(pm.cost_rate_minor,p.hourly_rate_minor)*
+               e.minutes/60
+             ),0)::bigint AS labor_cost_minor
+           FROM work_project_time_entry e
+           LEFT JOIN work_project_member pm
+             ON pm.tenant_id=e.tenant_id
+            AND pm.project_id=e.project_id
+            AND pm.membership_id=e.membership_id
+            AND pm.status='ACTIVE'
+           WHERE e.tenant_id=p.tenant_id AND e.project_id=p.id
+         ) t ON true
+         LEFT JOIN LATERAL(
+           SELECT
+             count(*) FILTER (
+               WHERE status NOT IN ('APPROVED','CANCELLED')
+             ) AS pending,
+             count(*) FILTER (
+               WHERE status NOT IN ('APPROVED','CANCELLED')
+                 AND due_at<now()
+             ) AS overdue
+           FROM work_project_deliverable d
+           WHERE d.tenant_id=p.tenant_id AND d.project_id=p.id
+         ) d ON true
+         LEFT JOIN LATERAL(
+           SELECT
+             count(*) FILTER (WHERE status='PENDING') AS pending,
+             count(*) FILTER (
+               WHERE status='PENDING' AND due_at<now()
+             ) AS overdue
+           FROM work_project_client_approval a
+           WHERE a.tenant_id=p.tenant_id AND a.project_id=p.id
+         ) a ON true
+         WHERE p.tenant_id=$1
+           AND p.status NOT IN ('COMPLETED','CANCELLED')
+           AND (
+             $2::uuid[] IS NULL
+             OR p.responsible_membership_id=ANY($2::uuid[])
+           )
+         ORDER BY
+           (coalesce(a.overdue,0)+coalesce(d.overdue,0)) DESC,
+           p.due_on NULLS LAST,p.updated_at DESC`,
+        [context.tenantId,scoped]
+      );
+      return result.rows;
+    });
+  }
+
+  async deliverables(context:TenantContext,projectId:string){
+    const scoped=await this.membershipIdsForScope(context,"projects.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertReadableProject(
+        client,context.tenantId,projectId,scoped
+      );
+      return (await client.query(
+        `SELECT
+           d.*,m.name AS milestone_name,
+           ap.display_name AS approved_by_name
+         FROM work_project_deliverable d
+         LEFT JOIN work_project_milestone m
+           ON m.tenant_id=d.tenant_id AND m.id=d.milestone_id
+         LEFT JOIN party ap
+           ON ap.tenant_id=d.tenant_id AND ap.id=d.approved_by_party_id
+         WHERE d.tenant_id=$1 AND d.project_id=$2
+         ORDER BY
+           CASE d.status
+             WHEN 'REWORK' THEN 0
+             WHEN 'CLIENT_REVIEW' THEN 1
+             WHEN 'INTERNAL_REVIEW' THEN 2
+             WHEN 'IN_PROGRESS' THEN 3
+             WHEN 'PLANNED' THEN 4
+             ELSE 5
+           END,
+           d.due_at NULLS LAST,d.created_at`,
+        [context.tenantId,projectId]
+      )).rows;
+    });
+  }
+
+  async addDeliverable(
+    context:TenantContext,
+    projectId:string,
+    input:{
+      title:string;
+      deliverableType?:"DESIGN"|"DEVELOPMENT"|"SEO"|"CONTENT"|"ADVERTISING"|"ANALYTICS"|"STRATEGY"|"REPORT"|"OTHER";
+      milestoneId?:string;
+      dueAt?:string;
+      clientApprovalRequired?:boolean;
+    }
+  ){
+    const scoped=await this.membershipIdsForScope(context,"projects.write");
+    const title=input.title?.trim();
+    if(!title||title.length>220){
+      throw new BadRequestException("Некорректное название результата");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertWritableProject(
+        client,context.tenantId,projectId,scoped
+      );
+      const result=await client.query(
+        `INSERT INTO work_project_deliverable(
+           tenant_id,project_id,milestone_id,title,deliverable_type,
+           due_at,client_approval_required,created_by_membership_id
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING *`,
+        [
+          context.tenantId,projectId,input.milestoneId??null,title,
+          input.deliverableType??"OTHER",
+          input.dueAt?new Date(input.dueAt):null,
+          input.clientApprovalRequired!==false,context.membershipId
+        ]
+      );
+      return result.rows[0];
+    });
+  }
+
+  async changeDeliverableStatus(
+    context:TenantContext,
+    projectId:string,
+    deliverableId:string,
+    input:{status:string;version:number;note?:string}
+  ){
+    const allowed=[
+      "PLANNED","IN_PROGRESS","INTERNAL_REVIEW",
+      "CLIENT_REVIEW","APPROVED","REWORK","CANCELLED"
+    ];
+    if(!allowed.includes(input.status)){
+      throw new BadRequestException("Некорректный статус результата");
+    }
+    const scoped=await this.membershipIdsForScope(context,"projects.write");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertWritableProject(
+        client,context.tenantId,projectId,scoped
+      );
+      const result=await client.query(
+        `UPDATE work_project_deliverable
+         SET status=$4,
+             approval_note=CASE
+               WHEN $4 IN ('APPROVED','REWORK') THEN $6
+               ELSE approval_note
+             END,
+             approved_at=CASE WHEN $4='APPROVED' THEN now() ELSE NULL END,
+             version=version+1,updated_at=now()
+         WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND version=$5
+         RETURNING *`,
+        [
+          context.tenantId,projectId,deliverableId,input.status,
+          input.version,input.note?.trim()||null
+        ]
+      );
+      if(!result.rows[0]){
+        throw new ConflictException("Результат уже изменён");
+      }
+      return result.rows[0];
+    });
+  }
+
+  async approvals(context:TenantContext,projectId:string){
+    const scoped=await this.membershipIdsForScope(context,"projects.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertReadableProject(
+        client,context.tenantId,projectId,scoped
+      );
+      return (await client.query(
+        `SELECT
+           a.*,d.title AS deliverable_title,
+           rp.display_name AS responded_by_name
+         FROM work_project_client_approval a
+         LEFT JOIN work_project_deliverable d
+           ON d.tenant_id=a.tenant_id AND d.id=a.deliverable_id
+         LEFT JOIN party rp
+           ON rp.tenant_id=a.tenant_id AND rp.id=a.responded_by_party_id
+         WHERE a.tenant_id=$1 AND a.project_id=$2
+         ORDER BY
+           CASE a.status WHEN 'PENDING' THEN 0 ELSE 1 END,
+           a.due_at NULLS LAST,a.created_at DESC`,
+        [context.tenantId,projectId]
+      )).rows;
+    });
+  }
+
+  async requestApproval(
+    context:TenantContext,
+    projectId:string,
+    input:{
+      deliverableId?:string;
+      requestType?:"DELIVERABLE"|"BUDGET"|"SCOPE_CHANGE"|"CAMPAIGN_LAUNCH"|"OTHER";
+      title:string;
+      dueAt?:string;
+    }
+  ){
+    const scoped=await this.membershipIdsForScope(context,"projects.write");
+    const title=input.title?.trim();
+    if(!title) throw new BadRequestException("Укажите предмет согласования");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertWritableProject(
+        client,context.tenantId,projectId,scoped
+      );
+      const result=await client.query(
+        `INSERT INTO work_project_client_approval(
+           tenant_id,project_id,deliverable_id,request_type,title,
+           due_at,created_by_membership_id
+         ) VALUES($1,$2,$3,$4,$5,$6,$7)
+         RETURNING *`,
+        [
+          context.tenantId,projectId,input.deliverableId??null,
+          input.requestType??"OTHER",title,
+          input.dueAt?new Date(input.dueAt):null,context.membershipId
+        ]
+      );
+      return result.rows[0];
+    });
+  }
+
+
 }
