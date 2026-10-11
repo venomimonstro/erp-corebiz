@@ -1441,7 +1441,7 @@ export class ProjectsService {
     const billable=input?.billableRateMinor;
     const status=input?.status??"ACTIVE";
     if(!allowed.includes(role))throw new BadRequestException("Неизвестная роль проекта");
-    if(!Number.isInteger(allocation)||allocation!<1||allocation!>100)
+    if(typeof allocation!=="number"||!Number.isInteger(allocation)||allocation<1||allocation>100)
       throw new BadRequestException("Загрузка сотрудника: от 1 до 100%");
     if(typeof cost!=="string"|| !/^\d{1,14}$/.test(cost) ||
        typeof billable!=="string"|| !/^\d{1,14}$/.test(billable))
@@ -1464,7 +1464,7 @@ export class ProjectsService {
              AND pm.project_id<>$3 AND pm.status='ACTIVE'
              AND p.status IN ('PLANNED','ACTIVE')`,
           [context.tenantId,membershipId,projectId]);
-        if(Number(allocated.rows[0]?.total??0)+allocation!>100)
+        if(Number(allocated.rows[0]?.total??0)+allocation>100)
           throw new ConflictException("Плановая загрузка сотрудника превышает 100%");
       }
       return (await client.query(
