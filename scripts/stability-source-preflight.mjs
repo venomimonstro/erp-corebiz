@@ -297,6 +297,8 @@ async function inspectRequiredHardening(root) {
       /service_package_entitlement/,
       /activation_policy_snapshot/,
       /resolveDanceDeliveryRule/,
+      /updateGroup/,
+      /room_zone_id/,
       /room_capacity_units/,
       /SELF_PRACTICE/
     ],
