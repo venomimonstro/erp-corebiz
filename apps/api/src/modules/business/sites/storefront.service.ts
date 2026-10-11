@@ -270,6 +270,8 @@ export class StorefrontService {
       phone?: string;
       email?: string;
       comment?: string;
+      deliveryMethodId?: string;
+      deliveryAddress?: string;
     }
   ): Promise<Record<string, unknown>> {
     if (!input || typeof input !== "object" || Array.isArray(input) ||
@@ -278,7 +280,11 @@ export class StorefrontService {
         (input.phone !== undefined && typeof input.phone !== "string") ||
         (input.email !== undefined && typeof input.email !== "string") ||
         (input.comment !== undefined && (typeof input.comment !== "string" ||
-          input.comment.length > 4000))) {
+          input.comment.length > 4000)) ||
+        (input.deliveryMethodId !== undefined && (typeof input.deliveryMethodId !== "string" ||
+          !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(input.deliveryMethodId))) ||
+        (input.deliveryAddress !== undefined && (typeof input.deliveryAddress !== "string" ||
+          input.deliveryAddress.length > 600))) {
       throw new BadRequestException("Некорректные данные заказа");
     }
     if (!input.idempotencyKey?.trim() || input.idempotencyKey.length > 160) {
@@ -442,6 +448,32 @@ export class StorefrontService {
         );
       }
 
+      // Seller quotes are stored in the tenant DB; never trust a fee sent by
+      // the buyer. The selected delivery method is bound to the Sales order.
+      const delivery = await this.database.withTenantTransaction(context,async client=>{
+        if (!input.deliveryMethodId) {
+          const any=await client.query(
+            "SELECT 1 FROM commerce_delivery_method WHERE tenant_id=$1 AND site_id=$2 AND active LIMIT 1",
+            [cart.tenant_id,cart.site_id]);
+          if(any.rowCount)throw new BadRequestException("Выберите способ доставки");
+          return null;
+        }
+        const method=await client.query<{
+          id:string;mode:string;title:string;fee_minor:string;
+        }>(
+          `SELECT id,mode,title,fee_minor::text
+           FROM commerce_delivery_method
+           WHERE tenant_id=$1 AND site_id=$2 AND id=$3 AND active`,
+          [cart.tenant_id,cart.site_id,input.deliveryMethodId]);
+        if(!method.rows[0])throw new BadRequestException("Способ доставки недоступен");
+        const address=input.deliveryAddress?.trim()??"";
+        if(method.rows[0].mode==="LOCAL_COURIER" &&
+          (address.length<8 || address.length>600)){
+          throw new BadRequestException("Укажите адрес доставки");
+        }
+        return {...method.rows[0],address};
+      });
+
       let customerId = claimed.checkout_party_id;
       if (!customerId) {
         // A crash between Party.create and cart checkpoint cannot be treated
@@ -473,11 +505,43 @@ export class StorefrontService {
         currency: config.currency,
         notes: input.comment?.trim() || "Заказ с сайта",
         idempotencyKey: "storefront:cart:" + cart.cart_id,
-        lines: lines.map(line => ({
-          skuId: line.sku_id,
-          quantityMilli: line.quantity_milli
-        }))
+        lines: [
+          ...lines.map(line => ({
+            skuId: line.sku_id,
+            quantityMilli: line.quantity_milli
+          })),
+          ...(delivery && BigInt(delivery.fee_minor)>0n ? [{
+            description: "Доставка: "+delivery.title,
+            quantityMilli: "1000",
+            unitPriceMinor: delivery.fee_minor
+          }] : [])
+        ]
       });
+
+      if(delivery){
+        await this.database.withTenantTransaction(context,async client=>{
+          const previous=await client.query<{
+            method_id:string;address:string|null;fee_minor:string;
+          }>(
+            `SELECT method_id,address,fee_minor::text
+             FROM commerce_order_delivery WHERE tenant_id=$1 AND sales_order_id=$2`,
+            [cart.tenant_id,order.id]);
+          if(previous.rows[0]){
+            if(previous.rows[0].method_id!==delivery.id ||
+               (previous.rows[0].address??"")!==delivery.address ||
+               previous.rows[0].fee_minor!==delivery.fee_minor){
+              throw new ConflictException("Условия доставки уже сохранены в заказе");
+            }
+          }else{
+            await client.query(
+              `INSERT INTO commerce_order_delivery(
+                tenant_id,sales_order_id,site_id,method_id,mode,title,fee_minor,address
+              ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+              [cart.tenant_id,order.id,cart.site_id,delivery.id,
+                delivery.mode,delivery.title,delivery.fee_minor,delivery.address||null]);
+          }
+        });
+      }
 
       // A retry can find an order created before a process crash.
       // Never confirm the same SalesOrder twice.
