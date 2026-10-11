@@ -1440,6 +1440,10 @@ export class DanceEconomicsService {
            s.adjustment_minor::text,s.total_minor::text,s.currency,
            s.status,s.payroll_batch_id,s.calculation_snapshot,
            s.finalized_at,s.exported_at,
+           pr.id AS review_id,
+           coalesce(pr.review_status,'PENDING') AS review_status,
+           pr.employee_comment,pr.manager_comment,
+           pr.acknowledged_at,pr.disputed_at,pr.resolved_at,
            coalesce((
              SELECT json_agg(json_build_object(
                'id',a.id,
@@ -1454,6 +1458,10 @@ export class DanceEconomicsService {
          FROM trainer_payroll_statement s
          JOIN service_resource r
            ON r.tenant_id=s.tenant_id AND r.id=s.trainer_resource_id
+         LEFT JOIN payroll_statement_review pr
+           ON pr.tenant_id=s.tenant_id
+          AND pr.statement_kind='DANCE_TRAINER'
+          AND pr.statement_id=s.id
          WHERE s.tenant_id=$1
            AND s.period_from=$2::date AND s.period_to=$3::date
            AND (
@@ -1480,10 +1488,18 @@ export class DanceEconomicsService {
            s.base_minor::text,s.guarantee_adjustment_minor::text,
            s.adjustment_minor::text,s.total_minor::text,s.currency,
            s.status,s.payroll_batch_id,s.calculation_snapshot,
-           s.finalized_at,s.exported_at,r.membership_id
+           s.finalized_at,s.exported_at,r.membership_id,
+           pr.id AS review_id,
+           coalesce(pr.review_status,'PENDING') AS review_status,
+           pr.employee_comment,pr.manager_comment,
+           pr.acknowledged_at,pr.disputed_at,pr.resolved_at
          FROM trainer_payroll_statement s
          JOIN service_resource r
            ON r.tenant_id=s.tenant_id AND r.id=s.trainer_resource_id
+         LEFT JOIN payroll_statement_review pr
+           ON pr.tenant_id=s.tenant_id
+          AND pr.statement_kind='DANCE_TRAINER'
+          AND pr.statement_id=s.id
          WHERE s.tenant_id=$1 AND s.id=$2
            AND (
              $3::uuid[] IS NULL
@@ -1540,6 +1556,18 @@ export class DanceEconomicsService {
         [context.tenantId,statementId]
       );
 
+      const reviewEvents=row.review_id
+        ?await client.query(
+          `SELECT
+             id,event_type,actor_membership_id,previous_status,new_status,
+             comment,statement_total_minor_snapshot::text,metadata,created_at
+           FROM payroll_statement_review_event
+           WHERE tenant_id=$1 AND review_id=$2
+           ORDER BY created_at,id`,
+          [context.tenantId,row.review_id]
+        )
+        :{rows:[] as Array<Record<string,unknown>>};
+
       let payrollSources:Array<Record<string,unknown>>=[];
       if(row.payroll_batch_id&&row.membership_id){
         const sources=await client.query(
@@ -1563,7 +1591,8 @@ export class DanceEconomicsService {
         statement:row,
         lessons:lessons.rows,
         adjustments:adjustments.rows,
-        payrollSources
+        payrollSources,
+        reviewEvents:reviewEvents.rows
       };
     });
   }
@@ -1643,6 +1672,230 @@ export class DanceEconomicsService {
     });
   }
 
+  async reviewPayrollStatement(
+    context:TenantContext,
+    statementId:string,
+    input:{
+      status:"ACKNOWLEDGED"|"DISPUTED";
+      comment?:string;
+    }
+  ){
+    const scopeIds=await this.scopeIds(context,"dance.read");
+    const comment=input.comment?.trim()||null;
+    if(!["ACKNOWLEDGED","DISPUTED"].includes(input.status)){
+      throw new BadRequestException("Некорректный статус согласования");
+    }
+    if(input.status==="DISPUTED"&&(!comment||comment.length<3)){
+      throw new BadRequestException("Опишите причину несогласия");
+    }
+    if(comment&&comment.length>1000){
+      throw new BadRequestException("Комментарий слишком длинный");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const statement=await client.query<{
+        id:string;
+        trainer_resource_id:string;
+        total_minor:string;
+        currency:string;
+        status:string;
+        membership_id:string|null;
+      }>(
+        `SELECT
+           s.id,s.trainer_resource_id,s.total_minor::text,s.currency,
+           s.status,r.membership_id
+         FROM trainer_payroll_statement s
+         JOIN service_resource r
+           ON r.tenant_id=s.tenant_id AND r.id=s.trainer_resource_id
+         WHERE s.tenant_id=$1 AND s.id=$2
+           AND (
+             $3::uuid[] IS NULL OR
+             r.membership_id=ANY($3::uuid[])
+           )
+         FOR UPDATE OF s`,
+        [context.tenantId,statementId,scopeIds]
+      );
+      const row=statement.rows[0];
+      if(!row) throw new NotFoundException("Ведомость не найдена");
+      if(!["FINALIZED","EXPORTED","PAID"].includes(row.status)){
+        throw new ConflictException(
+          "Согласовать можно только закрытую ведомость"
+        );
+      }
+      if(
+        scopeIds!==null &&
+        row.membership_id!==context.membershipId
+      ){
+        throw new ForbiddenException(
+          "Сотрудник может согласовать только собственную ведомость"
+        );
+      }
+
+      const existing=await client.query<{
+        id:string;
+        review_status:string;
+      }>(
+        `SELECT id,review_status
+         FROM payroll_statement_review
+         WHERE tenant_id=$1
+           AND statement_kind='DANCE_TRAINER'
+           AND statement_id=$2
+         FOR UPDATE`,
+        [context.tenantId,statementId]
+      );
+      const previous=existing.rows[0]?.review_status??"PENDING";
+
+      const review=await client.query<{
+        id:string;
+        review_status:string;
+      }>(
+        `INSERT INTO payroll_statement_review(
+           tenant_id,statement_kind,statement_id,employee_resource_id,
+           reviewer_membership_id,review_status,
+           statement_total_minor_snapshot,currency,employee_comment,
+           acknowledged_at,disputed_at
+         ) VALUES(
+           $1,'DANCE_TRAINER',$2,$3,$4,$5,$6,$7,$8,
+           CASE WHEN $5='ACKNOWLEDGED' THEN now() ELSE NULL END,
+           CASE WHEN $5='DISPUTED' THEN now() ELSE NULL END
+         )
+         ON CONFLICT(tenant_id,statement_kind,statement_id)
+         DO UPDATE SET
+           reviewer_membership_id=EXCLUDED.reviewer_membership_id,
+           review_status=EXCLUDED.review_status,
+           statement_total_minor_snapshot=EXCLUDED.statement_total_minor_snapshot,
+           currency=EXCLUDED.currency,
+           employee_comment=EXCLUDED.employee_comment,
+           manager_comment=NULL,
+           acknowledged_at=EXCLUDED.acknowledged_at,
+           disputed_at=EXCLUDED.disputed_at,
+           resolved_at=NULL,
+           resolved_by_membership_id=NULL,
+           updated_at=now()
+         RETURNING id,review_status`,
+        [
+          context.tenantId,statementId,row.trainer_resource_id,
+          context.membershipId,input.status,row.total_minor,row.currency,comment
+        ]
+      );
+      const reviewRow=review.rows[0];
+      if(!reviewRow) throw new Error("PAYROLL_REVIEW_SAVE_FAILED");
+
+      await client.query(
+        `INSERT INTO payroll_statement_review_event(
+           tenant_id,review_id,event_type,actor_membership_id,
+           previous_status,new_status,comment,
+           statement_total_minor_snapshot
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          context.tenantId,reviewRow.id,input.status,
+          context.membershipId,previous,input.status,comment,row.total_minor
+        ]
+      );
+      await this.audit(
+        client,context,"dance.payroll_review_"+input.status.toLowerCase(),
+        "trainer_payroll_statement",statementId,{
+          reviewId:reviewRow.id,
+          totalMinor:row.total_minor,
+          comment
+        }
+      );
+      return {
+        id:reviewRow.id,
+        status:reviewRow.review_status
+      };
+    });
+  }
+
+  async resolvePayrollReview(
+    context:TenantContext,
+    reviewId:string,
+    input:{
+      status:"RESOLVED"|"WAIVED";
+      comment:string;
+    }
+  ){
+    await this.requireAll(context,"dance.write");
+    const comment=input.comment?.trim();
+    if(!["RESOLVED","WAIVED"].includes(input.status)){
+      throw new BadRequestException("Некорректный статус решения");
+    }
+    if(!comment||comment.length<3||comment.length>1000){
+      throw new BadRequestException("Укажите решение по ведомости");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const review=await client.query<{
+        id:string;
+        statement_id:string;
+        review_status:string;
+        statement_total_minor_snapshot:string;
+      }>(
+        `SELECT
+           id,statement_id,review_status,
+           statement_total_minor_snapshot::text
+         FROM payroll_statement_review
+         WHERE tenant_id=$1
+           AND id=$2
+           AND statement_kind='DANCE_TRAINER'
+         FOR UPDATE`,
+        [context.tenantId,reviewId]
+      );
+      const row=review.rows[0];
+      if(!row) throw new NotFoundException("Согласование не найдено");
+      if(["RESOLVED","WAIVED"].includes(row.review_status)){
+        return {id:row.id,status:row.review_status,changed:false};
+      }
+      if(
+        input.status==="RESOLVED" &&
+        row.review_status!=="DISPUTED"
+      ){
+        throw new ConflictException(
+          "Разрешить можно только спорную ведомость"
+        );
+      }
+
+      const updated=await client.query(
+        `UPDATE payroll_statement_review
+         SET review_status=$3,
+             manager_comment=$4,
+             resolved_at=now(),
+             resolved_by_membership_id=$5,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING id,review_status`,
+        [
+          context.tenantId,reviewId,input.status,comment,
+          context.membershipId
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO payroll_statement_review_event(
+           tenant_id,review_id,event_type,actor_membership_id,
+           previous_status,new_status,comment,
+           statement_total_minor_snapshot
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          context.tenantId,reviewId,input.status,context.membershipId,
+          row.review_status,input.status,comment,
+          row.statement_total_minor_snapshot
+        ]
+      );
+      await this.audit(
+        client,context,"dance.payroll_review_"+input.status.toLowerCase(),
+        "trainer_payroll_statement",row.statement_id,{
+          reviewId,
+          comment
+        }
+      );
+      return {
+        ...updated.rows[0],
+        changed:true
+      };
+    });
+  }
+
   async approveCompensation(
     context:TenantContext,
     input:{from:string;to:string}
@@ -1715,6 +1968,25 @@ export class DanceEconomicsService {
       await this.buildTrainerPayrollStatementsTx(
         client,context.tenantId,from,to
       );
+
+      const disputed=await client.query(
+        `SELECT pr.id
+         FROM payroll_statement_review pr
+         JOIN trainer_payroll_statement s
+           ON s.tenant_id=pr.tenant_id AND s.id=pr.statement_id
+         WHERE pr.tenant_id=$1
+           AND pr.statement_kind='DANCE_TRAINER'
+           AND pr.review_status='DISPUTED'
+           AND s.period_from=$2::date
+           AND s.period_to=$3::date
+         LIMIT 1`,
+        [context.tenantId,periodFrom,periodTo]
+      );
+      if(disputed.rowCount){
+        throw new ConflictException(
+          "Есть спорная ведомость. Сначала разрешите спор или оформите управленческое исключение."
+        );
+      }
 
       const missing=await client.query(
         `SELECT s.id
