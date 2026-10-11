@@ -583,6 +583,31 @@ export class ComplianceService {
     });
   }
 
+  async calculations(
+    context:TenantContext,
+    legalEntityId:string
+  ) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           c.id,c.tax_code,c.period_key,c.date_from,c.date_to,
+           c.taxable_income_minor::text,c.deductible_expense_minor::text,
+           c.taxable_base_minor::text,c.calculated_tax_minor::text,
+           c.advances_minor::text,c.tax_due_minor::text,
+           c.calculation_method,c.rule_snapshot,c.source_snapshot,
+           c.status,c.confirmed_at,c.created_at
+         FROM accounting_tax_calculation c
+         WHERE c.tenant_id=$1
+           AND c.legal_entity_id=$2
+           AND c.status<>'SUPERSEDED'
+         ORDER BY c.date_to DESC,c.created_at DESC
+         LIMIT 24`,
+        [context.tenantId,legalEntityId]
+      );
+      return result.rows;
+    });
+  }
+
   async obligations(
     context:TenantContext,
     legalEntityId:string,
