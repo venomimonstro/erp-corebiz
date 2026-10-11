@@ -20,6 +20,16 @@ type WorkOrder={
   vin:string|null;plate_number:string|null;make:string;model:string;
   customer_name:string|null;line_count:number;
 };
+type WorkOrderLine={
+  id:string;lineType:"LABOR"|"PART"|"MATERIAL"|"OTHER";description:string;
+  quantityMilli:string;unitPriceMinor:string;unitCostMinor:string;
+  approved:boolean;completed:boolean;
+};
+type WorkOrderDetail=WorkOrder&{
+  diagnosis:string|null;mileage_in_km:number|null;mileage_out_km:number|null;
+  lines:WorkOrderLine[];
+};
+
 type Donor={
   id:string;stock_number:string;vin:string|null;make:string;model:string;
   production_year:number|null;status:string;purchase_price_minor:string;
@@ -58,6 +68,12 @@ export default function AutomotivePage(){
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [showVehicleForm,setShowVehicleForm]=useState(false);
+  const [selectedOrder,setSelectedOrder]=useState<WorkOrderDetail|null>(null);
+  const [lineType,setLineType]=useState<WorkOrderLine["lineType"]>("LABOR");
+  const [lineDescription,setLineDescription]=useState("");
+  const [lineQuantity,setLineQuantity]=useState("1");
+  const [linePrice,setLinePrice]=useState("");
+  const [lineCost,setLineCost]=useState("");
   const [showOrderForm,setShowOrderForm]=useState(false);
   const [showDonorForm,setShowDonorForm]=useState(false);
 
@@ -137,6 +153,105 @@ export default function AutomotivePage(){
       setShowOrderForm(false);setNotice("Заказ-наряд создан.");await load();
     }catch(cause){setError(cause instanceof Error?cause.message:"Не удалось создать заказ-наряд");}
     finally{setBusy(false);}
+  }
+
+  async function openOrder(id:string){
+    setBusy(true);setError("");
+    try{
+      const detail=await apiRequest<WorkOrderDetail>("/automotive/work-orders/"+id);
+      setSelectedOrder(detail);
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось открыть заказ-наряд");
+    }finally{setBusy(false);}
+  }
+
+  function nextOrderStatus(status:string){
+    return ({
+      DRAFT:"DIAGNOSIS",
+      DIAGNOSIS:"WAITING_APPROVAL",
+      WAITING_APPROVAL:"IN_PROGRESS",
+      WAITING_PARTS:"IN_PROGRESS",
+      IN_PROGRESS:"QUALITY_CHECK",
+      QUALITY_CHECK:"READY",
+      READY:"DELIVERED"
+    } as Record<string,string>)[status]??null;
+  }
+
+  async function advanceOrder(order:WorkOrder|WorkOrderDetail){
+    const next=nextOrderStatus(order.status);
+    if(!next)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/automotive/work-orders/"+order.id,{
+        method:"PATCH",body:JSON.stringify({status:next})
+      });
+      setNotice("Заказ-наряд переведён: "+statusLabel(next)+".");
+      await load();
+      if(selectedOrder?.id===order.id) await openOrder(order.id);
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось изменить этап ремонта");
+    }finally{setBusy(false);}
+  }
+
+  async function setWaitingParts(order:WorkOrder|WorkOrderDetail){
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/automotive/work-orders/"+order.id,{
+        method:"PATCH",body:JSON.stringify({status:"WAITING_PARTS"})
+      });
+      setNotice("Заказ-наряд переведён в ожидание запчастей.");
+      await load();
+      if(selectedOrder?.id===order.id) await openOrder(order.id);
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось изменить этап ремонта");
+    }finally{setBusy(false);}
+  }
+
+  async function addOrderLine(event:FormEvent){
+    event.preventDefault();
+    if(!selectedOrder||!lineDescription.trim())return;
+    const quantity=Math.max(0.001,Number(lineQuantity||"1"));
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/automotive/work-orders/"+selectedOrder.id+"/lines",{
+        method:"POST",
+        body:JSON.stringify({
+          lineType,description:lineDescription.trim(),
+          quantityMilli:Math.round(quantity*1000).toString(),
+          unitPriceMinor:Math.round(Number(linePrice||0)*100),
+          unitCostMinor:Math.round(Number(lineCost||0)*100),
+          approved:false
+        })
+      });
+      setLineDescription("");setLineQuantity("1");setLinePrice("");setLineCost("");
+      setNotice("Позиция добавлена в заказ-наряд.");
+      await openOrder(selectedOrder.id);
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось добавить позицию");
+    }finally{setBusy(false);}
+  }
+
+  async function updateLine(line:WorkOrderLine,action:"approve"|"complete"){
+    if(!selectedOrder)return;
+    setBusy(true);setError("");
+    try{
+      await apiRequest(
+        "/automotive/work-orders/"+selectedOrder.id+"/lines/"+line.id,
+        {
+          method:"PATCH",
+          body:JSON.stringify(
+            action==="approve"
+              ?{approved:true}
+              :{approved:true,completed:true}
+          )
+        }
+      );
+      await openOrder(selectedOrder.id);
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось обновить позицию");
+    }finally{setBusy(false);}
   }
 
   async function createDonor(event:FormEvent){
@@ -234,6 +349,77 @@ export default function AutomotivePage(){
           <button className={tab==="dismantling"?"active":""} type="button" onClick={()=>setTab("dismantling")}>Авторазбор <span>{donors.length}</span></button>
         </div>
 
+        {tab==="orders"&&selectedOrder?(
+          <section className="studio-section">
+            <div className="studio-section-head">
+              <div>
+                <span>{selectedOrder.business_number} · {statusLabel(selectedOrder.status)}</span>
+                <h2>{selectedOrder.make} {selectedOrder.model}</h2>
+                <p>
+                  {selectedOrder.plate_number??selectedOrder.vin??"Без номера"}
+                  {selectedOrder.customer_name?" · "+selectedOrder.customer_name:""}
+                </p>
+              </div>
+              <div className="studio-card-actions">
+                {nextOrderStatus(selectedOrder.status)?(
+                  <button type="button" onClick={()=>void advanceOrder(selectedOrder)} disabled={busy}>
+                    {statusLabel(nextOrderStatus(selectedOrder.status)!)} →
+                  </button>
+                ):null}
+                <button className="secondary-button" type="button" onClick={()=>setSelectedOrder(null)}>Закрыть</button>
+              </div>
+            </div>
+
+            <div className="studio-score-grid">
+              <article><span>Согласовано</span><strong>{money(selectedOrder.estimated_total_minor)}</strong><p>Подтверждённые клиентом работы и детали.</p></article>
+              <article><span>Выполнено</span><strong>{money(selectedOrder.actual_total_minor)}</strong><p>Фактически выполненные позиции.</p></article>
+              <article><span>Приёмка</span><strong>{selectedOrder.mileage_in_km??"—"}</strong><p>Пробег при заезде, км.</p></article>
+              <article><span>Позиций</span><strong>{selectedOrder.lines.length}</strong><p>Работы, детали и расходные материалы.</p></article>
+            </div>
+
+            <div className="studio-rule-grid">
+              {selectedOrder.lines.map(line=>(
+                <article className="studio-rule-card" key={line.id}>
+                  <header>
+                    <div>
+                      <span className="studio-chip">
+                        {line.lineType} · {line.completed?"Выполнено":line.approved?"Согласовано":"На согласовании"}
+                      </span>
+                      <h3>{line.description}</h3>
+                      <p>{Number(line.quantityMilli)/1000} × {money(line.unitPriceMinor)}</p>
+                    </div>
+                    <strong>{money(Math.round(Number(line.unitPriceMinor)*Number(line.quantityMilli)/1000))}</strong>
+                  </header>
+                  <footer>
+                    {!line.approved?(
+                      <button className="secondary-button" type="button" onClick={()=>void updateLine(line,"approve")} disabled={busy}>Согласовать</button>
+                    ):null}
+                    {!line.completed?(
+                      <button type="button" onClick={()=>void updateLine(line,"complete")} disabled={busy}>Выполнено</button>
+                    ):null}
+                  </footer>
+                </article>
+              ))}
+            </div>
+
+            <form className="studio-form-grid" onSubmit={addOrderLine}>
+              <label><span>Тип</span>
+                <select value={lineType} onChange={e=>setLineType(e.target.value as WorkOrderLine["lineType"])}>
+                  <option value="LABOR">Работа</option>
+                  <option value="PART">Запчасть</option>
+                  <option value="MATERIAL">Расходник</option>
+                  <option value="OTHER">Другое</option>
+                </select>
+              </label>
+              <label className="studio-form-wide"><span>Что делаем / что ставим</span><input value={lineDescription} onChange={e=>setLineDescription(e.target.value)} required placeholder="Замена масла / фильтр / рычаг..." /></label>
+              <label><span>Количество</span><input type="number" min="0.001" step="0.001" value={lineQuantity} onChange={e=>setLineQuantity(e.target.value)} /></label>
+              <label><span>Цена клиенту, ₽</span><input type="number" min="0" value={linePrice} onChange={e=>setLinePrice(e.target.value)} /></label>
+              <label><span>Себестоимость, ₽</span><input type="number" min="0" value={lineCost} onChange={e=>setLineCost(e.target.value)} /></label>
+              <div className="studio-form-actions"><button type="submit" disabled={busy}>Добавить позицию</button></div>
+            </form>
+          </section>
+        ):null}
+
         {tab==="orders"?(
           <section className="studio-section">
             <div className="studio-section-head"><div><span>Приёмка → диагностика → ремонт → выдача</span><h2>Заказ-наряды</h2><p>Видно, где автомобиль завис и чего ждёт.</p></div></div>
@@ -242,6 +428,17 @@ export default function AutomotivePage(){
                 <article className="studio-rule-card" key={o.id}>
                   <header><div><span className="studio-chip">{statusLabel(o.status)}</span><h3>{o.business_number} · {o.make} {o.model}</h3><p>{o.plate_number??o.vin??"Без номера"}{o.customer_name?" · "+o.customer_name:""}</p></div><strong>{money(o.estimated_total_minor)}</strong></header>
                   <div><p>{o.complaint||"Жалоба клиента не указана"}</p><p className="muted">{o.line_count} позиций{ o.promised_at?" · обещано "+new Date(o.promised_at).toLocaleString("ru-RU"):""}</p></div>
+                  <footer>
+                    <button className="secondary-button" type="button" onClick={()=>void openOrder(o.id)} disabled={busy}>Открыть</button>
+                    {["DIAGNOSIS","WAITING_APPROVAL","IN_PROGRESS"].includes(o.status)?(
+                      <button className="secondary-button" type="button" onClick={()=>void setWaitingParts(o)} disabled={busy}>Ждём детали</button>
+                    ):null}
+                    {nextOrderStatus(o.status)?(
+                      <button type="button" onClick={()=>void advanceOrder(o)} disabled={busy}>
+                        {statusLabel(nextOrderStatus(o.status)!)} →
+                      </button>
+                    ):null}
+                  </footer>
                 </article>
               ))}
               {!orders.length&&!busy?<div className="studio-empty"><span>01</span><strong>Нет заказ-нарядов</strong><p>Создайте первый заказ-наряд после приёмки автомобиля.</p></div>:null}
