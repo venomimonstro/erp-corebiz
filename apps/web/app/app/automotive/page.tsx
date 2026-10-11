@@ -76,6 +76,13 @@ export default function AutomotivePage(){
   const [lineCost,setLineCost]=useState("");
   const [showOrderForm,setShowOrderForm]=useState(false);
   const [showDonorForm,setShowDonorForm]=useState(false);
+  const [showPartForm,setShowPartForm]=useState(false);
+  const [partDonorId,setPartDonorId]=useState("");
+  const [partName,setPartName]=useState("");
+  const [partOem,setPartOem]=useState("");
+  const [partCondition,setPartCondition]=useState("USED_B");
+  const [partCost,setPartCost]=useState("");
+  const [partPrice,setPartPrice]=useState("");
 
   const [vMake,setVMake]=useState("");
   const [vModel,setVModel]=useState("");
@@ -272,6 +279,30 @@ export default function AutomotivePage(){
     finally{setBusy(false);}
   }
 
+  async function createPart(event:FormEvent){
+    event.preventDefault();
+    if(!partDonorId||!partName.trim())return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/automotive/donors/"+partDonorId+"/parts",{
+        method:"POST",
+        body:JSON.stringify({
+          partName:partName.trim(),
+          oemNumber:partOem.trim()||undefined,
+          conditionGrade:partCondition,
+          allocatedCostMinor:partCost?Math.round(Number(partCost)*100):0,
+          askingPriceMinor:partPrice?Math.round(Number(partPrice)*100):0
+        })
+      });
+      setPartName("");setPartOem("");setPartCost("");setPartPrice("");
+      setShowPartForm(false);
+      setNotice("Снятая деталь добавлена в авторазбор.");
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось добавить снятую деталь");
+    }finally{setBusy(false);}
+  }
+
   return (
     <main className="app-shell">
       <AppSidebar active="automotive" />
@@ -463,12 +494,58 @@ export default function AutomotivePage(){
         {tab==="dismantling"?(
           <>
             <section className="studio-section">
-              <div className="studio-section-head"><div><span>Донор → детали → деньги</span><h2>Авторазбор</h2><p>Каждый донор как отдельный инвестиционный объект.</p></div><button type="button" onClick={()=>setShowDonorForm(v=>!v)}>+ Принять донора</button></div>
+              <div className="studio-section-head">
+                <div><span>Донор → детали → деньги</span><h2>Авторазбор</h2><p>Каждый донор как отдельный инвестиционный объект.</p></div>
+                <div className="studio-card-actions">
+                  <button className="secondary-button" type="button" onClick={()=>setShowPartForm(v=>!v)}>+ Снятая деталь</button>
+                  <button type="button" onClick={()=>setShowDonorForm(v=>!v)}>+ Принять донора</button>
+                </div>
+              </div>
+              {showPartForm?(
+                <form className="studio-form-grid" onSubmit={createPart}>
+                  <label className="studio-form-wide"><span>Донор</span>
+                    <select value={partDonorId} onChange={e=>setPartDonorId(e.target.value)} required>
+                      <option value="">Выберите донора</option>
+                      {donors.map(d=>(
+                        <option key={d.id} value={d.id}>
+                          {d.stock_number} · {d.make} {d.model}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="studio-form-wide"><span>Деталь</span><input value={partName} onChange={e=>setPartName(e.target.value)} required placeholder="Фара левая / двигатель / дверь..." /></label>
+                  <label><span>OEM номер</span><input value={partOem} onChange={e=>setPartOem(e.target.value)} placeholder="Оригинальный номер" /></label>
+                  <label><span>Состояние</span>
+                    <select value={partCondition} onChange={e=>setPartCondition(e.target.value)}>
+                      <option value="USED_A">A · отличное</option>
+                      <option value="USED_B">B · хорошее</option>
+                      <option value="USED_C">C · с дефектами</option>
+                      <option value="FOR_REPAIR">Под ремонт</option>
+                      <option value="SCRAP">Утиль</option>
+                    </select>
+                  </label>
+                  <label><span>Себестоимость, ₽</span><input type="number" min="0" value={partCost} onChange={e=>setPartCost(e.target.value)} /></label>
+                  <label><span>Цена продажи, ₽</span><input type="number" min="0" value={partPrice} onChange={e=>setPartPrice(e.target.value)} /></label>
+                  <div className="studio-form-actions"><button type="submit" disabled={busy}>Добавить деталь</button></div>
+                </form>
+              ):null}
               <div className="studio-rule-grid">
                 {donors.map(d=>(
                   <article className="studio-rule-card" key={d.id}>
                     <header><div><span className="studio-chip">{statusLabel(d.status)}</span><h3>{d.stock_number} · {d.make} {d.model}</h3><p>{d.vin??"VIN не указан"}{d.production_year?" · "+d.production_year:""}</p></div><strong>{money(Number(d.purchase_price_minor)+Number(d.dismantling_cost_minor))}</strong></header>
                     <div><p>{d.parts_available} из {d.parts_total} деталей доступны</p><p className="muted">Распределено себестоимости {money(d.allocated_cost_minor)} · цена остатка {money(d.remaining_asking_minor)}</p></div>
+                    <footer>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={()=>{
+                          setPartDonorId(d.id);
+                          setShowPartForm(true);
+                        }}
+                      >
+                        + Снятая деталь
+                      </button>
+                    </footer>
                   </article>
                 ))}
               </div>
