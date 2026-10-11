@@ -982,8 +982,9 @@ export class DanceStudioService {
         `SELECT
            g.id,g.name,g.program_id,p.name AS program_name,p.service_id,
            g.branch_id,g.trainer_resource_id,tr.name AS trainer_name,
-           g.room_resource_id,rr.name AS room_name,g.capacity,
-           g.break_even_members,g.status,g.starts_on,g.ends_on,g.schedule,
+           g.room_resource_id,rr.name AS room_name,
+           g.room_zone_id,rz.name AS room_zone_name,g.room_capacity_units,
+           g.capacity,g.break_even_members,g.status,g.starts_on,g.ends_on,g.schedule,
            g.version,
            count(DISTINCT gm.id) FILTER (
              WHERE gm.status IN ('TRIAL','ACTIVE','PAUSED') AND gm.reserved_place
@@ -996,6 +997,8 @@ export class DanceStudioService {
            ON tr.tenant_id=g.tenant_id AND tr.id=g.trainer_resource_id
          LEFT JOIN service_resource rr
            ON rr.tenant_id=g.tenant_id AND rr.id=g.room_resource_id
+         LEFT JOIN service_resource_zone rz
+           ON rz.tenant_id=g.tenant_id AND rz.id=g.room_zone_id
          LEFT JOIN dance_group_member gm
            ON gm.tenant_id=g.tenant_id AND gm.group_id=g.id
          LEFT JOIN dance_group_waitlist w
@@ -1005,7 +1008,7 @@ export class DanceStudioService {
              $2::uuid[] IS NULL
              OR tr.membership_id = ANY($2::uuid[])
            )
-         GROUP BY g.id,p.name,p.service_id,tr.name,rr.name
+         GROUP BY g.id,p.name,p.service_id,tr.name,rr.name,rz.name
          ORDER BY p.name,g.name`,
         [context.tenantId,scopeIds]
       );
@@ -1021,6 +1024,8 @@ export class DanceStudioService {
       branchId?: string;
       trainerResourceId: string;
       roomResourceId?: string;
+      roomZoneId?: string;
+      roomCapacityUnits?: number;
       capacity: number;
       breakEvenMembers?: number;
       startsOn?: string;
@@ -1037,8 +1042,13 @@ export class DanceStudioService {
     if(!name||name.length>180) throw new BadRequestException("Некорректное название группы");
     const capacity=Math.floor(input.capacity);
     const breakEven=Math.floor(input.breakEvenMembers ?? 1);
+    const roomCapacityUnits=Math.floor(input.roomCapacityUnits ?? 1);
     if(capacity<1||capacity>500||breakEven<1||breakEven>capacity)
       throw new BadRequestException("Некорректная вместимость группы");
+    if(roomCapacityUnits<1||roomCapacityUnits>100000)
+      throw new BadRequestException("Некорректная доля зала");
+    if(input.roomZoneId&&!input.roomResourceId)
+      throw new BadRequestException("Зона указана без зала");
     const schedule=this.normalizeSchedule(input.schedule ?? []);
     if(input.startsOn && !/^\d{4}-\d{2}-\d{2}$/.test(input.startsOn))
       throw new BadRequestException("Некорректная дата старта");
@@ -1062,16 +1072,49 @@ export class DanceStudioService {
         input.roomResourceId ?? null
       );
 
+      if(input.roomResourceId){
+        const room=await client.query<{capacity:number}>(
+          `SELECT capacity
+           FROM service_resource
+           WHERE tenant_id=$1 AND id=$2
+             AND type IN ('ROOM','HALL','WORKPLACE')
+             AND status='ACTIVE'`,
+          [context.tenantId,input.roomResourceId]
+        );
+        const roomRow=room.rows[0];
+        if(!roomRow) throw new NotFoundException("Зал не найден");
+
+        let maxUnits=roomRow.capacity;
+        if(input.roomZoneId){
+          const zone=await client.query<{capacity_units:number}>(
+            `SELECT capacity_units
+             FROM service_resource_zone
+             WHERE tenant_id=$1 AND id=$2
+               AND resource_id=$3 AND status='ACTIVE'`,
+            [context.tenantId,input.roomZoneId,input.roomResourceId]
+          );
+          if(!zone.rows[0]) throw new NotFoundException("Зона зала не найдена");
+          maxUnits=zone.rows[0].capacity_units;
+        }
+        if(roomCapacityUnits>maxUnits){
+          throw new BadRequestException(
+            "Группа занимает больше пространства, чем доступно в выбранном зале или зоне"
+          );
+        }
+      }
+
       const result=await client.query(
         `INSERT INTO dance_group(
            tenant_id,program_id,branch_id,name,trainer_resource_id,
-           room_resource_id,capacity,break_even_members,starts_on,ends_on,
-           schedule
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           room_resource_id,room_zone_id,room_capacity_units,
+           capacity,break_even_members,starts_on,ends_on,schedule
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          RETURNING id,name,version`,
         [
           context.tenantId,input.programId,input.branchId??pr.branch_id??null,
           name,input.trainerResourceId,input.roomResourceId??null,
+          input.roomZoneId??null,
+          input.roomResourceId?roomCapacityUnits:1,
           capacity,breakEven,input.startsOn??new Date().toISOString().slice(0,10),
           input.endsOn??null,JSON.stringify(schedule)
         ]
@@ -2957,7 +3000,12 @@ export class DanceStudioService {
     const serviceId=input.serviceId??group?.service_id;
     let trainerId=input.trainerResourceId??group?.trainer_resource_id??null;
     const roomId=input.roomResourceId??group?.room_resource_id??null;
-    const roomZoneId=input.roomZoneId??null;
+    const roomZoneId=
+      input.roomZoneId??group?.room_zone_id??null;
+    const groupRoomUnits=
+      group?.room_capacity_units==null
+        ?undefined
+        :Number(group.room_capacity_units);
     const capacity=Math.floor(input.capacity??group?.capacity??1);
 
     if(lessonType==="SELF_PRACTICE"&&!input.trainerResourceId){
@@ -3076,7 +3124,9 @@ export class DanceStudioService {
     }
     const endsAt=new Date(startsAt.getTime()+duration*60000);
     const roomCapacityUnits=roomId
-      ? Math.floor(input.roomCapacityUnits??rule?.capacity_units??1)
+      ? Math.floor(
+        input.roomCapacityUnits??groupRoomUnits??rule?.capacity_units??1
+      )
       : 0;
     if(roomId&&(
       roomCapacityUnits<1||
