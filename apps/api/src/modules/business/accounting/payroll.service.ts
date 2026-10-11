@@ -9,7 +9,9 @@ export class PayrollService {
   async batches(ctx:TenantContext,legalEntityId:string) {
     return this.db.withTenantTransaction(ctx,async client=>{
       const r=await client.query(
-        `SELECT b.id,b.period_from,b.period_to,b.status,b.currency,b.approved_at,
+        `SELECT
+          b.id,b.period_from,b.period_to,b.status,b.currency,b.approved_at,
+          b.paid_at,b.payment_reference,b.payment_note,
           count(l.id)::integer AS employees,
           coalesce(sum(l.gross_minor),0)::text AS gross_minor,
           coalesce(sum(l.deduction_minor),0)::text AS deduction_minor
