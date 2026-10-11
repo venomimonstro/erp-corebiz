@@ -22,6 +22,13 @@ type Student = {
   payer_party_id: string | null;
   payer_name: string | null;
   debt_minor: string;
+  overdue_minor: string;
+  overdue_count: number;
+  open_charge_count: number;
+  family_debt_minor: string;
+  family_overdue_minor: string;
+  family_overdue_count: number;
+  family_children_count: number;
   active_groups: number;
 };
 
@@ -88,6 +95,8 @@ export default function DanceStudentsPage() {
   const [packages, setPackages] = useState<Pack[]>([]);
   const [makeupCredits, setMakeupCredits] = useState<MakeupCredit[]>([]);
   const [selectedId, setSelectedId] = useState("");
+  const [financeFilter, setFinanceFilter] =
+    useState<"ALL"|"DEBT"|"OVERDUE">("ALL");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [pending, setPending] = useState(false);
@@ -152,6 +161,27 @@ export default function DanceStudentsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const filteredStudents = useMemo(() => {
+    const rows = students.filter((student) => {
+      if (financeFilter === "DEBT") {
+        return BigInt(student.family_debt_minor ?? "0") > 0n;
+      }
+      if (financeFilter === "OVERDUE") {
+        return BigInt(student.family_overdue_minor ?? "0") > 0n;
+      }
+      return true;
+    });
+    return [...rows].sort((a,b) => {
+      const overdueA=BigInt(a.family_overdue_minor ?? "0");
+      const overdueB=BigInt(b.family_overdue_minor ?? "0");
+      if(overdueA!==overdueB) return overdueA>overdueB?-1:1;
+      const debtA=BigInt(a.family_debt_minor ?? "0");
+      const debtB=BigInt(b.family_debt_minor ?? "0");
+      if(debtA!==debtB) return debtA>debtB?-1:1;
+      return a.display_name.localeCompare(b.display_name,"ru");
+    });
+  },[students,financeFilter]);
 
   const selected = students.find((item) => item.id === selectedId) ?? null;
   const selectedCharges = charges.filter((item) => item.student_id === selectedId);
@@ -479,16 +509,35 @@ export default function DanceStudentsPage() {
         {error ? <div className="studio-message error"><strong>Ученики</strong><span>{error}</span></div> : null}
         {notice ? <div className="studio-message success"><strong>Готово</strong><span>{notice}</span></div> : null}
 
-        <section className="studio-client-switcher">
+        <section className="studio-client-switcher studio-family-switcher">
           <div>
             <span>Карточка ученика</span>
             <strong>{students.length} учеников в студии</strong>
+            <div className="studio-filter-chips">
+              {[
+                ["ALL","Все"],
+                ["DEBT","Есть долг"],
+                ["OVERDUE","Просрочено"]
+              ].map(([value,label])=>(
+                <button
+                  key={value}
+                  type="button"
+                  className={financeFilter===value?"active":""}
+                  onClick={()=>setFinanceFilter(value as typeof financeFilter)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
           <select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
             <option value="">Выберите ученика</option>
-            {students.map((student) => (
+            {filteredStudents.map((student) => (
               <option key={student.id} value={student.id}>
-                {student.display_name} · долг {money(student.debt_minor)}
+                {student.display_name} · семья {money(student.family_debt_minor)}
+                {BigInt(student.family_overdue_minor ?? "0")>0n
+                  ? " · просрочено " + money(student.family_overdue_minor)
+                  : ""}
               </option>
             ))}
           </select>
@@ -508,9 +557,21 @@ export default function DanceStudentsPage() {
                 <small>{selected.payer_party_id ? "семейный контур" : "личная оплата"}</small>
               </article>
               <article className="owner-kpi">
-                <span>Долг ученика</span>
-                <strong>{money(selected.debt_minor)}</strong>
-                <small>{selectedCharges.filter((item) => BigInt(item.remaining_minor) > 0n).length} открытых начислений</small>
+                <span>Долг семьи</span>
+                <strong>{money(selected.family_debt_minor)}</strong>
+                <small>
+                  {selected.family_children_count} детей с открытыми начислениями
+                </small>
+              </article>
+              <article className={
+                "owner-kpi " +
+                (BigInt(selected.family_overdue_minor ?? "0")>0n
+                  ? "owner-kpi-alert"
+                  : "")
+              }>
+                <span>Просрочено</span>
+                <strong>{money(selected.family_overdue_minor)}</strong>
+                <small>{selected.family_overdue_count} просроченных начислений</small>
               </article>
               <article className="owner-kpi">
                 <span>Группы</span>
