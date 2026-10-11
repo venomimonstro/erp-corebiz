@@ -341,10 +341,16 @@ export class ApiRateLimitGuard implements CanActivate {
   }
 
   private routeBucket(request: Request): string {
-    const path = request.path || request.url || "/";
-    const normalized = path
+    // Group different object IDs under the same matched endpoint: unbounded
+    // per-object Redis keys create avoidable memory pressure at 1,000 users.
+    const matched=request.route?.path;
+    const path=(typeof matched==="string"&&matched
+      ?matched
+      :request.path||request.url||"/").split("?")[0]!;
+    const normalized=path
       .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, ":id")
-      .replace(/\/\d+(?=\/|$)/g, "/:id");
-    return request.method.toUpperCase() + ":" + normalized.slice(0, 180);
+      .replace(/\/\d+(?=\/|$)/g, "/:id")
+      .replace(/\/[a-z0-9_-]{40,}(?=\/|$)/gi, "/:ref");
+    return request.method.toUpperCase()+":"+normalized.slice(0,180);
   }
 }
