@@ -499,4 +499,278 @@ export class TaxComplianceService {
     });
   }
 
+
+  async preparePacket(context:TenantContext,obligationId:string){
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<any>(
+        `SELECT
+           o.*,l.name AS legal_entity_name,l.inn,l.kpp
+         FROM accounting_compliance_obligation o
+         JOIN legal_entity l
+           ON l.tenant_id=o.tenant_id AND l.id=o.legal_entity_id
+         WHERE o.tenant_id=$1 AND o.id=$2
+         FOR UPDATE OF o`,
+        [context.tenantId,obligationId]
+      );
+      const o=result.rows[0];
+      if(!o) throw new NotFoundException("Налоговое обязательство не найдено");
+      if(["ACCEPTED","PAID","CANCELLED"].includes(o.workflow_status)){
+        throw new ConflictException("Обязательство уже завершено");
+      }
+
+      const packetKind=o.obligation_type==="PAY"
+        ?"PAYMENT_INSTRUCTION"
+        :o.obligation_type==="NOTIFY"
+          ?"FNS_NOTIFICATION"
+          :o.authority==="SFR"
+            ?"SFR_REPORT"
+            :"FNS_DECLARATION";
+
+      const payload={
+        generatedAt:new Date().toISOString(),
+        legalEntity:{
+          id:o.legal_entity_id,
+          name:o.legal_entity_name,
+          inn:o.inn,
+          kpp:o.kpp
+        },
+        obligation:{
+          id:o.id,
+          authority:o.authority,
+          type:o.obligation_type,
+          code:o.code,
+          title:o.title,
+          periodKey:o.period_key,
+          dueAt:o.due_at,
+          amountMinor:o.amount_minor,
+          currency:o.currency,
+          formCode:o.form_code
+        },
+        evidence:o.source_snapshot,
+        notice:
+          "Черновой пакет. Юридически значимая отправка требует проверки формата, подписи и подтвержденного оператора."
+      };
+
+      const packet=await client.query(
+        `INSERT INTO accounting_compliance_packet(
+           tenant_id,legal_entity_id,obligation_id,packet_kind,format,
+           form_code,schema_version,payload,validation_status,
+           signature_status,created_by_membership_id
+         ) VALUES(
+           $1,$2,$3,$4,'JSON',$5,'COREBIZ-DRAFT-1',$6,
+           'REVIEW_REQUIRED','SIGNATURE_REQUIRED',$7
+         )
+         ON CONFLICT(tenant_id,obligation_id,packet_kind)
+         DO UPDATE SET
+           payload=EXCLUDED.payload,
+           validation_status='REVIEW_REQUIRED',
+           signature_status=CASE
+             WHEN accounting_compliance_packet.signature_status='SIGNED'
+             THEN 'SIGNED'
+             ELSE 'SIGNATURE_REQUIRED'
+           END,
+           updated_at=now()
+         RETURNING *`,
+        [
+          context.tenantId,o.legal_entity_id,o.id,packetKind,
+          o.form_code??null,JSON.stringify(payload),context.membershipId
+        ]
+      );
+
+      await client.query(
+        `UPDATE accounting_compliance_obligation
+         SET packet_id=$3,
+             workflow_status=CASE
+               WHEN workflow_status='PLANNED' THEN 'READY'
+               ELSE workflow_status
+             END,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,o.id,packet.rows[0].id]
+      );
+      return packet.rows[0];
+    });
+  }
+
+  async validatePacket(
+    context:TenantContext,
+    packetId:string,
+    input:{valid:boolean;errors?:string[]}
+  ){
+    return this.database.withTenantTransaction(context,async client=>{
+      const errors=Array.isArray(input.errors)
+        ?input.errors.slice(0,100).map(String)
+        :[];
+      const result=await client.query(
+        `UPDATE accounting_compliance_packet
+         SET validation_status=$3,
+             validation_errors=$4::jsonb,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING *`,
+        [
+          context.tenantId,packetId,input.valid?"VALID":"INVALID",
+          JSON.stringify(errors)
+        ]
+      );
+      if(!result.rows[0]) throw new NotFoundException("Пакет не найден");
+      return result.rows[0];
+    });
+  }
+
+  async recordPacketSignature(
+    context:TenantContext,
+    packetId:string
+  ){
+    return this.database.withTenantTransaction(context,async client=>{
+      const packet=await client.query<any>(
+        `SELECT p.*,c.id AS connector_id,c.status AS connector_status,
+                c.certificate_valid_to
+         FROM accounting_compliance_packet p
+         LEFT JOIN accounting_reporting_connector c
+           ON c.tenant_id=p.tenant_id
+          AND c.legal_entity_id=p.legal_entity_id
+          AND c.status='VERIFIED'
+         WHERE p.tenant_id=$1 AND p.id=$2
+         ORDER BY c.last_verified_at DESC NULLS LAST
+         LIMIT 1
+         FOR UPDATE OF p`,
+        [context.tenantId,packetId]
+      );
+      const row=packet.rows[0];
+      if(!row) throw new NotFoundException("Пакет не найден");
+      if(row.validation_status!=="VALID"){
+        throw new ConflictException("Сначала пакет должен пройти валидацию");
+      }
+      if(!row.connector_id){
+        throw new ConflictException(
+          "Нет подтвержденного оператора электронной отчетности"
+        );
+      }
+      if(
+        row.certificate_valid_to &&
+        new Date(row.certificate_valid_to).getTime()<=Date.now()
+      ){
+        throw new ConflictException("Сертификат электронной подписи истек");
+      }
+
+      const result=await client.query(
+        `UPDATE accounting_compliance_packet
+         SET signature_status='SIGNED',signed_at=now(),
+             signed_by_membership_id=$3,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING *`,
+        [context.tenantId,packetId,context.membershipId]
+      );
+      return result.rows[0];
+    });
+  }
+
+  async approveObligation(
+    context:TenantContext,
+    obligationId:string,
+    note?:string
+  ){
+    return this.database.withTenantTransaction(context,async client=>{
+      const packet=await client.query<any>(
+        `SELECT p.id,p.validation_status
+         FROM accounting_compliance_packet p
+         WHERE p.tenant_id=$1 AND p.obligation_id=$2
+         FOR UPDATE`,
+        [context.tenantId,obligationId]
+      );
+      if(!packet.rows[0]){
+        throw new ConflictException("Сначала подготовьте пакет");
+      }
+      if(packet.rows[0].validation_status!=="VALID"){
+        throw new ConflictException("Пакет еще не прошел валидацию");
+      }
+      const result=await client.query(
+        `UPDATE accounting_compliance_obligation
+         SET workflow_status='APPROVED',
+             approved_by_membership_id=$3,approved_at=now(),
+             review_note=$4,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND workflow_status='READY'
+         RETURNING *`,
+        [context.tenantId,obligationId,context.membershipId,note?.trim()||null]
+      );
+      if(!result.rows[0]){
+        throw new ConflictException("Обязательство не готово к утверждению");
+      }
+      return result.rows[0];
+    });
+  }
+
+  async queueSubmission(
+    context:TenantContext,
+    obligationId:string
+  ){
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<any>(
+        `SELECT
+           o.id AS obligation_id,o.workflow_status,
+           p.id AS packet_id,p.validation_status,p.signature_status,
+           c.id AS connector_id,c.provider,c.supports_filing,
+           c.status AS connector_status
+         FROM accounting_compliance_obligation o
+         JOIN accounting_compliance_packet p
+           ON p.tenant_id=o.tenant_id AND p.obligation_id=o.id
+         LEFT JOIN accounting_reporting_connector c
+           ON c.tenant_id=o.tenant_id
+          AND c.legal_entity_id=o.legal_entity_id
+          AND c.status='VERIFIED'
+          AND c.supports_filing=true
+         WHERE o.tenant_id=$1 AND o.id=$2
+         ORDER BY c.last_verified_at DESC NULLS LAST
+         LIMIT 1
+         FOR UPDATE OF o,p`,
+        [context.tenantId,obligationId]
+      );
+      const row=result.rows[0];
+      if(!row) throw new NotFoundException("Обязательство или пакет не найдены");
+      if(row.workflow_status!=="APPROVED"){
+        throw new ConflictException("Сначала утвердите обязательство");
+      }
+      if(row.validation_status!=="VALID"||row.signature_status!=="SIGNED"){
+        throw new ConflictException("Нужны валидный и подписанный пакет");
+      }
+      if(!row.connector_id){
+        throw new ConflictException(
+          "Не подключен подтвержденный оператор электронной отчетности"
+        );
+      }
+
+      const key="tax-submit:"+obligationId+":"+row.packet_id;
+      const attempt=await client.query(
+        `INSERT INTO accounting_submission_attempt(
+           tenant_id,filing_package_id,connector_id,idempotency_key,status,
+           request_snapshot
+         )
+         SELECT $1,f.id,$3,$4,'QUEUED',$5
+         FROM accounting_filing_package f
+         WHERE f.tenant_id=$1 AND f.obligation_id=$2
+         ORDER BY f.created_at DESC
+         LIMIT 1
+         ON CONFLICT(tenant_id,idempotency_key)
+         DO UPDATE SET idempotency_key=EXCLUDED.idempotency_key
+         RETURNING *`,
+        [
+          context.tenantId,obligationId,row.connector_id,key,
+          JSON.stringify({
+            obligationId,
+            compliancePacketId:row.packet_id,
+            provider:row.provider
+          })
+        ]
+      );
+
+      if(!attempt.rows[0]){
+        throw new ConflictException(
+          "Для отправки нет provider-specific filing package. Подготовьте пакет формата оператора."
+        );
+      }
+      return attempt.rows[0];
+    });
+  }
+
 }
