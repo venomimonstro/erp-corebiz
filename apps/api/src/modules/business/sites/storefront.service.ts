@@ -169,11 +169,13 @@ export class StorefrontService {
              l.sku_id,s.code AS sku_code,p.name AS product_name,
              l.quantity_milli::text,
              s.sale_price_minor::text,s.currency,
+             (s.status='ACTIVE' AND v.status='ACTIVE' AND p.status='ACTIVE'
+               AND s.sale_price_minor>0) AS is_available,
              ((s.sale_price_minor*l.quantity_milli+500)/1000)::text AS line_total_minor
            FROM storefront_cart_line l
-           JOIN sku s ON s.tenant_id=l.tenant_id AND s.id=l.sku_id AND s.status='ACTIVE'
+           JOIN sku s ON s.tenant_id=l.tenant_id AND s.id=l.sku_id
            JOIN product_variant v ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
-           JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id AND p.status='ACTIVE'
+           JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
            WHERE l.tenant_id=$1 AND l.cart_id=$2
            ORDER BY l.created_at`,
           [cart.tenant_id,cart.cart_id]
