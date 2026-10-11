@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Patch,
+  Put,
   Post,
   Req
 } from "@nestjs/common";
@@ -46,6 +47,30 @@ export class ProjectsController {
     return {ok:true,data:await this.projects.addAgencyExpense(this.context(request),id,body)};
   }
 
+
+
+  @Get("agency/staff")
+  @RequirePermission("projects.write")
+  async agencyStaff(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.agencyStaff(this.context(request))};
+  }
+
+  @Get(":id/team")
+  @RequirePermission("projects.read")
+  async agencyTeam(@Req() request:AuthenticatedRequest,@Param("id") id:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.agencyTeam(this.context(request),id)};
+  }
+
+  @Put(":id/team/:membershipId")
+  @RequirePermission("finance.write")
+  async upsertAgencyTeamMember(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,@Param("membershipId") membershipId:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.upsertAgencyTeamMember(
+      this.context(request),id,membershipId,body)};
+  }
 
   @Get(":id/statements")
   @RequirePermission("projects.read")

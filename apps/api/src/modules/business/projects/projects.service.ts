@@ -1375,4 +1375,113 @@ export class ProjectsService {
     });
   }
 
+  async agencyStaff(context:TenantContext) {
+    const scoped=await this.membershipIdsForScope(context,"projects.write");
+    return this.database.withTenantTransaction(context,async client=>{
+      return (await client.query(
+        `SELECT m.id AS membership_id,u.email,
+                COALESCE(sum(pm.allocation_percent) FILTER (
+                  WHERE pm.status='ACTIVE' AND p.status IN ('PLANNED','ACTIVE')
+                ),0)::integer AS allocated_percent
+         FROM tenant_membership m
+         JOIN app_user u ON u.id=m.user_id
+         LEFT JOIN work_project_member pm ON pm.tenant_id=m.tenant_id
+            AND pm.membership_id=m.id
+         LEFT JOIN work_project p ON p.tenant_id=pm.tenant_id AND p.id=pm.project_id
+         WHERE m.tenant_id=$1 AND m.status='ACTIVE'
+           AND ($2::uuid[] IS NULL OR m.id=ANY($2::uuid[]))
+         GROUP BY m.id,u.email
+         ORDER BY u.email LIMIT 500`,
+        [context.tenantId,scoped]
+      )).rows;
+    });
+  }
+
+  async agencyTeam(context:TenantContext,projectId:string) {
+    const scoped=await this.membershipIdsForScope(context,"projects.read");
+    const costScope=await this.authorization.resolveScope(context,"finance.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertReadableProject(client,context.tenantId,projectId,scoped);
+      return (await client.query(
+        `SELECT pm.membership_id,u.email,pm.role_code,pm.allocation_percent,
+                pm.status,
+                CASE WHEN $3::boolean THEN pm.cost_rate_minor::text ELSE NULL END AS cost_rate_minor,
+                CASE WHEN $3::boolean THEN pm.billable_rate_minor::text ELSE NULL END AS billable_rate_minor,
+                COALESCE(hours.month_minutes,0)::integer AS month_minutes
+         FROM work_project_member pm
+         JOIN tenant_membership m ON m.tenant_id=pm.tenant_id AND m.id=pm.membership_id
+         JOIN app_user u ON u.id=m.user_id
+         LEFT JOIN LATERAL (
+           SELECT coalesce(sum(e.minutes),0) AS month_minutes
+           FROM work_project_time_entry e
+           WHERE e.tenant_id=pm.tenant_id AND e.project_id=pm.project_id
+             AND e.membership_id=pm.membership_id
+             AND e.work_date >= date_trunc('month',current_date)::date
+         ) hours ON true
+         WHERE pm.tenant_id=$1 AND pm.project_id=$2
+         ORDER BY CASE pm.status WHEN 'ACTIVE' THEN 0 ELSE 1 END,u.email`,
+        [context.tenantId,projectId,Boolean(costScope)]
+      )).rows;
+    });
+  }
+
+  async upsertAgencyTeamMember(
+    context:TenantContext,projectId:string,membershipId:string,
+    input:{roleCode?:string;allocationPercent?:number;costRateMinor?:string;
+           billableRateMinor?:string;status?:"ACTIVE"|"ARCHIVED"}
+  ) {
+    const scoped=await this.membershipIdsForScope(context,"projects.write");
+    if(!await this.authorization.resolveScope(context,"finance.write"))
+      throw new ForbiddenException("Стоимость труда может задавать только финансовый администратор");
+    const role=String(input?.roleCode??"SPECIALIST").trim().toUpperCase();
+    const allowed=["SPECIALIST","PROJECT_MANAGER","DESIGNER","DEVELOPER","QA",
+      "SEO","PPC","SMM","ANALYST","ACCOUNT_MANAGER","COPYWRITER","OTHER"];
+    const allocation=input?.allocationPercent;
+    const cost=input?.costRateMinor;
+    const billable=input?.billableRateMinor;
+    const status=input?.status??"ACTIVE";
+    if(!allowed.includes(role))throw new BadRequestException("Неизвестная роль проекта");
+    if(!Number.isInteger(allocation)||allocation!<1||allocation!>100)
+      throw new BadRequestException("Загрузка сотрудника: от 1 до 100%");
+    if(typeof cost!=="string"|| !/^\d{1,14}$/.test(cost) ||
+       typeof billable!=="string"|| !/^\d{1,14}$/.test(billable))
+      throw new BadRequestException("Ставки указываются целыми копейками");
+    if(!["ACTIVE","ARCHIVED"].includes(status))
+      throw new BadRequestException("Некорректный статус сотрудника");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertWritableProject(client,context.tenantId,projectId,scoped);
+      const membership=await client.query(
+        `SELECT 1 FROM tenant_membership WHERE tenant_id=$1 AND id=$2
+           AND status='ACTIVE' FOR UPDATE`,
+        [context.tenantId,membershipId]);
+      if(!membership.rowCount)throw new NotFoundException("Сотрудник не найден");
+      if(status==="ACTIVE"){
+        const allocated=await client.query<{total:string}>(
+          `SELECT coalesce(sum(pm.allocation_percent),0)::text AS total
+           FROM work_project_member pm JOIN work_project p
+             ON p.tenant_id=pm.tenant_id AND p.id=pm.project_id
+           WHERE pm.tenant_id=$1 AND pm.membership_id=$2
+             AND pm.project_id<>$3 AND pm.status='ACTIVE'
+             AND p.status IN ('PLANNED','ACTIVE')`,
+          [context.tenantId,membershipId,projectId]);
+        if(Number(allocated.rows[0]?.total??0)+allocation!>100)
+          throw new ConflictException("Плановая загрузка сотрудника превышает 100%");
+      }
+      return (await client.query(
+        `INSERT INTO work_project_member(
+           tenant_id,project_id,membership_id,role_code,allocation_percent,
+           cost_rate_minor,billable_rate_minor,status
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT(tenant_id,project_id,membership_id) DO UPDATE SET
+           role_code=EXCLUDED.role_code,allocation_percent=EXCLUDED.allocation_percent,
+           cost_rate_minor=EXCLUDED.cost_rate_minor,
+           billable_rate_minor=EXCLUDED.billable_rate_minor,
+           status=EXCLUDED.status,updated_at=now()
+         RETURNING membership_id,role_code,allocation_percent,status`,
+        [context.tenantId,projectId,membershipId,role,allocation,
+         cost,billable,status]
+      )).rows[0];
+    });
+  }
+
 }
