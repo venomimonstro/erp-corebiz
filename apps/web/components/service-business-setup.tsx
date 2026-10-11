@@ -35,6 +35,49 @@ type Organization = {
   branches:Branch[];
 };
 
+type BusinessProfile = {
+  verticalCode?:string|null;
+  verticalTitle?:string|null;
+};
+
+const VERTICAL_COPY:Record<string,{
+  eyebrow:string;
+  title:string;
+  subtitle:string;
+  person:string;
+  space:string;
+  serviceExample:string;
+  cardExample:string;
+}> = {
+  BARBERSHOP:{
+    eyebrow:"Настройка барбершопа",
+    title:"Услуги, барберы и кресла",
+    subtitle:"Свяжите стрижки и бороду с барберами, креслами, персональными ценами и расходниками.",
+    person:"барбер",
+    space:"кресло",
+    serviceExample:"Например, «Стрижка + борода»",
+    cardExample:"Например, «Стрижка + борода · стандарт»"
+  },
+  NAIL_SALON:{
+    eyebrow:"Настройка маникюрного салона",
+    title:"Мастера, столы и услуги",
+    subtitle:"Свяжите маникюр, покрытия и дизайн с мастерами, рабочими местами, длительностью и материалами.",
+    person:"мастер",
+    space:"стол",
+    serviceExample:"Например, «Маникюр + покрытие»",
+    cardExample:"Например, «Маникюр + покрытие · стандарт»"
+  },
+  BEAUTY_SALON:{
+    eyebrow:"Настройка салона красоты",
+    title:"Процедуры, мастера и кабинеты",
+    subtitle:"Свяжите услуги с мастерами, кабинетами, персональной ценой, длительностью и технологическими картами.",
+    person:"мастер",
+    space:"кабинет",
+    serviceExample:"Например, «Окрашивание»",
+    cardExample:"Например, «Окрашивание · стандарт»"
+  }
+};
+
 type DeliveryRule = {
   id:string;
   service_id:string;
@@ -130,6 +173,7 @@ export function ServiceBusinessSetup({mode="dance"}:{mode?:"dance"|"service"}){
   const [cards,setCards]=useState<TechnologyCard[]>([]);
   const [warehouses,setWarehouses]=useState<Warehouse[]>([]);
   const [products,setProducts]=useState<Product[]>([]);
+  const [profile,setProfile]=useState<BusinessProfile|null>(null);
   const [zones,setZones]=useState<Record<string,Zone[]>>({});
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
@@ -164,7 +208,7 @@ export function ServiceBusinessSetup({mode="dance"}:{mode?:"dance"|"service"}){
     try{
       const [
         serviceRows,resourceRows,ruleRows,cardRows,warehouseRows,productRows,
-        organization
+        organization,businessProfile
       ]=await Promise.all([
         apiRequest<Service[]>("/service/catalog"),
         apiRequest<Resource[]>("/service/resources"),
@@ -172,7 +216,8 @@ export function ServiceBusinessSetup({mode="dance"}:{mode?:"dance"|"service"}){
         apiRequest<TechnologyCard[]>("/service/technology-cards"),
         apiRequest<Warehouse[]>("/inventory/warehouses"),
         apiRequest<Product[]>("/catalog/products"),
-        apiRequest<Organization>("/organization")
+        apiRequest<Organization>("/organization"),
+        apiRequest<BusinessProfile>("/customization/business-profile")
       ]);
       setServices(serviceRows);
       setResources(resourceRows);
@@ -189,6 +234,7 @@ export function ServiceBusinessSetup({mode="dance"}:{mode?:"dance"|"service"}){
           (item)=>item.kind==="STOCKABLE"&&item.trackInventory
         )
       );
+      setProfile(businessProfile);
 
       const rooms=resourceRows.filter(item=>
         ["ROOM","HALL","WORKPLACE","EQUIPMENT","OTHER"].includes(item.type)
@@ -491,6 +537,11 @@ export function ServiceBusinessSetup({mode="dance"}:{mode?:"dance"|"service"}){
     }
   }
 
+  const verticalCopy=
+    mode==="service"&&profile?.verticalCode
+      ?VERTICAL_COPY[profile.verticalCode]??null
+      :null;
+
   return (
     <main className="app-shell">
       <AppSidebar active={mode==="dance"?"dance-setup":"service-setup"} />
@@ -498,15 +549,20 @@ export function ServiceBusinessSetup({mode="dance"}:{mode?:"dance"|"service"}){
         <header className="studio-hero">
           <div>
             <span className="studio-eyebrow">
-              {mode==="dance" ? "Настройка студии" : "Настройка услуг"}
+              {mode==="dance"
+                ? "Настройка студии"
+                : verticalCopy?.eyebrow ?? "Настройка услуг"}
             </span>
             <h1>
-              {mode==="dance" ? "Конструктор студии" : "Конструктор услуг"}
+              {mode==="dance"
+                ? "Конструктор студии"
+                : verticalCopy?.title ?? "Конструктор услуг"}
             </h1>
             <p>
               {mode==="dance"
                 ? "Свяжите услуги, тренеров, цены, расписание и пространство."
-                : "Свяжите услуги, сотрудников, цены, расходники и ресурсы."}
+                : verticalCopy?.subtitle ??
+                  "Свяжите услуги, сотрудников, цены, расходники и ресурсы."}
               {" "}Система сама применит нужное правило при записи клиента.
             </p>
           </div>
@@ -566,7 +622,8 @@ export function ServiceBusinessSetup({mode="dance"}:{mode?:"dance"|"service"}){
             <h2>Одна услуга — разные условия без дублей</h2>
           </div>
           <ol>
-            <li><b>1</b><span><strong>Выберите услугу</strong>{mode==="dance" ? "Например, «Персональная тренировка»." : "Например, «Стрижка», «Диагностика» или «Аренда зала»."}</span></li>
+            <li><b>1</b><span><strong>Выберите услугу</strong>{mode==="dance" ? "Например, «Персональная тренировка»." : verticalCopy?.serviceExample ??
+                  "Например, «Стрижка», «Диагностика» или «Аренда зала»."}</span></li>
             <li><b>2</b><span><strong>{mode==="dance"?"Назначьте тренера и цену":"Назначьте сотрудника и цену"}</strong>У каждого может быть своя стоимость и длительность.</span></li>
             <li><b>3</b><span><strong>Ограничьте время</strong>Будни, выходные, утро или вечер.</span></li>
             <li><b>4</b><span><strong>Система применит правило сама</strong>При записи, переносе и расчёте экономики.</span></li>
@@ -760,13 +817,13 @@ export function ServiceBusinessSetup({mode="dance"}:{mode?:"dance"|"service"}){
             <strong>Собрать тариф →</strong>
             <p>Ограничения по услуге, тренеру, дням недели и времени.</p>
           </a>
-          <a href={mode==="dance"?"/app/dance/team":"/app/service/resources"}>
+          <a href={mode==="dance"?"/app/dance/team":"/app/service/team"}>
             <span>Команда</span>
-            <strong>{mode==="dance"?"Настроить зарплату →":"Настроить сотрудников →"}</strong>
+            <strong>{mode==="dance"?"Настроить зарплату →":"Команда и зарплата →"}</strong>
             <p>
               {mode==="dance"
                 ?"Фикс, час, процент, за ученика и составные схемы."
-                :"Сотрудники, рабочее время, навыки и доступность для записи."}
+                :"Мастера, правила оплаты, оклады, гарантии и экономика по завершённым визитам."}
             </p>
           </a>
           <a href={mode==="dance"?"/app/dance/groups":"/app/service/bookings"}>
@@ -911,7 +968,7 @@ export function ServiceBusinessSetup({mode="dance"}:{mode?:"dance"|"service"}){
                     <span>Название</span>
                     <input
                       value={cardName}
-                      placeholder="Например, Окрашивание · стандарт"
+                      placeholder={verticalCopy?.cardExample ?? "Например, Окрашивание · стандарт"}
                       onChange={event=>setCardName(event.target.value)}
                       required
                     />
