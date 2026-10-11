@@ -502,3 +502,21 @@ WHERE c.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
       AND r.booking_id=c.booking_id
       AND r.state IN ('RESERVED','CONSUMED')
   );
+
+UNION ALL
+SELECT 'PAYROLL_PAID_BATCH_STATEMENT_DRIFT',count(*)::bigint
+FROM trainer_payroll_statement s
+JOIN payroll_accrual_batch b
+  ON b.tenant_id=s.tenant_id AND b.id=s.payroll_batch_id
+WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND b.status='PAID'
+  AND s.status<>'PAID'
+UNION ALL
+SELECT 'PAYROLL_PAID_WITHOUT_AUDIT',count(*)::bigint
+FROM payroll_accrual_batch b
+WHERE b.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND b.status='PAID'
+  AND (
+    b.paid_at IS NULL
+    OR b.paid_by_membership_id IS NULL
+  );
