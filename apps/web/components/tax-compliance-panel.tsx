@@ -24,6 +24,9 @@ type Obligation={
   calculation_status:string;
   workflow_status:string;
   form_code:string|null;
+  packet_id:string|null;
+  validation_status:string|null;
+  signature_status:string|null;
 };
 
 type Calculation={
@@ -190,6 +193,22 @@ export function TaxCompliancePanel({
     }
   }
 
+  async function prepareObligation(obligationId:string){
+    try{
+      await apiRequest(
+        "/accounting/compliance/obligations/"+
+        encodeURIComponent(obligationId)+"/packet",
+        {method:"POST"}
+      );
+      setMessage("Пакет подготовлен и поставлен на проверку");
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error?cause.message:"Не удалось подготовить пакет"
+      );
+    }
+  }
+
   async function decideOperation(
     paymentId:string,
     treatment:"TAXABLE_INCOME"|"DEDUCTIBLE_EXPENSE"|"NON_DEDUCTIBLE_EXPENSE"|"EXCLUDED"
@@ -351,8 +370,24 @@ export function TaxCompliancePanel({
               <span>{item.form_code??item.code}</span>
             </div>
             <div className="tax-obligation-status">
-              <span className="status-pill">{late?"Просрочено":item.workflow_status}</span>
+              <span className="status-pill">
+                {late?"Просрочено":item.workflow_status}
+              </span>
               {item.amount_minor?<strong>{rub(item.amount_minor)}</strong>:null}
+              {item.packet_id?
+                <small>
+                  Пакет · {item.validation_status??"черновик"} · {
+                    item.signature_status??"без подписи"
+                  }
+                </small>:
+                ["PLANNED","REJECTED"].includes(item.workflow_status)?
+                  <button
+                    className="secondary-button"
+                    onClick={()=>void prepareObligation(item.id)}
+                  >
+                    Подготовить пакет
+                  </button>
+                  :null}
             </div>
           </article>;
         })}
