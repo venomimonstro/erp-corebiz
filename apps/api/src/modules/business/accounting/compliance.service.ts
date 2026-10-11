@@ -686,6 +686,11 @@ export class ComplianceService {
       );
       const profile=profileResult.rows[0];
       if(!profile) throw new ConflictException("Сначала настройте налоговый профиль");
+      if(profile.compliance_enabled===false) {
+        throw new ConflictException(
+          "Налоговый контур выключен. Включите его в профиле, чтобы формировать регламентный календарь"
+        );
+      }
 
       const rules=await client.query<any>(
         `SELECT *
@@ -911,7 +916,7 @@ export class ComplianceService {
     return this.database.withTenantTransaction(context,async client=>{
       const obligationResult=await client.query<any>(
         `SELECT
-           o.*,le.inn,p.entity_kind,
+           o.*,le.inn,p.entity_kind,p.compliance_enabled,
            coalesce(p.kpp,le.kpp) AS kpp,p.oktmo
          FROM accounting_compliance_obligation o
          JOIN accounting_tax_profile p
@@ -924,6 +929,11 @@ export class ComplianceService {
       );
       const obligation=obligationResult.rows[0];
       if(!obligation) throw new NotFoundException("Обязательство не найдено");
+      if(obligation.compliance_enabled===false) {
+        throw new ConflictException(
+          "Налоговый контур выключен для этого юридического лица"
+        );
+      }
       if(!["PLANNED","READY","REJECTED"].includes(obligation.workflow_status)) {
         throw new ConflictException("Пакет уже находится на следующем этапе");
       }
