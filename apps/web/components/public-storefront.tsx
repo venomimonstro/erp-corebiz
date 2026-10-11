@@ -33,6 +33,7 @@ type CartLine = {
   sale_price_minor: string;
   currency: string;
   line_total_minor: string;
+  is_available: boolean;
 };
 
 type Cart = {
@@ -399,6 +400,12 @@ export function PublicStorefront({
                   {line.product_name} · {Number(line.quantity_milli) / 1000}
                 </span>
                 <strong>{rub(line.line_total_minor, line.currency)}</strong>
+                {!line.is_available ? <small role="alert">Больше не продаётся</small> : null}
+                <button type="button" className="public-cart-remove"
+                  disabled={Boolean(busy)}
+                  onClick={() => void changeQuantity(line.sku_id, 0)}>
+                  Удалить
+                </button>
               </div>
             ))}
           </div>
@@ -422,8 +429,9 @@ export function PublicStorefront({
           </p>
           <button
             className="public-primary-button"
-            disabled={busy === "checkout" || !name.trim() ||
-              (!phone.trim() && !email.trim()) || !cart.lines.length}
+            disabled={Boolean(busy) || !name.trim() ||
+              (!phone.trim() && !email.trim()) ||
+              !cart.lines.length || cart.lines.some(line => !line.is_available)}
             onClick={() => void checkout()}
             type="button"
           >
