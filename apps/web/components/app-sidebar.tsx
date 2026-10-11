@@ -50,6 +50,7 @@ const permissionByKey: Record<string,string> = {
   oms: "oms.read",
   returns: "returns.read",
   sites: "sites.read",
+  migration: "migration.manage",
   analytics: "analytics.read",
   profitability: "analytics.read",
   marketing: "analytics.read",
@@ -172,7 +173,8 @@ const sections: Section[] = [
     ["/app/channels", "Каналы продаж", "channels"],
     ["/app/oms", "Управление заказами", "oms"],
     ["/app/returns", "Возвраты", "returns"],
-    ["/app/sites", "Сайты и магазин", "sites"]
+    ["/app/sites", "Сайты и магазин", "sites"],
+    ["/app/migration", "Перенос из 1С / Excel", "migration"]
   ] },
   { title: "Аналитика", items: [
     ["/app/analytics", "Обзор", "analytics"],
