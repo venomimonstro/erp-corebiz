@@ -85,6 +85,8 @@ export class StorefrontService {
       throw new BadRequestException("Поисковый запрос слишком длинный");
     }
     const search=options.q?.trim()||null;
+    // Escape LIKE wildcards; user search must not widen the query with % or _.
+    const safeSearch=search?.replace(/[\\%_]/g,"\\const search=options.q?.trim()||null;")??null;
     if(search && search.length<2){
       throw new BadRequestException("Для поиска введите минимум 2 символа");
     }
@@ -128,7 +130,7 @@ export class StorefrontService {
          GROUP BY i.product_id,i.product_name,i.description,i.image_url,
            i.sku_id,i.sku_code,i.barcode,i.sale_price_minor,i.currency
          ORDER BY i.sku_id`,
-        [sf.tenant_id,sf.currency,options.cursor??null,search,limit+1]
+        [sf.tenant_id,sf.currency,options.cursor??null,safeSearch,limit+1]
       );
       const products=result.rows.slice(0,limit);
       return {
