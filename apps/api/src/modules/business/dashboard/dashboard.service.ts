@@ -1394,6 +1394,61 @@ export class DashboardService {
         definitions.ECOMMERCE[3]!.done=(imported.rows[0]?.orders??0)>0;
       }
 
+      if(verticalCode==="OMNICHANNEL_RETAIL"){
+        const result=await client.query<{
+          shops:number;stocked:number;published:number;
+          retail_reserved:number;completed:number;
+        }>(
+          `SELECT
+             (SELECT count(*)::integer FROM retail_location
+              WHERE tenant_id=$1 AND status='ACTIVE') AS shops,
+             (SELECT count(*)::integer FROM retail_location l
+              JOIN inventory_balance b ON b.tenant_id=l.tenant_id
+                AND b.warehouse_id=l.warehouse_id
+              WHERE l.tenant_id=$1 AND l.status='ACTIVE'
+                AND b.physical_milli>b.reserved_milli) AS stocked,
+             (SELECT count(DISTINCT s.id)::integer FROM site s
+              JOIN storefront_config sc ON sc.tenant_id=s.tenant_id
+                 AND sc.site_id=s.id AND sc.enabled
+              JOIN site_page p ON p.tenant_id=s.tenant_id
+                 AND p.site_id=s.id AND p.slug='/' AND p.status='ACTIVE'
+              JOIN site_page_version v ON v.tenant_id=p.tenant_id
+                 AND v.id=p.published_version_id AND v.status='PUBLISHED'
+              WHERE s.tenant_id=$1 AND s.status='ACTIVE') AS published,
+             (SELECT count(*)::integer FROM retail_order_link
+              WHERE tenant_id=$1) AS retail_reserved,
+             (SELECT count(*)::integer FROM sales_order o
+              WHERE o.tenant_id=$1 AND o.payment_status='PAID'
+                AND o.fulfillment_status='SHIPPED'
+                AND (EXISTS(SELECT 1 FROM retail_order_link r
+                  WHERE r.tenant_id=o.tenant_id AND r.sales_order_id=o.id)
+                  OR EXISTS(SELECT 1 FROM storefront_cart c
+                    WHERE c.tenant_id=o.tenant_id AND c.sales_order_id=o.id))
+              ) AS completed`,[context.tenantId]
+        );
+        const r=result.rows[0]!;
+        definitions.ECOMMERCE=[
+          {key:"omni-product",title:"Добавьте каталог электроники и SKU",
+            detail:"Один товар и артикул используется онлайн и в разных магазинах.",
+            href:"/app/catalog/products",done:values.product>0},
+          {key:"omni-store",title:"Откройте первую физическую точку",
+            detail:"Филиал и склад будут созданы вместе и не будут смешивать остатки.",
+            href:"/app/retail",done:r.shops>0},
+          {key:"omni-stock",title:"Примите товар в магазин",
+            detail:"Используйте реальные складские документы и межскладские перемещения.",
+            href:"/app/inventory/stock",done:r.stocked>0},
+          {key:"omni-site",title:"Опубликуйте интернет-магазин",
+            detail:"Одна витрина для товаров со всех филиалов.",
+            href:"/app/sites",done:r.published>0},
+          {key:"omni-collect",title:"Создайте резерв для покупателя",
+            detail:"Заказ на кассе или самовывоз закрепляет товар за конкретным складом.",
+            href:"/app/retail",done:r.retail_reserved>0},
+          {key:"omni-paid",title:"Проведите подтверждённую оплату и выдачу",
+            detail:"Для завершения нужны подтверждённый платёж, ККТ и реальная отгрузка.",
+            href:"/app/sales/orders",done:r.completed>0,firstValue:true}
+        ];
+      }
+
       const milestones = definitions[profile] ?? definitions.GENERAL;
       const firstValueDone = milestones.some(
         (item) => item.firstValue && item.done
