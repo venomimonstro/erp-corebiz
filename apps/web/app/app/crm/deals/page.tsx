@@ -27,6 +27,7 @@ type Stage = {
   name: string;
   kind: "NORMAL" | "WON" | "LOST";
   position: number;
+  probability: number | null;
   color: string | null;
   deals: Deal[];
 };
@@ -152,17 +153,23 @@ export default function DealsPage() {
   }))??[],[board,filter,onlyNeedsAction]);
 
   const totals = useMemo(() => {
-    if (!board) return { deals: 0, amountMinor: 0 };
+    if (!board) return { deals: 0, amountMinor: 0, forecastMinor: 0, needsAction: 0 };
     return visibleStages.reduce(
       (acc, stage) => {
         acc.deals += stage.deals.length;
+        acc.needsAction += stage.deals.filter(d=>
+          !d.hasNextAction || d.overdueTasks>0).length;
+        acc.forecastMinor += stage.deals.reduce((sum,deal)=>
+          sum+Math.round(Number(deal.amountMinor)*
+            (stage.kind==="WON"?1:stage.kind==="LOST"?0:
+              (stage.probability??0)/100)),0);
         acc.amountMinor += stage.deals.reduce(
           (sum, deal) => sum + Number(deal.amountMinor),
           0
         );
         return acc;
       },
-      { deals: 0, amountMinor: 0 }
+      { deals: 0, amountMinor: 0, forecastMinor: 0, needsAction: 0 }
     );
   }, [board, visibleStages]);
 
@@ -270,7 +277,7 @@ export default function DealsPage() {
             <h1>{board?.pipeline.name ?? "Сделки"}</h1>
             {board ? (
               <p className="workspace-summary">
-                {totals.deals} сделок · {formatMoney(String(totals.amountMinor), "RUB")}
+                {totals.deals} сделок · {formatMoney(String(totals.amountMinor), "RUB")} в работе
               </p>
             ) : null}
           </div>
@@ -282,6 +289,14 @@ export default function DealsPage() {
           </div>
         </header>
 
+        <div className="crm-funnel-metrics">
+          <article><small>Прогноз по вероятности этапов*</small>
+            <strong>{formatMoney(String(totals.forecastMinor),"RUB")}</strong>
+          </article>
+          <article><small>Сделки без действия / с просрочкой</small>
+            <strong>{totals.needsAction}</strong>
+          </article>
+        </div>
         <section className="crm-workspace-controls">
           <label>Воронка
             <select value={pipelineId} onChange={e=>setPipelineId(e.target.value)}>
@@ -299,6 +314,8 @@ export default function DealsPage() {
             Только без следующего действия или с просрочкой
           </label>
         </section>
+        <p className="muted">*Оценочный прогноз только по загруженным карточкам
+          выбранной воронки, не финансовая выручка и без учёта возвратов.</p>
         {notice?<p role="status">{notice}</p>:null}
         {actionDeal?<section className="studio-section crm-next-action">
           <h2>Следующее действие · {actionDeal.title}</h2>
