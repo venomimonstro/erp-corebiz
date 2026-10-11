@@ -9,7 +9,7 @@ type SyncJob = {
   job_id: string;
   tenant_id: string;
   connection_id: string;
-  provider: "OZON" | "WILDBERRIES";
+  provider: "OZON" | "WILDBERRIES" | "YANDEX_MARKET";
   period_from: Date;
   period_to: Date;
   cursor: Record<string, unknown>;
@@ -935,6 +935,97 @@ async function processWildberries(
   throw new Error("WILDBERRIES_PAGINATION_LIMIT_REACHED");
 }
 
+
+function normalizeYandexOrder(order:any):NormalizedOrder|null{
+  if(order?.fake===true||!["FBS","DBS","EXPRESS"].includes(String(order?.programType??"")))return null;
+  const externalOrderId=firstString(order?.orderId);
+  if(!externalOrderId)return null;
+  const items=Array.isArray(order?.items)?order.items:[];
+  const lines:NormalizedOrder["lines"]=[];
+  for(const [index,item] of items.entries()){
+    const offerId=firstString(item?.offerId);
+    const count=Number(item?.count);
+    if(!offerId||!Number.isSafeInteger(count)||count<=0)continue;
+    const rawPrice=item?.prices?.payment;
+    lines.push({
+      externalLineId:firstString(item?.id)??String(index),
+      externalOfferId:offerId,title:firstString(item?.offerName),
+      quantityMilli:String(count*1000),
+      unitPriceMinor:toMinor(rawPrice),
+      discountMinor:"0"
+    });
+  }
+  if(!lines.length)return null;
+  const currency=String(items[0]?.prices?.payment?.currencyId??"RUR");
+  return {
+    externalOrderId,
+    externalStatus:firstString(order?.status)??"UNKNOWN",
+    currency:currency==="RUR"?"RUB":currency,
+    orderedAt:safeIso(order?.creationDate),
+    payload:{
+      orderId:externalOrderId,programType:order?.programType,
+      campaignId:order?.campaignId,status:order?.status,
+      updatedAt:order?.updateDate
+    },lines
+  };
+}
+
+async function processYandex(pool:Pool,job:SyncJob):Promise<void>{
+  const cred=decryptCredentials(job.credentials_ciphertext);
+  const apiKey=String(cred.apiKey??"");
+  const businessId=String(cred.businessId??"");
+  if(apiKey.length<16||!/^[1-9][0-9]{0,14}$/.test(businessId))
+    throw new Error("YANDEX_CREDENTIALS_INVALID");
+  let cursor=typeof job.cursor?.nextPageToken==="string"?String(job.cursor.nextPageToken):"";
+  let imported=Number(job.cursor?.importedOrders??0);
+  let updated=Number(job.cursor?.updatedOrders??0);
+  for(let page=0;page<250;page++){
+    const endpoint=new URL(
+      "https://api.partner.market.yandex.ru/v1/businesses/"+businessId+"/orders"
+    );
+    endpoint.searchParams.set("limit","50");
+    if(cursor)endpoint.searchParams.set("pageToken",cursor);
+    const data=await fetchJson(endpoint.toString(),{
+      method:"POST",
+      headers:{"Api-Key":apiKey,"Content-Type":"application/json"},
+      body:JSON.stringify({
+        programTypes:["FBS","DBS","EXPRESS"],
+        dates:{
+          updateDateFrom:new Date(job.period_from).toISOString(),
+          updateDateTo:new Date(job.period_to).toISOString()
+        },
+        fake:false
+      }),
+      signal:AbortSignal.timeout(15000)
+    });
+    if(!Array.isArray(data?.orders))throw new Error("YANDEX_ORDERS_RESPONSE_INVALID");
+    const orders=data.orders;
+    for(const raw of orders){
+      const order=normalizeYandexOrder(raw);
+      if(!order)continue;
+      const result=await persistOrder(pool,job,order);
+      if(result==="created")imported++;
+      if(result==="updated")updated++;
+      if(result==="created"||result==="updated"){
+        await processStockHubOnce(pool);
+        await processStockHubOnce(pool);
+      }
+    }
+    const next=typeof data?.paging?.nextPageToken==="string"
+      ?data.paging.nextPageToken:"";
+    await checkpoint(pool,job,{
+      nextPageToken:next,importedOrders:imported,updatedOrders:updated
+    },imported,updated);
+    if(!next||next===cursor||orders.length===0){
+      await completeJob(pool,job,imported,updated,{
+        nextPageToken:"",importedOrders:imported,updatedOrders:updated
+      });return;
+    }
+    cursor=next;
+  }
+  throw new Error("YANDEX_PAGINATION_LIMIT_REACHED");
+}
+
 export async function processMarketplaceSyncOnce(
   pool: Pool
 ): Promise<boolean> {
@@ -946,6 +1037,8 @@ export async function processMarketplaceSyncOnce(
       await processOzon(pool, job);
     } else if (job.provider === "WILDBERRIES") {
       await processWildberries(pool, job);
+    } else if(job.provider==="YANDEX_MARKET") {
+      await processYandex(pool,job);
     } else {
       throw new Error("UNSUPPORTED_MARKETPLACE_PROVIDER");
     }
