@@ -550,6 +550,81 @@ async function inspectRequiredHardening(root) {
     message: "Owner FNS filing workflow UI is incomplete"
   },
   {
+    path: "apps/api/src/modules/business/accounting/compliance.service.ts",
+    patterns: [
+      /async npdOverview/,
+      /registerNpdReceipt/,
+      /confirmNpdReceipt/,
+      /rebuildNpdMonths/,
+      /tax_regime='NPD'/,
+      /annual_limit_minor/
+    ],
+    message: "NPD accounting workflow is incomplete"
+  },
+  {
+    path: "apps/web/app/app/accounting/taxes/page.tsx",
+    patterns: [
+      /НПД \/ самозанятость/,
+      /Мой налог/,
+      /Подтвердить чек/,
+      /remaining_limit_minor/
+    ],
+    message: "NPD owner workspace is incomplete"
+  },
+  {
+    path: "apps/api/src/modules/business/crm/crm.service.ts",
+    patterns: [
+      /dealDetails/,
+      /addActivity/,
+      /addNote/,
+      /createPipeline/,
+      /crm_activity/,
+      /crm_deal_tag/
+    ],
+    message: "Advanced CRM workspace is incomplete"
+  },
+  {
+    path: "apps/web/app/app/crm/deals/[id]/page.tsx",
+    patterns: [
+      /Единая история/,
+      /Следующее действие/,
+      /Lead score/,
+      /createProject/
+    ],
+    message: "Premium CRM deal workspace is incomplete"
+  },
+  {
+    path: "apps/api/src/modules/business/projects/projects.service.ts",
+    patterns: [
+      /agencyOverview/,
+      /addDeliverable/,
+      /requestApproval/,
+      /RETAINER/,
+      /work_project_client_approval/
+    ],
+    message: "Agency project workflow is incomplete"
+  },
+  {
+    path: "apps/web/app/app/agency/page.tsx",
+    patterns: [
+      /Профессиональные услуги/,
+      /Клиентский портфель/,
+      /Себестоимость команды/,
+      /Ждём клиента/
+    ],
+    message: "Agency owner workspace is incomplete"
+  },
+  {
+    path: "apps/api/src/modules/platform/customization/business-verticals.ts",
+    patterns: [
+      /WEB_MARKETING_AGENCY/,
+      /Веб-студия \/ маркетинговое агентство/,
+      /deliverables/,
+      /ретейнер/i
+    ],
+    message: "Web studio and marketing agency vertical is incomplete"
+  },
+  {
     path: "apps/worker/src/tenant-export.ts",
     patterns: [
       /dance_students/,
@@ -571,7 +646,13 @@ async function inspectRequiredHardening(root) {
       /automotive_vehicles/,
       /automotive_work_orders/,
       /automotive_donor_vehicles/,
-      /automotive_dismantled_parts/
+      /automotive_dismantled_parts/,
+      /accounting_npd_receipts/,
+      /accounting_npd_months/,
+      /crm_activities/,
+      /crm_automation_rules/,
+      /project_deliverables/,
+      /project_client_approvals/
     ],
     message: "Dance studio tenant export coverage is missing"
   }
@@ -656,7 +737,10 @@ async function inspectRequiredHardening(root) {
     "199_automotive_verticals.sql",
     "200_automotive_integrity.sql",
     "201_automotive_totals_trigger_fix.sql",
-    "202_automotive_workflow_integrity.sql"
+    "202_automotive_workflow_integrity.sql",
+    "203_accounting_npd.sql",
+    "204_crm_workspace.sql",
+    "205_professional_services_operations.sql"
   ];
 
   for (const name of requiredMigrations) {
