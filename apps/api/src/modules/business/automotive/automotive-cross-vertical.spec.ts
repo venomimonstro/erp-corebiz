@@ -16,8 +16,6 @@ function harness(options:{financeRead?:boolean;financeWrite?:boolean;line?:Recor
         id:lineId,order_status:"IN_PROGRESS",approved:true,completed:false,
         unit_price_minor:"10000",unit_cost_minor:"5000",...options.line
       }],rowCount:1};
-    if(sql.includes("FROM automotive_work_order WHERE tenant_id"))
-      return {rows:[],rowCount:0};
     if(sql.includes("FROM automotive_work_order")&&sql.includes("count(*)"))
       return {rows:[{open_orders:3,waiting_parts:1,overdue:0,delivered_revenue_minor:"150000"}],rowCount:1};
     if(sql.includes("FROM automotive_donor_vehicle")&&sql.includes("count"))
