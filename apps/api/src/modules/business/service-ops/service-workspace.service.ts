@@ -33,14 +33,14 @@ export class ServiceWorkspaceService {
       revenueMinor: string | null;
     };
   }> {
-    const base = date ? new Date(date) : new Date();
-    if (Number.isNaN(base.getTime())) {
-      throw new BadRequestException("Некорректная дата");
+    const selectedDay=date?.trim()||null;
+    if(selectedDay){
+      const parsed=new Date(selectedDay+"T00:00:00Z");
+      if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(selectedDay)||
+         Number.isNaN(parsed.getTime())||
+         parsed.toISOString().slice(0,10)!==selectedDay)
+        throw new BadRequestException("Укажите дату в формате YYYY-MM-DD");
     }
-
-    const start = new Date(base);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start.getTime() + 86400000);
     const scopedMembershipIds = await this.serviceScope(context, "service.read");
     const canViewFinance=Boolean(await this.authorization.resolveScope(context,"finance.read"));
 
@@ -48,6 +48,7 @@ export class ServiceWorkspaceService {
       const result = await client.query(
         "SELECT b.id,b.business_number,b.status,b.starts_at,b.ends_at," +
         "b.price_minor_snapshot::text,b.currency,b.version," +
+        "COALESCE(venue_tz.timezone,'Europe/Moscow') AS venue_timezone," +
         "p.display_name AS party_name,s.name AS service_name," +
         "COALESCE(json_agg(json_build_object(" +
         "'resourceId',r.id,'resourceName',r.name,'type',r.type" +
@@ -57,14 +58,24 @@ export class ServiceWorkspaceService {
         "LEFT JOIN party p ON p.tenant_id=b.tenant_id AND p.id=b.party_id " +
         "LEFT JOIN service_booking_resource br ON br.tenant_id=b.tenant_id AND br.booking_id=b.id " +
         "LEFT JOIN service_resource r ON r.tenant_id=br.tenant_id AND r.id=br.resource_id " +
-        "WHERE b.tenant_id=$1 AND b.starts_at >= $2 AND b.starts_at < $3 " +
-        "AND ($4::uuid[] IS NULL OR EXISTS (" +
+        "LEFT JOIN LATERAL (" +
+        "SELECT rr.timezone FROM service_booking_resource zr " +
+        "JOIN service_resource rr ON rr.tenant_id=zr.tenant_id AND rr.id=zr.resource_id " +
+        "WHERE zr.tenant_id=b.tenant_id AND zr.booking_id=b.id " +
+        "ORDER BY CASE WHEN rr.type IN ('ROOM','HALL','WORKPLACE') THEN 0 ELSE 1 END,rr.id LIMIT 1" +
+        ") venue_tz ON true " +
+        "WHERE b.tenant_id=$1 " +
+        "AND b.starts_at >= COALESCE($2::date-interval '1 day',now()-interval '2 days') " +
+        "AND b.starts_at < COALESCE($2::date+interval '2 days',now()+interval '2 days') " +
+        "AND (b.starts_at AT TIME ZONE COALESCE(venue_tz.timezone,'Europe/Moscow'))::date = " +
+        "COALESCE($2::date,(now() AT TIME ZONE COALESCE(venue_tz.timezone,'Europe/Moscow'))::date) " +
+        "AND ($3::uuid[] IS NULL OR EXISTS (" +
         "SELECT 1 FROM service_booking_resource scope_br " +
         "JOIN service_resource scope_r ON scope_r.tenant_id=scope_br.tenant_id AND scope_r.id=scope_br.resource_id " +
         "WHERE scope_br.tenant_id=b.tenant_id AND scope_br.booking_id=b.id " +
-        "AND scope_r.membership_id = ANY($4::uuid[]))) " +
-        "GROUP BY b.id,p.display_name,s.name ORDER BY b.starts_at",
-        [context.tenantId, start, end, scopedMembershipIds]
+        "AND scope_r.membership_id = ANY($3::uuid[]))) " +
+        "GROUP BY b.id,p.display_name,s.name,venue_tz.timezone ORDER BY b.starts_at",
+        [context.tenantId, selectedDay, scopedMembershipIds]
       );
 
       let completed = 0;
