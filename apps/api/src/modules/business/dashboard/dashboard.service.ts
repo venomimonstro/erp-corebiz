@@ -1272,35 +1272,27 @@ export class DashboardService {
           new Set(found.rows.slice(0,OPERATIONAL_SCAN_LIMIT).map(row=>row.id)));
       }
 
-      for (const [issueCode, ids] of currentIssues) {
-        for (const referenceId of ids) {
+      for(const [issueCode,ids] of currentIssues){
+        const idArray=Array.from(ids);
+        if(idArray.length){
+          // One statement per issue class, not 200 individual round trips.
           await client.query(
             `INSERT INTO tenant_operational_issue(
                tenant_id,issue_code,reference_id,state
-             ) VALUES ($1,$2,$3,'OPEN')
-             ON CONFLICT (tenant_id,issue_code,reference_id)
-             DO UPDATE SET
-               state='OPEN',
-               resolved_at=NULL`,
-            [context.tenantId, issueCode, referenceId]
+             ) SELECT $1,$2,ids.id,'OPEN' FROM unnest($3::uuid[]) AS ids(id)
+             ON CONFLICT(tenant_id,issue_code,reference_id)
+             DO UPDATE SET state='OPEN',resolved_at=NULL`,
+            [context.tenantId,issueCode,idArray]
           );
         }
-
-        // Never clear unseen issue rows when a tenant has more unresolved
-        // objects than the bounded preview can safely retrieve.
         if(truncatedRules.has(issueCode))continue;
-        const idArray = Array.from(ids);
         await client.query(
           `UPDATE tenant_operational_issue
            SET state='RESOLVED',resolved_at=now()
-           WHERE tenant_id=$1
-             AND issue_code=$2
-             AND state='OPEN'
-             AND (
-               cardinality($3::uuid[]) = 0
-               OR reference_id <> ALL($3::uuid[])
-             )`,
-          [context.tenantId, issueCode, idArray]
+           WHERE tenant_id=$1 AND issue_code=$2 AND state='OPEN'
+             AND (cardinality($3::uuid[])=0
+               OR reference_id<>ALL($3::uuid[]))`,
+          [context.tenantId,issueCode,idArray]
         );
       }
 
