@@ -5,11 +5,13 @@ import {apiRequest} from "../../../lib/api";
 type Location={
   id:string;code:string;name:string;address:string|null;
   pickup_enabled:boolean;warehouse_id:string;warehouse_name:string;
+  open_shift_id:string|null;
   available_milli:string;physical_milli:string;reserved_milli:string;
 };
 type Stock={
   sku_id:string;sku_code:string;product_name:string;
   physical_milli:string;reserved_milli:string;available_milli:string;
+  sellable_milli:string;
 };
 type Order={
   id:string;channel:string;created_at:string;order_id:string;
@@ -44,6 +46,7 @@ export default function RetailPage(){
   const [mode,setMode]=useState<"COUNTER"|"CLICK_COLLECT">("COUNTER");
   const [key,setKey]=useState(()=>token());
   const [busy,setBusy]=useState(false);
+  const [shiftCash,setShiftCash]=useState("0");
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [loading,setLoading]=useState(true);
@@ -72,7 +75,29 @@ export default function RetailPage(){
   },[locationId,search]);
   useEffect(()=>{void loadLocation();},[loadLocation]);
   const current=locations.find(l=>l.id===locationId);
-  const available=useMemo(()=>stock.filter(x=>Number(x.available_milli)>0),[stock]);
+  const available=useMemo(()=>stock.filter(x=>Number(x.sellable_milli)>0),[stock]);
+
+  async function changeShift(action:"open"|"close"){
+    if(!locationId)return;
+    const cash=Number(shiftCash.replace(",","."));
+    if(!Number.isFinite(cash)||cash<0||Math.round(cash*100)>1_000_000_000_000){
+      setError("Укажите неотрицательную сумму наличных");return;
+    }
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/retail/locations/"+locationId+"/shift/"+action,{
+        method:"POST",
+        body:JSON.stringify(action==="open"
+          ?{openingCashMinor:String(Math.round(cash*100))}
+          :{closingCashMinor:String(Math.round(cash*100))})
+      });
+      setShiftCash("0");
+      setNotice(action==="open"?"Смена открыта. Это не фискальная регистрация.":
+        "Смена закрыта. Сверьте суммы с кассой и платежами.");
+      await refresh();
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось изменить смену");}
+    finally{setBusy(false);}
+  }
 
   async function addLocation(){
     setBusy(true);setError("");setNotice("");
@@ -184,16 +209,38 @@ export default function RetailPage(){
         </label>
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Товар</th><th>Артикул</th><th>Факт</th><th>Резерв</th><th>Доступно</th></tr></thead>
+            <thead><tr><th>Товар</th><th>Артикул</th><th>Факт</th><th>Резерв</th><th>К продаже</th></tr></thead>
             <tbody>{stock.map(x=><tr key={x.sku_id}>
               <td>{x.product_name}</td><td>{x.sku_code}</td>
               <td>{pcs(x.physical_milli)}</td><td>{pcs(x.reserved_milli)}</td>
-              <td>{pcs(x.available_milli)}</td>
+              <td>{pcs(x.sellable_milli)}</td>
             </tr>)}</tbody>
           </table>
         </div>
         {!stock.length?<p>На этом складе пока нет товаров.
           Переместите их из центрального склада или проведите приход.</p>:null}
+      </section>:null}
+      {current?<section className="studio-section">
+        <div className="studio-section-head">
+          <div><h2>Кассовая смена</h2>
+            <p>{current.open_shift_id?"Смена открыта: заказы на кассе доступны.":
+              "Смена закрыта: доступны только онлайн-резервы для самовывоза."}</p>
+          </div>
+        </div>
+        <div className="studio-form-grid">
+          <label>{current.open_shift_id?"Наличные при закрытии смены, ₽":
+            "Наличные на начало смены, ₽"}
+            <input type="number" min="0" step="0.01" value={shiftCash}
+              onChange={e=>setShiftCash(e.target.value)}/>
+          </label>
+          <div className="studio-form-actions">
+            <button type="button" disabled={busy} onClick={()=>
+              void changeShift(current.open_shift_id?"close":"open")}>
+              {current.open_shift_id?"Закрыть смену":"Открыть смену"}
+            </button>
+          </div>
+        </div>
+        <p>Открытие и закрытие смены не регистрирует чек ККТ и не проводит оплату.</p>
       </section>:null}
       {current?<section className="studio-section">
         <h2>Резерв под покупателя</h2>
@@ -204,7 +251,9 @@ export default function RetailPage(){
           <label>Канал продажи
             <select value={mode}
               onChange={e=>setMode(e.target.value as typeof mode)}>
-              <option value="COUNTER">В магазине (касса)</option>
+              <option value="COUNTER" disabled={!current.open_shift_id}>
+                В магазине (касса)
+              </option>
               <option value="CLICK_COLLECT" disabled={!current.pickup_enabled}>
                 Самовывоз онлайн-заказа
               </option>
@@ -222,7 +271,7 @@ export default function RetailPage(){
             <select value={selectedSku} onChange={e=>setSelectedSku(e.target.value)}>
               <option value="">Выберите SKU</option>
               {available.map(item=><option value={item.sku_id} key={item.sku_id}>
-                {item.product_name} · {item.sku_code} ({pcs(item.available_milli)} шт.)
+                {item.product_name} · {item.sku_code} ({pcs(item.sellable_milli)} шт.)
               </option>)}
             </select>
           </label>
@@ -231,8 +280,9 @@ export default function RetailPage(){
               min="0.001" step="1" />
           </label>
         </div>
-        <button type="button" disabled={busy||!selectedSku}
-          onClick={()=>void reserve()}>Создать заказ и резерв</button>
+        <button type="button" onClick={()=>void reserve()}
+          disabled={busy||!selectedSku||(mode==="COUNTER"&&!current.open_shift_id)}>
+          Создать заказ и резерв</button>
         <p className="muted">При сбое сети повторите запрос, не меняя заказ:
           система использует ключ идемпотентности и проверяет склад.</p>
       </section>:null}
