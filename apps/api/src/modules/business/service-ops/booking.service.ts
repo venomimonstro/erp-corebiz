@@ -2360,6 +2360,10 @@ export class BookingService {
         throw new ConflictException("Запись уже изменена или переход недоступен");
       }
 
+      if (row.status === "COMPLETED") {
+        await this.consumeRemainingMaterials(client,context,bookingId);
+      }
+
       if (["COMPLETED","CANCELLED","NO_SHOW"].includes(row.status)) {
         await this.settlePackageRedemption(
           client,
