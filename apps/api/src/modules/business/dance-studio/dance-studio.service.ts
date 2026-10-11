@@ -30,6 +30,10 @@ export class DanceStudioService {
 
   async dashboard(context: TenantContext) {
     const scopeIds = await this.scopeIds(context, "dance.read");
+    // Trainers need their roster and lessons, not the company's unit economics.
+    const canViewFinancials=Boolean(
+      await this.authorization.resolveScope(context,"finance.read")
+    );
     return this.database.withTenantTransaction(context, async (client) => {
       const today = await client.query(
         `SELECT
@@ -54,8 +58,8 @@ export class DanceStudioService {
          LEFT JOIN dance_lesson_participant lp
            ON lp.tenant_id=l.tenant_id AND lp.lesson_id=l.id
          WHERE l.tenant_id=$1
-           AND l.starts_at >= date_trunc('day',now())
-           AND l.starts_at < date_trunc('day',now()) + interval '1 day'
+           AND (l.starts_at AT TIME ZONE coalesce(rr.timezone,tr.timezone,'Europe/Moscow'))::date
+               = (now() AT TIME ZONE coalesce(rr.timezone,tr.timezone,'Europe/Moscow'))::date
            AND (
              $2::uuid[] IS NULL
              OR tr.membership_id = ANY($2::uuid[])
@@ -69,7 +73,7 @@ export class DanceStudioService {
         [context.tenantId, scopeIds]
       );
 
-      const debt = await client.query(
+      const debt=canViewFinancials ? await client.query(
         `SELECT
            count(*) FILTER (
              WHERE o.status IN ('OPEN','PARTIALLY_SETTLED')
@@ -111,7 +115,7 @@ export class DanceStudioService {
              )
            )`,
         [context.tenantId, scopeIds]
-      );
+      ) : {rows:[]};
 
       const groupHealth = await client.query(
         `SELECT
@@ -254,7 +258,7 @@ export class DanceStudioService {
         [context.tenantId,scopeIds]
       );
 
-      const economics = await client.query(
+      const economics=canViewFinancials ? await client.query(
         `SELECT
            coalesce(sum(p.earned_revenue_minor),0)::text AS revenue_minor,
            coalesce(sum(p.trainer_cost_minor),0)::text AS trainer_cost_minor,
@@ -276,9 +280,9 @@ export class DanceStudioService {
              )
            )`,
         [context.tenantId, scopeIds]
-      );
+      ) : {rows:[]};
 
-      const economicsByProgram=await client.query(
+      const economicsByProgram=canViewFinancials ? await client.query(
         `SELECT
            coalesce(dp.id::text,'unscoped') AS id,
            coalesce(dp.name,'Вне направлений') AS name,
@@ -311,9 +315,9 @@ export class DanceStudioService {
          GROUP BY dp.id,dp.name
          ORDER BY sum(prof.contribution_margin_minor) DESC,2`,
         [context.tenantId,scopeIds]
-      );
+      ) : {rows:[]};
 
-      const economicsByTrainer=await client.query(
+      const economicsByTrainer=canViewFinancials ? await client.query(
         `SELECT
            coalesce(tr.id::text,'trainerless') AS id,
            coalesce(tr.name,'Без тренера') AS name,
@@ -342,9 +346,9 @@ export class DanceStudioService {
          GROUP BY tr.id,tr.name
          ORDER BY sum(prof.contribution_margin_minor) DESC,2`,
         [context.tenantId,scopeIds]
-      );
+      ) : {rows:[]};
 
-      const payrollMonth=await client.query<{
+      const payrollMonth=canViewFinancials ? await client.query<{
         expected_trainers:number;
         statement_count:number;
         payroll_total_minor:string;
@@ -417,10 +421,10 @@ export class DanceStudioService {
              ),0
            )::text AS payroll_extra_minor`,
         [context.tenantId,scopeIds]
-      );
+      ) : {rows:[]};
 
       let rentAdjustment=0n;
-      if(scopeIds===null){
+      if(scopeIds===null && canViewFinancials){
         const reconciliation=await client.query<{adjustment_minor:string}>(
           `WITH finalized AS (
              SELECT contract_id,amount_minor
@@ -535,21 +539,22 @@ export class DanceStudioService {
       );
 
       return {
+        canViewFinancials,
         todayLessons: today.rows,
-        debt: debt.rows[0] ?? {
+        debt: canViewFinancials ? (debt.rows[0] ?? {
           open_count: 0,
           open_minor: "0",
           overdue_count: 0
-        },
+        }) : null,
         groups: groupHealth.rows,
         packageAlerts: packageAlerts.rows[0] ?? {
           expiring: 0,
           low_visits: 0
         },
         retentionAlerts: retentionAlerts.rows,
-        economicsByProgram:economicsByProgram.rows,
-        economicsByTrainer:economicsByTrainer.rows,
-        monthEconomics: (() => {
+        economicsByProgram:canViewFinancials?economicsByProgram.rows:[],
+        economicsByTrainer:canViewFinancials?economicsByTrainer.rows:[],
+        monthEconomics: canViewFinancials ? (() => {
           const base=economics.rows[0] ?? {
             revenue_minor: "0",
             trainer_cost_minor: "0",
@@ -587,7 +592,7 @@ export class DanceStudioService {
             payroll_expected_trainers:payroll.expected_trainers,
             payroll_finalized:payrollFinalized
           };
-        })(),
+        })() : null,
         attention: attention.rows[0] ?? {
           unclosed_past_lessons: 0,
           attended_without_payment_source: 0,
