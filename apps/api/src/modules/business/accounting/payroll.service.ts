@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
+import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 
 @Injectable()
@@ -160,7 +161,7 @@ export class PayrollService {
   }
 
   private async assertNoOpenPayrollDisputes(
-    client:any,
+    client:PoolClient,
     tenantId:string,
     batchId:string
   ){
