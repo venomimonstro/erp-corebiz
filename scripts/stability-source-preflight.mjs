@@ -452,7 +452,7 @@ async function inspectRequiredHardening(root) {
       /async generateCalendar/,
       /async autoClassifyPayments/,
       /async calculateUsn/,
-      /accounting_tax_payment_classification/,
+      /accounting_tax_ledger_item/,
       /accounting_ens_snapshot/
     ],
     message: "Russian tax compliance automation service is incomplete"
