@@ -14,10 +14,30 @@ import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { Public } from "../../platform/auth/public.decorator";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
 import { ChannelsService } from "./channels.service";
+import { MarketplaceHubService } from "./marketplace-hub.service";
 
 @Controller("channels")
 export class ChannelsController {
-  constructor(private readonly channels: ChannelsService) {}
+  constructor(private readonly channels: ChannelsService, private readonly hub:MarketplaceHubService) {}
+
+
+  @Get("stock-hub")
+  @RequirePermission("channels.read")
+  async stockHub(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.hub.overview(this.context(request))};
+  }
+
+  @Post("stock-hub/listings")
+  @RequirePermission("channels.manage")
+  async stockHubListing(@Req() request:AuthenticatedRequest,@Body() body:any):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.hub.upsertListing(this.context(request),body)};
+  }
+
+  @Post("stock-hub/reconcile")
+  @RequirePermission("channels.manage")
+  async stockHubReconcile(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.hub.queueFullReconcile(this.context(request))};
+  }
 
   @Get("connections")
   @RequirePermission("channels.read")
