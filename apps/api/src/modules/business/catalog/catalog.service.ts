@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
@@ -179,24 +180,34 @@ export class CatalogService {
       description?: string;
     }
   ): Promise<{ productId: string; variantId: string; skuId: string; sku: string }> {
-    const name = input.name.trim();
-
-    if (name.length < 2 || name.length > 240) {
+    if(!input||typeof input.name!=="string")
+      throw new BadRequestException("Укажите название товара");
+    const name=input.name.trim();
+    if(name.length<2||name.length>240)
       throw new BadRequestException("Некорректное название товара");
-    }
+    if(input.kind!==undefined&&!["STOCKABLE","NON_STOCK"].includes(input.kind))
+      throw new BadRequestException("Некорректный тип товара");
 
-    const salePriceMinor = input.salePriceMinor ?? "0";
-    const costPriceMinor = input.costPriceMinor ?? "0";
-
-    if (!/^\d+$/.test(salePriceMinor) || !/^\d+$/.test(costPriceMinor)) {
+    const salePriceMinor=input.salePriceMinor??"0";
+    const costPriceMinor=input.costPriceMinor??"0";
+    // PostgreSQL bigint must never receive out-of-range user input.
+    if(!/^\d{1,18}$/.test(salePriceMinor)||!/^\d{1,18}$/.test(costPriceMinor)||
+       BigInt(salePriceMinor)>9223372036854775807n||
+       BigInt(costPriceMinor)>9223372036854775807n)
       throw new BadRequestException("Некорректная цена");
-    }
 
-    const skuCode =
-      input.sku?.trim() ||
-      `SKU-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
+    const skuCode=input.sku?.trim()||
+      `SKU-${randomUUID().replaceAll("-","").slice(0,10).toUpperCase()}`;
+    if(skuCode.length>128||skuCode.length===0||
+       (input.barcode!==undefined&&input.barcode.trim().length>128)||
+       (input.description!==undefined&&input.description.length>10000))
+      throw new BadRequestException("Слишком длинный артикул, штрихкод или описание");
 
     return this.database.withTenantTransaction(context, async (client) => {
+      // Catalog editors may set retail prices, but cost is a confidential
+      // financial input. Check this at the trusted service boundary, not UI.
+      if(BigInt(costPriceMinor)>0n && !await this.mayReadCost(client,context))
+        throw new ForbiddenException("Для указания себестоимости требуются финансовые права");
       if (input.categoryId) {
         const category = await client.query(
           `SELECT 1 FROM catalog_category
