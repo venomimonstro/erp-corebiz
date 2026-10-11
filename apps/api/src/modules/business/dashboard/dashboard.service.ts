@@ -1106,6 +1106,219 @@ export class DashboardService {
         ];
       }
 
+      // First-day steps must reflect the selected VERTICAL, not just the
+      // generic SERVICE or TRADE profile. Counts represent persisted domain
+      // events, not clicks, claims of readiness or generated demo records.
+      if (verticalCode === "DANCE_FITNESS") {
+        const r=await client.query<{
+          services:number;trainers:number;programs:number;groups:number;
+          students:number;plans:number;lessons:number;payroll:number;
+        }>(
+          `SELECT
+             (SELECT count(*)::integer FROM service_catalog_item
+              WHERE tenant_id=$1 AND status='ACTIVE') AS services,
+             (SELECT count(*)::integer FROM service_resource
+              WHERE tenant_id=$1 AND type='EMPLOYEE' AND status='ACTIVE') AS trainers,
+             (SELECT count(*)::integer FROM dance_program
+              WHERE tenant_id=$1 AND status='ACTIVE') AS programs,
+             (SELECT count(*)::integer FROM dance_group
+              WHERE tenant_id=$1 AND status='ACTIVE') AS groups,
+             (SELECT count(*)::integer FROM dance_student
+              WHERE tenant_id=$1 AND status IN ('LEAD','TRIAL','ACTIVE')) AS students,
+             (SELECT count(*)::integer FROM service_package_plan
+              WHERE tenant_id=$1 AND status='ACTIVE') AS plans,
+             (SELECT count(*)::integer FROM dance_lesson
+              WHERE tenant_id=$1 AND status IN ('PLANNED','OPEN_FOR_BOOKING','COMPLETED')) AS lessons,
+             (SELECT count(*)::integer FROM trainer_payroll_profile
+              WHERE tenant_id=$1 AND status='ACTIVE') AS payroll`,
+          [context.tenantId]
+        );
+        const d=r.rows[0]!;
+        definitions.SERVICE=[
+          {key:"dance-service",title:"Укажите услугу, цену и длительность",
+            detail:"Направление танцев нельзя создать без услуги. Начните с этого шага.",
+            href:"/app/dance/setup",done:d.services>0},
+          {key:"dance-trainer",title:"Добавьте тренера",
+            detail:"Тренер нужен для расписания и расчёта начислений.",
+            href:"/app/dance/setup",done:d.trainers>0},
+          {key:"dance-program",title:"Создайте направление",
+            detail:"Например: хип-хоп, балет или индивидуальные занятия.",
+            href:"/app/dance/groups",done:d.programs>0},
+          {key:"dance-group",title:"Создайте группу и назначьте тренера",
+            detail:"Укажите вместимость, дни и время занятий.",
+            href:"/app/dance/groups",done:d.groups>0},
+          {key:"dance-student",title:"Добавьте ученика и плательщика",
+            detail:"Привяжите родителя, чтобы вести абонементы и задолженности.",
+            href:"/app/dance/students",done:d.students>0},
+          {key:"dance-plan",title:"Создайте абонемент",
+            detail:"Зафиксируйте число занятий, стоимость и срок действия.",
+            href:"/app/dance/students",done:d.plans>0},
+          {key:"dance-lesson",title:"Сформируйте первое занятие",
+            detail:"После этого появятся участники, посещаемость и расчёты.",
+            href:"/app/dance/groups",done:d.lessons>0,firstValue:true},
+          {key:"dance-payroll",title:"Определите оплату тренера",
+            detail:"Оклад, ставка или процент; не обещайте начисление без правила.",
+            href:"/app/dance/team",done:d.payroll>0}
+        ];
+      }
+
+      if (verticalCode === "AUTO_SERVICE" ||
+          verticalCode === "AUTO_PARTS_DISMANTLING") {
+        const r=await client.query<{
+          vehicles:number;orders:number;donors:number;parts:number;
+          completed:number;
+        }>(
+          `SELECT
+             (SELECT count(*)::integer FROM automotive_vehicle
+               WHERE tenant_id=$1 AND status='ACTIVE') AS vehicles,
+             (SELECT count(*)::integer FROM automotive_work_order
+               WHERE tenant_id=$1 AND status<>'CANCELLED') AS orders,
+             (SELECT count(*)::integer FROM automotive_donor_vehicle
+               WHERE tenant_id=$1 AND status<>'ARCHIVED') AS donors,
+             (SELECT count(*)::integer FROM automotive_dismantled_part
+               WHERE tenant_id=$1 AND status<>'ARCHIVED') AS parts,
+             (SELECT count(*)::integer FROM automotive_work_order
+               WHERE tenant_id=$1 AND status='DELIVERED') AS completed`,
+          [context.tenantId]
+        );
+        const a=r.rows[0]!;
+        if (verticalCode==="AUTO_SERVICE") {
+          definitions.SERVICE=[
+            {key:"auto-client",title:"Добавьте клиента",
+              detail:"Начните с владельца автомобиля и контактных данных.",
+              href:"/app/crm/customers",done:values.party>0},
+            {key:"auto-vehicle",title:"Создайте карточку автомобиля",
+              detail:"VIN, госномер, пробег и привязка к владельцу.",
+              href:"/app/automotive",done:a.vehicles>0},
+            {key:"auto-order",title:"Откройте заказ-наряд",
+              detail:"Запишите жалобу клиента и согласуйте работы и запчасти.",
+              href:"/app/automotive",done:a.orders>0,firstValue:true},
+            {key:"auto-delivery",title:"Завершите ремонт и выдачу",
+              detail:"Проверьте выполненные работы, сумму и статус выдачи.",
+              href:"/app/automotive",done:a.completed>0}
+          ];
+        } else {
+          definitions.TRADE=[
+            {key:"donor",title:"Примите автомобиль-донор",
+              detail:"Укажите себестоимость покупки, VIN и номер донора.",
+              href:"/app/automotive",done:a.donors>0},
+            {key:"part",title:"Добавьте снятую деталь",
+              detail:"OEM, состояние и распределённую себестоимость.",
+              href:"/app/automotive",done:a.parts>0,firstValue:true},
+            {key:"sale",title:"Проведите первую продажу",
+              detail:"Продажа должна уменьшить остаток и показать маржу.",
+              href:"/app/sales/orders",done:values.order>0}
+          ];
+        }
+      }
+
+      if (["WEB_STUDIO","WEB_MARKETING_AGENCY","MARKETING_AGENCY",
+          "PROFESSIONAL_SERVICES"].includes(verticalCode??"")) {
+        definitions.SERVICE=[
+          {key:"agency-client",title:"Создайте клиента",
+            detail:"Карточка клиента объединяет сделки, проекты и задолженности.",
+            href:"/app/crm/customers",done:values.party>0},
+          {key:"agency-deal",title:"Создайте коммерческую сделку",
+            detail:"Зафиксируйте услугу, бюджет и ожидаемый срок.",
+            href:"/app/crm/deals",done:values.deal>0},
+          {key:"agency-project",title:"Создайте проект",
+            detail:"Свяжите обязательства, бюджет и этапы работ.",
+            href:"/app/projects",done:values.project>0,firstValue:true},
+          {key:"agency-task",title:"Назначьте первую задачу",
+            detail:"Исполнение начинается со срока и ответственного.",
+            href:"/app/tasks",done:values.task>0}
+        ];
+      }
+
+      if (["BEAUTY_SALON","BARBERSHOP","NAIL_SALON"].includes(verticalCode??"")) {
+        const resources=await client.query<{count:number}>(
+          `SELECT count(*)::integer AS count FROM service_resource
+           WHERE tenant_id=$1 AND type='EMPLOYEE' AND status='ACTIVE'`,
+          [context.tenantId]
+        );
+        definitions.SERVICE=[
+          {key:"salon-master",title:"Добавьте мастера и график",
+            detail:"Без мастера нельзя корректно показывать свободные окна.",
+            href:"/app/service/setup",done:(resources.rows[0]?.count??0)>0},
+          {key:"salon-service",title:"Укажите услуги и персональные цены",
+            detail:"Добавьте длительность и стоимость для работы записи.",
+            href:"/app/service/setup",done:values.service>0},
+          {key:"salon-client",title:"Добавьте первого клиента",
+            detail:"Контакты понадобятся для подтверждений и повторных визитов.",
+            href:"/app/crm/customers",done:values.party>0},
+          {key:"salon-booking",title:"Создайте первую запись",
+            detail:"Убедитесь, что мастер доступен, затем подтвердите время.",
+            href:"/app/service/bookings",done:values.booking>0,firstValue:true}
+        ];
+      }
+
+      if (verticalCode === "WAREHOUSE_3PL") {
+        const extra=await client.query<{done:number;owners:number}>(
+          `SELECT
+             (SELECT count(*)::integer FROM wms_task
+              WHERE tenant_id=$1 AND status='DONE') AS done,
+             (SELECT count(*)::integer FROM inventory_owner
+              WHERE tenant_id=$1 AND status='ACTIVE' AND owner_type='CLIENT') AS owners`,
+          [context.tenantId]
+        );
+        definitions.WAREHOUSE_3PL=[
+          {key:"owner",title:"Добавьте клиента-владельца товара",
+            detail:"Товар клиентов должен храниться раздельно по владельцам.",
+            href:"/app/wms/owners",done:(extra.rows[0]?.owners??0)>0},
+          {key:"sku",title:"Загрузите номенклатуру",
+            detail:"SKU используются для приёмки и адресного хранения.",
+            href:"/app/catalog/products",done:values.product>0},
+          {key:"task",title:"Создайте складское задание",
+            detail:"Готовое задание можно назначить и выполнить на ТСД.",
+            href:"/app/wms",done:values.wmsTask>0},
+          {key:"task-done",title:"Завершите реальное складское задание",
+            detail:"Только статус DONE подтверждает первый складской сценарий.",
+            href:"/app/wms/mobile",done:(extra.rows[0]?.done??0)>0,firstValue:true}
+        ];
+      }
+
+      if (verticalCode === "ECOMMERCE_STORE") {
+        const launched=await client.query<{published:number}>(
+          `SELECT count(DISTINCT s.id)::integer AS published
+           FROM site s
+           JOIN storefront_config sc
+             ON sc.tenant_id=s.tenant_id AND sc.site_id=s.id AND sc.enabled
+           JOIN site_page p
+             ON p.tenant_id=s.tenant_id AND p.site_id=s.id
+             AND p.slug='/' AND p.status='ACTIVE'
+           JOIN site_page_version v
+             ON v.tenant_id=p.tenant_id AND v.id=p.published_version_id
+             AND v.status='PUBLISHED'
+           WHERE s.tenant_id=$1 AND s.status='ACTIVE'`,
+          [context.tenantId]
+        );
+        definitions.ECOMMERCE=[
+          {key:"shop-product",title:"Добавьте товары с реальными ценами",
+            detail:"Карточка товара и SKU формируют витрину и складской учёт.",
+            href:"/app/catalog/products",done:values.product>0},
+          {key:"shop-site",title:"Опубликуйте интернет-магазин",
+            detail:"Нужна опубликованная главная и включённая витрина.",
+            href:"/app/sites",done:(launched.rows[0]?.published??0)>0},
+          {key:"shop-payment",title:"Настройте получение и эквайринг",
+            detail:"Самовывоз или курьер, свои реквизиты YooKassa и ККТ.",
+            href:"/app/sites/payments",done:false},
+          {key:"shop-order",title:"Получите первый подтверждённый заказ",
+            detail:"Проверьте резерв, платёж и доставку на тестовом стенде.",
+            href:"/app/commerce",done:values.order>0,firstValue:true}
+        ];
+        const config=await client.query<{configured:number}>(
+          `SELECT count(*)::integer AS configured
+           FROM commerce_merchant_config c
+           WHERE c.tenant_id=$1 AND c.enabled AND c.fiscal_enabled
+             AND EXISTS(
+               SELECT 1 FROM commerce_delivery_method d
+               WHERE d.tenant_id=c.tenant_id AND d.site_id=c.site_id AND d.active
+             )`,
+          [context.tenantId]
+        );
+        definitions.ECOMMERCE[2]!.done=(config.rows[0]?.configured??0)>0;
+      }
+
       const milestones = definitions[profile] ?? definitions.GENERAL;
       const firstValueDone = milestones.some(
         (item) => item.firstValue && item.done
