@@ -211,6 +211,18 @@ export class FinanceController {
     };
   }
 
+
+  @Post("invoices/from-agency/:statementId")
+  @RequirePermission("finance.invoice.manage")
+  async invoiceFromAgency(
+    @Req() request:AuthenticatedRequest,
+    @Param("statementId") statementId:string,
+    @Body() body:{dueAt?:string}
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.finance.createAgencyStatementInvoice(
+      this.context(request),statementId,body)};
+  }
+
   @Post("invoices/from-3pl/:statementId")
   @RequirePermission("finance.invoice.manage")
   async invoiceFrom3pl(

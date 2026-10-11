@@ -1,5 +1,6 @@
 import {
   Body,
+  Query,
   Controller,
   Get,
   Param,
@@ -43,6 +44,27 @@ export class ProjectsController {
   @RequirePermission("projects.write")
   async addExpense(@Req() request:AuthenticatedRequest,@Param("id") id:string,@Body() body:any):Promise<ApiSuccess<unknown>> {
     return {ok:true,data:await this.projects.addAgencyExpense(this.context(request),id,body)};
+  }
+
+
+  @Get(":id/statements")
+  @RequirePermission("projects.read")
+  async agencyStatements(@Req() request:AuthenticatedRequest,@Param("id") id:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.agencyStatements(this.context(request),id)};
+  }
+
+  @Get(":id/statements/preview")
+  @RequirePermission("projects.read")
+  async agencyStatementPreview(@Req() request:AuthenticatedRequest,@Param("id") id:string,
+    @Query("period") period:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.agencyStatementPreview(this.context(request),id,period)};
+  }
+
+  @Post(":id/statements/finalize")
+  @RequirePermission("projects.write")
+  async finalizeAgencyStatement(@Req() request:AuthenticatedRequest,@Param("id") id:string,
+    @Body() body:{period:string}):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.finalizeAgencyStatement(this.context(request),id,body?.period)};
   }
 
   @Get(":id/deliverables")

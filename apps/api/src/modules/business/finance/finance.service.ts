@@ -495,6 +495,75 @@ export class FinanceService {
     });
   }
 
+
+  async createAgencyStatementInvoice(
+    context:TenantContext,statementId:string,input?:{dueAt?:string}
+  ):Promise<{invoiceId:string;obligationId:string;number:string}> {
+    const dueAt=input?.dueAt ? new Date(input.dueAt):new Date(Date.now()+14*86400000);
+    if(Number.isNaN(dueAt.getTime()))throw new BadRequestException("Некорректный срок оплаты");
+    return this.database.withTenantTransaction(context,async client=>{
+      const stmt=await client.query<{
+        id:string;status:string;party_id:string|null;currency:string;
+        period_from:string;period_to:string;amount_minor:string;
+      }>(\`SELECT s.id,s.status,p.party_id,p.currency,
+                 s.period_from::text,s.period_to::text,
+                 s.service_revenue_minor::text AS amount_minor
+          FROM work_project_monthly_statement s
+          JOIN work_project p ON p.tenant_id=s.tenant_id AND p.id=s.project_id
+          WHERE s.tenant_id=$1 AND s.id=$2 FOR UPDATE OF s\`,
+        [context.tenantId,statementId]);
+      const row=stmt.rows[0];
+      if(!row)throw new NotFoundException("Агентский отчёт не найден");
+      const prior=await client.query<{id:string;business_number:string;obligation_id:string}>(
+        \`SELECT id,business_number,obligation_id FROM finance_invoice
+         WHERE tenant_id=$1 AND source_type='AGENCY_PROJECT_STATEMENT' AND source_id=$2\`,
+        [context.tenantId,statementId]);
+      if(prior.rows[0]){
+        const invoice=prior.rows[0];
+        return {invoiceId:invoice.id,obligationId:invoice.obligation_id,number:invoice.business_number};
+      }
+      if(row.status!=="FINALIZED")
+        throw new ConflictException("Сначала закройте месяц по проекту");
+      if(!row.party_id)throw new ConflictException("Не указан клиент проекта");
+      if(BigInt(row.amount_minor)<=0n)
+        throw new ConflictException("Нельзя выставить счёт с нулевой выручкой");
+      const obligation=await client.query<{id:string}>(
+        \`INSERT INTO financial_obligation(
+           tenant_id,direction,party_id,source_type,source_id,
+           currency,amount_minor,due_at
+         ) VALUES($1,'RECEIVABLE',$2,'AGENCY_PROJECT_STATEMENT',$3,$4,$5,$6)
+         ON CONFLICT (tenant_id,direction,source_type,source_id)
+         DO UPDATE SET updated_at=financial_obligation.updated_at
+         RETURNING id\`,
+        [context.tenantId,row.party_id,row.id,row.currency,row.amount_minor,dueAt]);
+      const obligationId=obligation.rows[0]!.id;
+      const number=await this.nextNumber(client,context.tenantId,"finance_invoice","INV");
+      const invoice=await client.query<{id:string}>(
+        \`INSERT INTO finance_invoice(
+           tenant_id,business_number,party_id,source_type,source_id,
+           obligation_id,period_from,period_to,currency,amount_minor,due_at,
+           created_by_membership_id
+         ) VALUES($1,$2,$3,'AGENCY_PROJECT_STATEMENT',$4,$5,$6,$7,$8,$9,$10,$11)
+         RETURNING id\`,
+        [context.tenantId,number,row.party_id,row.id,obligationId,
+         row.period_from,row.period_to,row.currency,row.amount_minor,dueAt,context.membershipId]);
+      const invoiceId=invoice.rows[0]!.id;
+      await client.query(
+        \`UPDATE work_project_monthly_statement SET status='INVOICED',updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='FINALIZED'\`,
+        [context.tenantId,row.id]);
+      await this.audit(client,context,"finance.agency_invoice_issued","finance_invoice",invoiceId,
+        {statementId,obligationId,amountMinor:row.amount_minor,currency:row.currency});
+      await this.events.enqueue(client,context,{
+        eventName:"finance.invoice_issued",entityType:"FINANCE_INVOICE",entityId:invoiceId,
+        payload:{invoiceId,sourceType:"AGENCY_PROJECT_STATEMENT",sourceId:statementId,
+          partyId:row.party_id,obligationId,amountMinor:row.amount_minor,currency:row.currency,
+          periodFrom:row.period_from,periodTo:row.period_to}
+      });
+      return {invoiceId,obligationId,number};
+    });
+  }
+
   async create3plStatementInvoice(
     context: TenantContext,
     statementId: string,

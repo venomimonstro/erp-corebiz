@@ -1190,4 +1190,189 @@ export class ProjectsService {
     });
   }
 
+  private agencyPeriod(period: string) {
+    if (typeof period !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(period))
+      throw new BadRequestException("Период должен быть в формате ГГГГ-ММ");
+    const [year,month]=period.split("-").map(Number);
+    if(year<2000 || year>2100)
+      throw new BadRequestException("Некорректный год");
+    const start=period+"-01";
+    const next=new Date(Date.UTC(year,month,1)).toISOString().slice(0,10);
+    const end=new Date(Date.UTC(year,month,0)).toISOString().slice(0,10);
+    return {start,next,end};
+  }
+
+  private async calculateAgencyStatement(
+    client: PoolClient, context: TenantContext, projectId:string, period:string
+  ) {
+    const dates=this.agencyPeriod(period);
+    const projectResult=await client.query<{
+      id:string;party_id:string|null;currency:string;status:string;
+      billing_mode:string;monthly_retainer_minor:string;
+      budget_minor:string;media_budget_minor:string;completed_at:string|null;
+      target_margin_bps:number|null;
+    }>(\`SELECT id,party_id,currency,status,billing_mode,
+              monthly_retainer_minor::text,budget_minor::text,
+              media_budget_minor::text,completed_at::text,target_margin_bps
+         FROM work_project WHERE tenant_id=$1 AND id=$2\`,
+      [context.tenantId,projectId]);
+    const project=projectResult.rows[0];
+    if(!project) throw new NotFoundException("Проект не найден");
+    const totals=await client.query<{
+      billable_minutes:string;billable_value_minor:string;labor_cost_minor:string;
+      missing_cost_entries:string;other_cost_minor:string;milestone_revenue_minor:string;
+    }>(\`SELECT
+      (SELECT COALESCE(sum(e.minutes) FILTER (WHERE e.billable),0)::text
+       FROM work_project_time_entry e WHERE e.tenant_id=$1 AND e.project_id=$2
+       AND e.work_date >= $3::date AND e.work_date < $4::date) AS billable_minutes,
+      (SELECT COALESCE(sum((e.hourly_rate_minor_snapshot*e.minutes+30)/60)
+                FILTER(WHERE e.billable),0)::text
+       FROM work_project_time_entry e WHERE e.tenant_id=$1 AND e.project_id=$2
+       AND e.work_date >= $3::date AND e.work_date < $4::date) AS billable_value_minor,
+      (SELECT COALESCE(sum(pm.cost_rate_minor*e.minutes/60),0)::text
+       FROM work_project_time_entry e LEFT JOIN work_project_member pm
+         ON pm.tenant_id=e.tenant_id AND pm.project_id=e.project_id
+         AND pm.membership_id=e.membership_id
+       WHERE e.tenant_id=$1 AND e.project_id=$2
+       AND e.work_date >= $3::date AND e.work_date < $4::date) AS labor_cost_minor,
+      (SELECT count(*)::text FROM work_project_time_entry e
+       LEFT JOIN work_project_member pm ON pm.tenant_id=e.tenant_id
+         AND pm.project_id=e.project_id AND pm.membership_id=e.membership_id
+       WHERE e.tenant_id=$1 AND e.project_id=$2
+         AND e.work_date >= $3::date AND e.work_date < $4::date
+         AND (pm.cost_rate_minor IS NULL OR pm.cost_rate_minor=0)) AS missing_cost_entries,
+      (SELECT COALESCE(sum(e.amount_minor),0)::text FROM work_project_expense e
+       WHERE e.tenant_id=$1 AND e.project_id=$2
+         AND e.expense_on >= $3::date AND e.expense_on < $4::date) AS other_cost_minor,
+      (SELECT COALESCE(sum(m.amount_minor),0)::text FROM work_project_milestone m
+       WHERE m.tenant_id=$1 AND m.project_id=$2 AND m.status='DONE'
+         AND m.completed_at >= $3::date AND m.completed_at < $4::date) AS milestone_revenue_minor\`,
+      [context.tenantId,projectId,dates.start,dates.next]);
+    const stats=totals.rows[0]!;
+    let revenue=0n;
+    if(project.billing_mode==="RETAINER") revenue=BigInt(project.monthly_retainer_minor);
+    if(project.billing_mode==="TIME_AND_MATERIAL") revenue=BigInt(stats.billable_value_minor);
+    if(project.billing_mode==="MILESTONE") revenue=BigInt(stats.milestone_revenue_minor);
+    if(project.billing_mode==="FIXED" && project.status==="COMPLETED" &&
+       project.completed_at?.slice(0,7)===period) revenue=BigInt(project.budget_minor);
+    if(project.billing_mode==="INTERNAL")
+      throw new BadRequestException("Внутренний проект не выставляется клиенту");
+    const labor=BigInt(stats.labor_cost_minor);
+    const other=BigInt(stats.other_cost_minor);
+    const gross=revenue-labor-other;
+    const rawMargin=revenue>0n ? gross*10000n/revenue : null;
+    const margin=rawMargin!==null && rawMargin>=-100000n && rawMargin<=10000n
+      ? Number(rawMargin):null;
+    const warnings:string[]=[];
+    if(!project.party_id) warnings.push("К проекту не привязан клиент");
+    if(BigInt(stats.missing_cost_entries)>0n)
+      warnings.push("Для части записей времени не указана себестоимость сотрудника");
+    if(revenue<=0n) warnings.push("Нет выручки за выбранный период");
+    if(project.media_budget_minor!=="0")
+      warnings.push("Клиентский медиабюджет указан отдельно и не входит в себестоимость");
+    if(rawMargin!==null && margin===null) warnings.push("Маржа за пределами допустимого диапазона");
+    if(project.target_margin_bps!==null && rawMargin!==null &&
+       rawMargin<BigInt(project.target_margin_bps)) warnings.push("Маржа ниже целевой");
+    return {
+      projectId,period,periodFrom:dates.start,periodTo:dates.end,
+      currency:project.currency,billingMode:project.billing_mode,
+      partyId:project.party_id,
+      serviceRevenueMinor:revenue.toString(),
+      mediaBudgetMinor:project.media_budget_minor,
+      laborCostMinor:labor.toString(),
+      otherCostMinor:other.toString(),
+      grossMarginMinor:gross.toString(),marginBps:margin,
+      billableMinutes:Number(stats.billable_minutes),
+      warnings
+    };
+  }
+
+  async agencyStatementPreview(context:TenantContext, projectId:string, period:string) {
+    const scope=await this.membershipIdsForScope(context,"projects.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertReadableProject(client,context.tenantId,projectId,scope);
+      return this.calculateAgencyStatement(client,context,projectId,period);
+    });
+  }
+
+  async agencyStatements(context:TenantContext,projectId:string) {
+    const scope=await this.membershipIdsForScope(context,"projects.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertReadableProject(client,context.tenantId,projectId,scope);
+      return (await client.query(
+        \`SELECT s.id,s.period_key,s.period_from,s.period_to,
+                s.service_revenue_minor::text,s.labor_cost_minor::text,
+                s.other_cost_minor::text,s.gross_margin_minor::text,
+                s.margin_bps,s.status,s.snapshot,s.finalized_at,
+                i.id AS invoice_id,i.business_number AS invoice_number,
+                i.status AS invoice_status,i.due_at AS invoice_due_at
+         FROM work_project_monthly_statement s
+         LEFT JOIN finance_invoice i ON i.tenant_id=s.tenant_id
+           AND i.source_type='AGENCY_PROJECT_STATEMENT' AND i.source_id=s.id
+         WHERE s.tenant_id=$1 AND s.project_id=$2
+         ORDER BY s.period_key DESC LIMIT 36\`,
+        [context.tenantId,projectId]
+      )).rows;
+    });
+  }
+
+  async finalizeAgencyStatement(context:TenantContext,projectId:string,period:string) {
+    const dates=this.agencyPeriod(period);
+    const today=new Date().toISOString().slice(0,7);
+    if(period>=today)
+      throw new BadRequestException("Закрывать можно только завершённые месяцы");
+    const scope=await this.membershipIdsForScope(context,"projects.write");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertWritableProject(client,context.tenantId,projectId,scope);
+      // Serialize close/retry by locking the project, without cross-tenant locks.
+      const lock=await client.query("SELECT id FROM work_project WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
+        [context.tenantId,projectId]);
+      if(!lock.rowCount) throw new NotFoundException("Проект не найден");
+      const existing=await client.query<{id:string;status:string}>(
+        \`SELECT id,status FROM work_project_monthly_statement
+         WHERE tenant_id=$1 AND project_id=$2 AND period_key=$3 FOR UPDATE\`,
+        [context.tenantId,projectId,period]);
+      if(existing.rows[0] && existing.rows[0].status!=="DRAFT"){
+        return {id:existing.rows[0].id,status:existing.rows[0].status,alreadyFinalized:true};
+      }
+      const preview=await this.calculateAgencyStatement(client,context,projectId,period);
+      // Missing cost rates cannot be silently treated as actual profit.
+      if(preview.warnings.some(w=>w.includes("себестоимость сотрудника")))
+        throw new ConflictException("Укажите себестоимость сотрудников перед закрытием периода");
+      if(!preview.partyId)
+        throw new ConflictException("У проекта должен быть клиент CRM");
+      const snapshot=JSON.stringify({
+        period,model:preview.billingMode,mediaBudgetExcluded:true,
+        missingCostEntries:0,warnings:preview.warnings,
+        calculatedAt:new Date().toISOString()
+      });
+      const result=await client.query<{id:string;status:string}>(
+        \`INSERT INTO work_project_monthly_statement(
+           tenant_id,project_id,period_key,period_from,period_to,
+           service_revenue_minor,media_budget_minor,labor_cost_minor,
+           other_cost_minor,gross_margin_minor,margin_bps,billable_minutes,
+           status,snapshot,finalized_at
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'FINALIZED',$13,now())
+         ON CONFLICT(tenant_id,project_id,period_key) DO UPDATE SET
+           period_from=EXCLUDED.period_from,period_to=EXCLUDED.period_to,
+           service_revenue_minor=EXCLUDED.service_revenue_minor,
+           media_budget_minor=EXCLUDED.media_budget_minor,
+           labor_cost_minor=EXCLUDED.labor_cost_minor,
+           other_cost_minor=EXCLUDED.other_cost_minor,
+           gross_margin_minor=EXCLUDED.gross_margin_minor,
+           margin_bps=EXCLUDED.margin_bps,billable_minutes=EXCLUDED.billable_minutes,
+           snapshot=EXCLUDED.snapshot,status='FINALIZED',finalized_at=now(),
+           updated_at=now()
+         WHERE work_project_monthly_statement.status='DRAFT'
+         RETURNING id,status\`,
+        [context.tenantId,projectId,period,dates.start,dates.end,
+         preview.serviceRevenueMinor,preview.mediaBudgetMinor,
+         preview.laborCostMinor,preview.otherCostMinor,
+         preview.grossMarginMinor,preview.marginBps,
+         preview.billableMinutes,snapshot]);
+      if(!result.rows[0]) throw new ConflictException("Период уже закрыт");
+      return {...result.rows[0],alreadyFinalized:false,preview};
+    });
+  }
+
 }
