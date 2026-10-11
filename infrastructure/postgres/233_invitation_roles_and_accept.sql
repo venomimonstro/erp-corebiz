@@ -19,8 +19,9 @@ DECLARE
   v_membership_id uuid;
   v_role_id uuid;
   v_role_code text;
+  v_inviter_owner boolean;
 BEGIN
-  SELECT i.id, i.tenant_id, i.role_id
+  SELECT i.id, i.tenant_id, i.role_id, i.invited_by_user_id
   INTO v_invite
   FROM public.tenant_invitation i
   JOIN public.app_user u ON u.id = p_user_id
@@ -34,6 +35,29 @@ BEGIN
   FOR UPDATE OF i;
 
   IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  -- Recheck sender authority at redemption. An old link may not grant
+  -- a privileged role after its inviter was demoted or removed.
+  SELECT tm.is_owner INTO v_inviter_owner
+  FROM public.tenant_membership tm
+  WHERE tm.tenant_id=v_invite.tenant_id
+    AND tm.user_id=v_invite.invited_by_user_id
+    AND tm.status='ACTIVE' LIMIT 1;
+
+  IF v_inviter_owner IS NULL OR NOT EXISTS(
+    SELECT 1 FROM public.tenant_membership tm
+    JOIN public.membership_role mr ON mr.tenant_id=tm.tenant_id
+      AND mr.membership_id=tm.id
+    JOIN public.role_permission rp ON rp.tenant_id=mr.tenant_id
+      AND rp.role_id=mr.role_id
+    WHERE tm.tenant_id=v_invite.tenant_id
+      AND tm.user_id=v_invite.invited_by_user_id
+      AND tm.status='ACTIVE'
+      AND rp.permission_code IN ('*','users.manage')
+      AND rp.scope='all'
+  ) THEN
     RETURN;
   END IF;
 
@@ -51,6 +75,44 @@ BEGIN
   END IF;
   IF v_role_id IS NULL OR v_role_code='OWNER' THEN
     RAISE EXCEPTION 'INVITATION_ROLE_NOT_AVAILABLE';
+  END IF;
+
+  IF v_invite.role_id IS NOT NULL AND (
+    NOT EXISTS(
+      SELECT 1 FROM public.tenant_membership tm
+      JOIN public.membership_role mr ON mr.tenant_id=tm.tenant_id
+        AND mr.membership_id=tm.id
+      JOIN public.role_permission rp ON rp.tenant_id=mr.tenant_id
+        AND rp.role_id=mr.role_id
+      WHERE tm.tenant_id=v_invite.tenant_id
+        AND tm.user_id=v_invite.invited_by_user_id
+        AND tm.status='ACTIVE'
+        AND rp.permission_code IN ('*','roles.manage')
+        AND rp.scope='all'
+    ) OR (
+      NOT v_inviter_owner AND EXISTS(
+        SELECT 1 FROM public.role_permission target
+        WHERE target.tenant_id=v_invite.tenant_id
+          AND target.role_id=v_role_id
+          AND NOT EXISTS(
+            SELECT 1 FROM public.tenant_membership actor
+            JOIN public.membership_role amr ON amr.tenant_id=actor.tenant_id
+              AND amr.membership_id=actor.id
+            JOIN public.role_permission own ON own.tenant_id=amr.tenant_id
+              AND own.role_id=amr.role_id
+            WHERE actor.tenant_id=v_invite.tenant_id
+              AND actor.user_id=v_invite.invited_by_user_id
+              AND actor.status='ACTIVE'
+              AND own.permission_code IN ('*',target.permission_code)
+              AND (CASE own.scope WHEN 'all' THEN 4 WHEN 'branch' THEN 3
+                    WHEN 'team' THEN 2 WHEN 'own' THEN 1 ELSE 0 END)
+                  >= (CASE target.scope WHEN 'all' THEN 4 WHEN 'branch' THEN 3
+                    WHEN 'team' THEN 2 WHEN 'own' THEN 1 ELSE 0 END)
+          )
+      )
+    )
+  ) THEN
+    RETURN;
   END IF;
 
   INSERT INTO public.tenant_membership(tenant_id,user_id,status,is_owner)
