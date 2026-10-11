@@ -20,6 +20,7 @@ type Project={
   party_name:string|null;
   actual_minutes:number;
   labor_cost_minor:string;
+  other_cost_minor:string;
   pending_deliverables:number;
   overdue_deliverables:number;
   pending_approvals:number;
@@ -46,7 +47,7 @@ export default function AgencyPage(){
   useEffect(()=>{void load();},[load]);
 
   const metrics=useMemo(()=>{
-    let revenue=0n,media=0n,labor=0n,atRisk=0,approvals=0;
+    let revenue=0n,media=0n,labor=0n,other=0n,atRisk=0,approvals=0;
     for(const row of rows){
       revenue+=BigInt(
         row.billing_mode==="RETAINER"
@@ -55,10 +56,11 @@ export default function AgencyPage(){
       );
       media+=BigInt(row.media_budget_minor||"0");
       labor+=BigInt(row.labor_cost_minor||"0");
+      other+=BigInt(row.other_cost_minor||"0");
       if(row.overdue_deliverables||row.overdue_approvals) atRisk++;
       approvals+=row.pending_approvals;
     }
-    return {revenue,media,labor,atRisk,approvals};
+    return {revenue,media,labor,other,atRisk,approvals};
   },[rows]);
 
   return <main className="app-shell">
@@ -88,6 +90,7 @@ export default function AgencyPage(){
           <article><span>Активные клиенты</span><strong>{rows.length}</strong><small>проекты в работе</small></article>
           <article><span>Контрактная выручка</span><strong>{money(metrics.revenue.toString())}</strong><small>бюджеты + месячные ретейнеры</small></article>
           <article><span>Себестоимость команды</span><strong>{money(metrics.labor.toString())}</strong><small>по фактически учтённым часам</small></article>
+          <article><span>Прямые расходы</span><strong>{money(metrics.other.toString())}</strong><small>подрядчики, ПО и прочее</small></article>
           <article className={metrics.atRisk?"is-risk":""}><span>Требуют внимания</span><strong>{metrics.atRisk}</strong><small>{metrics.approvals} согласований у клиентов</small></article>
         </div>
 
@@ -109,7 +112,7 @@ export default function AgencyPage(){
                   :project.budget_minor||"0"
               );
               const labor=BigInt(project.labor_cost_minor||"0");
-              const contribution=planned-labor-BigInt(project.media_budget_minor||"0");
+              const contribution=planned-labor-BigInt(project.other_cost_minor||"0");
               return <a href={"/app/projects/"+project.id} className="agency-project-card" key={project.id}>
                 <header>
                   <div>
@@ -121,12 +124,13 @@ export default function AgencyPage(){
                 </header>
                 <div className="agency-money-row">
                   <div><span>Контракт</span><strong>{money(planned.toString(),project.currency)}</strong></div>
-                  <div><span>Вклад после труда и media</span><strong>{money(contribution.toString(),project.currency)}</strong></div>
+                  <div><span>Вклад после труда и подрядчиков</span><strong>{money(contribution.toString(),project.currency)}</strong></div>
                 </div>
                 <div className="agency-progress-row">
                   <div><span>Результаты клиенту</span><strong>{project.pending_deliverables}</strong><small>{project.overdue_deliverables?"просрочено "+project.overdue_deliverables:"без просрочек"}</small></div>
                   <div><span>Ждём клиента</span><strong>{project.pending_approvals}</strong><small>{project.overdue_approvals?"просрочено "+project.overdue_approvals:"согласования"}</small></div>
                   <div><span>Команда</span><strong>{Math.round(project.actual_minutes/60)} ч</strong><small>{money(project.labor_cost_minor,project.currency)}</small></div>
+                  <div><span>Прямые расходы</span><strong>{money(project.other_cost_minor||"0",project.currency)}</strong></div>
                 </div>
                 <footer>
                   <span>{project.business_number}</span>
