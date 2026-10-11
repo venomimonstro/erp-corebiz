@@ -40,6 +40,62 @@ export class ComplianceController {
     };
   }
 
+  @Get("npd")
+  @RequirePermission("accounting.compliance.read")
+  async npd(
+    @Req() req:AuthenticatedRequest,
+    @Query("legalEntityId") legalEntityId:string,
+    @Query("year") year?:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.npdOverview(
+        this.context(req),legalEntityId,Number(year??new Date().getUTCFullYear())
+      )
+    };
+  }
+
+  @Post("npd/receipts")
+  @RequirePermission("accounting.compliance.manage")
+  async createNpdReceipt(
+    @Req() req:AuthenticatedRequest,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.registerNpdReceipt(this.context(req),body)
+    };
+  }
+
+  @Post("npd/receipts/:id/confirm")
+  @RequirePermission("accounting.compliance.approve")
+  async confirmNpdReceipt(
+    @Req() req:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.confirmNpdReceipt(
+        this.context(req),id,body
+      )
+    };
+  }
+
+  @Post("npd/months/rebuild")
+  @RequirePermission("accounting.compliance.manage")
+  async rebuildNpdMonths(
+    @Req() req:AuthenticatedRequest,
+    @Body() body:{legalEntityId:string;year:number}
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.rebuildNpdMonths(
+        this.context(req),body.legalEntityId,Number(body.year)
+      )
+    };
+  }
+
   @Get("cash-accounts")
   @RequirePermission("accounting.compliance.read")
   async cashAccounts(
