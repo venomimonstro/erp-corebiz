@@ -326,6 +326,81 @@ export class DanceStudioService {
         [context.tenantId,scopeIds]
       );
 
+      const payrollMonth=await client.query<{
+        expected_trainers:number;
+        statement_count:number;
+        payroll_total_minor:string;
+        payroll_extra_minor:string;
+      }>(
+        `WITH month_bounds AS (
+           SELECT
+             date_trunc('month',current_date)::date AS from_date,
+             (
+               date_trunc('month',current_date)+interval '1 month-1 day'
+             )::date AS to_date
+         ),
+         expected AS (
+           SELECT DISTINCT l.trainer_resource_id AS trainer_id
+           FROM dance_lesson_profitability prof
+           JOIN dance_lesson l
+             ON l.tenant_id=prof.tenant_id AND l.id=prof.lesson_id
+           LEFT JOIN service_resource tr
+             ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
+           WHERE prof.tenant_id=$1
+             AND l.trainer_resource_id IS NOT NULL
+             AND l.starts_at>=date_trunc('month',now())
+             AND l.starts_at<date_trunc('month',now())+interval '1 month'
+             AND (
+               $2::uuid[] IS NULL
+               OR tr.membership_id=ANY($2::uuid[])
+             )
+           UNION
+           SELECT p.trainer_resource_id
+           FROM trainer_payroll_profile p
+           JOIN service_resource tr
+             ON tr.tenant_id=p.tenant_id AND tr.id=p.trainer_resource_id
+           CROSS JOIN month_bounds mb
+           WHERE p.tenant_id=$1
+             AND p.status='ACTIVE'
+             AND p.valid_from<=mb.to_date
+             AND (p.valid_to IS NULL OR p.valid_to>=mb.from_date)
+             AND (
+               $2::uuid[] IS NULL
+               OR tr.membership_id=ANY($2::uuid[])
+             )
+         ),
+         statements AS (
+           SELECT s.*
+           FROM trainer_payroll_statement s
+           JOIN service_resource tr
+             ON tr.tenant_id=s.tenant_id AND tr.id=s.trainer_resource_id
+           CROSS JOIN month_bounds mb
+           WHERE s.tenant_id=$1
+             AND s.period_from=mb.from_date
+             AND s.period_to=mb.to_date
+             AND s.status IN ('FINALIZED','EXPORTED','PAID')
+             AND (
+               $2::uuid[] IS NULL
+               OR tr.membership_id=ANY($2::uuid[])
+             )
+         )
+         SELECT
+           (SELECT count(*) FROM expected)::integer AS expected_trainers,
+           (SELECT count(*) FROM statements)::integer AS statement_count,
+           coalesce(
+             (SELECT sum(total_minor) FROM statements),0
+           )::text AS payroll_total_minor,
+           coalesce(
+             (
+               SELECT sum(
+                 base_minor+guarantee_adjustment_minor+adjustment_minor
+               )
+               FROM statements
+             ),0
+           )::text AS payroll_extra_minor`,
+        [context.tenantId,scopeIds]
+      );
+
       let rentAdjustment=0n;
       if(scopeIds===null){
         const reconciliation=await client.query<{adjustment_minor:string}>(
@@ -463,13 +538,36 @@ export class DanceStudioService {
             room_cost_minor: "0",
             margin_minor: "0"
           };
+          const payroll=payrollMonth.rows[0]??{
+            expected_trainers:0,
+            statement_count:0,
+            payroll_total_minor:"0",
+            payroll_extra_minor:"0"
+          };
+          const adjustedRoom=
+            BigInt(base.room_cost_minor)+rentAdjustment;
+          const preliminaryMargin=
+            BigInt(base.margin_minor)-rentAdjustment;
+          const payrollExtra=BigInt(payroll.payroll_extra_minor);
+          const payrollFinalized=
+            payroll.expected_trainers>0 &&
+            payroll.statement_count>=payroll.expected_trainers;
           return {
             ...base,
-            room_cost_minor:
-              (BigInt(base.room_cost_minor)+rentAdjustment).toString(),
-            margin_minor:
-              (BigInt(base.margin_minor)-rentAdjustment).toString(),
-            room_statement_adjustment_minor:rentAdjustment.toString()
+            room_cost_minor:adjustedRoom.toString(),
+            margin_minor:preliminaryMargin.toString(),
+            room_statement_adjustment_minor:rentAdjustment.toString(),
+            payroll_total_minor:payroll.payroll_total_minor,
+            payroll_extra_minor:payroll.payroll_extra_minor,
+            full_team_cost_minor:
+              (
+                BigInt(base.trainer_cost_minor)+payrollExtra
+              ).toString(),
+            owner_margin_minor:
+              (preliminaryMargin-payrollExtra).toString(),
+            payroll_statement_count:payroll.statement_count,
+            payroll_expected_trainers:payroll.expected_trainers,
+            payroll_finalized:payrollFinalized
           };
         })(),
         attention: attention.rows[0] ?? {
