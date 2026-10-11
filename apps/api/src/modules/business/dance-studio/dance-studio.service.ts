@@ -492,7 +492,10 @@ export class DanceStudioService {
            s.id,s.party_id,p.display_name,s.birth_date,s.training_level,
            s.status,s.preferred_branch_id,s.joined_at,s.first_lesson_at,
            payer.id AS payer_party_id,payer.display_name AS payer_name,
-           debt.debt_minor,
+           debt.debt_minor,debt.overdue_minor,debt.overdue_count,
+           debt.open_charge_count,
+           family.family_debt_minor,family.family_overdue_minor,
+           family.family_overdue_count,family.family_children_count,
            groups.active_groups
          FROM dance_student s
          JOIN party p
@@ -504,25 +507,70 @@ export class DanceStudioService {
              ON pp.tenant_id=rel.tenant_id AND pp.id=rel.to_party_id
            WHERE rel.tenant_id=s.tenant_id
              AND rel.from_party_id=s.party_id
-             AND rel.relation_type='PAYER'
+             AND rel.relation_type IN ('PAYER','PARENT','GUARDIAN')
              AND (rel.ends_on IS NULL OR rel.ends_on>=current_date)
-           ORDER BY rel.is_primary DESC,rel.created_at
+           ORDER BY
+             CASE rel.relation_type
+               WHEN 'PAYER' THEN 0
+               WHEN 'PARENT' THEN 1
+               ELSE 2
+             END,
+             rel.is_primary DESC,
+             rel.created_at
            LIMIT 1
          ) payer ON true
          LEFT JOIN LATERAL (
            SELECT
-             coalesce(
-               sum(c.amount_minor-coalesce(o.settled_minor,0)) FILTER (
-                 WHERE c.status IN ('OPEN','PARTIALLY_PAID')
-               ),
-               0
-             )::text AS debt_minor
+             coalesce(sum(
+               c.amount_minor-coalesce(o.settled_minor,0)
+             ) FILTER (
+               WHERE c.status IN ('OPEN','PARTIALLY_PAID')
+             ),0)::text AS debt_minor,
+             coalesce(sum(
+               c.amount_minor-coalesce(o.settled_minor,0)
+             ) FILTER (
+               WHERE c.status IN ('OPEN','PARTIALLY_PAID')
+                 AND o.due_at<now()
+             ),0)::text AS overdue_minor,
+             count(*) FILTER (
+               WHERE c.status IN ('OPEN','PARTIALLY_PAID')
+                 AND o.due_at<now()
+             )::integer AS overdue_count,
+             count(*) FILTER (
+               WHERE c.status IN ('OPEN','PARTIALLY_PAID')
+             )::integer AS open_charge_count
            FROM dance_student_charge c
            LEFT JOIN financial_obligation o
              ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
            WHERE c.tenant_id=s.tenant_id
              AND c.student_id=s.id
          ) debt ON true
+         LEFT JOIN LATERAL (
+           SELECT
+             coalesce(sum(
+               c.amount_minor-coalesce(o.settled_minor,0)
+             ) FILTER (
+               WHERE c.status IN ('OPEN','PARTIALLY_PAID')
+             ),0)::text AS family_debt_minor,
+             coalesce(sum(
+               c.amount_minor-coalesce(o.settled_minor,0)
+             ) FILTER (
+               WHERE c.status IN ('OPEN','PARTIALLY_PAID')
+                 AND o.due_at<now()
+             ),0)::text AS family_overdue_minor,
+             count(*) FILTER (
+               WHERE c.status IN ('OPEN','PARTIALLY_PAID')
+                 AND o.due_at<now()
+             )::integer AS family_overdue_count,
+             count(DISTINCT c.student_id) FILTER (
+               WHERE c.status IN ('OPEN','PARTIALLY_PAID')
+             )::integer AS family_children_count
+           FROM dance_student_charge c
+           LEFT JOIN financial_obligation o
+             ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
+           WHERE c.tenant_id=s.tenant_id
+             AND c.payer_party_id=coalesce(payer.id,s.party_id)
+         ) family ON true
          LEFT JOIN LATERAL (
            SELECT
              count(DISTINCT gm.group_id) FILTER (
@@ -541,15 +589,24 @@ export class DanceStudioService {
                FROM dance_lesson_participant lp2
                JOIN dance_lesson l2
                  ON l2.tenant_id=lp2.tenant_id AND l2.id=lp2.lesson_id
-               JOIN service_resource tr2
+               LEFT JOIN service_resource tr2
                  ON tr2.tenant_id=l2.tenant_id
                 AND tr2.id=l2.trainer_resource_id
                WHERE lp2.tenant_id=s.tenant_id
                  AND lp2.student_id=s.id
-                 AND tr2.membership_id = ANY($2::uuid[])
+                 AND (
+                   tr2.membership_id = ANY($2::uuid[])
+                   OR (
+                     l2.trainer_resource_id IS NULL
+                     AND l2.created_by_membership_id = ANY($2::uuid[])
+                   )
+                 )
              )
            )
-         ORDER BY p.display_name`,
+         ORDER BY
+           family.family_overdue_minor::bigint DESC,
+           family.family_debt_minor::bigint DESC,
+           p.display_name`,
         [context.tenantId, scopeIds]
       );
       return result.rows;
