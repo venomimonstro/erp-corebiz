@@ -12,6 +12,24 @@ import { generateToken, hashToken } from "../auth/auth.utils";
 export class TenantsService {
   constructor(private readonly database: DatabaseService) {}
 
+  private async requireManageAll(client:import("pg").PoolClient,
+    context:TenantContext):Promise<void>{
+    const ok=await client.query(
+      `SELECT 1 FROM tenant_membership tm
+       JOIN membership_role mr ON mr.tenant_id=tm.tenant_id
+         AND mr.membership_id=tm.id
+       JOIN role_permission rp ON rp.tenant_id=mr.tenant_id
+         AND rp.role_id=mr.role_id
+       WHERE tm.tenant_id=$1 AND tm.id=$2 AND tm.user_id=$3
+         AND tm.status='ACTIVE'
+         AND rp.permission_code IN ('*','users.manage')
+         AND rp.scope='all' LIMIT 1`,
+      [context.tenantId,context.membershipId,context.userId]);
+    if(!ok.rowCount)throw new BadRequestException(
+      "Приглашать сотрудников может только руководитель с правом управления всей компанией"
+    );
+  }
+
   async createTenant(
     userId: string,
     companyName: string
@@ -80,6 +98,7 @@ export class TenantsService {
     }
 
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.requireManageAll(client,context);
       const existing = await client.query(
         `SELECT 1
          FROM tenant_membership m
@@ -186,6 +205,7 @@ export class TenantsService {
 
   async invitations(context:TenantContext){
     return this.database.withTenantTransaction(context,async client=>{
+      await this.requireManageAll(client,context);
       const result=await client.query(
         `SELECT i.id,i.email,i.status,i.expires_at,i.created_at,
            r.name AS role_name,r.code AS role_code
@@ -199,6 +219,7 @@ export class TenantsService {
 
   async team(context:TenantContext){
     return this.database.withTenantTransaction(context,async client=>{
+      await this.requireManageAll(client,context);
       const result=await client.query(
         `SELECT m.id AS membership_id,u.email,m.status,m.is_owner,
             coalesce(json_agg(json_build_object('id',r.id,'code',r.code,'name',r.name))
@@ -219,6 +240,7 @@ export class TenantsService {
     if(!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(id))
       throw new BadRequestException("Некорректный идентификатор");
     return this.database.withTenantTransaction(context,async client=>{
+      await this.requireManageAll(client,context);
       const r=await client.query(
         `UPDATE tenant_invitation SET status='REVOKED'
          WHERE tenant_id=$1 AND id=$2 AND status='PENDING'
