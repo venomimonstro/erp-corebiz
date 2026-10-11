@@ -1441,22 +1441,27 @@ export class DanceEconomicsService {
              )
            )
        )
+       ,period_accrual AS (
+         SELECT
+           a.trainer_resource_id,
+           min(a.currency)::text AS currency,
+           coalesce(sum(a.amount_minor),0)::text AS lesson_accrual_minor
+         FROM trainer_compensation_accrual a
+         JOIN dance_lesson l
+           ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
+         WHERE a.tenant_id=$1
+           AND l.starts_at>=$2 AND l.starts_at<$3
+           AND a.status IN ('APPROVED','EXPORTED')
+         GROUP BY a.trainer_resource_id
+       )
        SELECT
          c.trainer_resource_id,
-         coalesce(min(a.currency),'RUB')::text AS currency,
-         coalesce(sum(a.amount_minor),0)::text AS lesson_accrual_minor
+         coalesce(p.currency,'RUB')::text AS currency,
+         coalesce(p.lesson_accrual_minor,'0')::text AS lesson_accrual_minor
        FROM candidates c
-       LEFT JOIN trainer_compensation_accrual a
-         ON a.tenant_id=$1
-        AND a.trainer_resource_id=c.trainer_resource_id
-        AND a.status IN ('APPROVED','EXPORTED')
-       LEFT JOIN dance_lesson l
-         ON l.tenant_id=a.tenant_id
-        AND l.id=a.lesson_id
-        AND l.starts_at>=$2
-        AND l.starts_at<$3
-       WHERE a.id IS NULL OR l.id IS NOT NULL
-       GROUP BY c.trainer_resource_id`,
+       LEFT JOIN period_accrual p
+         ON p.trainer_resource_id=c.trainer_resource_id
+       ORDER BY c.trainer_resource_id`,
       [tenantId,from,to,periodTo,periodFrom]
     );
 
