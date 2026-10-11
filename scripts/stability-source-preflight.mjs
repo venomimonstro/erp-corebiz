@@ -324,7 +324,10 @@ async function inspectRequiredHardening(root) {
       /DANCE_TRAINER_STATEMENT/,
       /payroll_accrual_component/,
       /payroll_batch_id/,
-      /service_booking_material/
+      /service_booking_material/,
+      /payroll_statement_review/,
+      /reviewPayrollStatement/,
+      /resolvePayrollReview/
     ],
     message: "Dance studio economics hardening is missing"
   },
@@ -380,7 +383,9 @@ async function inspectRequiredHardening(root) {
       /payroll-profiles/,
       /archivePlan/,
       /Зарегистрировать выплату/,
-      /approvePayrollBatch/
+      /approvePayrollBatch/,
+      /review_status/,
+      /Есть спор/
     ],
     message: "Premium trainer payroll workspace is missing"
   },
@@ -389,7 +394,9 @@ async function inspectRequiredHardening(root) {
     patterns: [
       /async markPaid/,
       /status='PAID'/,
-      /payment_reference/
+      /payment_reference/,
+      /assertNoOpenPayrollDisputes/,
+      /review_status='DISPUTED'/
     ],
     message: "Explicit payroll payment lifecycle is missing"
   },
@@ -423,7 +430,9 @@ async function inspectRequiredHardening(root) {
       /trainer_compensation_accruals/,
       /trainer_payroll_profiles/,
       /payroll_accrual_components/,
-      /room_rental_statements/
+      /room_rental_statements/,
+      /payroll_statement_reviews/,
+      /payroll_statement_review_events/
     ],
     message: "Dance studio tenant export coverage is missing"
   }
@@ -492,7 +501,8 @@ async function inspectRequiredHardening(root) {
     "186_service_employee_economics.sql",
     "187_service_payroll_export_lifecycle.sql",
     "188_service_waitlist.sql",
-    "189_service_rebooking_cycle.sql"
+    "189_service_rebooking_cycle.sql",
+    "190_payroll_statement_reviews.sql"
   ];
 
   for (const name of requiredMigrations) {
@@ -528,7 +538,9 @@ async function inspectUniversalServiceEconomics(root) {
         /exportPayrollToBatch/,
         /SERVICE_EMPLOYEE_STATEMENT/,
         /service_waitlist_entry/,
-        /service\.waitlist_offer_created/
+        /service\.waitlist_offer_created/,
+        /payroll_statement_review/,
+        /reviewPayrollStatement/
       ]
     ],
     [
