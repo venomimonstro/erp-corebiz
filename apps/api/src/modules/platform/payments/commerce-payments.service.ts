@@ -219,7 +219,7 @@ export class CommercePaymentsService {
       const unit=total/(quantity/1000n);
       return {
         description:row.description.slice(0,128),
-        quantity:(quantity/1000n).toString()+".000",
+        quantity:Number(quantity/1000n),
         amount:{value:minorToMoney(unit.toString()),currency:"RUB"},
         vat_code:vatCode,payment_mode:"full_prepayment",
         payment_subject:row.description.toLowerCase().startsWith("доставка:")
@@ -244,7 +244,7 @@ export class CommercePaymentsService {
     }
     return {customer:{email},items:[{
       description:("Подписка CoreBiz "+code).slice(0,128),
-      quantity:"1.000",
+      quantity:1,
       amount:{value:minorToMoney(price),currency:"RUB"},
       vat_code:vat,payment_mode:"full_payment",payment_subject:"service"
     }],...(tax?{tax_system_code:tax}:{})};
