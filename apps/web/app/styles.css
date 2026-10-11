@@ -1772,3 +1772,33 @@ button, .primary, .secondary { font: inherit; }
 @media (max-width:580px){
   .package-preset-grid { grid-template-columns:1fr; }
 }
+
+
+/* Trainer payroll statements */
+.trainer-statement-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.trainer-statement-grid > article { min-height:170px; border:1px solid #e3e6e8; border-radius:15px; background:#fff; padding:15px; display:flex; flex-direction:column; gap:12px; }
+.trainer-statement-grid > article > header { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+.trainer-statement-grid > article > header > div { display:grid; gap:3px; }
+.trainer-statement-grid > article > header span:first-child { color:#92979d; font-size:8px; text-transform:uppercase; letter-spacing:.08em; }
+.trainer-statement-grid h3 { margin:0; font-size:14px; }
+.trainer-statement-grid > article > strong { margin-top:auto; font-size:27px; letter-spacing:-.045em; }
+.trainer-statement-grid > article > div { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; }
+.trainer-statement-grid > article > div > span { display:grid; gap:3px; padding:7px; border-radius:8px; background:#f6f7f8; color:#8a9096; font-size:8px; }
+.trainer-statement-grid > article > div b { color:#3a3f44; font-size:9px; }
+.studio-client-switcher { margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; gap:16px; border:1px solid #e0e3e6; border-radius:15px; background:#fff; padding:12px 14px; }
+.studio-client-switcher > div { display:grid; gap:3px; }
+.studio-client-switcher span { color:#90969d; font-size:8px; text-transform:uppercase; letter-spacing:.08em; }
+.studio-client-switcher strong { font-size:11px; }
+.studio-client-switcher select { min-width:min(420px,52vw); min-height:41px; border:1px solid #dce0e3; border-radius:10px; background:#fff; color:#272b30; padding:8px 10px; font:inherit; font-size:10px; }
+.student-package-summary { margin-top:12px; display:grid; grid-template-columns:auto minmax(0,1fr); gap:6px 12px; border-radius:11px; background:#f6f7f8; padding:11px; }
+.student-package-summary span { color:#8d9399; font-size:9px; }
+.student-package-summary strong { font-size:10px; }
+
+@media (max-width:920px){
+  .trainer-statement-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (max-width:650px){
+  .trainer-statement-grid { grid-template-columns:1fr; }
+  .studio-client-switcher { align-items:stretch; flex-direction:column; }
+  .studio-client-switcher select { width:100%; min-width:0; }
+}
