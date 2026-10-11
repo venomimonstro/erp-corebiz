@@ -104,7 +104,7 @@ export class CatalogService {
     if(cursor&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(cursor))
       throw new BadRequestException("Неверный курсор страницы каталога");
     const query=input.query?.trim()??"";
-    const safeQuery=query.replace(/[\\%_]/g,"\\const query=input.query?.trim()??"";");
+    const safeQuery=query.replace(/[\\%_]/g,"\\$&");
     if(query.length>100||(query.length>0&&query.length<3))
       throw new BadRequestException("Для поиска укажите от 3 до 100 символов");
     return this.database.withTenantTransaction(context,async client=>{
