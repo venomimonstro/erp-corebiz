@@ -13,12 +13,14 @@ import type { AuthenticatedRequest } from "../../platform/auth/auth.types";
 import { RequirePermission } from "../../platform/authorization/require-permission.decorator";
 import { DanceEconomicsService } from "./dance-economics.service";
 import { DanceStudioService } from "./dance-studio.service";
+import {DanceOperationsService} from "./dance-operations.service";
 
 @Controller("dance")
 export class DanceStudioController {
   constructor(
     private readonly studio:DanceStudioService,
-    private readonly economics:DanceEconomicsService
+    private readonly economics:DanceEconomicsService,
+    private readonly operations:DanceOperationsService
   ) {}
 
   @Get("access")
@@ -31,6 +33,12 @@ export class DanceStudioController {
   @RequirePermission("dance.read")
   async readiness(@Req() req:AuthenticatedRequest):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.studio.readiness(this.ctx(req))};
+  }
+
+  @Get("operations/health")
+  @RequirePermission("dance.read")
+  async operationsHealth(@Req() req:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.operations.health(this.ctx(req))};
   }
 
   @Get("dashboard")
