@@ -286,23 +286,36 @@ async function* readEntity(
      !(await hasTenantId(client,entity.table)))return;
   const table=quoteIdentifier(entity.table);
   const byId=await hasId(client,entity.table);
-  let lastId:unknown=null;
+  // Stock balances are composite-key rows and may contain millions of SKUs.
+  // Use the existing PK (tenant_id,warehouse_id,sku_id) as seek index.
+  const composite=entity.table==="inventory_balance"
+    ?["warehouse_id","sku_id"]:null;
+  const cursorColumns=byId?["id"]:composite;
+  let lastValues:unknown[]|null=null;
   let offset=0;
   for(;;){
-    const query=byId
-      ?"SELECT * FROM "+table+" WHERE tenant_id=$1 "+
-        (lastId===null?"":"AND id>$3 ")+"ORDER BY id LIMIT $2"
+    const columns=cursorColumns?.map(quoteIdentifier)??[];
+    const seek=lastValues===null?"":(
+      "AND ("+columns.join(",")+")>("+
+        columns.map((_,i)=>"$"+(i+3)).join(",")+") "
+    );
+    const query=cursorColumns
+      ?"SELECT * FROM "+table+" WHERE tenant_id=$1 "+seek+
+        "ORDER BY "+columns.join(",")+" LIMIT $2"
       :"SELECT * FROM "+table+" WHERE tenant_id=$1 ORDER BY tenant_id LIMIT $2 OFFSET $3";
-    const params=byId?(lastId===null?[tenantId,PAGE_SIZE]:[tenantId,PAGE_SIZE,lastId])
+    const params=cursorColumns
+      ?[tenantId,PAGE_SIZE,...(lastValues??[])]
       :[tenantId,PAGE_SIZE,offset];
     const result=await client.query<Record<string,unknown>>(query,params);
     if(!result.rows.length)break;
     yield result.rows.map(row=>cleanValue(row) as Record<string,unknown>);
-    if(byId){
-      const tail=result.rows[result.rows.length-1]?.id;
-      if(tail===null||tail===undefined||tail===lastId)
+    if(cursorColumns){
+      const tail=result.rows[result.rows.length-1]!;
+      const next=cursorColumns.map(col=>tail[col]);
+      if(next.some(value=>value===null||value===undefined)||
+         (lastValues!==null&&next.every((v,i)=>v===lastValues![i])))
         throw new Error("EXPORT_CURSOR_STALLED");
-      lastId=tail;
+      lastValues=next;
     }else{
       offset+=result.rows.length;
     }
