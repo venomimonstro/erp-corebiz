@@ -80,6 +80,7 @@ const EXPORT_ENTITIES: ExportEntity[] = [
   { table: "trainer_compensation_plan", label: "trainer_compensation_plans" },
   { table: "trainer_compensation_component", label: "trainer_compensation_components" },
   { table: "trainer_payroll_statement", label: "trainer_payroll_statements" },
+  { table: "trainer_payroll_adjustment", label: "trainer_payroll_adjustments" },
   { table: "trainer_compensation_accrual", label: "trainer_compensation_accruals" },
   { table: "room_rental_contract", label: "room_rental_contracts" },
   { table: "room_rental_slot", label: "room_rental_slots" },
