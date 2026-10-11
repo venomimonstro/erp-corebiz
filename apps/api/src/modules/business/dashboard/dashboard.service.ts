@@ -1,6 +1,8 @@
 import { Injectable } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { OPERATIONAL_SCAN_LIMIT, VERTICAL_OPERATIONAL_RULES,
+  VERTICAL_OPERATIONAL_RULE_BY_CODE } from "./vertical-operational-rules";
 
 @Injectable()
 export class DashboardService {
@@ -1258,6 +1260,18 @@ export class DashboardService {
         currentIssues.get("PAYROLL_DRAFT")!.add(row.id);
       }
 
+      // Covers all installed verticals via their real domain events and
+      // transaction states, not synthetic "ready" percentages. Scans include
+      // a sentinel row to avoid falsely resolving issues in large tenants.
+      const truncatedRules=new Set<string>();
+      for(const rule of VERTICAL_OPERATIONAL_RULES){
+        const found=await client.query<{id:string}>(rule.sql,[context.tenantId]);
+        if(found.rows.length>OPERATIONAL_SCAN_LIMIT)
+          truncatedRules.add(rule.code);
+        currentIssues.set(rule.code,
+          new Set(found.rows.slice(0,OPERATIONAL_SCAN_LIMIT).map(row=>row.id)));
+      }
+
       for (const [issueCode, ids] of currentIssues) {
         for (const referenceId of ids) {
           await client.query(
@@ -1272,6 +1286,9 @@ export class DashboardService {
           );
         }
 
+        // Never clear unseen issue rows when a tenant has more unresolved
+        // objects than the bounded preview can safely retrieve.
+        if(truncatedRules.has(issueCode))continue;
         const idArray = Array.from(ids);
         await client.query(
           `UPDATE tenant_operational_issue
@@ -1314,7 +1331,10 @@ export class DashboardService {
         BANK_UNMATCHED: "/app/finance",
         VAT_UNREGISTERED: "/app/accounting",
         CLOSE_BLOCKED: "/app/accounting",
-        PAYROLL_DRAFT: "/app/accounting"
+        PAYROLL_DRAFT: "/app/accounting",
+        ...Object.fromEntries(VERTICAL_OPERATIONAL_RULES.map(rule=>[
+          rule.code,rule.href
+        ]))
       };
 
       return {
@@ -1325,7 +1345,16 @@ export class DashboardService {
           code: issue.issue_code,
           referenceId: issue.reference_id,
           firstSeenAt: issue.first_seen_at.toISOString(),
-          href: href[issue.issue_code] ?? "/app"
+          href: href[issue.issue_code] ?? "/app",
+          title: VERTICAL_OPERATIONAL_RULE_BY_CODE.get(issue.issue_code)?.label
+            ?? issue.issue_code,
+          severity: VERTICAL_OPERATIONAL_RULE_BY_CODE.get(issue.issue_code)?.severity
+            ?? (["CLOSE_BLOCKED","VAT_UNREGISTERED"].includes(issue.issue_code)
+              ? "CRITICAL" : "WARNING"),
+          domain: VERTICAL_OPERATIONAL_RULE_BY_CODE.get(issue.issue_code)?.domain
+            ?? "ACCOUNTING",
+          explanation: VERTICAL_OPERATIONAL_RULE_BY_CODE.get(issue.issue_code)?.explanation
+            ?? "Откройте раздел и устраните причину проблемы"
         }))
       };
     });
