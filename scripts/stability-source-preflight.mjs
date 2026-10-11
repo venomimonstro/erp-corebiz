@@ -445,19 +445,6 @@ async function inspectRequiredHardening(root) {
     message: "Shared service pricing, technology card, or zone setup UX is missing"
   },
   {
-    path: "apps/api/src/modules/business/accounting/tax-compliance.service.ts",
-    patterns: [
-      /async dashboard/,
-      /async saveProfile/,
-      /async generateCalendar/,
-      /async autoClassifyPayments/,
-      /async calculateUsn/,
-      /accounting_tax_ledger_item/,
-      /accounting_ens_snapshot/
-    ],
-    message: "Russian tax compliance automation service is incomplete"
-  },
-  {
     path: "apps/api/src/modules/business/accounting/compliance.service.ts",
     patterns: [
       /syncTaxLedger/,
@@ -477,35 +464,13 @@ async function inspectRequiredHardening(root) {
       /Счета этого юрлица/,
       /Расчёт УСН/,
       /Собрать из финансов/,
-      /Обновить календарь/
-    ],
-    message: "Owner accounting compliance center is incomplete"
-  },
-  {
-    path: "apps/api/src/modules/business/accounting/tax-compliance.controller.ts",
-    patterns: [
-      /TaxComplianceController/,
-      /generateCalendar/,
-      /autoClassify/,
-      /calculateUsn/,
-      /confirmCalculation/,
-      /preparePacket/,
-      /recordSignature/,
-      /queueSubmission/
-    ],
-    message: "Russian tax compliance API is incomplete"
-  },
-  {
-    path: "apps/web/components/tax-compliance-panel.tsx",
-    patterns: [
-      /TaxCompliancePanel/,
-      /Налоговый помощник/,
       /Обновить календарь/,
-      /Проверить операции/,
       /Подготовить пакет/,
+      /Подтвердить КЭП/,
+      /КНД/,
       /VAT_22/
     ],
-    message: "Owner-first tax compliance UI is incomplete"
+    message: "Owner accounting compliance center is incomplete"
   },
   {
     path: "apps/worker/src/tenant-export.ts",
