@@ -27,6 +27,20 @@ type Project={
   overdue_approvals:number;
 };
 
+type OwnerHealth={
+  score:{
+    overdueInvoices:number;overdueDeliveries:number;renewalDue:number;
+    unworkedDeals:number;unpaidInvoiceCount:number;
+    outstandingMinor:string;overdueMinor:string;
+    contractedMonthlyRevenueMinor:string;activeMonthlyContracts:number;
+    crmVisible:boolean;
+  };
+  alerts:Array<{
+    type:string;title:string;description:string;
+    href:string;dueAt:string|null;priority:"high"|"medium";
+  }>;
+};
+
 type StatementPreview={
   projectId:string; period:string; currency:string; billingMode:string;
   serviceRevenueMinor:string; laborCostMinor:string; otherCostMinor:string;
@@ -51,6 +65,8 @@ const money=(v:string,c="RUB")=>new Intl.NumberFormat("ru-RU",{
 
 export default function AgencyPage(){
   const [rows,setRows]=useState<Project[]>([]);
+  const [health,setHealth]=useState<OwnerHealth|null>(null);
+  const [allAlerts,setAllAlerts]=useState(false);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState("");
   const [expenseProject,setExpenseProject]=useState("");
@@ -72,7 +88,13 @@ export default function AgencyPage(){
   const load=useCallback(async()=>{
     setLoading(true);setError("");
     try{
-      setRows(await apiRequest<Project[]>("/projects/agency/overview"));
+
+      const [projects,healthResult]=await Promise.all([
+        apiRequest<Project[]>("/projects/agency/overview"),
+        apiRequest<OwnerHealth>("/projects/agency/health")
+      ]);
+      setRows(projects);
+      setHealth(healthResult);
     }catch(cause){
       setError(cause instanceof Error?cause.message:"Не удалось загрузить агентство");
     }finally{setLoading(false);}
@@ -180,6 +202,7 @@ export default function AgencyPage(){
         </div>
         <div className="agency-hero-actions">
           <a className="secondary-button" href="/app/crm/deals">Воронка продаж</a>
+          <a className="secondary-button" href="/app/agency/contracts">Договоры</a>
           <a className="secondary-button" href="/app/agency/team">Команда и ставки</a>
           <a className="secondary-button" href="/app/agency/contracts">Договоры и продления</a>
           <a className="button-link" href="/app/projects?create=1">+ Новый проект</a>
@@ -199,6 +222,65 @@ export default function AgencyPage(){
           <article className={metrics.atRisk?"is-risk":""}><span>Требуют внимания</span><strong>{metrics.atRisk}</strong><small>{metrics.approvals} согласований у клиентов</small></article>
         </div>
 
+        {health?<section className="agency-board">
+          <div className="studio-section-head">
+            <div>
+              <span>Контроль владельца</span>
+              <h2>Что требует внимания сегодня</h2>
+              <p>Важные действия из CRM, клиентских проектов, договоров и счетов. Суммы в рублях; валютные договоры учитываются отдельно.</p>
+            </div>
+            <button className="secondary-button" type="button" onClick={()=>setAllAlerts(v=>!v)}>
+              {allAlerts?"Свернуть":"Все сигналы ("+health.alerts.length+")"}
+            </button>
+          </div>
+          <div className="agency-score-grid">
+            <article><span>Договорная выручка / месяц</span>
+              <strong>{money(health.score.contractedMonthlyRevenueMinor)}</strong>
+              <small>{health.score.activeMonthlyContracts} действующих месячных договоров</small>
+            </article>
+            <article><span>Дебиторка по счетам</span>
+              <strong>{money(health.score.outstandingMinor)}</strong>
+              <small>{health.score.unpaidInvoiceCount} неоплаченных счетов</small>
+            </article>
+            <article className={health.score.overdueInvoices?"is-risk":""}>
+              <span>Просрочено к оплате</span>
+              <strong>{money(health.score.overdueMinor)}</strong>
+              <small>{health.score.overdueInvoices} просроченных счетов</small>
+            </article>
+            <article className={health.score.renewalDue?"is-risk":""}>
+              <span>Продления договоров</span>
+              <strong>{health.score.renewalDue}</strong>
+              <small>пора связаться с клиентами</small>
+            </article>
+            <article className={health.score.overdueDeliveries?"is-risk":""}>
+              <span>Срыв сроков</span>
+              <strong>{health.score.overdueDeliveries}</strong>
+              <small>задачи сдачи и согласования</small>
+            </article>
+            {health.score.crmVisible?<article className={health.score.unworkedDeals?"is-risk":""}>
+              <span>Сделки без действия</span>
+              <strong>{health.score.unworkedDeals}</strong>
+              <small>откройте CRM и назначьте follow-up</small>
+            </article>:null}
+          </div>
+          <div className="agency-project-grid">
+            {(allAlerts?health.alerts:health.alerts.slice(0,6)).map((alert,i)=>
+              <a key={alert.type+alert.title+i} href={alert.href} className="agency-project-card">
+                <header><div><span className="agency-client">{alert.type}</span>
+                  <h3>{alert.title}</h3><p>{alert.description}</p></div>
+                  <span className={"agency-health "+(alert.priority==="high"?"risk":"ok")}>
+                    {alert.priority==="high"?"Срочно":"Запланировать"}
+                  </span>
+                </header>
+                <footer><span>{alert.dueAt?new Date(alert.dueAt).toLocaleDateString("ru-RU"):"Без срока"}</span>
+                  <span>Открыть →</span></footer>
+              </a>
+            )}
+            {!health.alerts.length?<div className="studio-empty"><strong>Критических сигналов нет</strong>
+              <p>Следите за продлениями, сроками и следующими действиями в CRM.</p></div>:null}
+          </div>
+          {health.alerts.length>=120?<p>Показаны первые 120 сигналов по приоритету.</p>:null}
+        </section>:null}
         <section className="agency-board">
           <div className="studio-section-head">
             <div><span>Расчёты с клиентами</span><h2>Закрытие месяца и счета</h2>
