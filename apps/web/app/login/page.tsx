@@ -21,7 +21,8 @@ export default function LoginPage() {
         method: "POST",
         body: JSON.stringify({ email, password })
       });
-      router.push("/app");
+      const pendingInvite=window.sessionStorage.getItem("corebiz.pending_invite");
+      router.push(pendingInvite?"/invite":"/app");
       router.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось войти");
