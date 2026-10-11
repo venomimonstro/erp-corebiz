@@ -1689,7 +1689,7 @@ export class ComplianceService {
       const obligationResult=await client.query<any>(
         `SELECT
            id,legal_entity_id,title,workflow_status,obligation_type,
-           amount_minor,currency,payment_obligation_id
+           amount_minor,currency,payment_obligation_id,payment_id
          FROM accounting_compliance_obligation
          WHERE tenant_id=$1 AND id=$2
          FOR UPDATE`,
@@ -1718,18 +1718,22 @@ export class ComplianceService {
         throw new ConflictException("Финансовое обязательство по налогу не найдено");
       }
 
-      if(row.workflow_status==="PAID"&&payable.status==="SETTLED"){
-        const existing=await client.query<{id:string}>(
-          `SELECT id FROM payment
-           WHERE tenant_id=$1 AND idempotency_key=$2
-           ORDER BY created_at DESC LIMIT 1`,
-          [context.tenantId,"tax-payment:"+obligationId]
-        );
+      if(row.workflow_status==="PAID"){
         return {
-          paid:true,alreadyPaid:true,paymentId:existing.rows[0]?.id??null,
+          paid:true,pending:false,alreadyPaid:true,
+          paymentId:row.payment_id??null,
           amountMinor:String(payable.amount_minor)
         };
       }
+
+      if(row.workflow_status==="PAYMENT_PENDING"&&row.payment_id){
+        return {
+          paid:false,pending:true,alreadyPaid:false,
+          paymentId:row.payment_id,
+          amountMinor:String(payable.amount_minor)
+        };
+      }
+
       if(row.workflow_status!=="APPROVED"){
         throw new ConflictException(
           "Оплата доступна только после проверки и утверждения налоговой задачи"
@@ -1752,17 +1756,9 @@ export class ComplianceService {
       const remaining=
         BigInt(payable.amount_minor)-BigInt(payable.settled_minor??0);
       if(remaining<=0n){
-        await client.query(
-          `UPDATE accounting_compliance_obligation
-           SET workflow_status='PAID',completed_at=coalesce(completed_at,now()),
-               updated_at=now()
-           WHERE tenant_id=$1 AND id=$2`,
-          [context.tenantId,obligationId]
+        throw new ConflictException(
+          "Финансовое обязательство уже закрыто. Подтвердите факт уплаты квитанцией банка или ФНС."
         );
-        return {
-          paid:true,alreadyPaid:true,paymentId:null,
-          amountMinor:String(payable.amount_minor)
-        };
       }
 
       const idempotencyKey="tax-payment:"+obligationId;
@@ -1770,100 +1766,85 @@ export class ComplianceService {
         `SELECT id,amount_minor::text
          FROM payment
          WHERE tenant_id=$1 AND idempotency_key=$2
-         ORDER BY created_at DESC
-         LIMIT 1
+         ORDER BY created_at DESC LIMIT 1
          FOR UPDATE`,
         [context.tenantId,idempotencyKey]
       );
-      if(existingPayment.rows[0]){
-        await client.query(
-          `UPDATE financial_obligation
-           SET settled_minor=amount_minor,status='SETTLED',updated_at=now()
-           WHERE tenant_id=$1 AND id=$2`,
-          [context.tenantId,row.payment_obligation_id]
+
+      let paymentId=existingPayment.rows[0]?.id??null;
+      let paymentAmount=existingPayment.rows[0]?.amount_minor??remaining.toString();
+
+      if(!paymentId){
+        const counter=await client.query<{value:string}>(
+          `INSERT INTO tenant_counter(tenant_id,counter_key,value)
+           VALUES($1,'payment',1)
+           ON CONFLICT(tenant_id,counter_key)
+           DO UPDATE SET value=tenant_counter.value+1,updated_at=now()
+           RETURNING value::text`,
+          [context.tenantId]
         );
-        await client.query(
-          `UPDATE accounting_compliance_obligation
-           SET workflow_status='PAID',completed_at=coalesce(completed_at,now()),
-               updated_at=now()
-           WHERE tenant_id=$1 AND id=$2`,
-          [context.tenantId,obligationId]
+        const number=
+          "PAY-"+new Date().getUTCFullYear()+"-"+
+          BigInt(counter.rows[0]?.value??"0").toString().padStart(6,"0");
+
+        const payment=await client.query<{id:string}>(
+          `INSERT INTO payment(
+             tenant_id,business_number,cash_account_id,party_id,obligation_id,
+             direction,kind,amount_minor,currency,status,source_type,source_id,
+             idempotency_key,note,posted_by_membership_id
+           ) VALUES(
+             $1,$2,$3,NULL,$4,'OUT','PAYMENT',$5,$6,'POSTED',
+             'ACCOUNTING_COMPLIANCE',$7,$8,$9,$10
+           )
+           RETURNING id`,
+          [
+            context.tenantId,number,input.cashAccountId,row.payment_obligation_id,
+            remaining.toString(),row.currency,obligationId,idempotencyKey,
+            input.note?.trim()||("Уплата: "+row.title),
+            context.membershipId
+          ]
         );
-        return {
-          paid:true,alreadyPaid:true,
-          paymentId:existingPayment.rows[0].id,
-          amountMinor:existingPayment.rows[0].amount_minor
-        };
+        paymentId=payment.rows[0]?.id??null;
+        paymentAmount=remaining.toString();
+        if(!paymentId) throw new Error("ACCOUNTING_TAX_PAYMENT_CREATE_FAILED");
       }
 
-      const counter=await client.query<{value:string}>(
-        `INSERT INTO tenant_counter(tenant_id,counter_key,value)
-         VALUES($1,'payment',1)
-         ON CONFLICT(tenant_id,counter_key)
-         DO UPDATE SET value=tenant_counter.value+1,updated_at=now()
-         RETURNING value::text`,
-        [context.tenantId]
-      );
-      const number=
-        "PAY-"+new Date().getUTCFullYear()+"-"+
-        BigInt(counter.rows[0]?.value??"0").toString().padStart(6,"0");
-
-      const payment=await client.query<{id:string}>(
-        `INSERT INTO payment(
-           tenant_id,business_number,cash_account_id,party_id,obligation_id,
-           direction,kind,amount_minor,currency,status,source_type,source_id,
-           idempotency_key,note,posted_by_membership_id
-         ) VALUES(
-           $1,$2,$3,NULL,$4,'OUT','PAYMENT',$5,$6,'POSTED',
-           'ACCOUNTING_COMPLIANCE',$7,$8,$9,$10
-         )
-         RETURNING id`,
-        [
-          context.tenantId,number,input.cashAccountId,row.payment_obligation_id,
-          remaining.toString(),row.currency,obligationId,idempotencyKey,
-          input.note?.trim()||("Уплата: "+row.title),
-          context.membershipId
-        ]
-      );
-      const paymentId=payment.rows[0]?.id;
-      if(!paymentId) throw new Error("ACCOUNTING_TAX_PAYMENT_CREATE_FAILED");
-
-      await client.query(
-        `UPDATE financial_obligation
-         SET settled_minor=amount_minor,status='SETTLED',updated_at=now()
-         WHERE tenant_id=$1 AND id=$2`,
-        [context.tenantId,row.payment_obligation_id]
-      );
       await client.query(
         `UPDATE accounting_compliance_obligation
-         SET workflow_status='PAID',completed_at=now(),updated_at=now()
+         SET workflow_status='PAYMENT_PENDING',
+             payment_id=$3,
+             payment_initiated_at=coalesce(payment_initiated_at,now()),
+             completed_at=NULL,
+             updated_at=now()
          WHERE tenant_id=$1 AND id=$2`,
-        [context.tenantId,obligationId]
+        [context.tenantId,obligationId,paymentId]
       );
+
       await client.query(
         `INSERT INTO accounting_compliance_receipt(
            tenant_id,obligation_id,provider,external_reference,
            receipt_type,payload
-         ) VALUES($1,$2,'COREBIZ_PAYMENT',$3,'PAYMENT',$4)
+         ) VALUES($1,$2,'COREBIZ_PAYMENT',$3,'SENT',$4)
          ON CONFLICT DO NOTHING`,
         [
           context.tenantId,obligationId,paymentId,
           JSON.stringify({
             paymentId,cashAccountId:input.cashAccountId,
-            amountMinor:remaining.toString()
+            amountMinor:paymentAmount,
+            state:"PAYMENT_INITIATED_NOT_CONFIRMED"
           })
         ]
       );
+
       await this.event(
-        client,context,obligationId,"TAX_PAID","APPROVED","PAID",
-        {
-          paymentId,amountMinor:remaining.toString(),
-          cashAccountId:input.cashAccountId
-        }
+        client,context,obligationId,
+        "TAX_PAYMENT_INITIATED","APPROVED","PAYMENT_PENDING",
+        {paymentId,amountMinor:paymentAmount,cashAccountId:input.cashAccountId}
       );
+
       return {
-        paid:true,alreadyPaid:false,paymentId,
-        amountMinor:remaining.toString()
+        paid:false,pending:true,alreadyPaid:false,
+        paymentId,amountMinor:paymentAmount
       };
     });
   }
