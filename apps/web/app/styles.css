@@ -4079,3 +4079,34 @@ button, .primary, .secondary { font: inherit; }
   box-sizing:border-box}
 @media(max-width:640px){.site-block-palette{grid-template-columns:1fr}
   .block-editor>header{flex-wrap:wrap}.site-preview.preview-mobile{max-width:100%}}
+
+/* Controlled 1C/Excel cutover: validate before applying irreversible imports. */
+.merchant-migration .section-block{margin-bottom:16px;border:1px solid #e6e9ec;
+  border-radius:17px;box-shadow:0 4px 18px rgba(25,40,50,.025)}
+.merchant-migration-form{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.merchant-migration-form label{display:grid;gap:7px;flex:1;min-width:210px}
+.merchant-migration-form label span{font-size:12px;font-weight:620;color:#495962}
+.merchant-migration-form select,.merchant-migration-form input{border:1px solid #dee4e8;
+  border-radius:10px;min-height:40px;padding:9px;font:inherit;background:#fff}
+.merchant-migration-form button{min-height:41px}
+.merchant-migration .section-block h3{margin:20px 0 10px;font-size:14px;letter-spacing:-.015em}
+.merchant-migration .data-table{font-size:12px}
+.merchant-migration .data-table td{max-width:260px;overflow-wrap:anywhere;vertical-align:top}
+.merchant-migration-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:10px;margin:14px 0 20px}
+.merchant-migration-metrics article{border:1px solid #e7ebef;background:#fafbfc;
+  border-radius:13px;padding:16px;display:grid;gap:6px}
+.merchant-migration-metrics span{font-size:11px;color:#75828b}
+.merchant-migration-metrics strong{font-size:25px;letter-spacing:-.04em;color:#28353e}
+.merchant-migration-fields{display:flex;flex-wrap:wrap;gap:7px}
+.merchant-migration-fields span{background:#f0f4f6;color:#4f626d;
+  border:1px solid #e2e9ec;padding:7px 10px;border-radius:9px;font-size:11px}
+.merchant-migration-note{background:#fafafa;color:#667179;font-size:12px;line-height:1.7;
+  padding:14px;border:1px solid #e6e9ec;border-radius:12px;margin:16px 0}
+.merchant-migration-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin-top:20px}
+.merchant-migration-actions a,.merchant-migration-actions button{min-height:40px}
+@media(max-width:650px){.merchant-migration-form{align-items:stretch;flex-direction:column}
+  .merchant-migration-form label{min-width:0;width:100%}
+  .merchant-migration-metrics article{padding:12px}
+  .merchant-migration-metrics strong{font-size:19px}}
