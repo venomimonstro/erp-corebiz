@@ -33,6 +33,18 @@ export class ProjectsController {
     };
   }
 
+  @Get(":id/expenses")
+  @RequirePermission("projects.read")
+  async expenses(@Req() request:AuthenticatedRequest,@Param("id") id:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.agencyExpenses(this.context(request),id)};
+  }
+
+  @Post(":id/expenses")
+  @RequirePermission("projects.write")
+  async addExpense(@Req() request:AuthenticatedRequest,@Param("id") id:string,@Body() body:any):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.addAgencyExpense(this.context(request),id,body)};
+  }
+
   @Get(":id/deliverables")
   @RequirePermission("projects.read")
   async deliverables(
