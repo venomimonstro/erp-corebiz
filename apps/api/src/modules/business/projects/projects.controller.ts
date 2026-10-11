@@ -49,6 +49,34 @@ export class ProjectsController {
 
 
 
+
+  @Get("agency/contracts")
+  @RequirePermission("finance.read")
+  async agencyContracts(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.agencyContracts(this.context(request))};
+  }
+
+  @Get(":id/contracts")
+  @RequirePermission("finance.read")
+  async projectContracts(@Req() request:AuthenticatedRequest,@Param("id") id:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.agencyContracts(this.context(request),id)};
+  }
+
+  @Post(":id/contracts")
+  @RequirePermission("finance.write")
+  async createAgencyContract(@Req() request:AuthenticatedRequest,@Param("id") id:string,
+    @Body() body:any):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.createAgencyContract(this.context(request),id,body)};
+  }
+
+  @Patch(":id/contracts/:contractId/status")
+  @RequirePermission("finance.write")
+  async contractStatus(@Req() request:AuthenticatedRequest,@Param("id") id:string,
+    @Param("contractId") contractId:string,@Body() body:any):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.changeAgencyContractStatus(
+      this.context(request),id,contractId,body)};
+  }
+
   @Get("agency/staff")
   @RequirePermission("projects.write")
   async agencyStaff(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {

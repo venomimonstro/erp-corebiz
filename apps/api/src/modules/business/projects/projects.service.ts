@@ -1568,4 +1568,131 @@ export class ProjectsService {
     });
   }
 
+  async agencyContracts(context:TenantContext,projectId?:string){
+    if(!await this.authorization.resolveScope(context,"finance.read"))
+      throw new ForbiddenException("Нет доступа к договорам");
+    const scope=await this.membershipIdsForScope(context,"projects.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      if(projectId)await this.assertReadableProject(client,context.tenantId,projectId,scope);
+      return (await client.query(
+        `SELECT c.*,c.service_fee_minor::text,c.client_media_budget_minor::text,
+                p.name AS project_name,p.currency,p.party_id,
+                party.display_name AS customer_name,
+                CASE WHEN c.status='ACTIVE' AND c.ends_on IS NOT NULL
+                    AND c.ends_on <= current_date+c.renewal_notice_days
+                  THEN true ELSE false END AS renewal_due
+         FROM agency_client_contract c
+         JOIN work_project p ON p.tenant_id=c.tenant_id AND p.id=c.project_id
+         LEFT JOIN party ON party.tenant_id=p.tenant_id AND party.id=p.party_id
+         WHERE c.tenant_id=$1 AND ($2::uuid IS NULL OR c.project_id=$2)
+           AND ($3::uuid[] IS NULL OR p.responsible_membership_id=ANY($3::uuid[]))
+         ORDER BY CASE WHEN c.status='ACTIVE' AND c.ends_on IS NOT NULL
+                     AND c.ends_on <= current_date+c.renewal_notice_days THEN 0 ELSE 1 END,
+           c.ends_on NULLS LAST,c.created_at DESC LIMIT 500`,
+        [context.tenantId,projectId??null,scope]
+      )).rows;
+    });
+  }
+
+  async createAgencyContract(context:TenantContext,projectId:string,input:{
+    contractNumber?:string;title?:string;contractType?:string;billingCycle?:string;
+    serviceFeeMinor?:string;clientMediaBudgetMinor?:string;
+    startsOn?:string;endsOn?:string;renewalNoticeDays?:number;notes?:string
+  }){
+    if(!await this.authorization.resolveScope(context,"finance.write"))
+      throw new ForbiddenException("Создать договор может финансовый администратор");
+    const scope=await this.membershipIdsForScope(context,"projects.write");
+    const number=input?.contractNumber?.trim();
+    const title=input?.title?.trim();
+    const contractType=input?.contractType;
+    const billingCycle=input?.billingCycle;
+    const fee=input?.serviceFeeMinor;
+    const media=input?.clientMediaBudgetMinor??"0";
+    const days=input?.renewalNoticeDays??30;
+    if(!number||number.length<2||number.length>80||!title||title.length<2||title.length>220)
+      throw new BadRequestException("Укажите номер и название договора");
+    if(!["WEBSITE_BUILD","SUPPORT","SEO","PPC","SMM","MARKETING_RETAINER","OTHER"].includes(contractType??""))
+      throw new BadRequestException("Некорректный тип договора");
+    if(!["ONE_TIME","MONTHLY","QUARTERLY"].includes(billingCycle??""))
+      throw new BadRequestException("Некорректный период оплаты");
+    if(typeof fee!=="string"|| !/^\d{1,15}$/.test(fee)||
+       !/^\d{1,15}$/.test(media))
+      throw new BadRequestException("Суммы должны быть указаны в копейках");
+    if(!Number.isInteger(days)||days<0||days>365)
+      throw new BadRequestException("Некорректный срок уведомления");
+    this.validateDate(input.startsOn,"дата начала договора");
+    if(!input.startsOn)throw new BadRequestException("Укажите дату начала договора");
+    this.validateDate(input.endsOn,"дата окончания договора");
+    if(input.endsOn&&input.endsOn<input.startsOn)
+      throw new BadRequestException("Дата окончания раньше начала");
+    if(input.notes && input.notes.length>3000)throw new BadRequestException("Примечание слишком длинное");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertWritableProject(client,context.tenantId,projectId,scope);
+      const project=await client.query<{party_id:string|null}>(
+        "SELECT party_id FROM work_project WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,projectId]);
+      if(!project.rows[0]?.party_id)
+        throw new ConflictException("Сначала привяжите к проекту клиента CRM");
+      try{
+        return (await client.query(
+          `INSERT INTO agency_client_contract(
+             tenant_id,project_id,contract_number,title,contract_type,billing_cycle,
+             service_fee_minor,client_media_budget_minor,starts_on,ends_on,
+             renewal_notice_days,notes,created_by_membership_id
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+           RETURNING id,contract_number,status,version`,
+          [context.tenantId,projectId,number,title,contractType,billingCycle,
+           fee,media,input.startsOn,input.endsOn??null,days,
+           input.notes?.trim()??null,context.membershipId]
+        )).rows[0];
+      }catch(e){if(this.isUniqueViolation(e))
+        throw new ConflictException("Договор с таким номером уже существует");
+        throw e;
+      }
+    });
+  }
+
+  async changeAgencyContractStatus(
+    context:TenantContext,projectId:string,contractId:string,
+    input:{status?:string;version?:number;signedOn?:string}
+  ){
+    if(!await this.authorization.resolveScope(context,"finance.write"))
+      throw new ForbiddenException("Недостаточно прав на договоры");
+    const scope=await this.membershipIdsForScope(context,"projects.write");
+    const status=input?.status;
+    if(!["ACTIVE","PAUSED","EXPIRED","TERMINATED"].includes(status??""))
+      throw new BadRequestException("Некорректный статус договора");
+    if(!Number.isInteger(input?.version)||input.version!<1)
+      throw new BadRequestException("Некорректная версия договора");
+    if(input.signedOn)this.validateDate(input.signedOn,"дата подписания");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertWritableProject(client,context.tenantId,projectId,scope);
+      const contract=await client.query<{status:string;version:number;ends_on:string|null;signed_on:string|null}>(
+        `SELECT status,version,ends_on::text,signed_on::text
+         FROM agency_client_contract WHERE tenant_id=$1 AND project_id=$2 AND id=$3
+         FOR UPDATE`,[context.tenantId,projectId,contractId]);
+      const row=contract.rows[0];
+      if(!row)throw new NotFoundException("Договор не найден");
+      if(row.version!==input.version)throw new ConflictException("Договор изменился, обновите данные");
+      const transitions:Record<string,string[]>={
+        DRAFT:["ACTIVE","TERMINATED"],ACTIVE:["PAUSED","EXPIRED","TERMINATED"],
+        PAUSED:["ACTIVE","TERMINATED"],EXPIRED:[],TERMINATED:[]
+      };
+      if(!transitions[row.status]?.includes(status!))
+        throw new ConflictException("Этот переход статуса договора недоступен");
+      if(status==="ACTIVE"&&!row.signed_on&&!input.signedOn)
+        throw new BadRequestException("Для активации укажите дату подписания");
+      if(status==="ACTIVE"&&row.ends_on&&row.ends_on<new Date().toISOString().slice(0,10))
+        throw new ConflictException("Нельзя активировать договор с истекшим сроком");
+      const res=await client.query(
+        `UPDATE agency_client_contract SET status=$4,version=version+1,
+           signed_on=coalesce(signed_on,$5::date),updated_at=now()
+         WHERE tenant_id=$1 AND project_id=$2 AND id=$3 RETURNING *`,
+        [context.tenantId,projectId,contractId,status,input.signedOn??null]);
+      await this.audit(client,context,"agency.contract_status_changed",
+        "agency_client_contract",contractId,{from:row.status,to:status});
+      return res.rows[0];
+    });
+  }
+
 }
