@@ -108,6 +108,12 @@ export class TaxComplianceService {
     const defaultRate=input.taxRegime==="USN_INCOME"?600:
       input.taxRegime==="USN_INCOME_EXPENSE"?1500:null;
     const rate=input.usnRateBps===undefined?defaultRate:Math.floor(input.usnRateBps);
+    if(
+      rate!==null&&
+      (!Number.isSafeInteger(rate)||rate<1||rate>10000)
+    ){
+      throw new BadRequestException("Некорректная ставка УСН");
+    }
 
     return this.database.withTenantTransaction(context,async client=>{
       const entity=await client.query(
