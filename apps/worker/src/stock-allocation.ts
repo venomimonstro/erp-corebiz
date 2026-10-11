@@ -15,9 +15,10 @@ export function distributeUnits(atpUnits:number,listings:MarketListing[]):Map<st
     .sort((a,b)=>a.priority-b.priority||a.id.localeCompare(b.id));
   if(!eligible.length)return result;
   // Reserve scarce stock for one listing at a time, then share further units.
-  for(let i=0;i<atpUnits;i++){
-    const listing=eligible[i%eligible.length]!;
-    result.set(listing.id,(result.get(listing.id)??0)+1);
+  const each=Math.floor(atpUnits/eligible.length);
+  const extra=atpUnits%eligible.length;
+  for(let i=0;i<eligible.length;i++){
+    result.set(eligible[i]!.id,each+(i<extra?1:0));
   }
   return result;
 }

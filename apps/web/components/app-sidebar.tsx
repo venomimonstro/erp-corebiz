@@ -46,6 +46,7 @@ const permissionByKey: Record<string,string> = {
   automotive: "service.read",
   "service-packages": "service.read",
   channels: "channels.read",
+  ecommerce: "channels.read",
   oms: "oms.read",
   returns: "returns.read",
   sites: "sites.read",
@@ -104,6 +105,7 @@ const capabilityByKey: Record<string,string> = {
   automotive: "service",
   "service-packages": "service",
   channels: "channels",
+  ecommerce: "channels",
   oms: "oms",
   returns: "oms",
   sites: "sites",
@@ -166,6 +168,7 @@ const sections: Section[] = [
     ["/app/service/packages", "Абонементы", "service-packages"]
   ] },
   { title: "Онлайн-торговля", items: [
+    ["/app/ecommerce", "Хаб маркетплейсов", "ecommerce"],
     ["/app/channels", "Каналы продаж", "channels"],
     ["/app/oms", "Управление заказами", "oms"],
     ["/app/returns", "Возвраты", "returns"],

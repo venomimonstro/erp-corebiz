@@ -73,7 +73,11 @@ async function reconcile(pool:Pool,key:PoolKey):Promise<void>{
          FROM channel_order_line_inbox li
          JOIN channel_order_inbox o ON o.tenant_id=li.tenant_id AND o.id=li.inbox_order_id
          WHERE li.tenant_id=$1 AND li.mapped_sku_id=$3
-           AND o.status IN ('RECEIVED','READY','NEEDS_MAPPING','IMPORTING','FAILED')
+           AND (o.status IN ('RECEIVED','READY','NEEDS_MAPPING','IMPORTING','FAILED')
+             OR (o.status='IMPORTED' AND NOT EXISTS(
+               SELECT 1 FROM oms_order oo WHERE oo.tenant_id=o.tenant_id
+                 AND oo.sales_order_id=o.sales_order_id
+                 AND oo.state IN ('SHIPPED','CANCELLED'))))
            AND EXISTS(
              SELECT 1 FROM channel_stock_listing l WHERE l.tenant_id=li.tenant_id
                AND l.warehouse_id=$2 AND l.sku_id=$3 AND l.connection_id=o.connection_id)`,
@@ -81,8 +85,8 @@ async function reconcile(pool:Pool,key:PoolKey):Promise<void>{
       client.query<{connection_id:string}>(`SELECT DISTINCT o.connection_id
          FROM channel_order_inbox o JOIN channel_order_line_inbox li
            ON li.tenant_id=o.tenant_id AND li.inbox_order_id=o.id
-         WHERE o.tenant_id=$1 AND o.status IN ('RECEIVED','READY','NEEDS_MAPPING','IMPORTING','FAILED')
-           AND li.mapped_sku_id IS NULL
+         WHERE o.tenant_id=$1 AND (o.status IN ('RECEIVED','READY','NEEDS_MAPPING','IMPORTING','FAILED')
+              OR o.status='IMPORTED') AND li.mapped_sku_id IS NULL
            AND EXISTS(SELECT 1 FROM channel_stock_listing l
              WHERE l.tenant_id=$1 AND l.warehouse_id=$2 AND l.connection_id=o.connection_id)`,
         [key.tenant_id,key.warehouse_id])
@@ -138,6 +142,9 @@ async function reconcile(pool:Pool,key:PoolKey):Promise<void>{
            updated_at=now()`,
         [key.tenant_id,l.id,amount,next]);
     }
+    await client.query(`UPDATE channel_stock_listing SET updated_at=now()
+      WHERE tenant_id=$1 AND warehouse_id=$2 AND sku_id=$3`,
+      [key.tenant_id,key.warehouse_id,key.sku_id]);
   });
 }
 
@@ -145,7 +152,8 @@ async function send(job:PublishJob):Promise<void>{
   const creds=credentials(job.credentials_ciphertext);
   const count=job.target_units;
   const warehouse=job.external_warehouse_id;
-  if(!/^[1-9][0-9]*$/.test(warehouse))throw new Error("EXTERNAL_WAREHOUSE_ID_REQUIRED");
+  if(!/^[1-9][0-9]*$/.test(warehouse)||!Number.isSafeInteger(Number(warehouse)))
+    throw new Error("EXTERNAL_WAREHOUSE_ID_REQUIRED");
   let url:string;let options:RequestInit;let expected:number;
   if(job.provider==="OZON"){
     const clientId=String(creds.clientId??"");
@@ -160,7 +168,8 @@ async function send(job:PublishJob):Promise<void>{
   }else if(job.provider==="WILDBERRIES"){
     const key=String(creds.apiToken??"");
     if(key.length<32)throw new Error("WB_CREDENTIALS_INVALID");
-    if(!job.external_stock_id||!/^[1-9][0-9]*$/.test(job.external_stock_id))
+    if(!job.external_stock_id||!/^[1-9][0-9]*$/.test(job.external_stock_id)||
+       !Number.isSafeInteger(Number(job.external_stock_id)))
       throw new Error("WB_CHRT_ID_REQUIRED");
     url="https://marketplace-api.wildberries.ru/api/v3/stocks/"+warehouse;
     options={method:"PUT",headers:{Authorization:key,"Content-Type":"application/json"},
@@ -246,5 +255,17 @@ export async function processStockHubOnce(pool:Pool):Promise<boolean>{
   if(dirty.rows[0]){await reconcile(pool,dirty.rows[0]);return true;}
   const job=await pool.query<PublishJob>("SELECT * FROM corebiz_claim_stock_target()");
   if(job.rows[0]){await publish(pool,job.rows[0]);return true;}
+  // Recheck active FBS pools periodically even without local stock writes.
+  const periodic=await pool.query(`INSERT INTO channel_stock_dirty(tenant_id,warehouse_id,sku_id)
+    SELECT tenant_id,warehouse_id,sku_id FROM (
+      SELECT DISTINCT ON (tenant_id,warehouse_id,sku_id)
+        tenant_id,warehouse_id,sku_id
+      FROM channel_stock_listing
+      WHERE publish_enabled AND updated_at<now()-interval '90 seconds'
+      ORDER BY tenant_id,warehouse_id,sku_id
+      LIMIT 15
+    ) stale
+    ON CONFLICT(tenant_id,warehouse_id,sku_id) DO NOTHING`);
+  if((periodic.rowCount??0)>0)return true;
   return false;
 }
