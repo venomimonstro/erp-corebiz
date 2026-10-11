@@ -581,7 +581,12 @@ export class BookingService {
            w.branch_id,b.name AS branch_name,
            w.desired_from,w.desired_to,w.min_notice_minutes,
            w.status,w.offered_starts_at,w.offer_expires_at,
-           w.source_booking_id,w.booked_booking_id,w.notes,w.created_at
+           w.source_booking_id,w.booked_booking_id,w.notes,w.created_at,
+           offered.resource_id AS offered_resource_id,
+           offered.resource_name AS offered_resource_name,
+           offered.resource_type AS offered_resource_type,
+           offered.capacity_units AS offered_capacity_units,
+           offered.zone_id AS offered_zone_id
          FROM service_waitlist_entry w
          JOIN party p
            ON p.tenant_id=w.tenant_id AND p.id=w.party_id
@@ -592,6 +597,23 @@ export class BookingService {
           AND r.id=w.preferred_employee_resource_id
          LEFT JOIN branch b
            ON b.tenant_id=w.tenant_id AND b.id=w.branch_id
+         LEFT JOIN LATERAL (
+           SELECT
+             br.resource_id,
+             r.name AS resource_name,
+             r.type AS resource_type,
+             br.capacity_units,
+             br.zone_id
+           FROM service_booking_resource br
+           JOIN service_resource r
+             ON r.tenant_id=br.tenant_id AND r.id=br.resource_id
+           WHERE br.tenant_id=w.tenant_id
+             AND br.booking_id=w.source_booking_id
+           ORDER BY
+             CASE WHEN r.type='EMPLOYEE' THEN 0 ELSE 1 END,
+             r.id
+           LIMIT 1
+         ) offered ON true
          WHERE w.tenant_id=$1
            AND ($2='ALL' OR w.status=$2)
            AND (
