@@ -42,6 +42,7 @@ const permissionByKey: Record<string,string> = {
   "service-waitlist": "service.read",
   resources: "service.read",
   "service-assets": "service.read",
+  automotive: "service.read",
   "service-packages": "service.read",
   channels: "channels.read",
   oms: "oms.read",
@@ -98,6 +99,7 @@ const capabilityByKey: Record<string,string> = {
   "service-waitlist": "service",
   resources: "service",
   "service-assets": "service",
+  automotive: "service",
   "service-packages": "service",
   channels: "channels",
   oms: "oms",
@@ -157,6 +159,7 @@ const sections: Section[] = [
     ["/app/service/waitlist", "Лист ожидания", "service-waitlist"],
     ["/app/service/resources", "Сотрудники и ресурсы", "resources"],
     ["/app/service/assets", "Автомобили и объекты", "service-assets"],
+    ["/app/automotive", "Автосервис и авторазбор", "automotive"],
     ["/app/service/packages", "Абонементы", "service-packages"]
   ] },
   { title: "Онлайн-торговля", items: [
