@@ -308,4 +308,23 @@ FROM (
     AND z.status='ACTIVE'
   GROUP BY z.tenant_id,z.resource_id,r.capacity
   HAVING sum(z.capacity_units)>r.capacity
-) q;
+) q
+UNION ALL
+SELECT 'TRAINER_PAYROLL_STATEMENT_TOTAL_MISMATCH',count(*)::bigint
+FROM trainer_payroll_statement s
+WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND s.total_minor<>(
+    s.lesson_accrual_minor+s.base_minor+s.guarantee_adjustment_minor
+  )
+UNION ALL
+SELECT 'TRAINER_PAYROLL_EXPORTED_WITHOUT_BATCH',count(*)::bigint
+FROM trainer_payroll_statement s
+WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND s.status IN ('EXPORTED','PAID')
+  AND s.payroll_batch_id IS NULL
+UNION ALL
+SELECT 'TRAINER_PAYROLL_BATCH_TENANT_MISMATCH',count(*)::bigint
+FROM trainer_payroll_statement s
+JOIN payroll_accrual_batch b ON b.id=s.payroll_batch_id
+WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND b.tenant_id<>s.tenant_id;
