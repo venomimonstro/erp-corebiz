@@ -7,6 +7,7 @@ import { apiRequest } from "../../../../lib/api";
 type ProductRow = {
   productId: string;
   productName: string;
+  imageUrl: string | null;
   kind: "STOCKABLE" | "NON_STOCK";
   variantId: string;
   variantName: string;
@@ -77,6 +78,7 @@ export default function ProductsPage() {
     if (!name?.trim()) return;
 
     const sku = window.prompt("SKU — можно оставить пустым", "") ?? "";
+    const imageUrl = window.prompt("Ссылка на фото товара (HTTPS, необязательно)", "") ?? "";
     const saleRub = Number((window.prompt("Цена продажи, ₽", "0") ?? "0").replace(",", "."));
     const costRub = Number((window.prompt("Себестоимость, ₽", "0") ?? "0").replace(",", "."));
 
@@ -96,6 +98,7 @@ export default function ProductsPage() {
         body: JSON.stringify({
           name: name.trim(),
           sku: sku.trim() || undefined,
+          imageUrl: imageUrl.trim() || undefined,
           salePriceMinor: String(Math.round(saleRub * 100)),
           costPriceMinor: String(Math.round(costRub * 100)),
           kind: "STOCKABLE"
@@ -105,6 +108,20 @@ export default function ProductsPage() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать товар");
     }
+  }
+
+  async function editImage(item:ProductRow) {
+    const url=window.prompt(
+      "Ссылка на фотографию товара (HTTPS). Очистите поле, чтобы удалить фото.",
+      item.imageUrl ?? ""
+    );
+    if(url===null)return;
+    try{
+      await apiRequest("/catalog/products/"+item.productId+"/image",{
+        method:"PATCH",body:JSON.stringify({imageUrl:url.trim()||null})
+      });
+      await load(null,activeSearch);
+    }catch(cause){setError(cause instanceof Error?cause.message:"Не удалось изменить фото");}
   }
 
   return (
@@ -167,10 +184,21 @@ export default function ProductsPage() {
                   return (
                     <tr key={item.skuId}>
                       <td>
-                        <strong>{item.productName}</strong>
-                        {item.variantName !== "Основной" ? (
-                          <small>{item.variantName}</small>
-                        ) : null}
+                        <div className="catalog-product-main">
+                          {item.imageUrl ? <img loading="lazy" src={item.imageUrl}
+                            alt="" className="catalog-product-image"/> :
+                            <span className="catalog-product-placeholder" aria-hidden="true">◻</span>}
+                          <div>
+                            <strong>{item.productName}</strong>
+                            {item.variantName !== "Основной" ? (
+                              <small>{item.variantName}</small>
+                            ) : null}
+                            <button className="catalog-product-image-action"
+                              type="button" onClick={()=>void editImage(item)}>
+                              {item.imageUrl?"Изменить фото":"+ Добавить фото"}
+                            </button>
+                          </div>
+                        </div>
                       </td>
                       <td>{item.sku}</td>
                       <td>{money(item.salePriceMinor, item.currency)}</td>
