@@ -567,10 +567,82 @@ export class ServiceEconomicsService {
          ORDER BY sum(p.contribution_margin_minor) DESC,s.name`,
         [context.tenantId,from,to,scope]
       );
+      const retention=await client.query(
+        `WITH last_service AS (
+           SELECT DISTINCT ON (b.party_id,b.service_id)
+             b.party_id,b.service_id,b.completed_at,b.starts_at
+           FROM service_booking b
+           JOIN service_catalog_item s
+             ON s.tenant_id=b.tenant_id AND s.id=b.service_id
+           LEFT JOIN service_booking_resource br
+             ON br.tenant_id=b.tenant_id AND br.booking_id=b.id
+           LEFT JOIN service_resource r
+             ON r.tenant_id=br.tenant_id
+            AND r.id=br.resource_id
+            AND r.type='EMPLOYEE'
+           WHERE b.tenant_id=$1
+             AND b.party_id IS NOT NULL
+             AND b.status='COMPLETED'
+             AND s.rebook_after_days IS NOT NULL
+             AND (
+               $4::uuid[] IS NULL
+               OR r.membership_id=ANY($4::uuid[])
+               OR r.id IS NULL
+             )
+           ORDER BY b.party_id,b.service_id,b.completed_at DESC,b.id DESC
+         )
+         SELECT
+           ls.party_id,p.display_name AS party_name,
+           ls.service_id,s.name AS service_name,
+           ls.completed_at AS last_completed_at,
+           s.rebook_after_days,s.rebook_grace_days,
+           (
+             ls.completed_at+
+             make_interval(days=>s.rebook_after_days)
+           ) AS target_at,
+           greatest(
+             0,
+             floor(
+               extract(epoch FROM (
+                 now()-(
+                   ls.completed_at+
+                   make_interval(
+                     days=>s.rebook_after_days+s.rebook_grace_days
+                   )
+                 )
+               ))/86400
+             )
+           )::integer AS overdue_days
+         FROM last_service ls
+         JOIN party p
+           ON p.tenant_id=$1 AND p.id=ls.party_id
+         JOIN service_catalog_item s
+           ON s.tenant_id=$1 AND s.id=ls.service_id
+         WHERE now()>=(
+             ls.completed_at+
+             make_interval(
+               days=>s.rebook_after_days+s.rebook_grace_days
+             )
+           )
+           AND NOT EXISTS(
+             SELECT 1
+             FROM service_booking future
+             WHERE future.tenant_id=$1
+               AND future.party_id=ls.party_id
+               AND future.service_id=ls.service_id
+               AND future.status IN ('DRAFT','CONFIRMED','ARRIVED')
+               AND future.starts_at>now()
+           )
+         ORDER BY overdue_days DESC,p.display_name
+         LIMIT 100`,
+        [context.tenantId,from,to,scope]
+      );
+
       return {
         totals:totals.rows[0]??{},
         employees:employees.rows,
-        services:services.rows
+        services:services.rows,
+        retentionAlerts:retention.rows
       };
     });
   }
