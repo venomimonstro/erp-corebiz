@@ -175,6 +175,9 @@ describe("public commerce safeguards", () => {
           rowCount: 1
         };
       }
+      if (sql.includes("FROM commerce_delivery_method")) {
+        return { rows: [], rowCount: 0 };
+      }
       if (sql.includes("SET checkout_party_id=")) {
         return { rows: [], rowCount: 1 };
       }
