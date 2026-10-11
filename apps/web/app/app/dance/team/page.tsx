@@ -96,6 +96,34 @@ function money(value: string) {
   }).format(Number(value) / 100);
 }
 
+function compensationLabel(value: string) {
+  return ({
+    FIXED: "За занятие",
+    HOURLY: "За часы",
+    PERCENT: "Процент",
+    ATTENDEE: "База + ученик",
+    TIERED: "По порогу посещаемости",
+    COMPOSITE: "Составная схема"
+  } as Record<string, string>)[value] ?? value;
+}
+
+function revenueBasisLabel(value: string) {
+  return ({
+    LIST: "По прайсу",
+    BILLED: "По начислениям",
+    PAID: "По фактической оплате",
+    EARNED: "По оказанным услугам"
+  } as Record<string, string>)[value] ?? value;
+}
+
+function rentLabel(value: string) {
+  return ({
+    HOURLY: "Почасовая",
+    FIXED_MONTHLY: "Фикс в месяц",
+    FIXED_SLOT: "Фикс за слот"
+  } as Record<string, string>)[value] ?? value;
+}
+
 function monthRange() {
   const now = new Date();
   const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -492,16 +520,16 @@ export default function DanceTeamPage() {
 
         {error ? <div className="inline-error"><strong>Тренеры и залы</strong><span>{error}</span></div> : null}
 
-        <div className="owner-kpi-grid">
+        <div className="owner-kpi-grid studio-kpi-grid">
           {trainerTotals.map(([id, total]) => (
-            <article className="owner-kpi" key={id}>
+            <article className="owner-kpi studio-kpi" key={id}>
               <span>{total.name}</span>
               <strong>{money(total.amount.toString())}</strong>
               <small>{total.lessons} уроков · {total.attended} посещений</small>
             </article>
           ))}
           {!trainerTotals.length ? (
-            <article className="owner-kpi">
+            <article className="owner-kpi studio-kpi">
               <span>Начисления месяца</span>
               <strong>0 ₽</strong>
               <small>Появятся после закрытия уроков</small>
@@ -509,7 +537,7 @@ export default function DanceTeamPage() {
           ) : null}
         </div>
 
-        <section className="section-block">
+        <section className="section-block studio-section">
           <div className="section-heading"><div><p className="muted">Правила</p><h2>Оплата тренеров</h2></div></div>
           <div className="data-table-wrap">
             <table className="data-table">
@@ -519,7 +547,7 @@ export default function DanceTeamPage() {
                   <tr key={plan.id}>
                     <td><strong>{plan.trainer_name}</strong></td>
                     <td>{plan.lesson_type ?? "Любой"}</td>
-                    <td>{plan.calculation_type}</td>
+                    <td>{compensationLabel(plan.calculation_type)}</td>
                     <td>
                       {plan.calculation_type === "FIXED" ? money(plan.fixed_minor) : null}
                       {plan.calculation_type === "HOURLY" ? money(plan.hourly_minor) + "/ч" : null}
@@ -527,7 +555,7 @@ export default function DanceTeamPage() {
                       {plan.calculation_type === "ATTENDEE" ? money(plan.fixed_minor) + " + " + money(plan.per_attendee_minor) + "/уч." : null}
                       {plan.calculation_type === "TIERED" ? money(plan.fixed_minor) + " + " + money(plan.threshold_extra_minor) + " после " + plan.threshold_count : null}
                     </td>
-                    <td>{plan.revenue_basis}</td>
+                    <td>{revenueBasisLabel(plan.revenue_basis)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -535,7 +563,7 @@ export default function DanceTeamPage() {
           </div>
         </section>
 
-        <section className="section-block">
+        <section className="section-block studio-section">
           <div className="section-heading"><div><p className="muted">Факт</p><h2>Начисления текущего месяца</h2></div></div>
           <div className="data-table-wrap">
             <table className="data-table">
@@ -557,7 +585,7 @@ export default function DanceTeamPage() {
           </div>
         </section>
 
-        <section className="section-block">
+        <section className="section-block studio-section">
           <div className="section-heading"><div><p className="muted">Залы</p><h2>Договоры и себестоимость</h2></div></div>
           <div className="data-table-wrap">
             <table className="data-table">
@@ -566,7 +594,7 @@ export default function DanceTeamPage() {
                 {contracts.map((item) => (
                   <tr key={item.id}>
                     <td><strong>{item.room_name}</strong><small>{item.counterparty_name ?? "собственный / без контрагента"}</small></td>
-                    <td>{item.pricing_type}</td>
+                    <td>{rentLabel(item.pricing_type)}</td>
                     <td>
                       {item.pricing_type === "HOURLY" ? money(item.hourly_rate_minor) + "/ч" : item.pricing_type === "FIXED_MONTHLY" ? money(item.monthly_minor) + "/мес" : money(item.slot_minor) + "/слот"}
                     </td>
@@ -581,10 +609,10 @@ export default function DanceTeamPage() {
           </div>
         </section>
 
-        <section className="section-block">
+        <section className="section-block studio-section">
           <div className="section-heading">
             <div>
-              <p className="muted">Finance</p>
+              <p className="muted">Финансы</p>
               <h2>Аренда текущего месяца</h2>
             </div>
           </div>
@@ -607,7 +635,7 @@ export default function DanceTeamPage() {
                       <strong>{item.room_name}</strong>
                       <small>{item.counterparty_name ?? "Внутренняя себестоимость"}</small>
                     </td>
-                    <td>{item.pricing_type}</td>
+                    <td>{rentLabel(item.pricing_type)}</td>
                     <td>{item.lesson_count}</td>
                     <td><strong>{money(item.amount_minor)}</strong></td>
                     <td><span className="status-pill">{item.status}</span></td>
@@ -619,7 +647,7 @@ export default function DanceTeamPage() {
                     <td colSpan={6}>
                       <div className="table-empty">
                         <strong>Месяц ещё не закрыт</strong>
-                        <span>После закрытия здесь появятся statements и кредиторка арендодателю.</span>
+                        <span>После закрытия появится итог аренды и сумма к оплате арендодателю.</span>
                       </div>
                     </td>
                   </tr>
