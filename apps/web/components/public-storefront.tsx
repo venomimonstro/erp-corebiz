@@ -10,6 +10,7 @@ type Product = {
   product_id: string;
   product_name: string;
   description: string | null;
+  image_url: string | null;
   sku_id: string;
   sku_code: string;
   sale_price_minor: string;
@@ -306,6 +307,15 @@ export function PublicStorefront({
 
           return (
             <article key={product.sku_id} className="public-product-card">
+              {product.image_url ? (
+                <div className="public-product-image-wrap">
+                  <img loading="lazy" decoding="async" src={product.image_url}
+                    alt={product.product_name} className="public-product-image" />
+                </div>
+              ) : (
+                <div className="public-product-image-wrap public-product-image-empty"
+                  aria-hidden="true">Фото товара</div>
+              )}
               <div>
                 <span className="public-product-stock">
                   {Number(product.atp_milli) > 0 ? "В наличии" : "Под заказ"}
