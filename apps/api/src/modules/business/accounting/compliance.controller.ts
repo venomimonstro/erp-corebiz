@@ -183,6 +183,33 @@ export class ComplianceController {
     };
   }
 
+  @Get("obligations/:id/lines")
+  @RequirePermission("accounting.compliance.read")
+  async complianceLines(
+    @Req() req:AuthenticatedRequest,
+    @Param("id") id:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.complianceLines(this.context(req),id)
+    };
+  }
+
+  @Post("obligations/:id/lines")
+  @RequirePermission("accounting.compliance.manage")
+  async saveComplianceLine(
+    @Req() req:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.saveComplianceLine(
+        this.context(req),id,body
+      )
+    };
+  }
+
   @Post("obligations/:id/packet")
   @RequirePermission("accounting.compliance.manage")
   async preparePacket(
