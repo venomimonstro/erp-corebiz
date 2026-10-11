@@ -22,7 +22,7 @@ export class CatalogService {
     sku: string;
     barcode: string | null;
     salePriceMinor: string;
-    costPriceMinor: string;
+    costPriceMinor: string | null;
     currency: string;
     trackInventory: boolean;
   }>> {
@@ -104,6 +104,7 @@ export class CatalogService {
     if(cursor&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(cursor))
       throw new BadRequestException("Неверный курсор страницы каталога");
     const query=input.query?.trim()??"";
+    const safeQuery=query.replace(/[\\%_]/g,"\\const query=input.query?.trim()??"";");
     if(query.length>100||(query.length>0&&query.length<3))
       throw new BadRequestException("Для поиска укажите от 3 до 100 символов");
     return this.database.withTenantTransaction(context,async client=>{
@@ -130,7 +131,7 @@ export class CatalogService {
              OR p.name ILIKE '%'||$3||'%')
          ORDER BY s.id
          LIMIT $4`,
-        [context.tenantId,cursor,query||null,limit+1]
+        [context.tenantId,cursor,safeQuery||null,limit+1]
       );
       const hasMore=result.rows.length>limit;
       const rows=result.rows.slice(0,limit);
