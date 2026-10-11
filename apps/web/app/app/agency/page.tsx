@@ -35,6 +35,13 @@ export default function AgencyPage(){
   const [rows,setRows]=useState<Project[]>([]);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState("");
+  const [expenseProject,setExpenseProject]=useState("");
+  const [expenseCategory,setExpenseCategory]=useState("CONTRACTOR");
+  const [expenseDescription,setExpenseDescription]=useState("");
+  const [expenseAmount,setExpenseAmount]=useState("");
+  const [expenseError,setExpenseError]=useState("");
+  const [expenseSaving,setExpenseSaving]=useState(false);
+
 
   const load=useCallback(async()=>{
     setLoading(true);setError("");
@@ -45,6 +52,26 @@ export default function AgencyPage(){
     }finally{setLoading(false);}
   },[]);
   useEffect(()=>{void load();},[load]);
+
+  const saveExpense=async()=>{
+    setExpenseError("");
+    const value=expenseAmount.trim().replace(",",".");
+    if(!/^\d+(?:\.\d{1,2})?$/.test(value) || Number(value)<=0){
+      setExpenseError("Укажите положительную сумму в рублях");return;
+    }
+    const [rub,kopecks=""]=value.split(".");
+    const amountMinor=(BigInt(rub)*100n+BigInt(kopecks.padEnd(2,"0"))).toString();
+    setExpenseSaving(true);
+    try{
+      await apiRequest("/projects/"+expenseProject+"/expenses",{
+        method:"POST",
+        body:JSON.stringify({category:expenseCategory,description:expenseDescription,amountMinor})
+      });
+      setExpenseAmount("");setExpenseDescription("");setExpenseProject("");
+      await load();
+    }catch(e){setExpenseError(e instanceof Error?e.message:"Не удалось сохранить расход");}
+    finally{setExpenseSaving(false);}
+  };
 
   const metrics=useMemo(()=>{
     let revenue=0n,media=0n,labor=0n,other=0n,atRisk=0,approvals=0;
@@ -94,6 +121,22 @@ export default function AgencyPage(){
           <article className={metrics.atRisk?"is-risk":""}><span>Требуют внимания</span><strong>{metrics.atRisk}</strong><small>{metrics.approvals} согласований у клиентов</small></article>
         </div>
 
+        <section className="agency-board">
+          <div className="studio-section-head"><div><span>Финансы проекта</span><h2>Прямые расходы</h2><p>Учитывайте подрядчиков, программное обеспечение и дополнительные затраты отдельно от клиентского рекламного бюджета.</p></div></div>
+          <div className="agency-hero-actions">
+            <select aria-label="Проект" value={expenseProject} onChange={e=>setExpenseProject(e.target.value)}>
+              <option value="">Выберите проект</option>
+              {rows.filter(p=>p.currency==="RUB").map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <select aria-label="Категория" value={expenseCategory} onChange={e=>setExpenseCategory(e.target.value)}>
+              <option value="CONTRACTOR">Подрядчики</option><option value="SOFTWARE">ПО</option><option value="TRAVEL">Командировки</option><option value="OTHER">Другое</option>
+            </select>
+            <input aria-label="Описание" placeholder="Описание расхода" value={expenseDescription} maxLength={240} onChange={e=>setExpenseDescription(e.target.value)}/>
+            <input aria-label="Сумма в рублях" placeholder="Сумма, ₽" inputMode="decimal" value={expenseAmount} onChange={e=>setExpenseAmount(e.target.value)}/>
+            <button disabled={expenseSaving||!expenseProject||expenseDescription.trim().length<2} onClick={()=>void saveExpense()}>{expenseSaving?"Сохранение…":"Добавить"}</button>
+          </div>
+          {expenseError?<p role="alert">{expenseError}</p>:null}
+        </section>
         <section className="agency-board">
           <div className="studio-section-head">
             <div>
