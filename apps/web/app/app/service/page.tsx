@@ -2,338 +2,469 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../components/app-sidebar";
+import { StudioModal } from "../../../components/studio-modal";
 import { apiRequest } from "../../../lib/api";
 
-type TodayData = {
-  bookings: Array<{
-    id: string;
-    business_number: string;
-    status: string;
-    starts_at: string;
-    ends_at: string;
-    price_minor_snapshot: string;
-    currency: string;
-    version: number;
-    party_name: string | null;
-    service_name: string;
-    resources: Array<{
-      resourceId: string;
-      resourceName: string;
-      type: string;
-    }>;
+type Booking={
+  id:string;
+  business_number:string;
+  status:string;
+  starts_at:string;
+  ends_at:string;
+  price_minor_snapshot:string;
+  currency:string;
+  version:number;
+  party_name:string|null;
+  service_name:string;
+  resources:Array<{
+    resourceId:string;
+    resourceName:string;
+    type:string;
   }>;
-  metrics: {
-    total: number;
-    completed: number;
-    noShow: number;
-    revenueMinor: string;
+};
+
+type TodayData={
+  bookings:Booking[];
+  metrics:{
+    total:number;
+    completed:number;
+    noShow:number;
+    revenueMinor:string;
   };
 };
 
-type Analytics = {
-  services: Array<{
-    id: string;
-    name: string;
-    bookings: number;
-    completed: number;
-    no_show: number;
-    revenue_minor: string;
+type Analytics={
+  services:Array<{
+    id:string;
+    name:string;
+    bookings:number;
+    completed:number;
+    no_show:number;
+    revenue_minor:string;
   }>;
-  resources: Array<{
-    id: string;
-    name: string;
-    type: string;
-    bookings: number;
-    booked_minutes: string;
-    completed: number;
+  resources:Array<{
+    id:string;
+    name:string;
+    type:string;
+    bookings:number;
+    booked_minutes:string;
+    completed:number;
   }>;
 };
 
-type Balance = {
-  warehouseId: string;
-  warehouseName: string;
-  skuId: string;
-  sku: string;
-  productName: string;
-  availableMilli: string;
+type Economics={
+  totals:{
+    completed:number;
+    revenue_minor:string;
+    material_cost_minor:string;
+    employee_cost_minor:string;
+    resource_cost_minor:string;
+    margin_minor:string;
+  };
+  employees:Array<{
+    id:string;
+    name:string;
+    completed:number;
+    revenue_minor:string;
+    employee_cost_minor:string;
+    margin_minor:string;
+  }>;
+  services:Array<{
+    id:string;
+    name:string;
+    completed:number;
+    revenue_minor:string;
+    material_cost_minor:string;
+    employee_cost_minor:string;
+    margin_minor:string;
+  }>;
 };
 
-function money(value: string): string {
-  return new Intl.NumberFormat("ru-RU", {
-    style: "currency",
-    currency: "RUB",
-    maximumFractionDigits: 0
-  }).format(Number(value) / 100);
+type Balance={
+  warehouseId:string;
+  warehouseName:string;
+  skuId:string;
+  sku:string;
+  productName:string;
+  availableMilli:string;
+};
+
+function money(value:string|number|undefined){
+  return new Intl.NumberFormat("ru-RU",{
+    style:"currency",
+    currency:"RUB",
+    maximumFractionDigits:0
+  }).format(Number(value??0)/100);
 }
 
-export default function ServiceHomePage() {
-  const [today, setToday] = useState<TodayData | null>(null);
-  const [analytics, setAnalytics] = useState<Analytics | null>(null);
-  const [balances, setBalances] = useState<Balance[]>([]);
-  const [error, setError] = useState("");
+export default function ServiceHomePage(){
+  const [today,setToday]=useState<TodayData|null>(null);
+  const [analytics,setAnalytics]=useState<Analytics|null>(null);
+  const [economics,setEconomics]=useState<Economics|null>(null);
+  const [balances,setBalances]=useState<Balance[]>([]);
+  const [error,setError]=useState("");
+  const [notice,setNotice]=useState("");
+  const [pending,setPending]=useState(false);
 
-  const load = useCallback(async () => {
+  const [materialBooking,setMaterialBooking]=useState<Booking|null>(null);
+  const [materialKey,setMaterialKey]=useState("");
+  const [materialQuantity,setMaterialQuantity]=useState("1");
+
+  const load=useCallback(async()=>{
     setError("");
-
-    try {
-      const [todayData, analyticsData, balanceData] = await Promise.all([
+    try{
+      const [todayData,analyticsData,balanceData,economicsData]=await Promise.all([
         apiRequest<TodayData>("/service/workspace/today"),
         apiRequest<Analytics>("/service/workspace/analytics"),
-        apiRequest<Balance[]>("/inventory/balances")
+        apiRequest<Balance[]>("/inventory/balances"),
+        apiRequest<Economics>("/service/economics")
       ]);
-
       setToday(todayData);
       setAnalytics(analyticsData);
       setBalances(balanceData);
-    } catch (cause) {
+      setEconomics(economicsData);
+    }catch(cause){
       setError(
         cause instanceof Error
-          ? cause.message
-          : "Не удалось загрузить рабочее место сервиса"
+          ?cause.message
+          :"Не удалось загрузить рабочее место"
       );
     }
-  }, []);
+  },[]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(()=>{void load();},[load]);
 
-  const conversion = useMemo(() => {
-    if (!today?.metrics.total) return 0;
-    return Math.round(
-      (today.metrics.completed / today.metrics.total) * 100
+  const conversion=useMemo(()=>{
+    if(!today?.metrics.total) return 0;
+    return Math.round(today.metrics.completed/today.metrics.total*100);
+  },[today]);
+
+  const availableMaterials=useMemo(
+    ()=>balances.filter(item=>BigInt(item.availableMilli)>0n),
+    [balances]
+  );
+
+  function openMaterial(booking:Booking){
+    setMaterialBooking(booking);
+    const first=availableMaterials[0];
+    setMaterialKey(first?first.warehouseId+"|"+first.skuId:"");
+    setMaterialQuantity("1");
+  }
+
+  async function consumeMaterial(){
+    if(!materialBooking) return;
+    const [warehouseId,skuId]=materialKey.split("|");
+    const item=availableMaterials.find(
+      row=>row.warehouseId===warehouseId&&row.skuId===skuId
     );
-  }, [today]);
-
-  async function consumeMaterial(bookingId: string) {
-    const available = balances.filter(
-      (item) => BigInt(item.availableMilli) > 0n
-    );
-
-    if (!available.length) {
-      setError("Нет доступных складских остатков для расхода");
+    if(!item){
+      setError("Выберите расходник");
       return;
     }
-
-    const text = available
-      .slice(0, 40)
-      .map(
-        (item, index) =>
-          `${index + 1}. ${item.productName} · ${item.sku} · ${item.warehouseName} · доступно ${Number(
-            item.availableMilli
-          ) / 1000}`
-      )
-      .join("\n");
-
-    const index =
-      Number(window.prompt("Выберите расходник:\n" + text, "1")) - 1;
-    const item = available[index];
-    if (!item) return;
-
-    const max = Number(item.availableMilli) / 1000;
-    const raw = window.prompt(
-      "Количество расхода",
-      String(Math.min(1, max))
-    );
-    if (raw === null) return;
-
-    const units = Number(raw.replace(",", "."));
-    if (!Number.isFinite(units) || units <= 0 || units > max) {
-      setError("Некорректное количество расхода");
+    const units=Number(materialQuantity.replace(",","."));
+    const max=Number(item.availableMilli)/1000;
+    if(!Number.isFinite(units)||units<=0||units>max){
+      setError("Проверьте количество расхода");
       return;
     }
-
-    const quantityMilli = String(Math.round(units * 1000));
-
-    try {
-      const line = await apiRequest<{ id: string }>(
-        "/service/workspace/bookings/" + bookingId + "/materials",
+    const quantityMilli=String(Math.round(units*1000));
+    setPending(true);
+    setError("");
+    try{
+      const line=await apiRequest<{id:string}>(
+        "/service/workspace/bookings/"+materialBooking.id+"/materials",
         {
-          method: "POST",
-          body: JSON.stringify({
-            warehouseId: item.warehouseId,
-            skuId: item.skuId,
-            quantityMilli
-          })
+          method:"POST",
+          body:JSON.stringify({warehouseId,skuId,quantityMilli})
         }
       );
-
       await apiRequest(
-        "/service/workspace/materials/" + line.id + "/consume",
+        "/service/workspace/materials/"+line.id+"/consume",
         {
-          method: "POST",
-          body: JSON.stringify({
+          method:"POST",
+          body:JSON.stringify({
             quantityMilli,
-            idempotencyKey: crypto.randomUUID()
+            idempotencyKey:crypto.randomUUID()
           })
         }
       );
-
-      await load();
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Не удалось списать расходник"
+      setMaterialBooking(null);
+      setNotice(
+        "Фактический расход сохранён. Для регулярных материалов лучше использовать техкарту."
       );
+      await load();
+    }catch(cause){
+      setError(
+        cause instanceof Error?cause.message:"Не удалось списать материал"
+      );
+    }finally{
+      setPending(false);
     }
   }
 
   return (
     <main className="app-shell">
       <AppSidebar active="service-home" />
-
-      <section className="workspace">
-        <header className="workspace-header">
+      <section className="workspace workspace-wide studio-premium">
+        <header className="studio-hero">
           <div>
-            <p className="muted">Сервис / Рабочее место</p>
-            <h1>Сегодня</h1>
-            <p className="workspace-summary">
-              Записи, выручка, no-show, загрузка ресурсов и расходники.
+            <span className="studio-eyebrow">Операционный центр</span>
+            <h1>Сегодня в бизнесе</h1>
+            <p>
+              Записи, загрузка, выручка и реальная маржа после материалов,
+              мастеров и ресурсов — на одном экране.
             </p>
           </div>
-
-          <a className="button-link" href="/app/service/bookings">
-            Открыть календарь
-          </a>
+          <div className="studio-hero-actions">
+            <a className="secondary-button" href="/app/service/setup">
+              Настроить услуги
+            </a>
+            <a className="secondary-button" href="/app/service/team">
+              Команда и зарплата
+            </a>
+            <a className="button-link" href="/app/service/bookings">
+              Открыть календарь
+            </a>
+          </div>
         </header>
 
-        {error ? (
-          <div className="inline-error">
-            <strong>Не удалось выполнить действие</strong>
-            <span>{error}</span>
+        {error?(
+          <div className="studio-message error">
+            <strong>Нужно проверить</strong><span>{error}</span>
           </div>
-        ) : null}
+        ):null}
+        {notice?(
+          <div className="studio-message success">
+            <strong>Готово</strong><span>{notice}</span>
+          </div>
+        ):null}
 
-        {today ? (
-          <>
-            <div className="metric-grid">
-              <article className="metric-card">
-                <span>Записей сегодня</span>
-                <strong>{today.metrics.total}</strong>
-                <small>Завершено {today.metrics.completed}</small>
-              </article>
+        <div className="studio-score-grid">
+          <article>
+            <span>Записей сегодня</span>
+            <strong>{today?.metrics.total??0}</strong>
+            <p>{today?.metrics.completed??0} завершено · no-show {today?.metrics.noShow??0}</p>
+          </article>
+          <article>
+            <span>Выполнено сегодня</span>
+            <strong>{conversion}%</strong>
+            <p>Доля завершённых записей текущего дня.</p>
+          </article>
+          <article>
+            <span>Маржа месяца</span>
+            <strong>{money(economics?.totals.margin_minor)}</strong>
+            <p>После материалов, мастеров и стоимости ресурсов.</p>
+          </article>
+          <article>
+            <span>Команде</span>
+            <strong>{money(economics?.totals.employee_cost_minor)}</strong>
+            <p>Автоматические начисления по завершённым визитам.</p>
+          </article>
+        </div>
 
-              <article className="metric-card">
-                <span>Стоимость завершённых услуг</span>
-                <strong>{money(today.metrics.revenueMinor)}</strong>
-                <small>Начисленная стоимость, не фактическая оплата</small>
-              </article>
-
-              <article className="metric-card">
-                <span>Выполнено</span>
-                <strong>{conversion}%</strong>
-                <small>No-show: {today.metrics.noShow}</small>
-              </article>
+        <section className="studio-section">
+          <div className="studio-section-head">
+            <div>
+              <span>Сегодня</span>
+              <h2>Расписание без шума</h2>
+              <p>
+                Основные действия рядом с записью. Материалы по техкартам
+                списываются автоматически при завершении.
+              </p>
             </div>
+            <a className="secondary-button" href="/app/service/bookings">
+              Полный календарь
+            </a>
+          </div>
 
-            <div className="service-today-list">
-              {today.bookings.map((booking) => (
-                <article className="service-today-row" key={booking.id}>
-                  <div className="booking-time">
-                    <strong>
-                      {new Date(booking.starts_at).toLocaleTimeString(
-                        "ru-RU",
-                        {
-                          hour: "2-digit",
-                          minute: "2-digit"
-                        }
-                      )}
-                    </strong>
-                    <span>
-                      {new Date(booking.ends_at).toLocaleTimeString(
-                        "ru-RU",
-                        {
-                          hour: "2-digit",
-                          minute: "2-digit"
-                        }
-                      )}
-                    </span>
-                  </div>
-
-                  <div>
-                    <strong>{booking.service_name}</strong>
-                    <span>
-                      {booking.party_name ?? "Без клиента"} ·{" "}
-                      {booking.resources
-                        .map((resource) => resource.resourceName)
-                        .join(", ")}
-                    </span>
-                  </div>
-
-                  <span className="status-pill">{booking.status}</span>
-
-                  <button
-                    disabled={["CANCELLED", "NO_SHOW"].includes(
-                      booking.status
+          <div className="service-today-list">
+            {(today?.bookings??[]).map(booking=>(
+              <article className="service-today-row" key={booking.id}>
+                <div className="booking-time">
+                  <strong>
+                    {new Date(booking.starts_at).toLocaleTimeString(
+                      "ru-RU",{hour:"2-digit",minute:"2-digit"}
                     )}
-                    onClick={() => void consumeMaterial(booking.id)}
-                    type="button"
-                  >
-                    Расходник
-                  </button>
+                  </strong>
+                  <span>
+                    {new Date(booking.ends_at).toLocaleTimeString(
+                      "ru-RU",{hour:"2-digit",minute:"2-digit"}
+                    )}
+                  </span>
+                </div>
+                <div>
+                  <strong>{booking.service_name}</strong>
+                  <span>
+                    {booking.party_name??"Без клиента"} ·{" "}
+                    {booking.resources.map(item=>item.resourceName).join(", ")||"ресурс не назначен"}
+                  </span>
+                </div>
+                <span className="status-pill">{booking.status}</span>
+                <button
+                  className="secondary-button"
+                  disabled={
+                    ["CANCELLED","NO_SHOW","COMPLETED"].includes(booking.status)||
+                    !availableMaterials.length
+                  }
+                  type="button"
+                  onClick={()=>openMaterial(booking)}
+                >
+                  + Факт. расход
+                </button>
+              </article>
+            ))}
+            {!(today?.bookings.length??0)?(
+              <div className="studio-empty">
+                <span>01</span>
+                <strong>Сегодня записей нет</strong>
+                <p>Откройте календарь или проверьте онлайн-запись.</p>
+              </div>
+            ):null}
+          </div>
+        </section>
+
+        <section className="studio-economics-grid">
+          <article className="studio-economics-panel">
+            <header>
+              <div>
+                <span>Услуги</span>
+                <h2>Что приносит маржу</h2>
+              </div>
+              <small>текущий месяц</small>
+            </header>
+            <div className="studio-economics-list">
+              {(economics?.services??[]).slice(0,8).map(item=>(
+                <div key={item.id}>
+                  <div>
+                    <strong>{item.name}</strong>
+                    <span>{item.completed} завершено</span>
+                  </div>
+                  <div>
+                    <strong>{money(item.margin_minor)}</strong>
+                    <span>
+                      выручка {money(item.revenue_minor)} · материалы{" "}
+                      {money(item.material_cost_minor)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {!(economics?.services.length??0)?(
+                <p>Экономика появится после завершения первых визитов.</p>
+              ):null}
+            </div>
+          </article>
+
+          <article className="studio-economics-panel">
+            <header>
+              <div>
+                <span>Команда</span>
+                <h2>Экономика по сотрудникам</h2>
+              </div>
+              <a href="/app/service/team">Открыть зарплату →</a>
+            </header>
+            <div className="studio-economics-list">
+              {(economics?.employees??[]).slice(0,8).map(item=>(
+                <div key={item.id}>
+                  <div>
+                    <strong>{item.name}</strong>
+                    <span>{item.completed} завершено</span>
+                  </div>
+                  <div>
+                    <strong>{money(item.margin_minor)}</strong>
+                    <span>
+                      выручка {money(item.revenue_minor)} · мастеру{" "}
+                      {money(item.employee_cost_minor)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {!(economics?.employees.length??0)?(
+                <p>Настройте правила оплаты и завершите первые визиты.</p>
+              ):null}
+            </div>
+          </article>
+        </section>
+
+        {analytics?(
+          <section className="studio-section">
+            <div className="studio-section-head">
+              <div>
+                <span>Загрузка</span>
+                <h2>Где есть свободная мощность</h2>
+                <p>
+                  Смотрите не только выручку, но и сколько времени реально заняты
+                  сотрудники, кабинеты и рабочие места.
+                </p>
+              </div>
+            </div>
+            <div className="studio-rule-grid">
+              {analytics.resources.slice(0,8).map(resource=>(
+                <article className="studio-rule-card" key={resource.id}>
+                  <header>
+                    <div>
+                      <span className="studio-chip">{resource.type}</span>
+                      <h3>{resource.name}</h3>
+                      <p>{resource.bookings} записей</p>
+                    </div>
+                    <strong>
+                      {Math.round(Number(resource.booked_minutes)/60)}
+                      <small> ч</small>
+                    </strong>
+                  </header>
+                  <footer>
+                    <span>завершено {resource.completed}</span>
+                    <b>за 30 дней</b>
+                  </footer>
                 </article>
               ))}
-
-              {!today.bookings.length ? (
-                <div className="table-empty">
-                  <strong>Сегодня записей нет</strong>
-                  <span>Откройте календарь и создайте первую запись.</span>
-                </div>
-              ) : null}
-            </div>
-          </>
-        ) : null}
-
-        {analytics ? (
-          <section className="section-block">
-            <div className="section-heading">
-              <div>
-                <p className="muted">30 дней</p>
-                <h2>Эффективность сервиса</h2>
-              </div>
-            </div>
-
-            <div className="service-analytics-grid">
-              <div className="settings-card">
-                <strong>Услуги</strong>
-                <div className="mini-ranking">
-                  {analytics.services.slice(0, 8).map((service) => (
-                    <article key={service.id}>
-                      <div>
-                        <strong>{service.name}</strong>
-                        <span>
-                          {service.completed}/{service.bookings} выполнено ·
-                          no-show {service.no_show}
-                        </span>
-                      </div>
-                      <b>{money(service.revenue_minor)}</b>
-                    </article>
-                  ))}
-                </div>
-              </div>
-
-              <div className="settings-card">
-                <strong>Ресурсы</strong>
-                <div className="mini-ranking">
-                  {analytics.resources.slice(0, 8).map((resource) => (
-                    <article key={resource.id}>
-                      <div>
-                        <strong>{resource.name}</strong>
-                        <span>
-                          {resource.type} ·{" "}
-                          {Math.round(Number(resource.booked_minutes) / 60)} ч
-                          занято
-                        </span>
-                      </div>
-                      <b>{resource.completed}</b>
-                    </article>
-                  ))}
-                </div>
-              </div>
             </div>
           </section>
-        ) : null}
+        ):null}
+
+        {materialBooking?(
+          <StudioModal
+            eyebrow="Корректировка материалов"
+            title={"Фактический расход · "+materialBooking.service_name}
+            description="Основной расход берётся из техкарты автоматически. Здесь можно добавить разовый фактический материал."
+            onClose={()=>setMaterialBooking(null)}
+          >
+            <div className="studio-modal-form">
+              <label>
+                <span>Материал</span>
+                <select
+                  value={materialKey}
+                  onChange={event=>setMaterialKey(event.target.value)}
+                >
+                  {availableMaterials.map(item=>(
+                    <option
+                      key={item.warehouseId+"|"+item.skuId}
+                      value={item.warehouseId+"|"+item.skuId}
+                    >
+                      {item.productName} · {item.sku} · {item.warehouseName}
+                      {" · "}доступно {Number(item.availableMilli)/1000}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Количество</span>
+                <input
+                  inputMode="decimal"
+                  value={materialQuantity}
+                  onChange={event=>setMaterialQuantity(event.target.value)}
+                />
+              </label>
+              <div className="studio-drawer-actions">
+                <button className="secondary-button" type="button" onClick={()=>setMaterialBooking(null)}>
+                  Отмена
+                </button>
+                <button disabled={pending} type="button" onClick={()=>void consumeMaterial()}>
+                  {pending?"Списываем…":"Добавить расход"}
+                </button>
+              </div>
+            </div>
+          </StudioModal>
+        ):null}
       </section>
     </main>
   );
