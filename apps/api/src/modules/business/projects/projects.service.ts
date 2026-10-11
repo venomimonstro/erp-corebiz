@@ -758,6 +758,18 @@ export class ProjectsService {
         throw new NotFoundException("Сотрудник не найден");
       }
 
+      const assigned=await client.query<{
+        cost_rate_minor:string;billable_rate_minor:string;status:string
+      }>(`SELECT cost_rate_minor::text,billable_rate_minor::text,status
+         FROM work_project_member
+         WHERE tenant_id=$1 AND project_id=$2 AND membership_id=$3`,
+        [context.tenantId,projectId,membershipId]);
+      if(assigned.rows[0]?.status==="ARCHIVED")
+        throw new ConflictException("Сотрудник больше не назначен на проект");
+      const costRateSnapshot=assigned.rows[0]?.cost_rate_minor??null;
+      const saleRateSnapshot=assigned.rows[0] &&
+        BigInt(assigned.rows[0].billable_rate_minor)>0n
+          ?assigned.rows[0].billable_rate_minor:projectRow.hourly_rate_minor;
       if (input.taskId) {
         const task = await client.query(
           `SELECT 1 FROM task
@@ -774,8 +786,9 @@ export class ProjectsService {
         const result = await client.query<{ id: string }>(
           `INSERT INTO work_project_time_entry(
              tenant_id,project_id,task_id,membership_id,work_date,
-             minutes,billable,hourly_rate_minor_snapshot,note,idempotency_key
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+             minutes,billable,hourly_rate_minor_snapshot,cost_rate_minor_snapshot,
+             note,idempotency_key
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
            RETURNING id`,
           [
             context.tenantId,
@@ -785,7 +798,8 @@ export class ProjectsService {
             input.workDate ?? new Date().toISOString().slice(0, 10),
             minutes,
             input.billable ?? true,
-            projectRow.hourly_rate_minor,
+            saleRateSnapshot,
+            costRateSnapshot,
             input.note?.trim() || null,
             input.idempotencyKey?.trim() || null
           ]
@@ -917,7 +931,7 @@ export class ProjectsService {
            SELECT
              coalesce(sum(e.minutes),0) AS actual_minutes,
              coalesce(sum(
-               coalesce(pm.cost_rate_minor,p.hourly_rate_minor)*
+               coalesce(e.cost_rate_minor_snapshot,pm.cost_rate_minor,0)*
                e.minutes/60
              ),0)::bigint AS labor_cost_minor
            FROM work_project_time_entry e
@@ -1254,7 +1268,7 @@ export class ProjectsService {
                 FILTER(WHERE e.billable),0)::text
        FROM work_project_time_entry e WHERE e.tenant_id=$1 AND e.project_id=$2
        AND e.work_date >= $3::date AND e.work_date < $4::date) AS billable_value_minor,
-      (SELECT COALESCE(sum(pm.cost_rate_minor*e.minutes/60),0)::text
+      (SELECT COALESCE(sum(coalesce(e.cost_rate_minor_snapshot,pm.cost_rate_minor,0)*e.minutes/60),0)::text
        FROM work_project_time_entry e LEFT JOIN work_project_member pm
          ON pm.tenant_id=e.tenant_id AND pm.project_id=e.project_id
          AND pm.membership_id=e.membership_id
@@ -1265,7 +1279,7 @@ export class ProjectsService {
          AND pm.project_id=e.project_id AND pm.membership_id=e.membership_id
        WHERE e.tenant_id=$1 AND e.project_id=$2
          AND e.work_date >= $3::date AND e.work_date < $4::date
-         AND (pm.cost_rate_minor IS NULL OR pm.cost_rate_minor=0)) AS missing_cost_entries,
+         AND coalesce(e.cost_rate_minor_snapshot,pm.cost_rate_minor,0)=0) AS missing_cost_entries,
       (SELECT COALESCE(sum(e.amount_minor),0)::text FROM work_project_expense e
        WHERE e.tenant_id=$1 AND e.project_id=$2
          AND e.expense_on >= $3::date AND e.expense_on < $4::date) AS other_cost_minor,
