@@ -52,6 +52,8 @@ export class AuthorizationService {
     roles: string[];
     permissions: Array<{ code: string; scope: PermissionScope }>;
     profileCode: string;
+    tenantId: string;
+    verticalCode: string | null;
     workspace:
       | "OWNER"
       | "ADMIN"
@@ -107,6 +109,11 @@ export class AuthorizationService {
         [context.tenantId]
       );
 
+      const vertical = await client.query<{vertical_code:string}>(
+        `SELECT vertical_code FROM tenant_business_vertical WHERE tenant_id=$1`,
+        [context.tenantId]
+      );
+
       const roleCodes = roles.rows.map((row) => row.code);
       const has = (code: string) => roleCodes.includes(code);
 
@@ -135,6 +142,8 @@ export class AuthorizationService {
           scope: row.scope
         })),
         profileCode: profile.rows[0]?.profile_code ?? "GENERAL",
+        tenantId: context.tenantId,
+        verticalCode: vertical.rows[0]?.vertical_code ?? null,
         workspace
       };
     });
