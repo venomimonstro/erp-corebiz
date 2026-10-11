@@ -42,6 +42,14 @@ type Cart = {
   lines: CartLine[];
   totalMinor: string;
 };
+type DeliveryMethod = {
+  id:string; code:string; title:string;
+  mode:"PICKUP"|"LOCAL_COURIER"; fee_minor:string;
+  description:string|null;
+};
+type DeliveryCatalog = {methods:DeliveryMethod[];currency:string};
+type PaymentStart = {intentId:string;status:string;confirmationUrl?:string};
+
 
 // A tenant custom domain must use the same-origin API proxy.
 const API_URL = "/api/v1";
@@ -83,6 +91,11 @@ export function PublicStorefront({
   const [email, setEmail] = useState("");
   const [search, setSearch] = useState("");
   const [loadingCatalog, setLoadingCatalog] = useState(false);
+  const [delivery, setDelivery] = useState<DeliveryMethod[]>([]);
+  const [deliveryMethodId, setDeliveryMethodId] = useState("");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [paymentCartKey, setPaymentCartKey] = useState("");
+
 
   const storageKey = "corebiz_cart_" + publicSlug;
 
@@ -134,6 +147,15 @@ export function PublicStorefront({
       setError(cause instanceof Error ? cause.message : "Корзина временно недоступна");
     });
   }, [ensureCart]);
+
+  useEffect(() => {
+    void request<DeliveryCatalog>(
+      "/payments/storefront/" + encodeURIComponent(publicSlug) + "/delivery"
+    ).then(result=>{
+      setDelivery(result.methods);
+      if(result.methods.length===1)setDeliveryMethodId(result.methods[0]!.id);
+    }).catch(()=>setDelivery([]));
+  },[publicSlug]);
 
   const pageSize = Math.max(1, Math.min(100, Math.floor(limit) || 12));
   useEffect(() => {
@@ -239,7 +261,9 @@ export function PublicStorefront({
             idempotencyKey: crypto.randomUUID(),
             name: name.trim(),
             phone: phone.trim() || undefined,
-            email: email.trim() || undefined
+            email: email.trim() || undefined,
+            deliveryMethodId: deliveryMethodId || undefined,
+            deliveryAddress: deliveryAddress.trim() || undefined
           })
         }
       );
@@ -267,13 +291,46 @@ export function PublicStorefront({
         );
       }
       setCheckoutOpen(false);
-      window.localStorage.removeItem(storageKey);
-      setCart(null);
+      setPaymentCartKey(cart.cartKey);
+      // Retain the opaque cart key until provider payment is confirmed.
+      // The seller may still accept manual offline payment for this order.
+      const updated=await request<Cart>(
+        "/storefront/carts/"+encodeURIComponent(cart.cartKey)
+      );
+      setCart(updated);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось оформить заказ");
     } finally {
       setBusy("");
     }
+  }
+
+  async function payOnline(){
+    const key=paymentCartKey || cart?.cartKey;
+    if(!key)return;
+    setBusy("payment");
+    setError("");
+    try{
+      const response=await request<PaymentStart>(
+        "/payments/storefront/carts/" + encodeURIComponent(key) + "/start",
+        {method:"POST"}
+      );
+      if(response.status==="SUCCEEDED"){
+        setSuccess("Заказ уже оплачен. Проверьте уведомление продавца.");
+        return;
+      }
+      if(!response.confirmationUrl)throw new Error("Ссылка на оплату не получена");
+      // Only provider-hosted forms: CoreBiz must never process card details.
+      const url=new URL(response.confirmationUrl);
+      if(url.protocol!=="https:" ||
+         !["yookassa.ru","yoomoney.ru"].some(host=>
+           url.hostname===host||url.hostname.endsWith("."+host))) {
+        throw new Error("Некорректный адрес платёжной формы");
+      }
+      window.location.assign(url.href);
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Оплата недоступна");
+    }finally{setBusy("");}
   }
 
   const visible = useMemo(() => catalog?.products ?? [], [catalog]);
@@ -395,6 +452,17 @@ export function PublicStorefront({
         </button>
       ) : null}
 
+      {paymentCartKey || cart?.status==="CHECKED_OUT" ? (
+        <div className="public-checkout">
+          <strong>Заказ оформлен · ожидает оплаты</strong>
+          <p>Оплата не подтверждается возвращением на сайт.
+            Статус обновляется только после проверки платёжного провайдера.</p>
+          <button type="button" className="public-primary-button"
+            disabled={Boolean(busy)} onClick={()=>void payOnline()}>
+            {busy==="payment"?"Подключаем оплату…":"Оплатить через YooKassa"}
+          </button>
+        </div>
+      ) : null}
       {checkoutOpen && cart ? (
         <div className="public-checkout">
           <div className="public-checkout-head">
@@ -437,15 +505,40 @@ export function PublicStorefront({
             <input value={email} onChange={(e) => setEmail(e.target.value)} />
           </label>
 
+          <label>
+            <span>Получение заказа</span>
+            <select value={deliveryMethodId}
+              onChange={event=>setDeliveryMethodId(event.target.value)}>
+              <option value="">Выберите способ получения</option>
+              {delivery.map(item=>(
+                <option value={item.id} key={item.id}>
+                  {item.title} · {item.fee_minor==="0"?"Бесплатно":rub(item.fee_minor)}
+                </option>
+              ))}
+            </select>
+          </label>
+          {delivery.find(d=>d.id===deliveryMethodId)?.mode==="LOCAL_COURIER" ? (
+            <label>
+              <span>Адрес доставки *</span>
+              <textarea rows={2} value={deliveryAddress}
+                onChange={event=>setDeliveryAddress(event.target.value)}
+                placeholder="Город, улица, дом, квартира" />
+            </label>
+          ) : null}
           <p className="public-order-notice">
-            Это заявка на заказ без онлайн-оплаты. Способ получения и оплату
-            сотрудник магазина согласует с вами отдельно.
+            Заказ сначала подтверждается в системе магазина.
+            Онлайн-оплата доступна только у продавца с подключёнными
+            эквайрингом и онлайн-кассой. При отсутствии онлайн-оплаты
+            сотрудник согласует расчёт отдельно.
           </p>
           <button
             className="public-primary-button"
             disabled={Boolean(busy) || cart.status !== "OPEN" || !name.trim() ||
               (!phone.trim() && !email.trim()) ||
-              !cart.lines.length || cart.lines.some(line => !line.is_available)}
+              !cart.lines.length || cart.lines.some(line => !line.is_available) ||
+              (delivery.length>0 && !deliveryMethodId) ||
+              (delivery.find(d=>d.id===deliveryMethodId)?.mode==="LOCAL_COURIER" &&
+                deliveryAddress.trim().length<8)}
             onClick={() => void checkout()}
             type="button"
           >
