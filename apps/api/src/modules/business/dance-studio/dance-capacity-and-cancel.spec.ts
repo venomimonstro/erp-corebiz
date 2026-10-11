@@ -108,4 +108,56 @@ describe("dance: simultaneous capacity and cancellation safeguards",()=>{
     expect(result.status).toBe("CANCELLED_IN_TIME");
     expect(result.promoted).toBeNull();
   });
+  it("does not change group membership if cancellation of a future paid lesson fails",async()=>{
+    const {studio,client}=harness(async sql=>{
+      if(sql.includes("SELECT id,student_id,status,reserved_place"))
+        return {rows:[{
+          id:"member-1",student_id:studentId,status:"ACTIVE",reserved_place:true
+        }]};
+      if(sql.includes("SELECT lp.lesson_id,lp.id AS participant_id"))
+        return {rows:[{lesson_id:lessonId,participant_id:"p-1",version:4}]};
+      if(sql.includes("UPDATE dance_group_member"))
+        throw new Error("Membership must not be changed after failed cancellation");
+      throw new Error("Unexpected query: "+sql.slice(0,90));
+    });
+    (studio as any).assertGroupAccess=jest.fn().mockResolvedValue({id:groupId,capacity:10});
+    (studio as any).markAttendanceTx=jest.fn().mockRejectedValue(
+      new ConflictException("Package payment already settled")
+    );
+    await expect(studio.changeGroupMemberStatus(context,groupId,"member-1",
+      {status:"LEFT"})).rejects.toBeInstanceOf(ConflictException);
+    expect(client.query.mock.calls.some(c=>String(c[0]).includes("UPDATE dance_group_member")))
+      .toBe(false);
+  });
+
+  it("cancels future reservations in the same transaction before pausing a student",async()=>{
+    const {studio,client,db}=harness(async sql=>{
+      if(sql.includes("SELECT id,student_id,status,reserved_place"))
+        return {rows:[{
+          id:"member-1",student_id:studentId,status:"ACTIVE",reserved_place:true
+        }]};
+      if(sql.includes("SELECT lp.lesson_id,lp.id AS participant_id"))
+        return {rows:[{lesson_id:lessonId,participant_id:"p-1",version:4}]};
+      if(sql.includes("UPDATE dance_group_member"))
+        return {rows:[{
+          id:"member-1",student_id:studentId,status:"PAUSED",reserved_place:true
+        }]};
+      throw new Error("Unexpected query: "+sql.slice(0,90));
+    });
+    (studio as any).assertGroupAccess=jest.fn().mockResolvedValue({id:groupId,capacity:10});
+    const cancel=jest.fn().mockResolvedValue({status:"CANCELLED_IN_TIME",version:5});
+    (studio as any).markAttendanceTx=cancel;
+    (studio as any).syncGroupRoster=jest.fn().mockResolvedValue({enrolled:0});
+    const result=await studio.changeGroupMemberStatus(context,groupId,"member-1",
+      {status:"PAUSED",keepPlace:true});
+    expect(result.member.status).toBe("PAUSED");
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(cancel.mock.calls[0][0]).toBe(client);
+    expect(cancel.mock.invocationCallOrder[0])
+      .toBeLessThan(client.query.mock.invocationCallOrder[
+        client.query.mock.calls.findIndex(c=>String(c[0]).includes("UPDATE dance_group_member"))
+      ]);
+    expect(db.withTenantTransaction).toHaveBeenCalledTimes(1);
+  });
+
 });
