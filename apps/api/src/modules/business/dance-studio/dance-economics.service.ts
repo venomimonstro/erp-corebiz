@@ -236,19 +236,33 @@ export class DanceEconomicsService {
       if(!trainer.rowCount) throw new NotFoundException("Тренер не найден");
 
       const current=await client.query<{id:string}>(
-        `SELECT id
-         FROM trainer_payroll_profile
-         WHERE tenant_id=$1
-           AND trainer_resource_id=$2
-           AND status='ACTIVE'
-           AND valid_from=$3::date
-           AND valid_to IS NOT DISTINCT FROM $4::date
-         LIMIT 1
-         FOR UPDATE`,
-        [
-          context.tenantId,input.trainerResourceId,
-          validFrom,input.validTo??null
-        ]
+        input.validFrom
+          ? `SELECT id
+             FROM trainer_payroll_profile
+             WHERE tenant_id=$1
+               AND trainer_resource_id=$2
+               AND status='ACTIVE'
+               AND valid_from=$3::date
+               AND valid_to IS NOT DISTINCT FROM $4::date
+             ORDER BY valid_from DESC,id
+             LIMIT 1
+             FOR UPDATE`
+          : `SELECT id
+             FROM trainer_payroll_profile
+             WHERE tenant_id=$1
+               AND trainer_resource_id=$2
+               AND status='ACTIVE'
+               AND valid_from<=current_date
+               AND (valid_to IS NULL OR valid_to>=current_date)
+             ORDER BY valid_from DESC,id
+             LIMIT 1
+             FOR UPDATE`,
+        input.validFrom
+          ? [
+              context.tenantId,input.trainerResourceId,
+              validFrom,input.validTo??null
+            ]
+          : [context.tenantId,input.trainerResourceId]
       );
 
       try{
@@ -295,6 +309,39 @@ export class DanceEconomicsService {
         }
         throw error;
       }
+    });
+  }
+
+  async archiveCompensationPlan(
+    context:TenantContext,
+    planId:string
+  ){
+    await this.requireAll(context,"dance.write");
+    return this.database.withTenantTransaction(context,async client=>{
+      const plan=await client.query<{status:string}>(
+        `SELECT status
+         FROM trainer_compensation_plan
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,planId]
+      );
+      const row=plan.rows[0];
+      if(!row) throw new NotFoundException("Правило зарплаты не найдено");
+      if(row.status==="ARCHIVED"){
+        return {id:planId,status:"ARCHIVED",changed:false};
+      }
+
+      await client.query(
+        `UPDATE trainer_compensation_plan
+         SET status='ARCHIVED',updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,planId]
+      );
+      await this.audit(
+        client,context,"dance.compensation_plan_archived",
+        "trainer_compensation_plan",planId
+      );
+      return {id:planId,status:"ARCHIVED",changed:true};
     });
   }
 
