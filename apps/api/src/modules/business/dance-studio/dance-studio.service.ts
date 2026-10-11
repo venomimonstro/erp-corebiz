@@ -59,10 +59,6 @@ export class DanceStudioService {
            AND (
              $2::uuid[] IS NULL
              OR tr.membership_id = ANY($2::uuid[])
-             OR (
-               l.trainer_resource_id IS NULL
-               AND l.created_by_membership_id = ANY($2::uuid[])
-             )
            )
          GROUP BY l.id,g.name,p.name,tr.name,rr.name
          ORDER BY l.starts_at`,
