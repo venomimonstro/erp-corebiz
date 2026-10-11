@@ -17,7 +17,7 @@ describe("omnichannel retail stock and order safety",()=>{
     idempotencyKey:"saledoc_123456789",
     lines:[{skuId:sku,quantityMilli:"1000"}]
   };
-  function setup(opts:{pickup?:boolean;orderStatus?:string;orderWarehouse?:string|null}={}){
+  function setup(opts:{pickup?:boolean;validPrice?:boolean;orderStatus?:string;orderWarehouse?:string|null}={}){
     const queries:string[]=[];
     const query=jest.fn(async(sql:string,args?:unknown[])=>{
       queries.push(sql);
@@ -26,7 +26,7 @@ describe("omnichannel retail stock and order safety",()=>{
           pickup_enabled:opts.pickup??true}],rowCount:1
       };
       if(sql.includes("count(DISTINCT s.id)::integer AS count"))return {
-        rows:[{count:1}],rowCount:1
+        rows:[{count:opts.validPrice===false?0:1}],rowCount:1
       };
       if(sql.includes("SELECT order_status,version,warehouse_id FROM sales_order"))
         return {rows:[{order_status:opts.orderStatus??"DRAFT",version:1,
@@ -54,10 +54,11 @@ describe("omnichannel retail stock and order safety",()=>{
     })).rejects.toBeInstanceOf(BadRequestException);
     expect(t.sales.create).not.toHaveBeenCalled();
   });
-  it("does not reserve electronics with missing active sale prices",async()=>{
-    const t=setup();
-    // Backend explicitly checks pricing before any Sales order is created.
-    expect(t.service.reserve).toBeDefined();
+  it("rejects inactive or zero-priced SKU before creating a sales order",async()=>{
+    const t=setup({validPrice:false});
+    await expect(t.service.reserve(ctx,order))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(t.sales.create).not.toHaveBeenCalled();
   });
 
   it("fails closed if the selected store does not offer pickup",async()=>{
