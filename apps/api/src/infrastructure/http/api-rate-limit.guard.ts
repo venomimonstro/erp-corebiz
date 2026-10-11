@@ -148,6 +148,31 @@ export class ApiRateLimitGuard implements CanActivate {
       };
     }
 
+    // Anonymous checkout creates costly Party/Sales/OMS records. Do not give
+    // it the high throughput intended for signed marketplace webhooks.
+    if (inferred === "PUBLIC_CHECKOUT") {
+      return {
+        userLimit: 10,
+        tenantLimit: null,
+        windowSeconds: 60,
+        costClass: "NORMAL",
+        userConcurrency: null,
+        tenantConcurrency: null,
+        leaseSeconds: 60
+      };
+    }
+    if (inferred === "PUBLIC_CART") {
+      return {
+        userLimit: 45,
+        tenantLimit: null,
+        windowSeconds: 60,
+        costClass: "NORMAL",
+        userConcurrency: null,
+        tenantConcurrency: null,
+        leaseSeconds: 60
+      };
+    }
+
     if (inferred === "WEBHOOK") {
       return {
         userLimit: 240,
