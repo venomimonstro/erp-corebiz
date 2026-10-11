@@ -5,7 +5,9 @@ export type ApiCostClass =
   | "SEARCH"
   | "HEAVY"
   | "EXPENSIVE"
-  | "WEBHOOK";
+  | "WEBHOOK"
+  | "PUBLIC_CART"
+  | "PUBLIC_CHECKOUT";
 
 export const API_COST_CLASS = "corebiz.api_cost_class";
 
