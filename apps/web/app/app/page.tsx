@@ -302,6 +302,13 @@ export default function AppHomePage() {
               </section>
             ) : null}
 
+            <a href="/app/commerce" className="commerce-owner-shortcut">
+              <div><span>Торговля · решения на сегодня</span>
+                <strong>Что отгрузить и какие товары докупить?</strong>
+                <small>Заказы, остатки, подтверждённые поставки и оценка потребности в одном месте.</small>
+              </div><b>Открыть →</b>
+            </a>
+
             <div className="owner-kpi-grid">
               {ownerKpis.map(([label, value, detail]) => (
                 <article className="owner-kpi" key={label}>
