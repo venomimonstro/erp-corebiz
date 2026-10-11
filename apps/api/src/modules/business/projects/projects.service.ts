@@ -1662,7 +1662,7 @@ export class ProjectsService {
     const status=input?.status;
     if(!["ACTIVE","PAUSED","EXPIRED","TERMINATED"].includes(status??""))
       throw new BadRequestException("Некорректный статус договора");
-    if(!Number.isInteger(input?.version)||input.version!<1)
+    if(typeof input?.version!=="number"||!Number.isInteger(input.version)||input.version<1)
       throw new BadRequestException("Некорректная версия договора");
     if(input.signedOn)this.validateDate(input.signedOn,"дата подписания");
     return this.database.withTenantTransaction(context,async client=>{
