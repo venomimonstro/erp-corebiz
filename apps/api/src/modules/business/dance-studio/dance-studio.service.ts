@@ -761,10 +761,10 @@ export class DanceStudioService {
              )
            )
          ORDER BY
-           family.family_overdue_minor::bigint DESC,
-           family.family_debt_minor::bigint DESC,
+           CASE WHEN $3::boolean THEN family.family_overdue_minor::bigint ELSE 0 END DESC,
+           CASE WHEN $3::boolean THEN family.family_debt_minor::bigint ELSE 0 END DESC,
            p.display_name`,
-        [context.tenantId, scopeIds]
+        [context.tenantId, scopeIds, canViewFinancials]
       );
       if(canViewFinancials)return result.rows;
       // Keep roster, group assignment and payer contact information visible.
