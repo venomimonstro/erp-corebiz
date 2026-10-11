@@ -69,7 +69,7 @@ export class MerchantConnectorService{
          clientSecret.length<8||clientSecret.length>256)
         throw new BadRequestException("Некорректный Client ID/Secret СДЭК");
       if(!Number.isInteger(body.fromCityCode)||
-         (body.fromCityCode??0)<1||body.fromCityCode!>99999999)
+         (body.fromCityCode??0)<1||Number(body.fromCityCode)>99999999)
         throw new BadRequestException("Требуется код города отправления СДЭК");
       credentials={clientId,clientSecret};
       config={fromCityCode:body.fromCityCode};
@@ -124,13 +124,17 @@ export class MerchantConnectorService{
     try{
       if(provider==="CDEK")await this.cdek.token(secret,conn.environment);
       else await this.atol.verify(secret,conn.environment);
-      await this.db.withTenantTransaction(ctx,async client=>
+      const committed=await this.db.withTenantTransaction(ctx,async client=>
         client.query(
           `UPDATE commerce_provider_connection
            SET state='VERIFIED',enabled=true,verified_at=now(),
              last_error_code=NULL,updated_at=now()
-           WHERE tenant_id=$1 AND id=$2 AND encrypted_credentials=$3`,
+           WHERE tenant_id=$1 AND id=$2 AND encrypted_credentials=$3
+           RETURNING id`,
           [ctx.tenantId,conn.id,conn.encrypted_credentials]));
+      if(!committed.rowCount)throw new ConflictException(
+        "Реквизиты изменились во время проверки; повторите подтверждение"
+      );
       return {provider,environment:conn.environment,state:"VERIFIED",
         note:provider==="ATOL_ONLINE"
           ?"Авторизация АТОЛ подтверждена; настоящие фискальные чеки ещё не испытаны."
