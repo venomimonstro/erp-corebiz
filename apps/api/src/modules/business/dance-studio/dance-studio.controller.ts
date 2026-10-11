@@ -224,10 +224,12 @@ export class DanceStudioController {
     @Req() req:AuthenticatedRequest,
     @Body() body:{
       groupId?:string;
-      lessonType?:"GROUP"|"INDIVIDUAL"|"TRIAL"|"MASTER_CLASS"|"OPEN_CLASS"|"REHEARSAL"|"RENTAL_EVENT";
+      lessonType?:"GROUP"|"INDIVIDUAL"|"TRIAL"|"MASTER_CLASS"|"OPEN_CLASS"|"REHEARSAL"|"RENTAL_EVENT"|"SELF_PRACTICE";
       serviceId?:string;
       trainerResourceId?:string;
       roomResourceId?:string;
+      roomZoneId?:string;
+      roomCapacityUnits?:number;
       startsAt:string;
       durationMinutes?:number;
       capacity?:number;
@@ -245,8 +247,10 @@ export class DanceStudioController {
     @Body() body:{
       startsAt?:string;
       durationMinutes?:number;
-      trainerResourceId?:string;
+      trainerResourceId?:string|null;
       roomResourceId?:string|null;
+      roomZoneId?:string|null;
+      roomCapacityUnits?:number;
       capacity?:number;
       version:number;
     }
@@ -465,6 +469,25 @@ export class DanceStudioController {
       ok:true,
       data:await this.economics.payrollStatements(
         this.ctx(req),{from,to}
+      )
+    };
+  }
+
+  @Post("payroll-statements/:statementId/adjustments")
+  @RequirePermission("dance.write")
+  async addPayrollAdjustment(
+    @Req() req:AuthenticatedRequest,
+    @Param("statementId") statementId:string,
+    @Body() body:{
+      type:"BONUS"|"DEDUCTION"|"CORRECTION"|"OTHER";
+      amountMinor:string;
+      reason:string;
+    }
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.economics.addPayrollAdjustment(
+        this.ctx(req),statementId,body
       )
     };
   }
