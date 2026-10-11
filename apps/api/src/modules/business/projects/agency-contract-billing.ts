@@ -32,9 +32,9 @@ export function calculateAgencyContractCharge(
     warnings.push("Нет действующего подписанного договора на этот период; нужна проверка финансового менеджера");
   }
   for(const c of applicable){
-    if(c.status!=="ACTIVE"||!c.signed_on){
+    if(c.status!=="ACTIVE"||!c.signed_on||c.signed_on>last){
       needsReview=true;
-      warnings.push("Договор "+c.contract_number+" не активирован или не подписан: автоматическое начисление запрещено");
+      warnings.push("Договор "+c.contract_number+" не активен или не подписан к концу расчётного периода: автоматическое начисление запрещено");
       continue;
     }
     if(c.signed_on>last){
