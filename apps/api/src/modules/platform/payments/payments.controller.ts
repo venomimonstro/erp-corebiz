@@ -52,6 +52,23 @@ export class PaymentsController {
     return {ok:true,data:await this.payments.saveDelivery(this.ctx(req),siteId,body)};
   }
 
+  @Post("stores/orders/:orderId/full-refund")
+  @RequirePermission("finance.write")
+  @ApiCost("EXPENSIVE")
+  async refund(
+    @Req() req:AuthenticatedRequest,@Param("orderId") orderId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.payments.fullRefund(this.ctx(req),orderId)};
+  }
+
+  @Get("refunds/:refundId/status")
+  @RequirePermission("finance.read")
+  async refundStatus(
+    @Req() req:AuthenticatedRequest,@Param("refundId") refundId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.payments.refundStatus(this.ctx(req),refundId)};
+  }
+
   @Public()
   @Get("storefront/:slug/delivery")
   @ApiCost("SEARCH")
