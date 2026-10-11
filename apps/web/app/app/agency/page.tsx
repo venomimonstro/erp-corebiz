@@ -27,6 +27,24 @@ type Project={
   overdue_approvals:number;
 };
 
+type StatementPreview={
+  projectId:string; period:string; currency:string; billingMode:string;
+  serviceRevenueMinor:string; laborCostMinor:string; otherCostMinor:string;
+  grossMarginMinor:string; marginBps:number|null; billableMinutes:number;
+  warnings:string[];
+};
+type StatementRow={
+  id:string;period_key:string;status:string;service_revenue_minor:string;
+  labor_cost_minor:string;other_cost_minor:string;gross_margin_minor:string;
+  invoice_id:string|null;invoice_number:string|null;invoice_status:string|null;
+  invoice_due_at:string|null;
+};
+const lastPeriod=()=>{
+  const now=new Date();
+  const date=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()-1,1));
+  return date.toISOString().slice(0,7);
+};
+
 const money=(v:string,c="RUB")=>new Intl.NumberFormat("ru-RU",{
   style:"currency",currency:c,maximumFractionDigits:0
 }).format(Number(v||0)/100);
@@ -41,6 +59,14 @@ export default function AgencyPage(){
   const [expenseAmount,setExpenseAmount]=useState("");
   const [expenseError,setExpenseError]=useState("");
   const [expenseSaving,setExpenseSaving]=useState(false);
+  const [billProject,setBillProject]=useState("");
+  const [billPeriod,setBillPeriod]=useState(lastPeriod);
+  const [billPreview,setBillPreview]=useState<StatementPreview|null>(null);
+  const [billRows,setBillRows]=useState<StatementRow[]>([]);
+  const [billBusy,setBillBusy]=useState(false);
+  const [billError,setBillError]=useState("");
+  const [billNotice,setBillNotice]=useState("");
+
 
 
   const load=useCallback(async()=>{
@@ -73,6 +99,55 @@ export default function AgencyPage(){
     finally{setExpenseSaving(false);}
   };
 
+  const refreshStatements=useCallback(async(id:string)=>{
+    if(!id){setBillRows([]);return;}
+    setBillRows(await apiRequest<StatementRow[]>("/projects/"+id+"/statements"));
+  },[]);
+  useEffect(()=>{
+    setBillPreview(null);setBillError("");setBillNotice("");
+    void refreshStatements(billProject).catch(e=>
+      setBillError(e instanceof Error?e.message:"Не удалось загрузить периоды")
+    );
+  },[billProject,refreshStatements]);
+
+  const showPreview=async()=>{
+    if(!billProject)return;
+    setBillError("");setBillNotice("");setBillBusy(true);
+    try{
+      const value=await apiRequest<StatementPreview>(
+        "/projects/"+billProject+"/statements/preview?period="+encodeURIComponent(billPeriod)
+      );
+      setBillPreview(value);
+    }catch(e){setBillError(e instanceof Error?e.message:"Не удалось рассчитать период");}
+    finally{setBillBusy(false);}
+  };
+  const finalizeMonth=async()=>{
+    if(!billProject||!billPreview||billPreview.period!==billPeriod)return;
+    setBillError("");setBillBusy(true);
+    try{
+      await apiRequest("/projects/"+billProject+"/statements/finalize",{
+        method:"POST",body:JSON.stringify({period:billPeriod})
+      });
+      await refreshStatements(billProject);
+      setBillPreview(null);
+      setBillNotice("Месяц закрыт. Можно выставить счёт.");
+    }catch(e){setBillError(e instanceof Error?e.message:"Не удалось закрыть месяц");}
+    finally{setBillBusy(false);}
+  };
+  const invoiceMonth=async(statementId:string)=>{
+    if(!billProject)return;
+    setBillBusy(true);setBillError("");setBillNotice("");
+    try{
+      const result=await apiRequest<{number:string}>(
+        "/finance/invoices/from-agency/"+statementId,
+        {method:"POST",body:"{}"}
+      );
+      await refreshStatements(billProject);
+      setBillNotice("Счёт "+result.number+" создан в разделе «Финансы».");
+    }catch(e){setBillError(e instanceof Error?e.message:"Не удалось выставить счёт");}
+    finally{setBillBusy(false);}
+  };
+
   const metrics=useMemo(()=>{
     let revenue=0n,media=0n,labor=0n,other=0n,atRisk=0,approvals=0;
     for(const row of rows){
@@ -100,11 +175,12 @@ export default function AgencyPage(){
           <p>
             Сделка превращается в проект. Проект — в понятный контур:
             что обещали клиенту, что команда делает сейчас, что ждёт согласования
-            и сколько денег остаётся после трудозатрат и рекламного бюджета.
+            и сколько остаётся после прямых расходов и трудозатрат.
           </p>
         </div>
         <div className="agency-hero-actions">
           <a className="secondary-button" href="/app/crm/deals">Воронка продаж</a>
+          <a className="secondary-button" href="/app/agency/team">Команда и ставки</a>
           <a className="button-link" href="/app/projects?create=1">+ Новый проект</a>
         </div>
       </header>
@@ -115,12 +191,59 @@ export default function AgencyPage(){
       {!loading?<>
         <div className="agency-score-grid">
           <article><span>Активные клиенты</span><strong>{rows.length}</strong><small>проекты в работе</small></article>
-          <article><span>Контрактная выручка</span><strong>{money(metrics.revenue.toString())}</strong><small>бюджеты + месячные ретейнеры</small></article>
+          <article><span>Плановая выручка</span><strong>{money(metrics.revenue.toString())}</strong><small>не фактические поступления</small></article>
           <article><span>Себестоимость команды</span><strong>{money(metrics.labor.toString())}</strong><small>по фактически учтённым часам</small></article>
+          <article><span>Медиабюджеты клиентов</span><strong>{money(metrics.media.toString())}</strong><small>отдельно от выручки агентства</small></article>
           <article><span>Прямые расходы</span><strong>{money(metrics.other.toString())}</strong><small>подрядчики, ПО и прочее</small></article>
           <article className={metrics.atRisk?"is-risk":""}><span>Требуют внимания</span><strong>{metrics.atRisk}</strong><small>{metrics.approvals} согласований у клиентов</small></article>
         </div>
 
+        <section className="agency-board">
+          <div className="studio-section-head">
+            <div><span>Расчёты с клиентами</span><h2>Закрытие месяца и счета</h2>
+            <p>Сначала проверьте трудозатраты и расходы, затем закройте завершённый месяц. После закрытия сумма фиксируется и может быть выставлена к оплате.</p></div>
+          </div>
+          <div className="agency-hero-actions">
+            <select aria-label="Проект для закрытия месяца" value={billProject} onChange={e=>setBillProject(e.target.value)}>
+              <option value="">Выберите клиентский проект</option>
+              {rows.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <input aria-label="Отчётный месяц" type="month" max={lastPeriod()} value={billPeriod}
+              onChange={e=>{setBillPeriod(e.target.value);setBillPreview(null);setBillNotice("");}}/>
+            <button disabled={billBusy||!billProject} onClick={()=>void showPreview()}>Рассчитать период</button>
+          </div>
+          {billError?<p role="alert" className="studio-message error">{billError}</p>:null}
+          {billNotice?<p role="status">{billNotice}</p>:null}
+          {billPreview?<div className="agency-score-grid">
+            <article><span>Выручка услуг</span><strong>{money(billPreview.serviceRevenueMinor,billPreview.currency)}</strong></article>
+            <article><span>Труд сотрудников</span><strong>{money(billPreview.laborCostMinor,billPreview.currency)}</strong></article>
+            <article><span>Прямые расходы</span><strong>{money(billPreview.otherCostMinor,billPreview.currency)}</strong></article>
+            <article><span>Маржинальный результат</span><strong>{money(billPreview.grossMarginMinor,billPreview.currency)}</strong></article>
+          </div>:null}
+          {billPreview?<div>
+            {billPreview.warnings.length>0?
+              <ul>{billPreview.warnings.map(w=><li key={w}>{w}</li>)}</ul>:null}
+            <p>Модель: {billPreview.billingMode}, учтено часов: {Math.round(billPreview.billableMinutes/60*10)/10}.</p>
+            <button disabled={billBusy||billPreview.period!==billPeriod||
+              billPreview.warnings.some(w=>w.includes("себестоимость сотрудника")||w.includes("не привязан клиент"))}
+              onClick={()=>void finalizeMonth()}>Зафиксировать месяц</button>
+          </div>:null}
+          {billProject?<div className="agency-project-grid">
+            {billRows.map(row=><article className="agency-project-card" key={row.id}>
+              <header><div><span className="agency-client">{row.period_key}</span>
+                <h3>{row.invoice_number??"Без счёта"}</h3></div>
+                <span className="agency-health">{row.invoice_status??row.status}</span>
+              </header>
+              <div className="agency-money-row">
+                <div><span>Выручка</span><strong>{money(row.service_revenue_minor)}</strong></div>
+                <div><span>Маржинальный результат</span><strong>{money(row.gross_margin_minor)}</strong></div>
+              </div>
+              {row.status==="FINALIZED" && BigInt(row.service_revenue_minor)>0n?
+                <button disabled={billBusy} onClick={()=>void invoiceMonth(row.id)}>Выставить счёт</button>:null}
+              {row.invoice_id?<a href="/app/finance">Открыть финансы</a>:null}
+            </article>)}
+          </div>:null}
+        </section>
         <section className="agency-board">
           <div className="studio-section-head"><div><span>Финансы проекта</span><h2>Прямые расходы</h2><p>Учитывайте подрядчиков, программное обеспечение и дополнительные затраты отдельно от клиентского рекламного бюджета.</p></div></div>
           <div className="agency-hero-actions">
