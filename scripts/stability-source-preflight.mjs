@@ -351,9 +351,43 @@ async function inspectRequiredHardening(root) {
       /DANCE_FITNESS/,
       /finance\/allocated-payment/,
       /dance\/lessons\//,
+      /dance\/payroll-profiles/,
+      /DANCE_TRAINER_STATEMENT/,
+      /accounting\/payroll\/batches\//,
       /dance\/room-statements\/finalize/
     ],
-    message: "Dance studio golden owner journey is missing"
+    message: "Dance studio golden owner/payroll journey is missing"
+  },
+  {
+    path: "apps/web/app/app/dance/team/page.tsx",
+    patterns: [
+      /Постоянные условия тренеров/,
+      /Правила доплат за работу/,
+      /payroll-profiles/,
+      /archivePlan/
+    ],
+    message: "Premium trainer payroll workspace is missing"
+  },
+  {
+    path: "apps/web/app/app/dance/groups/page.tsx",
+    patterns: [
+      /lessonRoomZoneId/,
+      /lessonRoomCapacityUnits/,
+      /roomZoneId/,
+      /SELF_PRACTICE/
+    ],
+    message: "Shared hall and self-practice lesson UX is missing"
+  },
+  {
+    path: "apps/web/app/app/dance/setup/page.tsx",
+    patterns: [
+      /service\/delivery-rules/,
+      /service\/technology-cards/,
+      /createTechnologyCard/,
+      /inventory\/warehouses/,
+      /service\/resources\/.*\/zones/
+    ],
+    message: "Service pricing, technology card, or zone setup UX is missing"
   },
   {
     path: "apps/worker/src/tenant-export.ts",
