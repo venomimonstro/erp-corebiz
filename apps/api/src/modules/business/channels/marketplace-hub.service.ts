@@ -6,15 +6,46 @@ import {DatabaseService} from "../../../infrastructure/database/database.service
 export class MarketplaceHubService {
   constructor(private readonly database:DatabaseService){}
 
+  /** Bounded, tenant-filtered search: never ship the entire mapping table to browsers. */
+  async searchMappings(context:TenantContext,input:{
+    connectionId?:string;query?:string;limit?:number
+  }){
+    if(!input.connectionId||!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(input.connectionId))
+      throw new BadRequestException("Выберите подключение маркетплейса");
+    const query=(input.query??"").trim();
+    if(query.length>100||(query.length>0&&query.length<3))
+      throw new BadRequestException("Для поиска укажите минимум 3 символа");
+    const limit=input.limit??50;
+    if(!Number.isSafeInteger(limit)||limit<1||limit>100)
+      throw new BadRequestException("Размер выдачи: от 1 до 100");
+    const pattern=query.replace(/[\\%_]/g,"\\  async overview(context:TenantContext) {");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT m.id,m.connection_id,m.external_offer_id,m.sku_id,
+           s.code AS sku,c.name AS channel_name,c.provider
+         FROM channel_product_mapping m
+         JOIN sku s ON s.tenant_id=m.tenant_id AND s.id=m.sku_id
+         JOIN channel_connection c ON c.tenant_id=m.tenant_id AND c.id=m.connection_id
+         WHERE m.tenant_id=$1 AND m.connection_id=$2 AND m.status='ACTIVE'
+           AND s.status='ACTIVE'
+           AND ($3::text IS NULL OR s.code ILIKE '%'||$3||'%'
+             OR m.external_offer_id ILIKE '%'||$3||'%')
+         ORDER BY m.id
+         LIMIT $4`,
+        [context.tenantId,input.connectionId,pattern||null,limit]
+      );
+      return result.rows;
+    });
+  }
+
   async overview(context:TenantContext) {
     return this.database.withTenantTransaction(context,async client=>{
       const [warehouses,listings,dirty,connections,mappings]=await Promise.all([
         client.query(`SELECT w.id,w.name,w.code,w.is_default,
-          count(DISTINCT b.sku_id)::integer AS tracked_skus
-          FROM warehouse w LEFT JOIN inventory_balance b
-          ON b.tenant_id=w.tenant_id AND b.warehouse_id=w.id
+          NULL::integer AS tracked_skus
+          FROM warehouse w
           WHERE w.tenant_id=$1 AND w.status='ACTIVE'
-          GROUP BY w.id ORDER BY w.is_default DESC,w.name`,[context.tenantId]),
+          ORDER BY w.is_default DESC,w.name LIMIT 1000`,[context.tenantId]),
         client.query(`SELECT l.id,l.connection_id,c.provider,c.name AS connection_name,
             l.warehouse_id,w.name AS warehouse_name,l.sku_id,s.code AS sku,
             l.mapping_id,m.external_offer_id,l.external_warehouse_id,l.external_stock_id,
@@ -35,8 +66,10 @@ export class MarketplaceHubService {
           LEFT JOIN inventory_policy ip ON ip.tenant_id=l.tenant_id
             AND ip.warehouse_id=l.warehouse_id AND ip.sku_id=l.sku_id
           LEFT JOIN channel_stock_target t ON t.tenant_id=l.tenant_id AND t.listing_id=l.id
-          WHERE l.tenant_id=$1 ORDER BY w.name,s.code,l.priority,c.name LIMIT 2000`,[context.tenantId]),
-        client.query(`SELECT count(*)::integer AS count FROM channel_stock_dirty WHERE tenant_id=$1`,[context.tenantId]),
+          WHERE l.tenant_id=$1 ORDER BY w.name,s.code,l.priority,c.name LIMIT 200`,[context.tenantId]),
+        client.query(`SELECT count(*)::integer AS count FROM (
+            SELECT 1 FROM channel_stock_dirty WHERE tenant_id=$1 LIMIT 10001
+          ) pending`,[context.tenantId]),
         client.query(`SELECT id,name,provider,status,last_synced_at,last_error
           FROM channel_connection WHERE tenant_id=$1 ORDER BY created_at DESC`,[context.tenantId]),
         client.query(`SELECT m.id,m.connection_id,m.external_offer_id,m.sku_id,
@@ -45,7 +78,7 @@ export class MarketplaceHubService {
           JOIN sku s ON s.tenant_id=m.tenant_id AND s.id=m.sku_id
           JOIN channel_connection c ON c.tenant_id=m.tenant_id AND c.id=m.connection_id
           WHERE m.tenant_id=$1 AND m.status='ACTIVE'
-          ORDER BY c.name,s.code LIMIT 3000`,[context.tenantId])
+          ORDER BY c.name,s.code LIMIT 100`,[context.tenantId])
       ]);
       return {warehouses:warehouses.rows,listings:listings.rows,connections:connections.rows,mappings:mappings.rows,
         queuedPools:dirty.rows[0]?.count??0,
