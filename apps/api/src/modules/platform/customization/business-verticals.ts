@@ -37,6 +37,7 @@ export type BusinessVerticalCode =
   | "AUTO_PARTS_DISMANTLING"
   | "DANCE_FITNESS"
   | "PROFESSIONAL_SERVICES"
+  | "WEB_MARKETING_AGENCY"
   | "RETAIL_STORE"
   | "WHOLESALE_B2B"
   | "ECOMMERCE_STORE"
@@ -349,6 +350,48 @@ export const BUSINESS_VERTICALS: Record<
       "Просроченная дебиторка"
     ]
   },
+  WEB_MARKETING_AGENCY: {
+    code: "WEB_MARKETING_AGENCY",
+    title: "Веб-студия / маркетинговое агентство",
+    summary: "CRM, продажи, проекты, ретейнеры, дедлайны, согласования, рекламные бюджеты, часы команды, маржинальность и бухгалтерия.",
+    profileCode: "SERVICE",
+    version: 1,
+    enabledCapabilities: [
+      "crm","tasks","sales","finance","accounting","projects",
+      "sites","growth","workflow","support"
+    ],
+    customFields: [
+      { entityType: "DEAL", fieldKey: "service_mix", label: "Услуги / scope", dataType: "TEXT" },
+      { entityType: "DEAL", fieldKey: "decision_maker", label: "ЛПР", dataType: "TEXT" },
+      { entityType: "DEAL", fieldKey: "monthly_budget", label: "Месячный бюджет", dataType: "NUMBER" },
+      { entityType: "DEAL", fieldKey: "target_cpa_roas", label: "Целевой CPA / ROAS", dataType: "TEXT" }
+    ],
+    ownerQuestions: [
+      "Какие сделки имеют следующий шаг и когда?",
+      "Какие проекты ждут клиента и какие дедлайны под риском?",
+      "Какова маржа по каждому клиенту после часов команды и рекламного бюджета?",
+      "Сколько ретейнерной выручки защищено на следующий месяц?",
+      "Какая дебиторка и какие налоги требуют действия?"
+    ],
+    primaryWorkspaces: ["crm","agency","projects","tasks","finance","accounting","growth"],
+    operatingFlows: [
+      "Лид → квалификация → оценка → КП → переговоры → договор → проект",
+      "Проект → scope → deliverables → внутренняя проверка → согласование клиента → сдача",
+      "Ретейнер → месячный план → трудозатраты → рекламный бюджет → отчёт → счёт → оплата",
+      "Маркетинг клиента → кампании → расходы → лиды/сделки → ROMI/маржа",
+      "Доходы и выплаты → бухгалтерский контур → налоговый календарь"
+    ],
+    attentionSignals: [
+      "Сделка без следующего действия",
+      "КП отправлено, но follow-up не назначен",
+      "Deliverable просрочен или завис на согласовании",
+      "Фактические часы превышают оценку или съедают целевую маржу",
+      "Рекламный бюджет вырос без ожидаемой отдачи",
+      "Клиентская дебиторка просрочена",
+      "Налоговое обязательство приближается к сроку"
+    ]
+  },
+
   RETAIL_STORE: {
     code: "RETAIL_STORE",
     title: "Розничная торговля",
