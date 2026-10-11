@@ -260,6 +260,72 @@ export class DanceStudioService {
         [context.tenantId, scopeIds]
       );
 
+      const economicsByProgram=await client.query(
+        `SELECT
+           coalesce(dp.id::text,'unscoped') AS id,
+           coalesce(dp.name,'Вне направлений') AS name,
+           count(prof.id)::integer AS lessons,
+           coalesce(sum(prof.earned_revenue_minor),0)::text AS revenue_minor,
+           coalesce(sum(prof.trainer_cost_minor),0)::text AS trainer_cost_minor,
+           coalesce(sum(prof.room_cost_minor),0)::text AS room_cost_minor,
+           coalesce(sum(prof.other_cost_minor),0)::text AS other_cost_minor,
+           coalesce(sum(prof.contribution_margin_minor),0)::text AS margin_minor
+         FROM dance_lesson_profitability prof
+         JOIN dance_lesson l
+           ON l.tenant_id=prof.tenant_id AND l.id=prof.lesson_id
+         LEFT JOIN dance_group g
+           ON g.tenant_id=l.tenant_id AND g.id=l.group_id
+         LEFT JOIN dance_program dp
+           ON dp.tenant_id=g.tenant_id AND dp.id=g.program_id
+         LEFT JOIN service_resource tr
+           ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
+         WHERE prof.tenant_id=$1
+           AND l.starts_at>=date_trunc('month',now())
+           AND l.starts_at<date_trunc('month',now())+interval '1 month'
+           AND (
+             $2::uuid[] IS NULL
+             OR tr.membership_id=ANY($2::uuid[])
+             OR (
+               l.trainer_resource_id IS NULL
+               AND l.created_by_membership_id=ANY($2::uuid[])
+             )
+           )
+         GROUP BY dp.id,dp.name
+         ORDER BY sum(prof.contribution_margin_minor) DESC,2`,
+        [context.tenantId,scopeIds]
+      );
+
+      const economicsByTrainer=await client.query(
+        `SELECT
+           coalesce(tr.id::text,'trainerless') AS id,
+           coalesce(tr.name,'Без тренера') AS name,
+           count(prof.id)::integer AS lessons,
+           coalesce(sum(prof.earned_revenue_minor),0)::text AS revenue_minor,
+           coalesce(sum(prof.trainer_cost_minor),0)::text AS trainer_cost_minor,
+           coalesce(sum(prof.room_cost_minor),0)::text AS room_cost_minor,
+           coalesce(sum(prof.other_cost_minor),0)::text AS other_cost_minor,
+           coalesce(sum(prof.contribution_margin_minor),0)::text AS margin_minor
+         FROM dance_lesson_profitability prof
+         JOIN dance_lesson l
+           ON l.tenant_id=prof.tenant_id AND l.id=prof.lesson_id
+         LEFT JOIN service_resource tr
+           ON tr.tenant_id=l.tenant_id AND tr.id=l.trainer_resource_id
+         WHERE prof.tenant_id=$1
+           AND l.starts_at>=date_trunc('month',now())
+           AND l.starts_at<date_trunc('month',now())+interval '1 month'
+           AND (
+             $2::uuid[] IS NULL
+             OR tr.membership_id=ANY($2::uuid[])
+             OR (
+               l.trainer_resource_id IS NULL
+               AND l.created_by_membership_id=ANY($2::uuid[])
+             )
+           )
+         GROUP BY tr.id,tr.name
+         ORDER BY sum(prof.contribution_margin_minor) DESC,2`,
+        [context.tenantId,scopeIds]
+      );
+
       let rentAdjustment=0n;
       if(scopeIds===null){
         const reconciliation=await client.query<{adjustment_minor:string}>(
@@ -388,6 +454,8 @@ export class DanceStudioService {
           low_visits: 0
         },
         retentionAlerts: retentionAlerts.rows,
+        economicsByProgram:economicsByProgram.rows,
+        economicsByTrainer:economicsByTrainer.rows,
         monthEconomics: (() => {
           const base=economics.rows[0] ?? {
             revenue_minor: "0",
