@@ -23,6 +23,8 @@ DECLARE
     'corebiz_public_site_tracker',
     'corebiz_resolve_public_storefront',
     'corebiz_resolve_public_cart',
+    'corebiz_resolve_payment_tenant',
+    'corebiz_resolve_refund_tenant',
     'corebiz_resolve_site_form_binding',
     'corebiz_resolve_tracker_site',
     'corebiz_tracker_summary',
