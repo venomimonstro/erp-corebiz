@@ -97,15 +97,21 @@ export class OmsService {
       enabled?: boolean;
     }
   ): Promise<void> {
-    const safety = input.safetyStockMilli ?? "0";
-    if (!/^\d+$/.test(safety)) {
-      throw new BadRequestException("Некорректный safety stock");
-    }
-
+    if(!input||typeof input.warehouseId!=="string"||
+       typeof input.skuId!=="string")
+      throw new BadRequestException("Укажите склад и товар");
+    if(input.safetyStockMilli!==undefined&&
+       typeof input.safetyStockMilli!=="string")
+      throw new BadRequestException("Страховой остаток должен быть числом в тысячных");
+    if(input.enabled!==undefined&&typeof input.enabled!=="boolean")
+      throw new BadRequestException("enabled должен быть true или false");
+    const safety=input.safetyStockMilli??"0";
+    if(!/^\d{1,18}$/.test(safety)||
+       BigInt(safety)>9223372036854775807n)
+      throw new BadRequestException("Некорректный страховой запас");
     const priority=input.sourcingPriority??100;
-    if (!Number.isSafeInteger(priority)||priority<0||priority>10000) {
+    if(!Number.isSafeInteger(priority)||priority<0||priority>10000)
       throw new BadRequestException("Приоритет должен быть от 0 до 10000");
-    }
 
     await this.database.withTenantTransaction(context, async (client) => {
       const warehouse = await client.query(
@@ -129,9 +135,12 @@ export class OmsService {
          ) VALUES ($1,$2,$3,$4,$5,$6,$7)
          ON CONFLICT (tenant_id,warehouse_id,sku_id)
          DO UPDATE SET
-           safety_stock_milli=EXCLUDED.safety_stock_milli,
-           sourcing_priority=EXCLUDED.sourcing_priority,
-           enabled=EXCLUDED.enabled,
+           safety_stock_milli=CASE WHEN $8::boolean
+             THEN EXCLUDED.safety_stock_milli ELSE inventory_policy.safety_stock_milli END,
+           sourcing_priority=CASE WHEN $9::boolean
+             THEN EXCLUDED.sourcing_priority ELSE inventory_policy.sourcing_priority END,
+           enabled=CASE WHEN $10::boolean
+             THEN EXCLUDED.enabled ELSE inventory_policy.enabled END,
            updated_by_membership_id=EXCLUDED.updated_by_membership_id,
            updated_at=now()`,
         [
@@ -141,7 +150,10 @@ export class OmsService {
           safety,
           priority,
           input.enabled ?? true,
-          context.membershipId
+          context.membershipId,
+          input.safetyStockMilli!==undefined,
+          input.sourcingPriority!==undefined,
+          input.enabled!==undefined
         ]
       );
     });
