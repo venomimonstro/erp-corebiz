@@ -29,7 +29,7 @@ type MonthEconomics={
 };
 type Dashboard={
   canViewFinancials:boolean;
-  setup:{programs:number;groups:number;trainers:number;students:number;plans:number;lessons:number}|null;
+  setup:{services:number;programs:number;groups:number;trainers:number;students:number;plans:number;lessons:number}|null;
   todayLessons:Lesson[];
   debt:{open_count:number;open_minor:string;overdue_count:number}|null;
   groups:Group[];
@@ -142,6 +142,8 @@ export default function DanceDashboardPage(){
   const capacity=sum(scheduled.map(l=>l.capacity));
   const month=data?.monthEconomics;
   const setupSteps=data?.setup?[
+    {key:"service",ready:data.setup.services>0,
+      label:"Создать услугу с ценой и длительностью",href:"/app/dance/setup"},
     {key:"trainer",ready:data.setup.trainers>0,label:"Добавить тренера",href:"/app/dance/setup"},
     {key:"program",ready:data.setup.programs>0,label:"Настроить направление",href:"/app/dance/groups"},
     {key:"group",ready:data.setup.groups>0,label:"Создать группу",href:"/app/dance/groups"},
