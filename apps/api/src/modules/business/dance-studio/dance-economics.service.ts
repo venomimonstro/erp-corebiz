@@ -1549,22 +1549,26 @@ export class DanceEconomicsService {
            AND a.status IN ('APPROVED','EXPORTED')
          UNION
          SELECT DISTINCT p.trainer_resource_id
+         FROM trainer_payroll_profile p
+         WHERE p.tenant_id=$1
+           AND p.status='ACTIVE'
+           AND p.valid_from <= $4::date
+           AND (p.valid_to IS NULL OR p.valid_to >= $5::date)
+         UNION
+         SELECT DISTINCT p.trainer_resource_id
          FROM trainer_compensation_plan p
          WHERE p.tenant_id=$1
            AND p.status='ACTIVE'
            AND p.valid_from <= $4::date
            AND (p.valid_to IS NULL OR p.valid_to >= $5::date)
            AND (
-             (
-               p.guarantee_period='MONTH'
-               AND p.minimum_guarantee_minor>0
-             )
+             p.minimum_guarantee_minor>0
              OR EXISTS(
                SELECT 1
                FROM trainer_compensation_component c
                WHERE c.tenant_id=p.tenant_id
                  AND c.plan_id=p.id
-                 AND c.component_type='MONTHLY_BASE'
+                 AND c.component_type IN ('MONTHLY_BASE','DAILY_BASE')
              )
            )
        ),
@@ -1594,10 +1598,31 @@ export class DanceEconomicsService {
 
     const output:Array<Record<string,unknown>>=[];
     for(const row of trainers.rows){
+      const profileResult=await client.query<{
+        id:string;
+        monthly_base_minor:string;
+        daily_base_minor:string;
+        minimum_guarantee_minor:string;
+        currency:string;
+      }>(
+        `SELECT
+           id,monthly_base_minor::text,daily_base_minor::text,
+           minimum_guarantee_minor::text,currency
+         FROM trainer_payroll_profile
+         WHERE tenant_id=$1
+           AND trainer_resource_id=$2
+           AND status='ACTIVE'
+           AND valid_from <= $3::date
+           AND (valid_to IS NULL OR valid_to >= $4::date)
+         ORDER BY valid_from DESC,id
+         LIMIT 1`,
+        [tenantId,row.trainer_resource_id,periodTo,periodFrom]
+      );
+      const profile=profileResult.rows[0]??null;
+
       const plans=await client.query<{
         id:string;
         minimum_guarantee_minor:string;
-        guarantee_period:"DAY"|"MONTH";
       }>(
         `WITH used AS (
            SELECT DISTINCT a.plan_id AS id
@@ -1619,21 +1644,17 @@ export class DanceEconomicsService {
              AND p.valid_from <= $5::date
              AND (p.valid_to IS NULL OR p.valid_to >= $6::date)
              AND (
-               (
-                 p.guarantee_period='MONTH'
-                 AND p.minimum_guarantee_minor>0
-               )
+               p.minimum_guarantee_minor>0
                OR EXISTS(
                  SELECT 1
                  FROM trainer_compensation_component c
                  WHERE c.tenant_id=p.tenant_id
                    AND c.plan_id=p.id
-                   AND c.component_type='MONTHLY_BASE'
+                   AND c.component_type IN ('MONTHLY_BASE','DAILY_BASE')
                )
              )
          )
-         SELECT
-           p.id,p.minimum_guarantee_minor::text,p.guarantee_period
+         SELECT p.id,p.minimum_guarantee_minor::text
          FROM trainer_compensation_plan p
          WHERE p.tenant_id=$1
            AND p.id IN (
@@ -1644,177 +1665,153 @@ export class DanceEconomicsService {
          ORDER BY p.id`,
         [tenantId,row.trainer_resource_id,from,to,periodTo,periodFrom]
       );
-      const planIds=plans.rows.map(plan=>plan.id);
+      const planIds=plans.rows.map((plan)=>plan.id);
 
       let base=0n;
+      let guarantee=0n;
       const baseSnapshot:Array<Record<string,unknown>>=[];
 
-      if(planIds.length){
-        const monthly=await client.query<{
-          id:string;
-          amount_minor:string;
-          metadata:Record<string,unknown>|null;
-        }>(
-          `SELECT id,amount_minor::text,metadata
-           FROM trainer_compensation_component
-           WHERE tenant_id=$1
-             AND plan_id=ANY($2::uuid[])
-             AND component_type='MONTHLY_BASE'
-           ORDER BY priority,id`,
-          [tenantId,planIds]
-        );
-        let monthlyMax=0n;
-        let monthlyStack=0n;
-        for(const component of monthly.rows){
-          const amount=BigInt(component.amount_minor);
-          const stacks=Boolean(component.metadata?.stack);
-          if(stacks) monthlyStack+=amount;
-          else if(amount>monthlyMax) monthlyMax=amount;
+      for(const plan of plans.rows){
+        const value=BigInt(plan.minimum_guarantee_minor);
+        if(value>guarantee) guarantee=value;
+      }
+
+      if(profile){
+        guarantee=BigInt(profile.minimum_guarantee_minor);
+        const monthly=BigInt(profile.monthly_base_minor);
+        if(monthly>0n){
+          base+=monthly;
           baseSnapshot.push({
-            componentId:component.id,
+            source:"PROFILE",
+            profileId:profile.id,
             componentType:"MONTHLY_BASE",
-            configuredAmountMinor:amount.toString(),
-            stack:stacks
+            units:1,
+            amountMinor:monthly.toString()
           });
         }
-        base+=monthlyMax+monthlyStack;
 
-        const daily=await client.query<{
-          work_date:string;
-          base_minor:string;
-          component_ids:string[];
-        }>(
-          `WITH worked AS (
-             SELECT DISTINCT
-               (l.starts_at AT TIME ZONE l.timezone)::date AS work_date,
-               a.plan_id
+        const daily=BigInt(profile.daily_base_minor);
+        if(daily>0n){
+          const worked=await client.query<{days:number}>(
+            `SELECT count(
+               DISTINCT (l.starts_at AT TIME ZONE l.timezone)::date
+             )::integer AS days
              FROM trainer_compensation_accrual a
              JOIN dance_lesson l
                ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
              WHERE a.tenant_id=$1
                AND a.trainer_resource_id=$2
-               AND a.plan_id IS NOT NULL
                AND l.starts_at>=$3 AND l.starts_at<$4
-               AND a.status IN ('APPROVED','EXPORTED')
-           ),
-           components AS (
-             SELECT
-               w.work_date,c.id,c.amount_minor,
-               coalesce((c.metadata->>'stack')::boolean,false) AS stack
-             FROM worked w
-             JOIN trainer_compensation_component c
-               ON c.tenant_id=$1
-              AND c.plan_id=w.plan_id
-              AND c.component_type='DAILY_BASE'
-           )
-           SELECT
-             work_date::text,
-             (
-               coalesce(max(amount_minor) FILTER (WHERE NOT stack),0)
-               + coalesce(sum(amount_minor) FILTER (WHERE stack),0)
-             )::text AS base_minor,
-             array_agg(id ORDER BY id) AS component_ids
-           FROM components
-           GROUP BY work_date
-           ORDER BY work_date`,
-          [tenantId,row.trainer_resource_id,from,to]
-        );
-        for(const day of daily.rows){
-          const amount=BigInt(day.base_minor);
+               AND a.status IN ('APPROVED','EXPORTED')`,
+            [tenantId,row.trainer_resource_id,from,to]
+          );
+          const units=Math.max(0,worked.rows[0]?.days??0);
+          const amount=daily*BigInt(units);
           base+=amount;
           baseSnapshot.push({
+            source:"PROFILE",
+            profileId:profile.id,
             componentType:"DAILY_BASE",
-            workDate:day.work_date,
-            componentIds:day.component_ids,
+            units,
+            rateMinor:daily.toString(),
+            amountMinor:amount.toString()
+          });
+        }
+      }else if(planIds.length){
+        const legacy=await client.query<{
+          monthly_base_minor:string;
+          daily_base_minor:string;
+        }>(
+          `SELECT
+             coalesce(max(amount_minor) FILTER (
+               WHERE component_type='MONTHLY_BASE'
+             ),0)::text AS monthly_base_minor,
+             coalesce(max(amount_minor) FILTER (
+               WHERE component_type='DAILY_BASE'
+             ),0)::text AS daily_base_minor
+           FROM trainer_compensation_component
+           WHERE tenant_id=$1
+             AND plan_id=ANY($2::uuid[])
+             AND component_type IN ('DAILY_BASE','MONTHLY_BASE')`,
+          [tenantId,planIds]
+        );
+        const monthly=BigInt(legacy.rows[0]?.monthly_base_minor??"0");
+        const daily=BigInt(legacy.rows[0]?.daily_base_minor??"0");
+        if(monthly>0n){
+          base+=monthly;
+          baseSnapshot.push({
+            source:"LEGACY_MAX",
+            componentType:"MONTHLY_BASE",
+            units:1,
+            amountMinor:monthly.toString()
+          });
+        }
+        if(daily>0n){
+          const worked=await client.query<{days:number}>(
+            `SELECT count(
+               DISTINCT (l.starts_at AT TIME ZONE l.timezone)::date
+             )::integer AS days
+             FROM trainer_compensation_accrual a
+             JOIN dance_lesson l
+               ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
+             WHERE a.tenant_id=$1
+               AND a.trainer_resource_id=$2
+               AND l.starts_at>=$3 AND l.starts_at<$4
+               AND a.status IN ('APPROVED','EXPORTED')`,
+            [tenantId,row.trainer_resource_id,from,to]
+          );
+          const units=Math.max(0,worked.rows[0]?.days??0);
+          const amount=daily*BigInt(units);
+          base+=amount;
+          baseSnapshot.push({
+            source:"LEGACY_MAX",
+            componentType:"DAILY_BASE",
+            units,
+            rateMinor:daily.toString(),
             amountMinor:amount.toString()
           });
         }
       }
 
-      let monthlyGuarantee=0n;
-      for(const plan of plans.rows){
-        if(plan.guarantee_period!=="MONTH") continue;
-        const value=BigInt(plan.minimum_guarantee_minor);
-        if(value>monthlyGuarantee) monthlyGuarantee=value;
-      }
-
-      const dailyGuarantee=await client.query<{amount:string}>(
-        `WITH worked AS (
-           SELECT DISTINCT
-             (l.starts_at AT TIME ZONE l.timezone)::date AS work_date,
-             a.plan_id
-           FROM trainer_compensation_accrual a
-           JOIN dance_lesson l
-             ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
-           WHERE a.tenant_id=$1
-             AND a.trainer_resource_id=$2
-             AND a.plan_id IS NOT NULL
-             AND l.starts_at>=$3 AND l.starts_at<$4
-             AND a.status IN ('APPROVED','EXPORTED')
-         ),
-         daily AS (
-           SELECT
-             w.work_date,
-             max(p.minimum_guarantee_minor) AS guarantee_minor
-           FROM worked w
-           JOIN trainer_compensation_plan p
-             ON p.tenant_id=$1
-            AND p.id=w.plan_id
-            AND p.guarantee_period='DAY'
-           GROUP BY w.work_date
-         )
-         SELECT coalesce(sum(guarantee_minor),0)::text AS amount
-         FROM daily`,
-        [tenantId,row.trainer_resource_id,from,to]
-      );
-      const dailyGuaranteeMinor=BigInt(dailyGuarantee.rows[0]?.amount??"0");
-      const guarantee=
-        dailyGuaranteeMinor>monthlyGuarantee
-          ?dailyGuaranteeMinor
-          :monthlyGuarantee;
-
       const lesson=BigInt(row.lesson_accrual_minor);
       const subtotal=lesson+base;
-      const guaranteeAdjustment=guarantee>subtotal?guarantee-subtotal:0n;
-      const calculatedTotal=subtotal+guaranteeAdjustment;
+      const adjustment=guarantee>subtotal?guarantee-subtotal:0n;
+      const total=subtotal+adjustment;
+      const currency=profile?.currency??row.currency;
 
       const statement=await client.query(
         `INSERT INTO trainer_payroll_statement(
            tenant_id,trainer_resource_id,period_from,period_to,
            lesson_accrual_minor,base_minor,guarantee_adjustment_minor,
-           adjustment_minor,total_minor,currency,status,
-           calculation_snapshot,finalized_at
+           total_minor,currency,status,calculation_snapshot,finalized_at
          ) VALUES(
-           $1,$2,$3,$4,$5,$6,$7,0,$8,$9,'FINALIZED',$10,now()
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,'FINALIZED',$10,now()
          )
          ON CONFLICT(tenant_id,trainer_resource_id,period_from,period_to)
          DO UPDATE SET
            lesson_accrual_minor=EXCLUDED.lesson_accrual_minor,
            base_minor=EXCLUDED.base_minor,
            guarantee_adjustment_minor=EXCLUDED.guarantee_adjustment_minor,
-           total_minor=EXCLUDED.total_minor+
-             trainer_payroll_statement.adjustment_minor,
+           total_minor=EXCLUDED.total_minor,
            currency=EXCLUDED.currency,
            status='FINALIZED',
            calculation_snapshot=EXCLUDED.calculation_snapshot,
            finalized_at=now(),
            updated_at=now()
          WHERE trainer_payroll_statement.status IN ('DRAFT','FINALIZED')
-         RETURNING
-           id,trainer_resource_id,lesson_accrual_minor::text,
-           base_minor::text,guarantee_adjustment_minor::text,
-           adjustment_minor::text,total_minor::text,status`,
+         RETURNING id,trainer_resource_id,lesson_accrual_minor::text,
+                   base_minor::text,guarantee_adjustment_minor::text,
+                   total_minor::text,status`,
         [
           tenantId,row.trainer_resource_id,periodFrom,periodTo,
-          lesson.toString(),base.toString(),guaranteeAdjustment.toString(),
-          calculatedTotal.toString(),row.currency,
+          lesson.toString(),base.toString(),adjustment.toString(),
+          total.toString(),currency,
           JSON.stringify({
+            profileId:profile?.id??null,
             planIds,
             lessonAccrualMinor:lesson.toString(),
             baseComponents:baseSnapshot,
-            monthlyGuaranteeMinor:monthlyGuarantee.toString(),
-            dailyGuaranteeMinor:dailyGuaranteeMinor.toString(),
-            effectiveGuaranteeMinor:guarantee.toString()
+            minimumGuaranteeMinor:guarantee.toString()
           })
         ]
       );
