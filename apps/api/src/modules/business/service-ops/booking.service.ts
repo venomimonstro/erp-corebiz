@@ -11,6 +11,7 @@ import { DatabaseService } from "../../../infrastructure/database/database.servi
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
 import { DomainEventService } from "../../platform/events/domain-event.service";
 import { AttributionService } from "../growth/attribution.service";
+import { InventoryService } from "../inventory/inventory.service";
 
 type BookingStatus =
   | "DRAFT"
@@ -27,7 +28,8 @@ export class BookingService {
     private readonly database: DatabaseService,
     private readonly events: DomainEventService,
     private readonly attribution: AttributionService,
-    private readonly authorization: AuthorizationService
+    private readonly authorization: AuthorizationService,
+    private readonly inventory: InventoryService
   ) {}
 
   async services(context: TenantContext): Promise<Array<Record<string, unknown>>> {
@@ -36,7 +38,8 @@ export class BookingService {
         `SELECT
            s.id, s.name, s.code, s.category, s.duration_minutes,
            s.buffer_before_minutes, s.buffer_after_minutes,
-           s.price_minor::text, s.currency, s.metadata,
+           s.price_minor::text, s.currency, s.delivery_format,
+           s.group_capacity, s.metadata,
            COALESCE(
              json_agg(
                json_build_object(
@@ -70,6 +73,8 @@ export class BookingService {
       bufferAfterMinutes?: number;
       priceMinor?: string;
       currency?: string;
+      deliveryFormat?: "INDIVIDUAL" | "GROUP" | "SELF_PRACTICE" | "RENTAL";
+      groupCapacity?: number;
     }
   ): Promise<{ id: string }> {
     await this.requireServiceAll(context, "service.write");
@@ -94,14 +99,23 @@ export class BookingService {
       throw new BadRequestException("Некорректная цена услуги");
     }
 
+    const deliveryFormat = input.deliveryFormat ?? "INDIVIDUAL";
+    if (!["INDIVIDUAL","GROUP","SELF_PRACTICE","RENTAL"].includes(deliveryFormat)) {
+      throw new BadRequestException("Некорректный формат услуги");
+    }
+    const groupCapacity = Math.floor(input.groupCapacity ?? 1);
+    if (groupCapacity < 1 || groupCapacity > 100000) {
+      throw new BadRequestException("Некорректная вместимость услуги");
+    }
+
     return this.database.withTenantTransaction(context, async (client) => {
       try {
         const result = await client.query<{ id: string }>(
           `INSERT INTO service_catalog_item(
              tenant_id, name, code, category, duration_minutes,
              buffer_before_minutes, buffer_after_minutes,
-             price_minor, currency
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             price_minor, currency, delivery_format, group_capacity
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
            RETURNING id`,
           [
             context.tenantId,
@@ -112,7 +126,9 @@ export class BookingService {
             before,
             after,
             price,
-            input.currency?.trim().toUpperCase() || "RUB"
+            input.currency?.trim().toUpperCase() || "RUB",
+            deliveryFormat,
+            groupCapacity
           ]
         );
 
