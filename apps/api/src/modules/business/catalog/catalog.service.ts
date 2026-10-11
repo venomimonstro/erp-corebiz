@@ -4,6 +4,7 @@ import {
   NotFoundException
 } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
+import type {PoolClient} from "pg";
 import type { TenantContext } from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 
@@ -26,6 +27,7 @@ export class CatalogService {
     trackInventory: boolean;
   }>> {
     return this.database.withTenantTransaction(context, async (client) => {
+      const canReadCost=await this.mayReadCost(client,context);
       const result = await client.query<{
         product_id: string;
         product_name: string;
@@ -79,11 +81,85 @@ export class CatalogService {
         sku: row.sku_code,
         barcode: row.barcode,
         salePriceMinor: row.sale_price_minor,
-        costPriceMinor: row.cost_price_minor,
+        costPriceMinor: canReadCost?row.cost_price_minor:null,
         currency: row.currency,
         trackInventory: row.track_inventory
       }));
     });
+  }
+
+
+  /**
+   * Keyset pagination for large catalogs. No OFFSET scans, no COUNT(*),
+   * and no accidental cross-tenant or unbounded payloads.
+   */
+  async page(
+    context:TenantContext,
+    input:{limit?:number;cursor?:string;query?:string}
+  ){
+    const limit=input.limit??100;
+    if(!Number.isSafeInteger(limit)||limit<1||limit>200)
+      throw new BadRequestException("Размер страницы: от 1 до 200 товаров");
+    const cursor=input.cursor?.trim()||null;
+    if(cursor&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(cursor))
+      throw new BadRequestException("Неверный курсор страницы каталога");
+    const query=input.query?.trim()??"";
+    if(query.length>100||(query.length>0&&query.length<3))
+      throw new BadRequestException("Для поиска укажите от 3 до 100 символов");
+    return this.database.withTenantTransaction(context,async client=>{
+      const canReadCost=await this.mayReadCost(client,context);
+      const result=await client.query<{
+        product_id:string;product_name:string;kind:string;
+        variant_id:string;variant_name:string;sku_id:string;
+        sku_code:string;barcode:string|null;sale_price_minor:string;
+        cost_price_minor:string;currency:string;track_inventory:boolean;
+      }>(
+        `SELECT p.id AS product_id,p.name AS product_name,p.kind,
+          v.id AS variant_id,v.name AS variant_name,
+          s.id AS sku_id,s.code AS sku_code,s.barcode,
+          s.sale_price_minor::text,s.cost_price_minor::text,
+          s.currency,s.track_inventory
+         FROM sku s
+         JOIN product_variant v ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+         JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+         WHERE s.tenant_id=$1 AND s.status='ACTIVE'
+           AND v.status='ACTIVE' AND p.status='ACTIVE'
+           AND ($2::uuid IS NULL OR s.id>$2::uuid)
+           AND ($3::text IS NULL OR s.code ILIKE '%'||$3||'%'
+             OR coalesce(s.barcode,'') ILIKE '%'||$3||'%'
+             OR p.name ILIKE '%'||$3||'%')
+         ORDER BY s.id
+         LIMIT $4`,
+        [context.tenantId,cursor,query||null,limit+1]
+      );
+      const hasMore=result.rows.length>limit;
+      const rows=result.rows.slice(0,limit);
+      return {
+        items:rows.map(row=>({
+          productId:row.product_id,productName:row.product_name,kind:row.kind,
+          variantId:row.variant_id,variantName:row.variant_name,
+          skuId:row.sku_id,sku:row.sku_code,barcode:row.barcode,
+          salePriceMinor:row.sale_price_minor,
+          costPriceMinor:canReadCost?row.cost_price_minor:null,
+          currency:row.currency,trackInventory:row.track_inventory
+        })),
+        hasMore,
+        nextCursor:hasMore?rows[rows.length-1]?.sku_id??null:null
+      };
+    });
+  }
+
+  private async mayReadCost(client:PoolClient,context:TenantContext):Promise<boolean>{
+    const result=await client.query<{allowed:boolean}>(
+      `SELECT EXISTS(
+        SELECT 1 FROM membership_role mr
+        JOIN role_permission rp ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
+        WHERE mr.tenant_id=$1 AND mr.membership_id=$2
+          AND rp.permission_code IN ('*','finance.read','catalog.cost.read')
+      ) AS allowed`,
+      [context.tenantId,context.membershipId]
+    );
+    return result.rows[0]?.allowed===true;
   }
 
   async create(
