@@ -29,6 +29,17 @@ type GroupHealth = {
   waitlist: number;
 };
 
+type EconomicsSlice = {
+  id: string;
+  name: string;
+  lessons: number;
+  revenue_minor: string;
+  trainer_cost_minor: string;
+  room_cost_minor: string;
+  other_cost_minor: string;
+  margin_minor: string;
+};
+
 type Dashboard = {
   todayLessons: Lesson[];
   debt: {
@@ -37,6 +48,8 @@ type Dashboard = {
     overdue_count: number;
   };
   groups: GroupHealth[];
+  economicsByProgram: EconomicsSlice[];
+  economicsByTrainer: EconomicsSlice[];
   packageAlerts: {
     expiring: number;
     low_visits: number;
@@ -63,6 +76,12 @@ type Dashboard = {
     over_capacity: number;
   };
 };
+
+function marginPercent(item: EconomicsSlice) {
+  const revenue=Number(item.revenue_minor);
+  if(!Number.isFinite(revenue)||revenue<=0) return 0;
+  return Math.round(Number(item.margin_minor)/revenue*100);
+}
 
 function money(value: string, currency = "RUB") {
   return new Intl.NumberFormat("ru-RU", {
@@ -180,6 +199,68 @@ export default function DanceDashboardPage() {
                 <small>{data.groups.length} активных групп</small>
               </article>
             </div>
+
+            <section className="studio-economics-grid">
+              <article className="studio-economics-panel">
+                <header>
+                  <div>
+                    <span>Направления</span>
+                    <h2>Где зарабатываем</h2>
+                  </div>
+                  <small>текущий месяц</small>
+                </header>
+                <div className="studio-economics-list">
+                  {data.economicsByProgram.map((item)=>(
+                    <div key={item.id}>
+                      <div>
+                        <strong>{item.name}</strong>
+                        <span>{item.lessons} занятий</span>
+                      </div>
+                      <div>
+                        <strong>{money(item.margin_minor)}</strong>
+                        <span>
+                          {marginPercent(item)}% маржа · выручка{" "}
+                          {money(item.revenue_minor)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                  {!data.economicsByProgram.length ? (
+                    <p>Закройте первые занятия — экономика появится здесь.</p>
+                  ) : null}
+                </div>
+              </article>
+
+              <article className="studio-economics-panel">
+                <header>
+                  <div>
+                    <span>Команда</span>
+                    <h2>Экономика по тренерам</h2>
+                  </div>
+                  <a href="/app/dance/team">Открыть зарплату →</a>
+                </header>
+                <div className="studio-economics-list">
+                  {data.economicsByTrainer.map((item)=>(
+                    <div key={item.id}>
+                      <div>
+                        <strong>{item.name}</strong>
+                        <span>{item.lessons} занятий</span>
+                      </div>
+                      <div>
+                        <strong>{money(item.margin_minor)}</strong>
+                        <span>
+                          тренеру {money(item.trainer_cost_minor)} ·{" "}
+                          {marginPercent(item)}% маржа
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                  {!data.economicsByTrainer.length ? (
+                    <p>После закрытия уроков появится сравнение команды.</p>
+                  ) : null}
+                </div>
+              </article>
+            </section>
 
             {Object.values(data.attention).some((value) => Number(value) > 0) ? (
               <div className="studio-alert">
