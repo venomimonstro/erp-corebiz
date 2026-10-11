@@ -959,3 +959,82 @@ WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
     OR p.validation_status<>'VALID'
     OR p.signature_status<>'SIGNED'
   );
+
+
+-- Optional regulated accounting contour must fail closed.
+SELECT 'ACCOUNTING_COMPLIANCE_DISABLED_ADVANCED' AS code,count(*)::bigint AS affected
+FROM accounting_compliance_obligation o
+JOIN accounting_tax_profile p
+  ON p.tenant_id=o.tenant_id AND p.id=o.tax_profile_id
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND p.compliance_enabled=false
+  AND o.workflow_status NOT IN ('PLANNED','CANCELLED')
+UNION ALL
+SELECT 'ACCOUNTING_COMPLIANCE_DISABLED_WITHOUT_REASON',count(*)::bigint
+FROM accounting_tax_profile p
+WHERE p.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND p.status='ACTIVE'
+  AND p.compliance_enabled=false
+  AND nullif(btrim(p.compliance_disabled_reason),'') IS NULL;
+
+-- Automotive vertical integrity.
+SELECT 'AUTOMOTIVE_WORK_ORDER_PARTY_MISMATCH' AS code,count(*)::bigint AS affected
+FROM automotive_work_order o
+JOIN automotive_vehicle v
+  ON v.tenant_id=o.tenant_id AND v.id=o.vehicle_id
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND v.party_id IS NOT NULL
+  AND o.party_id IS NOT NULL
+  AND v.party_id<>o.party_id
+UNION ALL
+SELECT 'AUTOMOTIVE_WORK_ORDER_TOTAL_DRIFT',count(*)::bigint
+FROM automotive_work_order o
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND (
+    o.estimated_total_minor<>coalesce((
+      SELECT sum((l.unit_price_minor*l.quantity_milli+999)/1000)
+      FROM automotive_work_order_line l
+      WHERE l.tenant_id=o.tenant_id
+        AND l.work_order_id=o.id
+        AND l.approved=true
+    ),0)
+    OR
+    o.actual_total_minor<>coalesce((
+      SELECT sum((l.unit_price_minor*l.quantity_milli+999)/1000)
+      FROM automotive_work_order_line l
+      WHERE l.tenant_id=o.tenant_id
+        AND l.work_order_id=o.id
+        AND l.approved=true
+        AND l.completed=true
+    ),0)
+  )
+UNION ALL
+SELECT 'AUTOMOTIVE_DELIVERED_WITH_UNFINISHED_LINE',count(*)::bigint
+FROM automotive_work_order o
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND o.status='DELIVERED'
+  AND EXISTS(
+    SELECT 1
+    FROM automotive_work_order_line l
+    WHERE l.tenant_id=o.tenant_id
+      AND l.work_order_id=o.id
+      AND l.approved=true
+      AND l.completed=false
+  )
+UNION ALL
+SELECT 'AUTOMOTIVE_DONOR_DISMANTLED_WITHOUT_PARTS',count(*)::bigint
+FROM automotive_donor_vehicle d
+WHERE d.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND d.status='DISMANTLED'
+  AND NOT EXISTS(
+    SELECT 1 FROM automotive_dismantled_part p
+    WHERE p.tenant_id=d.tenant_id AND p.donor_vehicle_id=d.id
+  )
+UNION ALL
+SELECT 'AUTOMOTIVE_PART_WAREHOUSE_TENANT_DRIFT',count(*)::bigint
+FROM automotive_dismantled_part p
+LEFT JOIN warehouse w
+  ON w.tenant_id=p.tenant_id AND w.id=p.warehouse_id
+WHERE p.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND p.warehouse_id IS NOT NULL
+  AND w.id IS NULL;
