@@ -96,6 +96,55 @@ export const VERTICAL_OPERATIONAL_RULES:readonly VerticalOperationalRule[]=[
       ORDER BY t.updated_at,t.listing_id LIMIT 201`
   },
   {
+    code:"MARKETPLACE_EXCESS_PUBLICATION",
+    domain:"ECOMMERCE",label:"Остаток опубликован сверх доступного",
+    severity:"CRITICAL",href:"/app/ecommerce",
+    explanation:"Сумма последних подтверждённых остатков на площадках превышает доступный остаток собственного склада с учётом резервов и страхового запаса",
+    permission:"channels.read",
+    sql:`WITH exposure AS (
+      SELECT l.tenant_id,l.warehouse_id,l.sku_id,
+        sum(coalesce(t.published_units,0))::numeric AS published
+      FROM channel_stock_listing l JOIN channel_stock_target t
+        ON t.tenant_id=l.tenant_id AND t.listing_id=l.id
+      WHERE l.tenant_id=$1
+      GROUP BY l.tenant_id,l.warehouse_id,l.sku_id
+    ), unsafe AS (
+      SELECT e.tenant_id,e.warehouse_id,e.sku_id
+      FROM exposure e
+      LEFT JOIN inventory_balance b ON b.tenant_id=e.tenant_id
+        AND b.warehouse_id=e.warehouse_id AND b.sku_id=e.sku_id
+      LEFT JOIN inventory_policy p ON p.tenant_id=e.tenant_id
+        AND p.warehouse_id=e.warehouse_id AND p.sku_id=e.sku_id
+      WHERE e.published >
+        CASE WHEN p.enabled=false THEN 0 ELSE
+          greatest(0,floor((
+            coalesce(b.physical_milli,0)
+            -coalesce(b.reserved_milli,0)
+            -coalesce(p.safety_stock_milli,0)
+          )::numeric/1000)) END
+    )
+    SELECT l.id FROM channel_stock_listing l
+    JOIN unsafe r ON r.tenant_id=l.tenant_id
+      AND r.warehouse_id=l.warehouse_id AND r.sku_id=l.sku_id
+    WHERE l.tenant_id=$1 AND l.publish_enabled
+    ORDER BY l.id LIMIT 201`
+  },
+  {
+    code:"MARKETPLACE_ORDER_FEED_STALE",
+    domain:"ECOMMERCE",label:"Заказы площадки давно не обновлялись",
+    severity:"CRITICAL",href:"/app/ecommerce",
+    explanation:"При публикации товара поток заказов маркетплейса должен регулярно обновляться; иначе остатки могут быть недостоверными",
+    permission:"channels.read",
+    sql:`SELECT l.id FROM channel_stock_listing l
+      JOIN channel_connection c ON c.tenant_id=l.tenant_id
+        AND c.id=l.connection_id
+      WHERE l.tenant_id=$1 AND l.enabled AND l.publish_enabled
+        AND c.status='ACTIVE'
+        AND (c.last_synced_at IS NULL
+          OR c.last_synced_at<now()-interval '10 minutes')
+      ORDER BY l.id LIMIT 201`
+  },
+  {
     code:"PROJECT_DELIVERABLE_OVERDUE",domain:"PROJECTS",label:"Сорванные сроки результатов",
     severity:"WARNING",href:"/app/projects",
     explanation:"Этап разработки, SEO, рекламы или отчёт не передан в срок",
