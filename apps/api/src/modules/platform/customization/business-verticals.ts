@@ -34,6 +34,7 @@ export type BusinessVerticalCode =
   | "BARBERSHOP"
   | "NAIL_SALON"
   | "AUTO_SERVICE"
+  | "AUTO_PARTS_DISMANTLING"
   | "DANCE_FITNESS"
   | "PROFESSIONAL_SERVICES"
   | "RETAIL_STORE"
@@ -208,9 +209,9 @@ export const BUSINESS_VERTICALS: Record<
   AUTO_SERVICE: {
     code: "AUTO_SERVICE",
     title: "Автосервис",
-    summary: "CRM, карточки автомобилей, история обслуживания, работы, запчасти, склад и прибыль.",
+    summary: "VIN, автомобили клиентов, заказ-наряды, диагностика, работы, запчасти, посты, механики, склад и прибыль.",
     profileCode: "SERVICE",
-    version: 4,
+    version: 5,
     enabledCapabilities: [
       "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
       "service","sites","growth","workflow","support"
@@ -234,6 +235,43 @@ export const BUSINESS_VERTICALS: Record<
       "Автомобиль завис в статусе без следующего действия",
       "Запчасть не зарезервирована или не пришла",
       "Пост простаивает или перегружен"
+    ]
+  },
+  AUTO_PARTS_DISMANTLING: {
+    code: "AUTO_PARTS_DISMANTLING",
+    title: "Автозапчасти / авторазбор",
+    summary: "Доноры, снятые детали, OEM и аналоги, совместимость, состояние, склад, продажи и маржа каждой детали.",
+    profileCode: "TRADE",
+    version: 1,
+    enabledCapabilities: [
+      "crm","tasks","catalog","sales","procurement","inventory","finance","accounting",
+      "service","oms","sites","growth","workflow","support"
+    ],
+    customFields: [
+      { entityType: "PRODUCT", fieldKey: "oem_number", label: "OEM номер", dataType: "TEXT" },
+      { entityType: "PRODUCT", fieldKey: "part_condition", label: "Состояние детали", dataType: "SELECT", options: ["NEW","USED_A","USED_B","USED_C","FOR_REPAIR"] },
+      { entityType: "PRODUCT", fieldKey: "donor_stock_number", label: "Номер донора", dataType: "TEXT" },
+      { entityType: "SALES_ORDER", fieldKey: "customer_vin", label: "VIN автомобиля клиента", dataType: "TEXT" }
+    ],
+    ownerQuestions: [
+      "Сколько денег заморожено в донорах и снятых деталях?",
+      "Какие детали продаются быстро, а какие залежались?",
+      "Какие OEM и аналоги чаще всего ищут и не находят?",
+      "Какая фактическая прибыль по каждому донору после разборки и списаний?"
+    ],
+    primaryWorkspaces: ["automotive", "catalog", "inventory", "sales", "procurement", "finance"],
+    operatingFlows: [
+      "Покупка донора → приёмка → разбор → оценка состояния → создание деталей → склад",
+      "OEM/VIN клиента → подбор совместимости → резерв детали → продажа/установка",
+      "Деталь → фото/состояние/OEM/аналоги → публикация → заказ → отгрузка",
+      "Стоимость донора + разборка → распределение себестоимости → маржа проданных деталей"
+    ],
+    attentionSignals: [
+      "Донор долго не разобран",
+      "Снятая деталь без OEM или совместимости",
+      "Деталь зарезервирована, но заказ не завершён",
+      "Залежавшиеся детали и низкая оборачиваемость",
+      "Продажа ниже распределённой себестоимости"
     ]
   },
   DANCE_FITNESS: {
