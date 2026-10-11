@@ -552,7 +552,29 @@ export class DanceStudioService {
         [context.tenantId,scopeIds]
       );
 
+      const setup=scopeIds===null ? (await client.query<{
+        programs:number;groups:number;trainers:number;students:number;plans:number;lessons:number;
+      }>(
+        `SELECT
+          (SELECT count(*)::integer FROM dance_program p
+           WHERE p.tenant_id=$1 AND p.status='ACTIVE') AS programs,
+          (SELECT count(*)::integer FROM dance_group g
+           WHERE g.tenant_id=$1 AND g.status='ACTIVE') AS groups,
+          (SELECT count(*)::integer FROM service_resource r
+           WHERE r.tenant_id=$1 AND r.type='EMPLOYEE' AND r.status='ACTIVE') AS trainers,
+          (SELECT count(*)::integer FROM dance_student s
+           WHERE s.tenant_id=$1 AND s.status='ACTIVE') AS students,
+          (SELECT count(*)::integer FROM service_package_plan sp
+           WHERE sp.tenant_id=$1 AND sp.status='ACTIVE'
+             AND (sp.dance_program_id IS NOT NULL OR sp.dance_group_id IS NOT NULL)) AS plans,
+          (SELECT count(*)::integer FROM dance_lesson l
+           WHERE l.tenant_id=$1 AND l.starts_at>now()
+             AND l.status IN ('PLANNED','OPEN_FOR_BOOKING')) AS lessons`,
+        [context.tenantId]
+      )).rows[0]??null : null;
+
       return {
+        setup,
         canViewFinancials,
         todayLessons: today.rows,
         debt: canViewFinancials ? (debt.rows[0] ?? {
