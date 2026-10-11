@@ -491,7 +491,8 @@ async function inspectRequiredHardening(root) {
     "185_payroll_payment_lifecycle.sql",
     "186_service_employee_economics.sql",
     "187_service_payroll_export_lifecycle.sql",
-    "188_service_waitlist.sql"
+    "188_service_waitlist.sql",
+    "189_service_rebooking_cycle.sql"
   ];
 
   for (const name of requiredMigrations) {
