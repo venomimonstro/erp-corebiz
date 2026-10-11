@@ -905,6 +905,7 @@ export class ProjectsService {
            party.display_name AS party_name,
            coalesce(t.actual_minutes,0)::integer AS actual_minutes,
            coalesce(t.labor_cost_minor,0)::text AS labor_cost_minor,
+           coalesce(expenses.total_minor,0)::text AS other_cost_minor,
            coalesce(d.pending,0)::integer AS pending_deliverables,
            coalesce(d.overdue,0)::integer AS overdue_deliverables,
            coalesce(a.pending,0)::integer AS pending_approvals,
@@ -927,6 +928,11 @@ export class ProjectsService {
             AND pm.status='ACTIVE'
            WHERE e.tenant_id=p.tenant_id AND e.project_id=p.id
          ) t ON true
+         LEFT JOIN LATERAL(
+           SELECT coalesce(sum(e.amount_minor),0)::bigint AS total_minor
+           FROM work_project_expense e
+           WHERE e.tenant_id=p.tenant_id AND e.project_id=p.id
+         ) expenses ON true
          LEFT JOIN LATERAL(
            SELECT
              count(*) FILTER (
@@ -1129,5 +1135,59 @@ export class ProjectsService {
     });
   }
 
+
+  async agencyExpenses(context: TenantContext, projectId: string) {
+    const scoped = await this.membershipIdsForScope(context, "projects.read");
+    return this.database.withTenantTransaction(context, async (client) => {
+      await this.assertReadableProject(client, context.tenantId, projectId, scoped);
+      return (await client.query(
+        `SELECT id,project_id,category,description,amount_minor::text,
+                expense_on,created_at
+         FROM work_project_expense
+         WHERE tenant_id=$1 AND project_id=$2
+         ORDER BY expense_on DESC,created_at DESC LIMIT 500`,
+        [context.tenantId,projectId]
+      )).rows;
+    });
+  }
+
+  async addAgencyExpense(
+    context: TenantContext,
+    projectId: string,
+    input: {category?:string;description?:string;amountMinor?:string;expenseOn?:string}
+  ) {
+    const category=input?.category;
+    const description=input?.description?.trim();
+    const amount=input?.amountMinor;
+    if (!category || !["CONTRACTOR","SOFTWARE","TRAVEL","OTHER"].includes(category))
+      throw new BadRequestException("Некорректная категория расхода");
+    if (!description || description.length<2 || description.length>240)
+      throw new BadRequestException("Укажите описание расхода");
+    if (!amount || !/^[1-9][0-9]{0,14}$/.test(amount))
+      throw new BadRequestException("Некорректная сумма расхода в копейках");
+    const expenseOn=input?.expenseOn??new Date().toISOString().slice(0,10);
+    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(expenseOn) ||
+        !Number.isFinite(Date.parse(expenseOn)) ||
+        new Date(expenseOn).toISOString().slice(0,10)!==expenseOn)
+      throw new BadRequestException("Некорректная дата расхода");
+    const scoped=await this.membershipIdsForScope(context,"projects.write");
+    return this.database.withTenantTransaction(context,async(client)=>{
+      await this.assertWritableProject(client,context.tenantId,projectId,scoped);
+      const project=await client.query<{currency:string}>(
+        "SELECT currency FROM work_project WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,projectId]
+      );
+      if(project.rows[0]?.currency!=="RUB")
+        throw new BadRequestException("Расходы пока доступны только для проектов в RUB");
+      return (await client.query(
+        `INSERT INTO work_project_expense(
+           tenant_id,project_id,category,description,amount_minor,
+           expense_on,created_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+         RETURNING id,project_id,category,description,amount_minor::text,expense_on`,
+        [context.tenantId,projectId,category,description,amount,expenseOn,context.membershipId]
+      )).rows[0];
+    });
+  }
 
 }
