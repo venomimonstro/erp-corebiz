@@ -128,6 +128,59 @@ export class AuthService {
     }
   }
 
+  async registerInvited(input:{
+    email:string;password:string;invitationToken:string
+  }):Promise<{token:string;auth:SessionAuth}>{
+    if(!input || typeof input.invitationToken!=="string" ||
+      input.invitationToken.length<32 || input.invitationToken.length>256){
+      throw new BadRequestException("Некорректная ссылка приглашения");
+    }
+    const email=this.normalizeEmail(input.email);
+    this.validatePassword(input.password);
+    const passwordHash=await hash(input.password,{
+      type:argon2id,memoryCost:19_456,timeCost:2,parallelism:1
+    });
+    try{
+      return await this.database.withTransaction(async client=>{
+        const created=await client.query<{id:string;email:string}>(
+          `INSERT INTO app_user(email,password_hash)
+           VALUES($1,$2) RETURNING id,email`,[email,passwordHash]);
+        const user=created.rows[0];
+        if(!user)throw new Error("USER_CREATE_FAILED");
+        const accepted=await client.query<{tenant_id:string;membership_id:string}>(
+          "SELECT * FROM public.corebiz_auth_accept_invitation($1::uuid,$2)",
+          [user.id,hashToken(input.invitationToken)]);
+        const membership=accepted.rows[0];
+        if(!membership)throw new BadRequestException(
+          "Приглашение недействительно, просрочено или указана другая почта"
+        );
+        await client.query("SELECT set_config('app.tenant_id',$1,true)",[
+          membership.tenant_id]);
+        const tenant=await client.query<{name:string}>(
+          "SELECT name FROM tenant WHERE id=$1",[membership.tenant_id]);
+        if(!tenant.rows[0])throw new Error("INVITED_TENANT_NOT_FOUND");
+        const sessionToken=generateToken();
+        const sessionId=await this.createSession(
+          client,user.id,membership.membership_id,sessionToken);
+        return {
+          token:sessionToken,
+          auth:{
+            sessionId,tenantId:membership.tenant_id,
+            tenantName:tenant.rows[0].name,
+            userId:user.id,membershipId:membership.membership_id,
+            email:user.email,isOwner:false
+          }
+        };
+      });
+    }catch(error){
+      if(this.isUniqueViolation(error))
+        throw new ConflictException(
+          "Аккаунт уже существует. Войдите и примите приглашение."
+        );
+      throw error;
+    }
+  }
+
   async login(input: LoginInput): Promise<{
     token: string;
     auth: SessionAuth;
