@@ -4,6 +4,7 @@ import {
   NotFoundException
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
+import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 
 @Injectable()
@@ -329,7 +330,7 @@ export class AutomotiveService {
     });
   }
 
-  private async nextNumber(client:any,tenantId:string,key:string,prefix:string) {
+  private async nextNumber(client:PoolClient,tenantId:string,key:string,prefix:string) {
     const result=await client.query<{value:string}>(
       `INSERT INTO tenant_counter(tenant_id,counter_key,value)
        VALUES($1,$2,1)
