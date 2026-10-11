@@ -73,6 +73,13 @@ type Dashboard={
     source:string;
   };
   connectors:Array<{id:string;provider:string;status:string}>;
+  ytdTaxableIncomeMinor:string;
+  alerts:Array<{
+    code:string;
+    severity:"INFO"|"WARNING"|"CRITICAL";
+    title:string;
+    detail:string;
+  }>;
 };
 
 function rub(value:string|null|undefined){
@@ -283,6 +290,21 @@ export function TaxCompliancePanel({
     {error?<div className="inline-error"><strong>Налоги</strong><span>{error}</span></div>:null}
     {message?<div className="tax-success">{message}</div>:null}
 
+    {(data?.alerts??[]).length?<div className="tax-alert-stack">
+      {(data?.alerts??[]).map(alert=>
+        <article
+          className={"tax-alert "+alert.severity.toLowerCase()}
+          key={alert.code}
+        >
+          <span>{alert.severity==="CRITICAL"?"!":"i"}</span>
+          <div>
+            <strong>{alert.title}</strong>
+            <small>{alert.detail}</small>
+          </div>
+        </article>
+      )}
+    </div>:null}
+
     <div className="owner-kpi-grid tax-kpi-grid">
       <article className={"owner-kpi tax-kpi "+((data?.counts.overdue??0)>0?"danger":"")}>
         <span>Просрочено</span>
@@ -290,9 +312,9 @@ export function TaxCompliancePanel({
         <small>нужно сделать сейчас</small>
       </article>
       <article className="owner-kpi tax-kpi">
-        <span>Ближайшие 14 дней</span>
-        <strong>{data?.counts.next_14_days??0}</strong>
-        <small>сдать, уведомить или оплатить</small>
+        <span>Доход в налоговой книге</span>
+        <strong>{rub(data?.ytdTaxableIncomeMinor)}</strong>
+        <small>с начала года · после классификации</small>
       </article>
       <article className="owner-kpi tax-kpi">
         <span>Нужно проверить</span>
