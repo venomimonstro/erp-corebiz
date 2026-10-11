@@ -2304,11 +2304,13 @@ export class DanceEconomicsService {
     lesson:any,
     cancelled:boolean
   ){
-    if(!lesson.room_resource_id)
+    if(!lesson.room_resource_id){
       return {amount:0n,snapshot:{type:"NO_ROOM"}};
+    }
 
     const resource=await client.query<{
-      cost_per_hour_minor:string;timezone:string;
+      cost_per_hour_minor:string;
+      timezone:string;
     }>(
       `SELECT cost_per_hour_minor::text,timezone
        FROM service_resource
@@ -2318,83 +2320,177 @@ export class DanceEconomicsService {
     const rr=resource.rows[0];
     if(!rr) return {amount:0n,snapshot:{type:"ROOM_MISSING"}};
 
+    const lessonUnits=Math.max(
+      1,Number(lesson.room_capacity_units??1)
+    );
+    const lessonZone=lesson.room_zone_id??null;
+
     const contractResult=await client.query<any>(
       `SELECT *
        FROM room_rental_contract
-       WHERE tenant_id=$1 AND room_resource_id=$2 AND status='ACTIVE'
-         AND valid_from <= ($3::timestamptz AT TIME ZONE $4)::date
+       WHERE tenant_id=$1
+         AND room_resource_id=$2
+         AND status='ACTIVE'
+         AND valid_from<=($3::timestamptz AT TIME ZONE $4)::date
          AND (
            valid_to IS NULL
-           OR valid_to >= ($3::timestamptz AT TIME ZONE $4)::date
+           OR valid_to>=($3::timestamptz AT TIME ZONE $4)::date
          )
-       ORDER BY valid_from DESC
+         AND (
+           zone_id IS NULL
+           OR zone_id=$5::uuid
+         )
+         AND capacity_units >= $6
+       ORDER BY
+         (zone_id IS NOT NULL) DESC,
+         capacity_units ASC,
+         valid_from DESC,
+         id
        LIMIT 1`,
-      [tenantId,lesson.room_resource_id,lesson.starts_at,rr.timezone]
+      [
+        tenantId,lesson.room_resource_id,lesson.starts_at,rr.timezone,
+        lessonZone,lessonUnits
+      ]
     );
     const contract=contractResult.rows[0];
+
     const duration=Math.max(
       1,Math.round(
-        (new Date(lesson.ends_at).getTime()-new Date(lesson.starts_at).getTime())/60000
+        (
+          new Date(lesson.ends_at).getTime()-
+          new Date(lesson.starts_at).getTime()
+        )/60000
       )
     );
 
     let normal=0n;
-    let snapshot:any={type:"RESOURCE_HOURLY",durationMinutes:duration};
+    let snapshot:any={
+      type:"RESOURCE_HOURLY",
+      durationMinutes:duration,
+      roomCapacityUnits:lessonUnits,
+      roomZoneId:lessonZone
+    };
+
     if(!contract){
-      normal=(BigInt(rr.cost_per_hour_minor)*BigInt(duration)+59n)/60n;
+      normal=(
+        BigInt(rr.cost_per_hour_minor)*
+        BigInt(duration)*
+        BigInt(lessonUnits)+59n
+      )/60n;
       snapshot.costPerHourMinor=rr.cost_per_hour_minor;
-    }else if(contract.pricing_type==="HOURLY"){
-      const minutes=Math.max(duration,contract.minimum_billable_minutes);
-      normal=(BigInt(contract.hourly_rate_minor)*BigInt(minutes)+59n)/60n;
-      snapshot={
-        type:"HOURLY",
-        contractId:contract.id,
-        durationMinutes:duration,
-        billableMinutes:minutes,
-        hourlyRateMinor:String(contract.hourly_rate_minor)
-      };
-    }else if(contract.pricing_type==="FIXED_SLOT"){
-      const slot=await client.query<{slot_minor:string}>(
-        `SELECT slot_minor::text
-         FROM room_rental_slot
-         WHERE tenant_id=$1 AND contract_id=$2
-           AND weekday=extract(isodow from ($3::timestamptz AT TIME ZONE $4))::int
-           AND start_minute <= (
-             extract(hour from ($3::timestamptz AT TIME ZONE $4))::int*60+
-             extract(minute from ($3::timestamptz AT TIME ZONE $4))::int
-           )
-         ORDER BY start_minute DESC
-         LIMIT 1`,
-        [tenantId,contract.id,lesson.starts_at,rr.timezone]
-      );
-      normal=BigInt(slot.rows[0]?.slot_minor??contract.slot_minor);
-      snapshot={
-        type:"FIXED_SLOT",
-        contractId:contract.id,
-        slotMinor:normal.toString()
-      };
     }else{
-      const count=await client.query<{count:number}>(
-        `SELECT count(*)::integer AS count
-         FROM dance_lesson
-         WHERE tenant_id=$1 AND room_resource_id=$2
-           AND status NOT IN ('CANCELLED_BY_STUDIO','CANCELLED_BY_TRAINER')
-           AND date_trunc('month',starts_at AT TIME ZONE $4)=
-               date_trunc('month',$3::timestamptz AT TIME ZONE $4)`,
-        [tenantId,lesson.room_resource_id,lesson.starts_at,rr.timezone]
-      );
-      const divisor=Math.max(1,count.rows[0]?.count??1);
-      normal=BigInt(contract.monthly_minor)/BigInt(divisor);
-      snapshot={
-        type:"FIXED_MONTHLY",
-        contractId:contract.id,
-        monthlyMinor:String(contract.monthly_minor),
-        allocatedLessons:divisor
-      };
+      const contractUnits=Math.max(1,Number(contract.capacity_units??1));
+      const prorate=(amount:bigint)=>
+        (amount*BigInt(lessonUnits)+BigInt(contractUnits)-1n)/
+        BigInt(contractUnits);
+
+      if(contract.pricing_type==="HOURLY"){
+        const minutes=Math.max(duration,contract.minimum_billable_minutes);
+        const full=(
+          BigInt(contract.hourly_rate_minor)*BigInt(minutes)+59n
+        )/60n;
+        normal=prorate(full);
+        snapshot={
+          type:"HOURLY",
+          contractId:contract.id,
+          durationMinutes:duration,
+          billableMinutes:minutes,
+          hourlyRateMinor:String(contract.hourly_rate_minor),
+          contractCapacityUnits:contractUnits,
+          lessonCapacityUnits:lessonUnits,
+          roomZoneId:lessonZone,
+          capacityProrated:true
+        };
+      }else if(contract.pricing_type==="FIXED_SLOT"){
+        const slot=await client.query<{slot_minor:string}>(
+          `SELECT slot_minor::text
+           FROM room_rental_slot
+           WHERE tenant_id=$1 AND contract_id=$2
+             AND weekday=extract(
+               isodow from ($3::timestamptz AT TIME ZONE $4)
+             )::int
+             AND start_minute<=(
+               extract(hour from ($3::timestamptz AT TIME ZONE $4))::int*60+
+               extract(minute from ($3::timestamptz AT TIME ZONE $4))::int
+             )
+             AND end_minute>=(
+               extract(hour from ($5::timestamptz AT TIME ZONE $4))::int*60+
+               extract(minute from ($5::timestamptz AT TIME ZONE $4))::int
+             )
+           ORDER BY start_minute DESC
+           LIMIT 1`,
+          [
+            tenantId,contract.id,lesson.starts_at,rr.timezone,
+            lesson.ends_at
+          ]
+        );
+        const full=BigInt(slot.rows[0]?.slot_minor??contract.slot_minor);
+        normal=prorate(full);
+        snapshot={
+          type:"FIXED_SLOT",
+          contractId:contract.id,
+          slotMinor:full.toString(),
+          contractCapacityUnits:contractUnits,
+          lessonCapacityUnits:lessonUnits,
+          roomZoneId:lessonZone,
+          capacityProrated:true
+        };
+      }else{
+        const weight=BigInt(lessonUnits)*BigInt(duration);
+        const totalWeight=await client.query<{weight:string}>(
+          `SELECT coalesce(sum(
+             l.room_capacity_units::bigint*
+             greatest(
+               1,
+               round(
+                 extract(epoch from (l.ends_at-l.starts_at))/60
+               )::bigint
+             )
+           ),0)::text AS weight
+           FROM dance_lesson l
+           WHERE l.tenant_id=$1
+             AND l.room_resource_id=$2
+             AND l.status NOT IN (
+               'CANCELLED_BY_STUDIO','CANCELLED_BY_TRAINER'
+             )
+             AND (
+               $5::uuid IS NULL
+               OR l.room_zone_id IS NOT DISTINCT FROM $5::uuid
+             )
+             AND date_trunc(
+               'month',l.starts_at AT TIME ZONE $4
+             )=date_trunc(
+               'month',$3::timestamptz AT TIME ZONE $4
+             )`,
+          [
+            tenantId,lesson.room_resource_id,lesson.starts_at,
+            rr.timezone,contract.zone_id??null
+          ]
+        );
+        const divisor=BigInt(totalWeight.rows[0]?.weight??"0");
+        normal=divisor>0n
+          ?(
+            BigInt(contract.monthly_minor)*weight+
+            divisor-1n
+          )/divisor
+          :0n;
+        snapshot={
+          type:"FIXED_MONTHLY",
+          contractId:contract.id,
+          monthlyMinor:String(contract.monthly_minor),
+          lessonCapacityMinutes:weight.toString(),
+          monthCapacityMinutes:divisor.toString(),
+          contractCapacityUnits:contractUnits,
+          lessonCapacityUnits:lessonUnits,
+          roomZoneId:lessonZone
+        };
+      }
     }
 
     if(cancelled&&contract){
-      const charged=(normal*BigInt(contract.cancellation_charge_bps)+9999n)/10000n;
+      const charged=(
+        normal*BigInt(contract.cancellation_charge_bps)+9999n
+      )/10000n;
       return {
         amount:charged,
         snapshot:{
