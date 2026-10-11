@@ -18,6 +18,10 @@ type Issue = {
   referenceId: string;
   firstSeenAt: string;
   href: string;
+  title: string;
+  severity: "WARNING"|"CRITICAL";
+  domain: string;
+  explanation: string;
 };
 
 type Operational = {
@@ -40,6 +44,8 @@ const LABELS: Record<string,string> = {
 export default function OperationsPage() {
   const [data, setData] = useState<Operational | null>(null);
   const [error, setError] = useState("");
+  const [activeDomain,setActiveDomain]=useState("ALL");
+  const [showAll,setShowAll]=useState(false);
 
   const load = useCallback(async () => {
     setError("");
@@ -62,6 +68,24 @@ export default function OperationsPage() {
     () => new Map((data?.snapshots ?? []).map((row) => [row.metric_code,row])),
     [data]
   );
+
+  const domains=useMemo(()=>{
+    const map=new Map<string,number>();
+    for(const issue of data?.issues??[]){
+      map.set(issue.domain,(map.get(issue.domain)??0)+1);
+    }
+    return [...map].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]));
+  },[data]);
+  const visibleIssues=useMemo(()=>{
+    const filtered=(data?.issues??[]).filter(issue=>
+      activeDomain==="ALL"||issue.domain===activeDomain
+    ).sort((a,b)=>Number(b.severity==="CRITICAL")-
+      Number(a.severity==="CRITICAL")||
+      Date.parse(a.firstSeenAt)-Date.parse(b.firstSeenAt));
+    return showAll?filtered:filtered.slice(0,25);
+  },[data,activeDomain,showAll]);
+  const criticalCount=(data?.issues??[])
+    .filter(issue=>issue.severity==="CRITICAL").length;
 
   function money(code: string): string {
     const row = snapshotMap.get(code);
@@ -87,7 +111,8 @@ export default function OperationsPage() {
             <p className="muted">Владелец / Контроль</p>
             <h1>Что требует внимания</h1>
             <p className="workspace-summary">
-              Деньги, несопоставленные операции, НДС, закрытие месяца и зарплата — только исключения, которые требуют действия.
+              Единая точка контроля для торговли, услуг, студий, автосервисов, агентств,
+              маркетплейсов и складов. Только реальные отклонения и следующий шаг.
             </p>
           </div>
           <button
@@ -134,15 +159,29 @@ export default function OperationsPage() {
             <section className="section-block">
               <div className="section-heading">
                 <div>
-                  <p className="muted">Action & Exception</p>
-                  <h2>
-                    Требует действий · {data.issues.length}
-                  </h2>
+                  <p className="muted">Контроль бизнес-процессов</p>
+                  <h2>Нужны решения · {data.issues.length}</h2>
+                  <p className="muted">{criticalCount
+                    ?criticalCount+" критичных отклонений — сначала устраните их"
+                    :"Сначала просроченные операции, затем предупреждения"}</p>
                 </div>
               </div>
-
+              <div className="operations-filters" role="group" aria-label="Фильтр процессов">
+                <button type="button" className={activeDomain==="ALL"?"active":""}
+                  aria-pressed={activeDomain==="ALL"}
+                  onClick={()=>{setActiveDomain("ALL");setShowAll(false);}}>
+                  Все · {data.issues.length}
+                </button>
+                {domains.map(([domain,count])=>
+                  <button type="button" key={domain}
+                    className={activeDomain===domain?"active":""}
+                    aria-pressed={activeDomain===domain}
+                    onClick={()=>{setActiveDomain(domain);setShowAll(false);}}>
+                    {domain} · {count}
+                  </button>)}
+              </div>
               <div className="action-queue">
-                {data.issues.map((issue) => (
+                {visibleIssues.map((issue) => (
                   <a
                     className="action-item"
                     href={issue.href}
@@ -151,29 +190,31 @@ export default function OperationsPage() {
                     <span
                       className={
                         "severity-dot " +
-                        (issue.code === "CLOSE_BLOCKED" ||
-                        issue.code === "VAT_UNREGISTERED"
-                          ? "critical"
-                          : "warning")
+                        (issue.severity==="CRITICAL"?"critical":"warning")
                       }
                     />
                     <div>
-                      <small>{issue.code}</small>
-                      <strong>{LABELS[issue.code] ?? issue.code}</strong>
-                      <span>
-                        С{" "}
-                        {new Date(issue.firstSeenAt).toLocaleString("ru-RU")}
-                      </span>
+                      <small>{issue.domain} · {issue.code}</small>
+                      <strong>{issue.title ?? LABELS[issue.code] ?? issue.code}</strong>
+                      <span>{issue.explanation}</span>
+                      <small>Обнаружено: {new Date(issue.firstSeenAt).toLocaleString("ru-RU")}</small>
                     </div>
                     <b>Открыть →</b>
                   </a>
                 ))}
 
+                {activeDomain!=="ALL"&&!visibleIssues.length?<div className="table-empty">
+                  <strong>В этой категории исключений нет</strong>
+                </div>:null}
+                {(data.issues.filter(issue=>activeDomain==="ALL"||issue.domain===activeDomain).length>25&&!showAll)?
+                  <button className="secondary-button" type="button"
+                    onClick={()=>setShowAll(true)}>Показать остальные события</button>:null}
                 {!data.issues.length ? (
                   <div className="table-empty">
                     <strong>Критичных исключений нет</strong>
                     <span>
-                      Банковская сверка, НДС, закрытие месяца и payroll не требуют действия.
+                      В проверенных процессах нет открытых отклонений. Это не заменяет сверку
+                      с внешними банками и площадками.
                     </span>
                   </div>
                 ) : null}
