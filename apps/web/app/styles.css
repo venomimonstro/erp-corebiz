@@ -3837,3 +3837,21 @@ button, .primary, .secondary { font: inherit; }
 @media(prefers-reduced-motion:reduce){
   .dance-owner a,.dance-owner button{transition:none;transform:none!important}
 }
+
+/* Dance studio focus navigation — reusable within its operational pages. */
+.dance-segment-nav{display:flex;align-items:center;gap:4px;max-width:100%;
+  width:max-content;flex-wrap:wrap;padding:5px;margin:5px 0 20px;
+  background:#f1f2f3;border:1px solid #eaeced;border-radius:13px}
+.dance-segment-nav button{appearance:none;border:0;background:transparent;color:#737b80;
+  border-radius:9px;padding:11px 16px;min-height:40px;cursor:pointer;
+  font:inherit;font-size:12px;font-weight:640;line-height:1.2;
+  transition:background .15s ease,color .15s ease}
+.dance-segment-nav button:hover{color:#282e33;background:#e7e9eb}
+.dance-segment-nav button.active,.dance-segment-nav button[aria-pressed="true"]{
+  background:white;color:#252b30;box-shadow:0 1px 5px rgba(28,34,39,.07)}
+.dance-segment-nav button:focus-visible{outline:3px solid #91b3d0;outline-offset:2px}
+@media(max-width:680px){
+  .dance-segment-nav{width:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:4px}
+  .dance-segment-nav button{white-space:normal;padding:9px 7px;font-size:11px}
+}
+@media(prefers-reduced-motion:reduce){.dance-segment-nav button{transition:none}}
