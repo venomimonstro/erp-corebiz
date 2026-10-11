@@ -389,8 +389,16 @@ export class CommercePaymentsService {
     });
     this.verifyAmount(intent,response);
     const link=response.confirmation?.confirmation_url;
-    if(!link || !link.startsWith("https://yookassa.ru/") &&
-       !link.startsWith("https://yoomoney.ru/")) {
+    let trustedLink=false;
+    if(link){
+      try{
+        const url=new URL(link);
+        trustedLink=url.protocol==="https:" && !url.username && !url.password &&
+          ["yookassa.ru","yoomoney.ru"].some(host=>
+            url.hostname===host||url.hostname.endsWith("."+host));
+      }catch{trustedLink=false;}
+    }
+    if(!trustedLink){
       throw new ServiceUnavailableException("Провайдер не вернул безопасную ссылку оплаты");
     }
     await this.database.withTenantTransaction(this.context(intent.tenant_id),async client=>{
