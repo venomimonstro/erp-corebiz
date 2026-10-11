@@ -203,6 +203,42 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path: "apps/api/src/modules/platform/billing/billing.service.ts",
+      patterns: [/BigInt\(row\.monthly_price_minor\) > 0n/, /ConflictException/,
+        /current_plan_code === row.code/],
+      message: "Unpaid SaaS self-service upgrades are not blocked"
+    },
+    {
+      path: "apps/api/src/modules/business/sites/storefront.service.ts",
+      patterns: [/COALESCE\(ip.enabled,true\)/,
+        /w.status='ACTIVE'/, /is_available !== true/,
+        /p.slug='\/' AND p.status='ACTIVE' AND v.status='PUBLISHED'/],
+      message: "Storefront availability or pre-checkout publication guard is missing"
+    },
+    {
+      path: "apps/api/src/modules/business/sites/storefront.controller.ts",
+      patterns: [/@ApiCost\("PUBLIC_CHECKOUT"\)/, /@ApiCost\("PUBLIC_CART"\)/],
+      message: "Anonymous commerce is not protected by specific budgets"
+    },
+    {
+      path: "apps/web/components/public-storefront.tsx",
+      patterns: [/current.status === "PROCESSING"/,
+        /cart.status !== "OPEN"/, /line.is_available/],
+      message: "Buyer recovery after interrupted checkout is incomplete"
+    },
+    {
+      path: "infrastructure/postgres/226_public_storefront_publication_gate.sql",
+      patterns: [/corebiz_resolve_public_storefront/,
+        /v.status='PUBLISHED'/, /SECURITY DEFINER/],
+      message: "Draft storefront is publicly available"
+    },
+    {
+      path: "scripts/production-gate.sh",
+      patterns: [/COREBIZ_SMOKE_BASE_URL COREBIZ_SMOKE_WEB_URL/,
+        /loopback staging instance/],
+      message: "Business smoke tests may target public production URLs"
+    },
+    {
       path: "apps/api/src/modules/business/party/party.service.ts",
       patterns: [
         /party_create_idempotency/,
