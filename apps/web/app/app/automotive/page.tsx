@@ -97,6 +97,9 @@ export default function AutomotivePage(){
   const [orderPromise,setOrderPromise]=useState("");
   const [orderMileage,setOrderMileage]=useState("");
   const [orderBudget,setOrderBudget]=useState("");
+  const [approvalEdit,setApprovalEdit]=useState(false);
+  const [approvalRub,setApprovalRub]=useState("");
+  const [approvalNote,setApprovalNote]=useState("");
 
   const [dMake,setDMake]=useState("");
   const [dModel,setDModel]=useState("");
@@ -170,9 +173,38 @@ export default function AutomotivePage(){
     try{
       const detail=await apiRequest<WorkOrderDetail>("/automotive/work-orders/"+id);
       setSelectedOrder(detail);
+      setApprovalEdit(false);
+      setApprovalRub(detail.authorization_limit_minor===null?""
+        :String(Number(detail.authorization_limit_minor)/100));
+      setApprovalNote("");
     }catch(cause){
       setError(cause instanceof Error?cause.message:"Не удалось открыть заказ-наряд");
     }finally{setBusy(false);}
+  }
+
+  async function saveCustomerApproval(event:FormEvent){
+    event.preventDefault();
+    if(!selectedOrder||busy)return;
+    const amount=Number(approvalRub.replace(",","."));
+    if(!Number.isFinite(amount)||amount<=0||amount>10_000_000_000){
+      setError("Проверьте согласованную сумму");return;
+    }
+    if(approvalNote.trim().length<10){
+      setError("Укажите основание изменения лимита не короче 10 символов");return;
+    }
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/automotive/work-orders/"+selectedOrder.id,{
+        method:"PATCH",body:JSON.stringify({
+          authorizationLimitMinor:String(Math.round(amount*100)),
+          authorizationNote:approvalNote.trim()
+        })
+      });
+      setNotice("Лимит согласования обновлён, основание сохранено в журнале.");
+      await openOrder(selectedOrder.id);
+      await load();
+    }catch(cause){setError(cause instanceof Error?cause.message:"Не удалось согласовать сумму");}
+    finally{setBusy(false);}
   }
 
   function nextOrderStatus(status:string){
@@ -424,6 +456,30 @@ export default function AutomotivePage(){
                   :""}
               </span>
             </div>
+            {!["DELIVERED","CANCELLED"].includes(selectedOrder.status)?(
+              <div className="studio-card">
+                <button className="secondary-button" type="button"
+                  onClick={()=>setApprovalEdit(value=>!value)}>
+                  {approvalEdit?"Скрыть изменение лимита":"Изменить согласованный бюджет"}
+                </button>
+                {approvalEdit?(
+                  <form onSubmit={saveCustomerApproval} className="studio-form-grid">
+                    <label><span>Новый лимит клиента, ₽</span>
+                      <input type="number" min="0.01" step="0.01" required
+                        value={approvalRub} onChange={event=>setApprovalRub(event.target.value)}/>
+                    </label>
+                    <label className="studio-form-wide"><span>Основание согласования</span>
+                      <input required minLength={10} value={approvalNote}
+                        onChange={event=>setApprovalNote(event.target.value)}
+                        placeholder="Например: согласовано с владельцем автомобиля по телефону"/>
+                    </label>
+                    <div className="studio-form-actions">
+                      <button type="submit" disabled={busy}>Подтвердить новый лимит</button>
+                    </div>
+                  </form>
+                ):null}
+              </div>
+            ):null}
             <div className="studio-rule-grid">
               {selectedOrder.lines.map(line=>(
                 <article className="studio-rule-card" key={line.id}>
