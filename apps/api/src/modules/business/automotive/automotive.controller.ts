@@ -108,6 +108,60 @@ export class AutomotiveController {
     return {ok:true,data:await this.automotive.parts(this.context(request),q)};
   }
 
+  @Get("fitments")
+  @RequirePermission("inventory.read")
+  async fitments(
+    @Req() request:AuthenticatedRequest,
+    @Query("skuId") skuId?:string,
+    @Query("vehicleId") vehicleId?:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.automotive.fitments(
+        this.context(request),{skuId,vehicleId}
+      )
+    };
+  }
+
+  @Post("fitments")
+  @RequirePermission("inventory.write")
+  async createFitment(
+    @Req() request:AuthenticatedRequest,@Body() body:any
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.automotive.createFitment(this.context(request),body)
+    };
+  }
+
+  @Get("vehicles/:id/compatible-parts")
+  @RequirePermission("inventory.read")
+  async compatibleParts(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Query("q") q?:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.automotive.compatibleParts(this.context(request),id,q)
+    };
+  }
+
+  @Patch("parts/:id/inventory")
+  @RequirePermission("inventory.write")
+  async linkPartToInventory(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.automotive.linkPartToInventory(
+        this.context(request),id,body
+      )
+    };
+  }
+
   @Post("donors/:id/parts")
   @RequirePermission("inventory.write")
   async addPart(
