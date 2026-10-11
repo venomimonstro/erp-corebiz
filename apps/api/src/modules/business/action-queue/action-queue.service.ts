@@ -6,6 +6,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { GoLiveService } from "../../platform/go-live/go-live.service";
 import { VERTICAL_OPERATIONAL_RULE_BY_CODE } from "../dashboard/vertical-operational-rules";
+import {visibleOperationalCodes} from "./operational-visibility";
 import {DashboardService} from "../dashboard/dashboard.service";
 
 type QueueItem = {
@@ -146,10 +147,8 @@ export class ActionQueueService {
           }
         }
 
-        if (
-          allowed("dashboard.owner.read") ||
-          allowed("finance.read")
-        ) {
+        const issueCodes=visibleOperationalCodes(permissions);
+        if(issueCodes===null||issueCodes.length>0){
           const issues = await client.query<{
             id: string;
             issue_code: string;
@@ -158,9 +157,10 @@ export class ActionQueueService {
             `SELECT id,issue_code,first_seen_at
              FROM tenant_operational_issue
              WHERE tenant_id=$1 AND state='OPEN'
+               AND ($2::text[] IS NULL OR issue_code=ANY($2::text[]))
              ORDER BY first_seen_at
              LIMIT 50`,
-            [context.tenantId]
+            [context.tenantId,issueCodes]
           );
 
           const issueLabels: Record<string, {
@@ -192,14 +192,8 @@ export class ActionQueueService {
 
           for (const row of issues.rows) {
             const vertical=VERTICAL_OPERATIONAL_RULE_BY_CODE.get(row.issue_code);
-            if(vertical&&!allowed("dashboard.owner.read")&&!allowed(vertical.permission))
+            if(issueCodes!==null&&!issueCodes.includes(row.issue_code))
               continue;
-            if(row.issue_code==="VAT_UNREGISTERED"&&!allowed("dashboard.owner.read")
-              &&!allowed("accounting.compliance.read"))continue;
-            if(row.issue_code==="CLOSE_BLOCKED"&&!allowed("dashboard.owner.read")
-              &&!allowed("accounting.read"))continue;
-            if(row.issue_code==="PAYROLL_DRAFT"&&!allowed("dashboard.owner.read")
-              &&!allowed("accounting.read"))continue;
             const meta = vertical
               ? {title:vertical.label,href:vertical.href,severity:vertical.severity}
               : issueLabels[row.issue_code] ?? {
