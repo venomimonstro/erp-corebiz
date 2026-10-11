@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
+import { DanceWorkspaceNav } from "../../../../components/dance-workspace-nav";
 import { apiRequest } from "../../../../lib/api";
 
 type Customer = {
@@ -418,6 +419,8 @@ export default function DanceStudentsPage() {
             <button onClick={() => void addStudent()} type="button">+ Ученик</button>
           </div>
         </header>
+
+        <DanceWorkspaceNav active="students" />
 
         {error ? <div className="inline-error"><strong>Ученики</strong><span>{error}</span></div> : null}
 
