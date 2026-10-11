@@ -7,6 +7,7 @@ import {
 import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import {assertReservableStock} from "./reservation-policy";
 import { DomainEventService } from "../../platform/events/domain-event.service";
 
 export type InventoryReceiptLine = {
@@ -590,30 +591,30 @@ export class InventoryService {
     const balance = await client.query<{
       physical_milli: string;
       reserved_milli: string;
+      safety_stock_milli:string;
+      policy_enabled:boolean;
     }>(
-      `SELECT physical_milli::text, reserved_milli::text
-       FROM inventory_balance
-       WHERE tenant_id = $1
-         AND warehouse_id = $2
-         AND sku_id = $3
-       FOR UPDATE`,
+      `SELECT b.physical_milli::text,b.reserved_milli::text,
+         coalesce(ip.safety_stock_milli,0)::text AS safety_stock_milli,
+         coalesce(ip.enabled,true) AS policy_enabled
+       FROM inventory_balance b
+       LEFT JOIN inventory_policy ip
+         ON ip.tenant_id=b.tenant_id AND ip.warehouse_id=b.warehouse_id
+         AND ip.sku_id=b.sku_id
+       WHERE b.tenant_id=$1 AND b.warehouse_id=$2 AND b.sku_id=$3
+       FOR UPDATE OF b`,
       [context.tenantId, input.warehouseId, input.skuId]
     );
 
-    const row = balance.rows[0]!;
-    const available =
-      BigInt(row.physical_milli) - BigInt(row.reserved_milli);
-    const safety = input.safetyStockMilli ?? 0n;
-
-    if (safety < 0n) {
-      throw new BadRequestException("Safety stock не может быть отрицательным");
-    }
-
-    if (available - input.quantityMilli < safety) {
-      throw new ConflictException(
-        "Недостаточно ATP с учётом страхового остатка"
-      );
-    }
+    const row=balance.rows[0]!;
+    assertReservableStock({
+      physicalMilli:BigInt(row.physical_milli),
+      reservedMilli:BigInt(row.reserved_milli),
+      requestedMilli:input.quantityMilli,
+      configuredSafetyMilli:BigInt(row.safety_stock_milli),
+      inheritedSafetyMilli:input.safetyStockMilli,
+      enabled:row.policy_enabled
+    });
 
     const activeSameLineWarehouse = await client.query<{ id: string }>(
       `SELECT id
@@ -836,23 +837,28 @@ export class InventoryService {
         const balance = await client.query<{
           physical_milli: string;
           reserved_milli: string;
+          safety_stock_milli:string;
+          policy_enabled:boolean;
         }>(
-          `SELECT physical_milli::text, reserved_milli::text
-           FROM inventory_balance
-           WHERE tenant_id = $1 AND warehouse_id = $2 AND sku_id = $3
-           FOR UPDATE`,
+          `SELECT b.physical_milli::text,b.reserved_milli::text,
+             coalesce(ip.safety_stock_milli,0)::text AS safety_stock_milli,
+             coalesce(ip.enabled,true) AS policy_enabled
+           FROM inventory_balance b
+           LEFT JOIN inventory_policy ip ON ip.tenant_id=b.tenant_id
+             AND ip.warehouse_id=b.warehouse_id AND ip.sku_id=b.sku_id
+           WHERE b.tenant_id=$1 AND b.warehouse_id=$2 AND b.sku_id=$3
+           FOR UPDATE OF b`,
           [context.tenantId, warehouseId, line.sku_id]
         );
 
-        const row = balance.rows[0]!;
-        const available =
-          BigInt(row.physical_milli) - BigInt(row.reserved_milli);
-
-        if (available < quantity) {
-          throw new ConflictException(
-            "Недостаточно доступного остатка для резервирования заказа"
-          );
-        }
+        const row=balance.rows[0]!;
+        assertReservableStock({
+          physicalMilli:BigInt(row.physical_milli),
+          reservedMilli:BigInt(row.reserved_milli),
+          requestedMilli:quantity,
+          configuredSafetyMilli:BigInt(row.safety_stock_milli),
+          enabled:row.policy_enabled
+        });
 
         if(ownerLedger){
           const ownerBalance=await client.query<{
