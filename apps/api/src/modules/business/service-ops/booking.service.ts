@@ -1691,7 +1691,7 @@ export class BookingService {
         `SELECT
            b.id, b.business_number, b.status, b.source,
            b.starts_at, b.ends_at, b.price_minor_snapshot::text,
-           b.currency, b.version, b.notes,
+           b.currency,b.version,b.notes,b.delivery_format_snapshot,
            p.display_name AS party_name,
            s.name AS service_name,
            CASE WHEN a.id IS NULL THEN NULL ELSE json_build_object(
@@ -1725,6 +1725,8 @@ export class BookingService {
            ON br.tenant_id = b.tenant_id AND br.booking_id = b.id
          LEFT JOIN service_resource r
            ON r.tenant_id = br.tenant_id AND r.id = br.resource_id
+         LEFT JOIN service_resource_zone rz
+           ON rz.tenant_id=br.tenant_id AND rz.id=br.zone_id
          WHERE b.tenant_id = $1
            AND b.starts_at < $3
            AND b.ends_at > $2
@@ -2782,7 +2784,7 @@ export class BookingService {
          c.amount_minor::text,c.status,
          o.status AS obligation_status,o.settled_minor::text
        FROM service_booking_charge c
-       LEFT JOIN financial_obligation o
+       JOIN financial_obligation o
          ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
        WHERE c.tenant_id=$1 AND c.booking_id=$2
        FOR UPDATE OF c,o`,
@@ -2801,7 +2803,7 @@ export class BookingService {
            $1,'PAYABLE',$2,'SERVICE_BOOKING_REFUND',$3,$4,$5,now()
          )
          ON CONFLICT(tenant_id,direction,source_type,source_id)
-         DO UPDATE SET updated_at=now()
+         DO NOTHING
          RETURNING id`,
         [
           context.tenantId,row.payer_party_id,bookingId,
@@ -2809,7 +2811,31 @@ export class BookingService {
         ]
       );
       if(!refund.rows[0]){
-        throw new Error("SERVICE_BOOKING_REFUND_OBLIGATION_FAILED");
+        const existingRefund=await client.query<{
+          amount_minor:string;
+          party_id:string|null;
+          currency:string;
+        }>(
+          `SELECT amount_minor::text,party_id,currency
+           FROM financial_obligation
+           WHERE tenant_id=$1
+             AND direction='PAYABLE'
+             AND source_type='SERVICE_BOOKING_REFUND'
+             AND source_id=$2
+           FOR UPDATE`,
+          [context.tenantId,bookingId]
+        );
+        const existing=existingRefund.rows[0];
+        if(
+          !existing ||
+          existing.amount_minor!==settled.toString() ||
+          existing.party_id!==row.payer_party_id ||
+          existing.currency!==row.currency
+        ){
+          throw new ConflictException(
+            "Существующий возврат не совпадает с оплаченной суммой записи"
+          );
+        }
       }
     }
 
