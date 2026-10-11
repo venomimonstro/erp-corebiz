@@ -203,6 +203,35 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path: "apps/api/src/modules/platform/payments/commerce-payments.service.ts",
+      patterns: [/verifyAmount\(intent,payment\)/,
+        /finance\.receiveSalesPayment/, /finance\.refundSalesPayment/,
+        /corebiz_resolve_payment_tenant/, /corebiz_resolve_refund_tenant/,
+        /sealMerchantSecret/, /commerce_order_delivery/,
+        /COREBIZ_SAAS_FISCAL_ENABLED/],
+      message: "Verified acquiring or refund ledger reconciliation is missing"
+    },
+    {
+      path: "apps/api/src/modules/platform/payments/yookassa.gateway.ts",
+      patterns: [/api\.yookassa\.ru\/v3/, /aes-256-gcm/,
+        /Idempotence-Key/, /AbortController/],
+      message: "Fixed-origin payment transport, encryption or retries are missing"
+    },
+    {
+      path: "apps/api/src/modules/platform/payments/payments.controller.ts",
+      patterns: [/@RequirePermission\("billing.manage"\)/,
+        /@RequirePermission\("finance.write"\)/,
+        /@ApiCost\("PUBLIC_CHECKOUT"\)/, /webhooks\/yookassa/],
+      message: "Missing protected payment and provider callback routes"
+    },
+    {
+      path: "infrastructure/postgres/227_commerce_checkout_payments_shipping.sql",
+      patterns: [/commerce_payment_intent/, /commerce_merchant_config/,
+        /commerce_order_delivery/, /ENABLE ROW LEVEL SECURITY/,
+        /corebiz_resolve_payment_tenant/],
+      message: "Tenant-isolated payment intent and delivery tables missing"
+    },
+    {
       path: "apps/api/src/modules/platform/billing/billing.service.ts",
       patterns: [/BigInt\(row\.monthly_price_minor\) > 0n/, /ConflictException/,
         /current_plan_code === row.code/],
