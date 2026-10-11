@@ -102,8 +102,8 @@ export class OmsService {
       throw new BadRequestException("Некорректный safety stock");
     }
 
-    const priority = Math.floor(input.sourcingPriority ?? 100);
-    if (priority < 0 || priority > 10000) {
+    const priority=input.sourcingPriority??100;
+    if (!Number.isSafeInteger(priority)||priority<0||priority>10000) {
       throw new BadRequestException("Приоритет должен быть от 0 до 10000");
     }
 
@@ -171,6 +171,9 @@ export class OmsService {
            )::text AS atp_milli
          FROM warehouse w
          CROSS JOIN sku s
+         LEFT JOIN warehouse_wms_profile wp
+           ON wp.tenant_id=w.tenant_id AND wp.warehouse_id=w.id
+          AND wp.status='ACTIVE'
          LEFT JOIN inventory_balance b
            ON b.tenant_id=w.tenant_id
           AND b.warehouse_id=w.id
@@ -186,6 +189,9 @@ export class OmsService {
            AND s.track_inventory=true
            AND ($2::uuid IS NULL OR s.id=$2)
            AND COALESCE(ip.enabled,true)=true
+           -- Mixed 3PL stock belongs to individual owners. The unscoped
+           -- ATP endpoint must never advertise another client's inventory.
+           AND (wp.owner_tracking_state IS DISTINCT FROM 'OWNER_LEDGER')
          ORDER BY s.code,
                   COALESCE(ip.sourcing_priority,100),
                   w.is_default DESC,
