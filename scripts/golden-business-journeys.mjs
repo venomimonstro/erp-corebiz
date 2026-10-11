@@ -573,10 +573,25 @@ async function danceStudioJourney() {
 
   await request("POST", "/dance/compensation-plans", {
     trainerResourceId: trainer.id,
+    serviceId: service.id,
     lessonType: "GROUP",
-    calculationType: "PERCENT",
-    percentBps: 4000,
-    revenueBasis: "PAID"
+    calculationType: "COMPOSITE",
+    revenueBasis: "PAID",
+    minimumGuaranteeMinor: "150000",
+    guaranteePeriod: "MONTH",
+    components: [
+      {
+        componentType: "MONTHLY_BASE",
+        amountMinor: "100000",
+        priority: 100
+      },
+      {
+        componentType: "PERCENT",
+        percentBps: 4000,
+        revenueBasis: "PAID",
+        priority: 110
+      }
+    ]
   });
 
   await request("POST", "/dance/room-contracts", {
@@ -676,6 +691,50 @@ async function danceStudioJourney() {
     "DANCE paid package revenue must feed trainer percentage accrual"
   );
 
+  const payrollFrom = new Date(Date.UTC(
+    startsAt.getUTCFullYear(),
+    startsAt.getUTCMonth(),
+    1
+  ));
+  const payrollTo = new Date(Date.UTC(
+    startsAt.getUTCFullYear(),
+    startsAt.getUTCMonth() + 1,
+    1
+  ));
+  const approved = await request(
+    "POST",
+    "/dance/compensation/approve",
+    {
+      from: payrollFrom.toISOString(),
+      to: payrollTo.toISOString()
+    }
+  );
+  assert.ok(
+    approved.statements?.length >= 1,
+    "DANCE trainer month approval must finalize payroll statement"
+  );
+  const statements = await request(
+    "GET",
+    "/dance/payroll-statements?from=" +
+      encodeURIComponent(payrollFrom.toISOString()) +
+      "&to=" +
+      encodeURIComponent(payrollTo.toISOString())
+  );
+  const trainerStatement = statements.find(
+    (item) => item.trainer_resource_id === trainer.id
+  );
+  assert.ok(trainerStatement, "DANCE trainer payroll statement");
+  assert.ok(
+    BigInt(trainerStatement.base_minor) >= 100000n,
+    "DANCE composite salary must include monthly base"
+  );
+  assert.ok(
+    BigInt(trainerStatement.total_minor) >=
+      BigInt(trainerStatement.lesson_accrual_minor) +
+      BigInt(trainerStatement.base_minor),
+    "DANCE statement total must include lesson accrual and base"
+  );
+
   const month = startsAt.toISOString().slice(0, 7);
   const rent = await request(
     "POST",
@@ -708,7 +767,7 @@ async function danceStudioJourney() {
   return {
     profile: "DANCE_FITNESS",
     result:
-      "parent → child → group → package → payment → lesson → attendance → trainer + room economics",
+      "parent → child → group → package → payment → lesson → attendance → composite trainer payroll + room economics",
     studentId: student.id,
     groupId: group.id,
     lessonId: lesson.id,
