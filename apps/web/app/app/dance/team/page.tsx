@@ -2076,24 +2076,30 @@ export default function DanceTeamPage() {
             ) : null}
 
             <div className="studio-form-grid">
-              <label>
-                <span>
-                  {planScheme === "HOURLY"
-                    ? "Ставка за час, ₽"
-                    : planScheme === "COMPOSITE"
-                      ? "Оклад в месяц, ₽"
-                      : planScheme === "PERCENT"
-                        ? "Фиксированная часть, ₽"
-                        : "Базовая сумма, ₽"}
-                </span>
-                <input
-                  inputMode="decimal"
-                  value={planBaseRub}
-                  onChange={(event) => setPlanBaseRub(event.target.value)}
-                />
-              </label>
+              {["FIXED","HOURLY","ATTENDEE","COMPOSITE"].includes(planScheme) ? (
+                <label>
+                  <span>
+                    {planScheme === "HOURLY"
+                      ? "Ставка за час, ₽"
+                      : planScheme === "COMPOSITE"
+                        ? planBasePeriod === "DAY"
+                          ? "Фикс за рабочий день, ₽"
+                          : "Оклад в месяц, ₽"
+                        : planScheme === "ATTENDEE"
+                          ? "Фикс за занятие, ₽"
+                          : "Сумма за занятие, ₽"}
+                  </span>
+                  <input
+                    inputMode="decimal"
+                    value={planBaseRub}
+                    onChange={(event) => setPlanBaseRub(event.target.value)}
+                  />
+                </label>
+              ) : null}
 
-              {(planScheme === "PERCENT" || planScheme === "COMPOSITE") ? (
+              {(planScheme === "PERCENT" ||
+                (planScheme === "COMPOSITE" &&
+                  planVariableType === "PERCENT")) ? (
                 <label>
                   <span>Процент от реализации, %</span>
                   <input
@@ -2115,14 +2121,16 @@ export default function DanceTeamPage() {
                 </label>
               ) : null}
 
-              <label>
-                <span>Минимальная гарантия в месяц, ₽</span>
-                <input
-                  inputMode="decimal"
-                  value={planGuaranteeRub}
-                  onChange={(event) => setPlanGuaranteeRub(event.target.value)}
-                />
-              </label>
+              {planScheme === "COMPOSITE" ? (
+                <label>
+                  <span>Минимальная гарантия в месяц, ₽</span>
+                  <input
+                    inputMode="decimal"
+                    value={planGuaranteeRub}
+                    onChange={(event) => setPlanGuaranteeRub(event.target.value)}
+                  />
+                </label>
+              ) : null}
             </div>
           </StudioModal>
         ) : null}
