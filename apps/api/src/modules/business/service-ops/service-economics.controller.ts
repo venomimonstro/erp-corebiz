@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   Query,
   Req
@@ -116,6 +117,42 @@ export class ServiceEconomicsController {
       ok:true,
       data:await this.economics.payrollStatements(
         this.context(request),month
+      )
+    };
+  }
+
+  @Post("payroll-statements/:statementId/review")
+  @RequirePermission("service.read")
+  async reviewPayrollStatement(
+    @Req() request:AuthenticatedRequest,
+    @Param("statementId") statementId:string,
+    @Body() body:{
+      status:"ACKNOWLEDGED"|"DISPUTED";
+      comment?:string;
+    }
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.economics.reviewPayrollStatement(
+        this.context(request),statementId,body
+      )
+    };
+  }
+
+  @Post("payroll-reviews/:reviewId/resolve")
+  @RequirePermission("service.write")
+  async resolvePayrollReview(
+    @Req() request:AuthenticatedRequest,
+    @Param("reviewId") reviewId:string,
+    @Body() body:{
+      status:"RESOLVED"|"WAIVED";
+      comment:string;
+    }
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.economics.resolvePayrollReview(
+        this.context(request),reviewId,body
       )
     };
   }
