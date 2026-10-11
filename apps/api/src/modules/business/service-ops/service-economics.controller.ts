@@ -78,6 +78,20 @@ export class ServiceEconomicsController {
     };
   }
 
+  @Post("payroll-statements/export")
+  @RequirePermission("service.write")
+  async exportPayroll(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:{batchId:string;month?:string}
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.economics.exportPayrollToBatch(
+        this.context(request),body
+      )
+    };
+  }
+
   @Get("payroll-statements")
   @RequirePermission("service.read")
   async payrollStatements(
