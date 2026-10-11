@@ -91,6 +91,31 @@ export class ResourcesController {
     return { ok: true, data: { updated: true } };
   }
 
+  @Get(":id/zones")
+  @RequirePermission("service.read")
+  async zones(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.resources.zones(this.context(request),id)
+    };
+  }
+
+  @Post(":id/zones")
+  @RequirePermission("service.write")
+  async createZone(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.resources.createZone(this.context(request),id,body)
+    };
+  }
+
   @Post(":id/blocks")
   @RequirePermission("service.write")
   async addBlock(
