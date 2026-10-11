@@ -4,13 +4,14 @@ const items = [
   { key: "overview", href: "/app/dance", label: "Обзор", hint: "Деньги и контроль" },
   { key: "groups", href: "/app/dance/groups", label: "Расписание", hint: "Группы и занятия" },
   { key: "students", href: "/app/dance/students", label: "Ученики", hint: "Семьи и оплаты" },
-  { key: "team", href: "/app/dance/team", label: "Команда и залы", hint: "Тренеры, аренда, ресурсы" }
+  { key: "team", href: "/app/dance/team", label: "Команда и залы", hint: "Тренеры, аренда, ресурсы" },
+  { key: "setup", href: "/app/dance/setup", label: "Настройка", hint: "Цены, услуги, зоны" }
 ] as const;
 
 export function DanceWorkspaceNav({
   active
 }: {
-  active: "overview" | "groups" | "students" | "team";
+  active: "overview" | "groups" | "students" | "team" | "setup";
 }) {
   return (
     <nav className="studio-nav" aria-label="Разделы студии">
