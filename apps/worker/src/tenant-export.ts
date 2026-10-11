@@ -71,6 +71,7 @@ const EXPORT_ENTITIES: ExportEntity[] = [
   { table: "service_package_freeze", label: "service_package_freezes" },
   { table: "service_resource", label: "service_resources" },
   { table: "service_booking", label: "service_bookings" },
+  { table: "service_booking_charge", label: "service_booking_charges" },
   { table: "service_booking_resource", label: "service_booking_resources" },
   { table: "service_booking_material", label: "service_booking_materials" },
   { table: "service_delivery_rule", label: "service_delivery_rules" },
