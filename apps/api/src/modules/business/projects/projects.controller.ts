@@ -22,6 +22,83 @@ export class ProjectsController {
     return { ok: true, data: await this.projects.list(this.context(request)) };
   }
 
+  @Get("agency/overview")
+  @RequirePermission("projects.read")
+  async agencyOverview(
+    @Req() request:AuthenticatedRequest
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.projects.agencyOverview(this.context(request))
+    };
+  }
+
+  @Get(":id/deliverables")
+  @RequirePermission("projects.read")
+  async deliverables(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.projects.deliverables(this.context(request),id)
+    };
+  }
+
+  @Post(":id/deliverables")
+  @RequirePermission("projects.write")
+  async addDeliverable(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.projects.addDeliverable(this.context(request),id,body)
+    };
+  }
+
+  @Patch(":id/deliverables/:deliverableId/status")
+  @RequirePermission("projects.write")
+  async deliverableStatus(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Param("deliverableId") deliverableId:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.projects.changeDeliverableStatus(
+        this.context(request),id,deliverableId,body
+      )
+    };
+  }
+
+  @Get(":id/approvals")
+  @RequirePermission("projects.read")
+  async approvals(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.projects.approvals(this.context(request),id)
+    };
+  }
+
+  @Post(":id/approvals")
+  @RequirePermission("projects.write")
+  async requestApproval(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.projects.requestApproval(this.context(request),id,body)
+    };
+  }
+
   @Get(":id")
   @RequirePermission("projects.read")
   async details(
