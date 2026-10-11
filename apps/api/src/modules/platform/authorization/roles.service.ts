@@ -11,6 +11,25 @@ import { DatabaseService } from "../../../infrastructure/database/database.servi
 export class RolesService {
   constructor(private readonly database: DatabaseService) {}
 
+  private async requireManageAll(
+    client:import("pg").PoolClient,context:TenantContext
+  ):Promise<void>{
+    const result=await client.query(
+      `SELECT 1 FROM membership_role mr
+       JOIN role_permission rp ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
+       JOIN tenant_membership tm ON tm.tenant_id=mr.tenant_id AND tm.id=mr.membership_id
+       WHERE mr.tenant_id=$1 AND mr.membership_id=$2
+         AND tm.user_id=$3 AND tm.status='ACTIVE'
+         AND rp.permission_code IN ('*','roles.manage')
+         AND rp.scope='all'
+       LIMIT 1`,
+      [context.tenantId,context.membershipId,context.userId]
+    );
+    if(!result.rowCount)throw new ForbiddenException(
+      "Управление ролями требует прав на всю организацию"
+    );
+  }
+
   async list(context: TenantContext): Promise<
     Array<{
       id: string;
@@ -21,6 +40,7 @@ export class RolesService {
     }>
   > {
     return this.database.withTenantTransaction(context, async (client) => {
+      await this.requireManageAll(client,context);
       const roles = await client.query<{
         id: string;
         code: string;
@@ -64,6 +84,7 @@ export class RolesService {
     roleId: string
   ): Promise<void> {
     await this.database.withTenantTransaction(context, async (client) => {
+      await this.requireManageAll(client,context);
       const membership = await client.query(
         `SELECT id
          FROM tenant_membership
