@@ -80,6 +80,7 @@ export default function SignupPage() {
               <option value="ECOMMERCE_STORE">Свой интернет-магазин</option>
               <option value="MARKETPLACE_SELLER">Продавец Ozon / Wildberries</option>
               <option value="RETAIL_STORE">Розничный магазин</option>
+              <option value="OMNICHANNEL_RETAIL">Сеть магазинов + интернет-магазин</option>
               <option value="WHOLESALE_B2B">Оптовая торговля B2B</option>
               <option value="WAREHOUSE_3PL">Склад или 3PL</option>
               <option value="PROFESSIONAL_SERVICES">IT или профессиональные услуги</option>
