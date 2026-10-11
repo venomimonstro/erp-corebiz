@@ -486,6 +486,234 @@ export class AutomotiveService {
     });
   }
 
+  async fitments(
+    context:TenantContext,
+    input:{skuId?:string;vehicleId?:string}
+  ){
+    return this.database.withTenantTransaction(context,async client=>{
+      let vehicle:any=null;
+      if(input.vehicleId){
+        const vehicleResult=await client.query(
+          `SELECT make,model,generation,production_year,engine_code
+           FROM automotive_vehicle
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,input.vehicleId]
+        );
+        vehicle=vehicleResult.rows[0]??null;
+        if(!vehicle) throw new NotFoundException("Автомобиль не найден");
+      }
+
+      const result=await client.query(
+        `SELECT
+           f.id,f.sku_id,s.code AS sku_code,
+           f.make,f.model,f.generation,f.year_from,f.year_to,
+           f.engine_code,f.oem_number,f.fitment_source,
+           f.confidence_bps,f.metadata
+         FROM automotive_part_fitment f
+         JOIN sku s
+           ON s.tenant_id=f.tenant_id AND s.id=f.sku_id
+         WHERE f.tenant_id=$1
+           AND ($2::uuid IS NULL OR f.sku_id=$2)
+           AND (
+             $3::text IS NULL
+             OR (
+               lower(f.make)=lower($3)
+               AND lower(f.model)=lower($4)
+               AND (f.generation IS NULL OR $5::text IS NULL OR lower(f.generation)=lower($5))
+               AND (f.year_from IS NULL OR $6::integer IS NULL OR f.year_from<=$6)
+               AND (f.year_to IS NULL OR $6::integer IS NULL OR f.year_to>=$6)
+               AND (f.engine_code IS NULL OR $7::text IS NULL OR lower(f.engine_code)=lower($7))
+             )
+           )
+         ORDER BY f.confidence_bps DESC,f.make,f.model,f.year_from NULLS FIRST`,
+        [
+          context.tenantId,input.skuId??null,
+          vehicle?.make??null,vehicle?.model??null,vehicle?.generation??null,
+          vehicle?.production_year??null,vehicle?.engine_code??null
+        ]
+      );
+      return result.rows;
+    });
+  }
+
+  async createFitment(
+    context:TenantContext,
+    input:{
+      skuId:string;
+      make:string;
+      model:string;
+      generation?:string;
+      yearFrom?:number;
+      yearTo?:number;
+      engineCode?:string;
+      oemNumber?:string;
+      fitmentSource?:"MANUAL"|"OEM_CATALOG"|"SUPPLIER"|"IMPORT";
+      confidenceBps?:number;
+      metadata?:Record<string,unknown>;
+    }
+  ){
+    const make=input.make?.trim();
+    const model=input.model?.trim();
+    if(!input.skuId||!make||!model){
+      throw new BadRequestException("Нужны SKU, марка и модель");
+    }
+    const yearFrom=input.yearFrom===undefined?null:Math.floor(input.yearFrom);
+    const yearTo=input.yearTo===undefined?null:Math.floor(input.yearTo);
+    if(yearFrom!==null&&(yearFrom<1900||yearFrom>2100)){
+      throw new BadRequestException("Некорректный год начала применимости");
+    }
+    if(yearTo!==null&&(yearTo<1900||yearTo>2100)){
+      throw new BadRequestException("Некорректный год окончания применимости");
+    }
+    if(yearFrom!==null&&yearTo!==null&&yearTo<yearFrom){
+      throw new BadRequestException("Год окончания меньше года начала");
+    }
+    const confidence=Math.floor(input.confidenceBps??10000);
+    if(confidence<0||confidence>10000){
+      throw new BadRequestException("Некорректная уверенность совместимости");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const sku=await client.query(
+        `SELECT 1 FROM sku
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+        [context.tenantId,input.skuId]
+      );
+      if(!sku.rowCount) throw new NotFoundException("SKU не найден");
+
+      const result=await client.query(
+        `INSERT INTO automotive_part_fitment(
+           tenant_id,sku_id,make,model,generation,year_from,year_to,
+           engine_code,oem_number,fitment_source,confidence_bps,metadata
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         RETURNING *`,
+        [
+          context.tenantId,input.skuId,make,model,
+          input.generation?.trim()||null,yearFrom,yearTo,
+          input.engineCode?.trim()||null,input.oemNumber?.trim()||null,
+          input.fitmentSource??"MANUAL",confidence,
+          JSON.stringify(input.metadata??{})
+        ]
+      );
+      return result.rows[0];
+    });
+  }
+
+  async compatibleParts(
+    context:TenantContext,
+    vehicleId:string,
+    search?:string
+  ){
+    return this.database.withTenantTransaction(context,async client=>{
+      const vehicleResult=await client.query<any>(
+        `SELECT make,model,generation,production_year,engine_code
+         FROM automotive_vehicle
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+        [context.tenantId,vehicleId]
+      );
+      const vehicle=vehicleResult.rows[0];
+      if(!vehicle) throw new NotFoundException("Автомобиль не найден");
+
+      const result=await client.query(
+        `SELECT DISTINCT ON (p.id)
+           p.id,p.part_name,p.oem_number,p.condition_grade,p.status,
+           p.asking_price_minor::text,p.allocated_cost_minor::text,
+           p.sku_id,s.code AS sku_code,d.stock_number,
+           f.confidence_bps,f.fitment_source
+         FROM automotive_dismantled_part p
+         JOIN automotive_donor_vehicle d
+           ON d.tenant_id=p.tenant_id AND d.id=p.donor_vehicle_id
+         JOIN automotive_part_fitment f
+           ON f.tenant_id=p.tenant_id AND f.sku_id=p.sku_id
+         JOIN sku s
+           ON s.tenant_id=p.tenant_id AND s.id=p.sku_id
+         WHERE p.tenant_id=$1
+           AND p.status IN ('AVAILABLE','RESERVED')
+           AND lower(f.make)=lower($2)
+           AND lower(f.model)=lower($3)
+           AND (
+             f.generation IS NULL OR $4::text IS NULL OR
+             lower(f.generation)=lower($4)
+           )
+           AND (
+             f.year_from IS NULL OR $5::integer IS NULL OR f.year_from<=$5
+           )
+           AND (
+             f.year_to IS NULL OR $5::integer IS NULL OR f.year_to>=$5
+           )
+           AND (
+             f.engine_code IS NULL OR $6::text IS NULL OR
+             lower(f.engine_code)=lower($6)
+           )
+           AND (
+             $7::text IS NULL
+             OR p.part_name ILIKE '%'||$7||'%'
+             OR p.oem_number ILIKE '%'||$7||'%'
+             OR s.code ILIKE '%'||$7||'%'
+           )
+         ORDER BY p.id,f.confidence_bps DESC
+         LIMIT 500`,
+        [
+          context.tenantId,vehicle.make,vehicle.model,vehicle.generation,
+          vehicle.production_year,vehicle.engine_code,search?.trim()||null
+        ]
+      );
+      return result.rows;
+    });
+  }
+
+  async linkPartToInventory(
+    context:TenantContext,
+    partId:string,
+    input:{skuId:string;warehouseId:string}
+  ){
+    if(!input.skuId||!input.warehouseId){
+      throw new BadRequestException("Укажите SKU и склад");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const partResult=await client.query<any>(
+        `SELECT *
+         FROM automotive_dismantled_part
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,partId]
+      );
+      const part=partResult.rows[0];
+      if(!part) throw new NotFoundException("Деталь не найдена");
+      if(part.sku_id||part.warehouse_id){
+        if(part.sku_id===input.skuId&&part.warehouse_id===input.warehouseId){
+          return part;
+        }
+        throw new BadRequestException(
+          "Деталь уже привязана к другому SKU или складу"
+        );
+      }
+
+      await this.inventory.receiveForAutomotive(client,context,{
+        partId,
+        warehouseId:input.warehouseId,
+        skuId:input.skuId,
+        quantityMilli:BigInt(part.quantity_milli),
+        unitCostMinor:
+          BigInt(part.quantity_milli)>0n
+            ?(
+              BigInt(part.allocated_cost_minor)*1000n+
+              BigInt(part.quantity_milli)-1n
+            )/BigInt(part.quantity_milli)
+            :0n
+      });
+
+      const updated=await client.query(
+        `UPDATE automotive_dismantled_part
+         SET sku_id=$3,warehouse_id=$4,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING *`,
+        [context.tenantId,partId,input.skuId,input.warehouseId]
+      );
+      return updated.rows[0];
+    });
+  }
+
   async addDismantledPart(context:TenantContext,donorId:string,input:any) {
     const name=String(input.partName??"").trim();
     if(!name) throw new BadRequestException("Укажите название детали");
