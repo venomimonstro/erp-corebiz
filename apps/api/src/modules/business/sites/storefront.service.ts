@@ -223,19 +223,8 @@ export class StorefrontService {
           throw new ConflictException("Корзина уже оформляется, закрыта или истекла");
         }
 
-        const sku=await client.query(
-          `SELECT 1 FROM sku s
-           JOIN product_variant v ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
-           JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
-           JOIN storefront_config sc ON sc.tenant_id=s.tenant_id AND sc.site_id=$3
-           WHERE s.tenant_id=$1 AND s.id=$2
-             AND sc.enabled=true AND s.currency=sc.currency
-             AND s.sale_price_minor>0
-             AND s.status='ACTIVE' AND v.status='ACTIVE' AND p.status='ACTIVE'`,
-          [cart.tenant_id,input.skuId,cart.site_id]
-        );
-        if(!sku.rowCount) throw new NotFoundException("Товар недоступен");
-
+        // Removing a discontinued SKU must always work. Otherwise an old
+        // cart can become impossible to clear after its product is archived.
         if(quantity===0n){
           await client.query(
             `DELETE FROM storefront_cart_line
@@ -243,6 +232,18 @@ export class StorefrontService {
             [cart.tenant_id,cart.cart_id,input.skuId]
           );
         }else{
+          const sku=await client.query(
+            `SELECT 1 FROM sku s
+             JOIN product_variant v ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+             JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+             JOIN storefront_config sc ON sc.tenant_id=s.tenant_id AND sc.site_id=$3
+             WHERE s.tenant_id=$1 AND s.id=$2
+               AND sc.enabled=true AND s.currency=sc.currency
+               AND s.sale_price_minor>0
+               AND s.status='ACTIVE' AND v.status='ACTIVE' AND p.status='ACTIVE'`,
+            [cart.tenant_id,input.skuId,cart.site_id]
+          );
+          if(!sku.rowCount) throw new NotFoundException("Товар недоступен");
           if(quantity>1000000000n) throw new BadRequestException("Слишком большое количество");
           await client.query(
             `INSERT INTO storefront_cart_line(
@@ -292,6 +293,13 @@ export class StorefrontService {
     }
     if ((phone?.length ?? 0) > 40 || (email?.length ?? 0) > 320) {
       throw new BadRequestException("Некорректные контакты");
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new BadRequestException("Укажите корректный email");
+    }
+    if (phone && (!/^[+()0-9\s-]{6,40}$/.test(phone) ||
+        (phone.match(/\d/g) ?? []).length < 6)) {
+      throw new BadRequestException("Укажите корректный телефон");
     }
 
     const cart = await this.resolveCart(cartKey);
