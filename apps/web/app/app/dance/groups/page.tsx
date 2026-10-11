@@ -1126,16 +1126,20 @@ export default function DanceGroupsPage() {
             </div>
             <div className="data-table-wrap">
               <table className="data-table">
-                <thead><tr><th>Ученик</th><th>Статус</th><th>Плательщик</th><th>Скидка</th><th></th></tr></thead>
+                <thead><tr><th>Ученик</th><th>Статус</th>
+                  {canViewFinance?<><th>Плательщик</th><th>Скидка</th></>:null}
+                  {canManageDance?<th>Действия</th>:null}
+                </tr></thead>
                 <tbody>
                   {roster?.members.map((member) => (
                     <tr key={member.id}>
                       <td><strong>{member.student_name}</strong></td>
                       <td>{member.status}</td>
-                      <td>{member.payer_name ?? "—"}</td>
-                      <td>{member.discount_bps===null||member.discount_bps===undefined
-  ?"—":(member.discount_bps/100).toLocaleString("ru-RU")+"%"}</td>
-                      <td className="table-actions">
+                      {canViewFinance?<><td>{member.payer_name ?? "—"}</td>
+                        <td>{member.discount_bps===null||member.discount_bps===undefined
+                          ?"—":(member.discount_bps/100).toLocaleString("ru-RU")+"%"}</td>
+                      </>:null}
+                      {canManageDance?<td className="table-actions">
                         {canManageDance&&member.status !== "ACTIVE" ? (
                           <button onClick={() => void changeMember(member, "ACTIVE")} type="button">Вернуть</button>
                         ) : null}
@@ -1145,16 +1149,16 @@ export default function DanceGroupsPage() {
                         {canManageDance&&member.status !== "LEFT" ? (
                           <button className="secondary-button" onClick={() => void changeMember(member, "LEFT")} type="button">Вывести</button>
                         ) : null}
-                      </td>
+                      </td>:null}
                     </tr>
                   ))}
                   {roster?.waitlist.map((member) => (
                     <tr key={"w-" + member.id}>
                       <td><strong>{member.student_name}</strong></td>
                       <td>WAITLIST → {member.enrollment_status ?? "ACTIVE"}</td>
-                      <td>ожидает место</td>
-                      <td>{((member.discount_bps ?? 0) / 100).toLocaleString("ru-RU")}%</td>
-                      <td>Автопереход при освобождении места</td>
+                      {canViewFinance?<><td>—</td><td>{member.discount_bps===null||member.discount_bps===undefined
+                        ?"—":(member.discount_bps/100).toLocaleString("ru-RU")+"%"}</td></>:null}
+                      {canManageDance?<td>Автопереход при освобождении места</td>:null}
                     </tr>
                   ))}
                 </tbody>
