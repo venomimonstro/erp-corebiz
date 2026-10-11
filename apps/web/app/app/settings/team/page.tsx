@@ -23,7 +23,7 @@ export default function TeamPage(){
       const [staff, pending,available]=await Promise.all([
         apiRequest<Member[]>("/tenants/team"),
         apiRequest<Invite[]>("/tenants/invitations"),
-        apiRequest<Role[]>("/roles")
+        apiRequest<Role[]>("/roles").catch(()=>[])
       ]);
       setMembers(staff);setInvites(pending);setRoles(available);
     }catch(cause){
