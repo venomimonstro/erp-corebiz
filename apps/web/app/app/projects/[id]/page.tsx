@@ -5,6 +5,16 @@ import { useParams } from "next/navigation";
 import { AppSidebar } from "../../../../components/app-sidebar";
 import { apiRequest } from "../../../../lib/api";
 
+type Deliverable={
+  id:string;title:string;deliverable_type:string;status:string;version:number;
+  due_at:string|null;client_approval_required:boolean;approval_note:string|null;
+};
+type ClientApproval={
+  id:string;title:string;request_type:string;status:string;deliverable_id:string|null;
+  response_note:string|null;due_at:string|null;evidence_reference:string|null;
+  recorded_by_membership_id:string|null;
+};
+
 type ProjectStatus = "PLANNED" | "ACTIVE" | "ON_HOLD" | "COMPLETED" | "CANCELLED";
 
 type ProjectDetail = {
@@ -71,13 +81,21 @@ export default function ProjectPage() {
   const [data, setData] = useState<ProjectDetail | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [deliverables,setDeliverables]=useState<Deliverable[]>([]);
+  const [approvals,setApprovals]=useState<ClientApproval[]>([]);
+  const [working,setWorking]=useState(false);
 
   const load = useCallback(async () => {
     if (!projectId) return;
     setLoading(true);
     setError("");
     try {
-      setData(await apiRequest<ProjectDetail>("/projects/" + projectId));
+      const [details,results,decisions]=await Promise.all([
+        apiRequest<ProjectDetail>("/projects/"+projectId),
+        apiRequest<Deliverable[]>("/projects/"+projectId+"/deliverables"),
+        apiRequest<ClientApproval[]>("/projects/"+projectId+"/approvals")
+      ]);
+      setData(details);setDeliverables(results);setApprovals(decisions);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить проект");
     } finally {
@@ -184,6 +202,66 @@ export default function ProjectPage() {
     }
   }
 
+  async function addDeliverable(){
+    if(!projectId)return;
+    const title=window.prompt("Результат для клиента: макет, отчёт, сайт, рекламная кампания");
+    if(!title?.trim())return;
+    setWorking(true);setError("");
+    try{
+      await apiRequest("/projects/"+projectId+"/deliverables",{
+        method:"POST",body:JSON.stringify({title:title.trim(),clientApprovalRequired:true})
+      });
+      await load();
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось создать результат");}
+    finally{setWorking(false);}
+  }
+  async function deliverableStatus(d:Deliverable,status:string){
+    if(!projectId)return;
+    setWorking(true);setError("");
+    try{
+      await apiRequest("/projects/"+projectId+"/deliverables/"+d.id+"/status",{
+        method:"PATCH",body:JSON.stringify({status,version:d.version})
+      });
+      await load();
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось изменить статус результата");}
+    finally{setWorking(false);}
+  }
+  async function requestDeliverableApproval(d:Deliverable){
+    if(!projectId)return;
+    setWorking(true);setError("");
+    try{
+      await apiRequest("/projects/"+projectId+"/approvals",{
+        method:"POST",body:JSON.stringify({
+          title:"Согласовать результат: "+d.title,
+          deliverableId:d.id,requestType:"DELIVERABLE"
+        })
+      });
+      await load();
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось запросить согласование");}
+    finally{setWorking(false);}
+  }
+  async function decideClientApproval(a:ClientApproval,decision:"APPROVED"|"REJECTED"){
+    if(!projectId)return;
+    const responseNote=window.prompt(
+      decision==="APPROVED"?"Как клиент подтвердил результат?":"Причина отказа / замечания клиента"
+    );
+    if(!responseNote?.trim())return;
+    const evidenceReference=decision==="APPROVED"
+      ?window.prompt("Ссылка или номер письма/акта с подтверждением клиента"):undefined;
+    if(decision==="APPROVED"&&!evidenceReference?.trim())return;
+    setWorking(true);setError("");
+    try{
+      await apiRequest("/projects/"+projectId+"/approvals/"+a.id+"/decision",{
+        method:"PATCH",body:JSON.stringify({
+          decision,responseNote:responseNote.trim(),
+          evidenceReference:evidenceReference?.trim()
+        })
+      });
+      await load();
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось записать решение");}
+    finally{setWorking(false);}
+  }
+
   return (
     <main className="app-shell">
       <AppSidebar active="projects" />
@@ -201,6 +279,7 @@ export default function ProjectPage() {
             <a className="secondary-button" href="/app/projects">Все проекты</a>
             <button onClick={() => void addMilestone()} type="button">+ Этап</button>
             <button onClick={() => void addTime()} type="button">+ Время</button>
+            <button onClick={() => void addDeliverable()} type="button">+ Результат</button>
           </div>
         </header>
 
@@ -302,6 +381,50 @@ export default function ProjectPage() {
                   </tbody>
                 </table>
               </div>
+            </section>
+
+            <section className="section-block">
+              <div className="section-heading"><div><p className="muted">Сдача работ</p>
+                <h2>Результаты и клиентское согласование</h2>
+                <p>Подтверждения клиентов записываются менеджером с указанием источника. Это не электронная подпись клиента.</p>
+              </div></div>
+              <div className="data-table-wrap">
+                <table className="data-table">
+                  <thead><tr><th>Результат</th><th>Тип</th><th>Статус</th><th>Действие</th></tr></thead>
+                  <tbody>
+                    {deliverables.map(d=><tr key={d.id}>
+                      <td><strong>{d.title}</strong></td><td>{d.deliverable_type}</td>
+                      <td><span className="status-pill">{d.status}</span></td>
+                      <td className="table-actions">
+                        {d.status==="PLANNED"||d.status==="REWORK"?
+                          <button disabled={working} onClick={()=>void deliverableStatus(d,"IN_PROGRESS")}>В работу</button>:null}
+                        {d.status==="IN_PROGRESS"?
+                          <button disabled={working} onClick={()=>void deliverableStatus(d,"INTERNAL_REVIEW")}>На проверку</button>:null}
+                        {d.status==="INTERNAL_REVIEW"?
+                          <button disabled={working} onClick={()=>void deliverableStatus(d,d.client_approval_required?"CLIENT_REVIEW":"APPROVED")}>
+                            {d.client_approval_required?"На согласование":"Принять"}</button>:null}
+                        {d.status==="CLIENT_REVIEW"&&!approvals.some(a=>a.deliverable_id===d.id&&a.status==="PENDING")?
+                          <button disabled={working} onClick={()=>void requestDeliverableApproval(d)}>Запросить подтверждение</button>:null}
+                      </td>
+                    </tr>)}
+                    {!deliverables.length?<tr><td colSpan={4}>Добавьте первый результат и его этапы сдачи.</td></tr>:null}
+                  </tbody>
+                </table>
+              </div>
+              <h3>История согласований</h3>
+              <div className="data-table-wrap"><table className="data-table">
+                <thead><tr><th>Запрос</th><th>Статус</th><th>Основание / комментарий</th><th>Решение</th></tr></thead>
+                <tbody>{approvals.map(a=><tr key={a.id}>
+                  <td>{a.title}</td><td><span className="status-pill">{a.status}</span></td>
+                  <td>{a.evidence_reference??a.response_note??"Ожидается"}</td>
+                  <td className="table-actions">{a.status==="PENDING"?<>
+                    <button disabled={working} onClick={()=>void decideClientApproval(a,"APPROVED")}>Подтверждено</button>
+                    <button disabled={working} className="secondary-button" onClick={()=>void decideClientApproval(a,"REJECTED")}>Замечания</button>
+                  </>:null}</td>
+                </tr>)}
+                {!approvals.length?<tr><td colSpan={4}>Согласований пока нет.</td></tr>:null}
+                </tbody>
+              </table></div>
             </section>
 
             <section className="section-block">
