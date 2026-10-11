@@ -4110,3 +4110,51 @@ button, .primary, .secondary { font: inherit; }
   .merchant-migration-form label{min-width:0;width:100%}
   .merchant-migration-metrics article{padding:12px}
   .merchant-migration-metrics strong{font-size:19px}}
+
+/* Commerce owner: operational decisions, not a second complex ERP menu. */
+.commerce-decisions .workspace-header h1{letter-spacing:-.045em}
+.commerce-decisions-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:11px;margin:0 0 18px}
+.commerce-decisions-kpis a{display:flex;flex-direction:column;gap:9px;
+  padding:20px;border:1px solid #e5e9ec;border-radius:17px;background:#fff;
+  text-decoration:none;color:#303c44;min-height:138px;transition:box-shadow .15s,border-color .15s}
+.commerce-decisions-kpis a:hover{border-color:#b7c7ce;box-shadow:0 7px 20px rgba(22,41,53,.045)}
+.commerce-decisions-kpis a:focus-visible{outline:2px solid #657e90;outline-offset:3px}
+.commerce-decisions-kpis span{font-size:12px;color:#687782;font-weight:560}
+.commerce-decisions-kpis strong{font-size:30px;line-height:1;letter-spacing:-.05em;color:#27353e}
+.commerce-decisions-kpis small{font-size:11px;color:#86929a;line-height:1.45;margin-top:auto}
+.commerce-decisions .section-block{border:1px solid #e6e9ec;border-radius:18px;
+  box-shadow:0 6px 24px rgba(21,43,57,.02)}
+.commerce-decisions-section-top{display:flex;gap:20px;justify-content:space-between;
+  align-items:center;margin-bottom:18px}
+.commerce-decisions-section-top h2{font-size:20px;letter-spacing:-.035em;margin:4px 0 6px}
+.commerce-decisions-section-top p{font-size:12px;color:#75838b;line-height:1.6;margin:0}
+.commerce-decisions-section-top a{flex-shrink:0}
+.commerce-decisions-tabs{display:flex;gap:7px;flex-wrap:wrap;
+  border-bottom:1px solid #eaedf0;padding:0 0 15px;margin-bottom:14px}
+.commerce-decisions-tabs button{border:1px solid #e3e9ed;border-radius:9px;
+  background:#fff;padding:10px 13px;font-size:12px;color:#63717a;cursor:pointer}
+.commerce-decisions-tabs button.active{background:#24333e;color:#fff;border-color:#24333e}
+.commerce-decisions-tabs button:focus-visible{outline:2px solid #667f91;outline-offset:2px}
+.commerce-decisions .data-table td{font-size:12px;line-height:1.5;vertical-align:middle}
+.commerce-decisions .data-table td strong{display:block;font-size:12px}
+.commerce-decisions .data-table td small{display:block;color:#89949c;margin-top:4px}
+.commerce-risk{display:inline-block;background:#f5f5f5;color:#59656c;
+  border-radius:6px;padding:6px 9px;white-space:nowrap;font-size:10px;font-weight:600}
+.commerce-risk.out,.commerce-risk.critical{background:#fff4f0;color:#9c543d}
+.commerce-method{border-top:1px solid #eff0f2;margin:16px 0 0;
+  padding-top:15px;font-size:11px;color:#849098;line-height:1.7}
+.commerce-next-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;margin:18px 0}
+.commerce-next-actions a{display:flex;flex-direction:column;gap:6px;
+  padding:18px 20px;text-decoration:none;border:1px solid #e7eaed;background:#fff;
+  border-radius:13px;color:#33414a}
+.commerce-next-actions a:hover{border-color:#a7b7c0}
+.commerce-next-actions strong{font-size:13px}
+.commerce-next-actions span{font-size:11px;color:#87929a}
+@media(max-width:1100px){.commerce-decisions-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.commerce-decisions-kpis{gap:8px}
+  .commerce-decisions-kpis a{padding:15px;min-height:130px}
+  .commerce-decisions-kpis strong{font-size:25px}
+  .commerce-next-actions{grid-template-columns:1fr}
+  .commerce-decisions-section-top{flex-direction:column;align-items:flex-start}}
