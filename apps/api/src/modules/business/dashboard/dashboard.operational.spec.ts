@@ -41,7 +41,7 @@ describe("owner control across all verticals",()=>{
     }
     const resolved=new Set(calls
       .filter(c=>c.sql.includes("UPDATE tenant_operational_issue")&&
-        c.sql.includes("reference_id <> ALL"))
+        /reference_id\s*<>\s*ALL/.test(c.sql))
       .map(c=>String(c.args[1])));
     for(const rule of VERTICAL_OPERATIONAL_RULES){
       expect(resolved).toContain(rule.code);
