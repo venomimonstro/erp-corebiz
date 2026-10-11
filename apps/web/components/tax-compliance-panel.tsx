@@ -9,6 +9,7 @@ type Profile={
   tax_regime:string;
   vat_mode:string;
   has_employees:boolean;
+  usn_rate_bps:number|null;
 };
 
 type Obligation={
@@ -88,6 +89,7 @@ export function TaxCompliancePanel({
   const [vat,setVat]=useState("NO_VAT");
   const [kind,setKind]=useState<"ORGANIZATION"|"IP">("ORGANIZATION");
   const [employees,setEmployees]=useState(false);
+  const [usnRate,setUsnRate]=useState("6");
   const [busy,setBusy]=useState(false);
   const [message,setMessage]=useState("");
   const [error,setError]=useState("");
@@ -113,6 +115,9 @@ export function TaxCompliancePanel({
         setVat(result.profile.vat_mode);
         setKind(result.profile.entity_kind);
         setEmployees(result.profile.has_employees);
+        if(result.profile.usn_rate_bps!==null){
+          setUsnRate(String(result.profile.usn_rate_bps/100));
+        }
       }
     }catch(cause){
       setError(cause instanceof Error?cause.message:"Не удалось загрузить налоги");
@@ -134,6 +139,9 @@ export function TaxCompliancePanel({
           taxRegime:regime,
           vatMode:vat,
           hasEmployees:employees,
+          usnRateBps:regime.startsWith("USN")
+            ?Math.round(Number(usnRate.replace(",","."))*100)
+            :undefined,
           reportingMode:"SEMI_AUTOMATIC"
         })
       });
@@ -299,6 +307,15 @@ export function TaxCompliancePanel({
           <option value="VAT_5">5%</option><option value="VAT_7">7%</option>
           <option value="VAT_22">22%</option><option value="VAT_MIXED">Смешанный</option>
         </select></label>
+        {regime.startsWith("USN")?<label>
+          <span>Ставка УСН, %</span>
+          <input
+            inputMode="decimal"
+            value={usnRate}
+            onChange={e=>setUsnRate(e.target.value)}
+            placeholder={regime==="USN_INCOME"?"6":"15"}
+          />
+        </label>:null}
         <label className="tax-check">
           <input type="checkbox" checked={employees} onChange={e=>setEmployees(e.target.checked)}/>
           <span>Есть сотрудники</span>
