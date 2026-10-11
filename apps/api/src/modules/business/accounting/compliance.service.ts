@@ -714,6 +714,177 @@ export class ComplianceService {
     });
   }
 
+  async complianceLines(
+    context:TenantContext,
+    obligationId:string
+  ) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const exists=await client.query(
+        `SELECT 1 FROM accounting_compliance_obligation
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,obligationId]
+      );
+      if(!exists.rowCount) throw new NotFoundException("Обязательство не найдено");
+      const result=await client.query(
+        `SELECT
+           id,line_number,kpp,oktmo,kbk,tax_period_code,reporting_year,
+           amount_minor::text,source,status,metadata,confirmed_at
+         FROM accounting_compliance_line
+         WHERE tenant_id=$1 AND obligation_id=$2
+         ORDER BY line_number`,
+        [context.tenantId,obligationId]
+      );
+      return result.rows;
+    });
+  }
+
+  async saveComplianceLine(
+    context:TenantContext,
+    obligationId:string,
+    input:{
+      lineNumber?:number;
+      kpp?:string;
+      oktmo?:string;
+      kbk?:string;
+      taxPeriodCode?:string;
+      reportingYear?:number;
+      amountMinor:string;
+      confirm?:boolean;
+    }
+  ) {
+    const lineNumber=Math.floor(input.lineNumber??1);
+    const kpp=input.kpp?.trim()||null;
+    const oktmo=input.oktmo?.trim()||null;
+    const kbk=input.kbk?.trim()||null;
+    const taxPeriodCode=input.taxPeriodCode?.trim()||null;
+    const reportingYear=input.reportingYear===undefined
+      ?null
+      :Math.floor(input.reportingYear);
+
+    if(lineNumber<1||lineNumber>999) {
+      throw new BadRequestException("Некорректный номер строки");
+    }
+    if(kpp&&!/^\d{9}$/.test(kpp)) {
+      throw new BadRequestException("КПП должен содержать 9 цифр");
+    }
+    if(oktmo&&!/^(?:\d{8}|\d{11})$/.test(oktmo)) {
+      throw new BadRequestException("ОКТМО должен содержать 8 или 11 цифр");
+    }
+    if(kbk&&!/^\d{20}$/.test(kbk)) {
+      throw new BadRequestException("КБК должен содержать 20 цифр");
+    }
+    if(taxPeriodCode&&!/^\d{2}\/\d{2}$/.test(taxPeriodCode)) {
+      throw new BadRequestException("Код периода укажите в формате 00/00");
+    }
+    if(
+      reportingYear!==null &&
+      (reportingYear<2000||reportingYear>2100)
+    ) {
+      throw new BadRequestException("Некорректный отчётный год");
+    }
+    if(!/^\d+$/.test(input.amountMinor??"")) {
+      throw new BadRequestException("Некорректная сумма строки");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const obligationResult=await client.query<any>(
+        `SELECT
+           o.id,o.form_code,o.workflow_status,o.legal_entity_id,
+           p.entity_kind,coalesce(p.kpp,le.kpp) AS profile_kpp,p.oktmo
+         FROM accounting_compliance_obligation o
+         JOIN accounting_tax_profile p
+           ON p.tenant_id=o.tenant_id AND p.id=o.tax_profile_id
+         JOIN legal_entity le
+           ON le.tenant_id=o.tenant_id AND le.id=o.legal_entity_id
+         WHERE o.tenant_id=$1 AND o.id=$2
+         FOR UPDATE OF o`,
+        [context.tenantId,obligationId]
+      );
+      const obligation=obligationResult.rows[0];
+      if(!obligation) throw new NotFoundException("Обязательство не найдено");
+      if(
+        !["PLANNED","READY","REJECTED"].includes(
+          obligation.workflow_status
+        )
+      ) {
+        throw new ConflictException(
+          "Строки нельзя менять после утверждения документа"
+        );
+      }
+
+      const effectiveKpp=kpp??obligation.profile_kpp??null;
+      const effectiveOktmo=oktmo??obligation.oktmo??null;
+      if(input.confirm){
+        if(!effectiveOktmo||!kbk||!taxPeriodCode||reportingYear===null) {
+          throw new BadRequestException(
+            "Для подтверждения заполните ОКТМО, КБК, период и год"
+          );
+        }
+        if(
+          obligation.entity_kind==="ORGANIZATION" &&
+          !effectiveKpp
+        ) {
+          throw new BadRequestException("Для организации укажите КПП");
+        }
+      }
+
+      const result=await client.query<any>(
+        `INSERT INTO accounting_compliance_line(
+           tenant_id,obligation_id,line_number,kpp,oktmo,kbk,
+           tax_period_code,reporting_year,amount_minor,source,status,
+           confirmed_by_membership_id,confirmed_at
+         ) VALUES(
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,'MANUAL',$10,
+           CASE WHEN $10='CONFIRMED' THEN $11::uuid ELSE NULL END,
+           CASE WHEN $10='CONFIRMED' THEN now() ELSE NULL END
+         )
+         ON CONFLICT(tenant_id,obligation_id,line_number)
+         DO UPDATE SET
+           kpp=EXCLUDED.kpp,oktmo=EXCLUDED.oktmo,kbk=EXCLUDED.kbk,
+           tax_period_code=EXCLUDED.tax_period_code,
+           reporting_year=EXCLUDED.reporting_year,
+           amount_minor=EXCLUDED.amount_minor,
+           source='MANUAL',status=EXCLUDED.status,
+           confirmed_by_membership_id=EXCLUDED.confirmed_by_membership_id,
+           confirmed_at=EXCLUDED.confirmed_at,updated_at=now()
+         RETURNING *`,
+        [
+          context.tenantId,obligationId,lineNumber,effectiveKpp,
+          effectiveOktmo,kbk,taxPeriodCode,reportingYear,input.amountMinor,
+          input.confirm?"CONFIRMED":"DRAFT",context.membershipId
+        ]
+      );
+
+      if(input.confirm){
+        const total=await client.query<{amount:string}>(
+          `SELECT coalesce(sum(amount_minor),0)::text AS amount
+           FROM accounting_compliance_line
+           WHERE tenant_id=$1 AND obligation_id=$2
+             AND status='CONFIRMED'`,
+          [context.tenantId,obligationId]
+        );
+        await client.query(
+          `UPDATE accounting_compliance_obligation
+           SET amount_minor=$3::bigint,
+               calculation_status='CONFIRMED',
+               review_note='Сумма подтверждена по строкам налогового документа',
+               updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,obligationId,total.rows[0]?.amount??"0"]
+        );
+        await this.event(
+          client,context,obligationId,"COMPLIANCE_LINE_CONFIRMED",
+          obligation.workflow_status,obligation.workflow_status,{
+            lineNumber,
+            amountMinor:input.amountMinor
+          }
+        );
+      }
+
+      return result.rows[0];
+    });
+  }
+
   async preparePacket(context:TenantContext,obligationId:string) {
     return this.database.withTenantTransaction(context,async client=>{
       const obligationResult=await client.query<any>(
@@ -734,6 +905,17 @@ export class ComplianceService {
         throw new ConflictException("Пакет уже находится на следующем этапе");
       }
 
+      const lineResult=await client.query<any>(
+        `SELECT
+           line_number,kpp,oktmo,kbk,tax_period_code,reporting_year,
+           amount_minor::text,source,status
+         FROM accounting_compliance_line
+         WHERE tenant_id=$1 AND obligation_id=$2
+         ORDER BY line_number`,
+        [context.tenantId,obligationId]
+      );
+      const lines=lineResult.rows;
+
       const errors:string[]=[];
       if(!obligation.inn) errors.push("Не указан ИНН");
       if(
@@ -744,6 +926,38 @@ export class ComplianceService {
         obligation.authority==="FNS" &&
         !obligation.source_url
       ) errors.push("Нет нормативного источника правила");
+      if(obligation.form_code==="KND_1110355"){
+        if(!lines.length) {
+          errors.push("Не заполнены строки КНД 1110355");
+        }
+        for(const line of lines){
+          if(line.status!=="CONFIRMED"){
+            errors.push("Строка "+line.line_number+" не подтверждена");
+          }
+          if(!line.oktmo) errors.push("Строка "+line.line_number+": нет ОКТМО");
+          if(!line.kbk) errors.push("Строка "+line.line_number+": нет КБК");
+          if(!line.tax_period_code) {
+            errors.push("Строка "+line.line_number+": нет кода периода");
+          }
+          if(!line.reporting_year) {
+            errors.push("Строка "+line.line_number+": нет отчётного года");
+          }
+          if(line.amount_minor===null) {
+            errors.push("Строка "+line.line_number+": нет суммы");
+          }
+          if(obligation.entity_kind==="ORGANIZATION"&&!line.kpp){
+            errors.push("Строка "+line.line_number+": нет КПП");
+          }
+        }
+        if(lines.length&&obligation.amount_minor!==null){
+          const linesTotal=lines.reduce(
+            (sum:number,line:any)=>sum+Number(line.amount_minor??0),0
+          );
+          if(linesTotal!==Number(obligation.amount_minor)){
+            errors.push("Сумма строк не совпадает с подтверждённой суммой");
+          }
+        }
+      }
 
       const payload={
         schema:"corebiz.accounting.compliance/v1",
@@ -766,7 +980,8 @@ export class ComplianceService {
         regulatoryEvidence:{
           sourceUrl:obligation.source_url,
           effectiveAt:obligation.source_effective_at
-        }
+        },
+        lines
       };
       const checksum=createHash("sha256")
         .update(JSON.stringify(payload))
@@ -843,24 +1058,107 @@ export class ComplianceService {
       throw new BadRequestException("Укажите основание проверки документа");
     }
     return this.database.withTenantTransaction(context,async client=>{
-      const result=await client.query<any>(
-        `UPDATE accounting_compliance_packet p
-         SET validation_status='VALID',validation_errors='[]'::jsonb,
-             updated_at=now()
+      const current=await client.query<any>(
+        `SELECT
+           o.id,o.form_code,o.amount_minor,o.obligation_type,
+           o.workflow_status,p.id AS packet_id,
+           tp.entity_kind,coalesce(tp.kpp,le.kpp) AS kpp,
+           tp.oktmo,le.inn
          FROM accounting_compliance_obligation o
-         WHERE p.tenant_id=$1
-           AND o.tenant_id=p.tenant_id
-           AND o.id=$2
-           AND p.id=o.packet_id
-         RETURNING p.*`,
+         JOIN accounting_tax_profile tp
+           ON tp.tenant_id=o.tenant_id AND tp.id=o.tax_profile_id
+         JOIN legal_entity le
+           ON le.tenant_id=o.tenant_id AND le.id=o.legal_entity_id
+         LEFT JOIN accounting_compliance_packet p
+           ON p.tenant_id=o.tenant_id AND p.id=o.packet_id
+         WHERE o.tenant_id=$1 AND o.id=$2
+         FOR UPDATE OF o`,
         [context.tenantId,obligationId]
       );
-      if(!result.rows[0]) throw new NotFoundException("Пакет не найден");
+      const row=current.rows[0];
+      if(!row) throw new NotFoundException("Обязательство не найдено");
+      if(!row.packet_id) throw new NotFoundException("Пакет не найден");
+      if(row.workflow_status!=="READY"){
+        throw new ConflictException("Пакет не находится на этапе проверки");
+      }
+
+      const linesResult=await client.query<any>(
+        `SELECT
+           line_number,kpp,oktmo,kbk,tax_period_code,reporting_year,
+           amount_minor::text,status
+         FROM accounting_compliance_line
+         WHERE tenant_id=$1 AND obligation_id=$2
+         ORDER BY line_number`,
+        [context.tenantId,obligationId]
+      );
+      const lines=linesResult.rows;
+      const errors:string[]=[];
+      if(!row.inn) errors.push("Не указан ИНН");
+      if(
+        ["PAY","NOTIFY"].includes(row.obligation_type) &&
+        row.amount_minor===null
+      ) errors.push("Не подтверждена сумма");
+
+      if(row.form_code==="KND_1110355"){
+        if(!lines.length) errors.push("Не заполнены строки КНД 1110355");
+        for(const line of lines){
+          if(line.status!=="CONFIRMED") {
+            errors.push("Строка "+line.line_number+" не подтверждена");
+          }
+          if(!line.oktmo) errors.push("Строка "+line.line_number+": нет ОКТМО");
+          if(!line.kbk) errors.push("Строка "+line.line_number+": нет КБК");
+          if(!line.tax_period_code) {
+            errors.push("Строка "+line.line_number+": нет кода периода");
+          }
+          if(!line.reporting_year) {
+            errors.push("Строка "+line.line_number+": нет отчётного года");
+          }
+          if(line.amount_minor===null) {
+            errors.push("Строка "+line.line_number+": нет суммы");
+          }
+          if(row.entity_kind==="ORGANIZATION"&&!line.kpp){
+            errors.push("Строка "+line.line_number+": нет КПП");
+          }
+        }
+        if(lines.length&&row.amount_minor!==null){
+          const total=lines.reduce(
+            (sum:number,line:any)=>sum+Number(line.amount_minor??0),0
+          );
+          if(total!==Number(row.amount_minor)){
+            errors.push("Сумма строк не совпадает с подтверждённой суммой");
+          }
+        }
+      }
+
+      if(errors.length){
+        await client.query(
+          `UPDATE accounting_compliance_packet
+           SET validation_status='INVALID',validation_errors=$3,updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,row.packet_id,JSON.stringify(errors)]
+        );
+        throw new ConflictException(
+          "Пакет не прошёл проверку: "+errors.join("; ")
+        );
+      }
+
+      const result=await client.query<any>(
+        `UPDATE accounting_compliance_packet
+         SET validation_status='VALID',validation_errors='[]'::jsonb,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING *`,
+        [context.tenantId,row.packet_id]
+      );
       await client.query(
         `UPDATE accounting_compliance_obligation
          SET review_note=$3,updated_at=now()
          WHERE tenant_id=$1 AND id=$2`,
         [context.tenantId,obligationId,input.note.trim()]
+      );
+      await this.event(
+        client,context,obligationId,"PACKET_VALIDATED",
+        "READY","READY",{note:input.note.trim()}
       );
       return result.rows[0];
     });
