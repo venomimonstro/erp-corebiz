@@ -163,7 +163,7 @@ export default function DanceGroupsPage() {
   const [lessonTrainerId, setLessonTrainerId] = useState("");
   const [lessonRoomId, setLessonRoomId] = useState("");
   const [lessonStartsAt, setLessonStartsAt] = useState(new Date(Date.now() + 86400000).toISOString().slice(0, 16));
-  const [lessonChargeRub, setLessonChargeRub] = useState("2500");
+  const [lessonChargeRub, setLessonChargeRub] = useState("");
   const [lessonPackageId, setLessonPackageId] = useState("");
 
   const load = useCallback(async () => {
@@ -574,7 +574,7 @@ export default function DanceGroupsPage() {
     );
     setLessonRoomId((current) => current || rooms[0]?.id || "");
     setLessonPackageId("");
-    setLessonChargeRub(type === "SELF_PRACTICE" ? "500" : "2500");
+    setLessonChargeRub("");
   }
 
   async function createStandaloneLesson() {
@@ -599,8 +599,11 @@ export default function DanceGroupsPage() {
       setError("Проверьте дату и время");
       return;
     }
-    const chargeRub=Number(lessonChargeRub.replace(",","."));
-    if(!Number.isFinite(chargeRub)||chargeRub<0){
+    const manualCharge=lessonChargeRub.trim();
+    const chargeRub=manualCharge
+      ? Number(manualCharge.replace(",","."))
+      : null;
+    if(chargeRub!==null&&(!Number.isFinite(chargeRub)||chargeRub<0)){
       setError("Проверьте стоимость занятия");
       return;
     }
@@ -629,7 +632,9 @@ export default function DanceGroupsPage() {
           packageId:lessonPackageId||undefined,
           chargeMinor:lessonPackageId
             ?"0"
-            :String(Math.round(chargeRub*100))
+            :chargeRub===null
+              ?undefined
+              :String(Math.round(chargeRub*100))
         })
       });
 
@@ -1176,18 +1181,19 @@ export default function DanceGroupsPage() {
 
                 {!lessonPackageId ? (
                   <label>
-                    <span>Цена разового занятия, ₽</span>
+                    <span>Цена разового занятия, ₽ · необязательно</span>
                     <input
                       inputMode="decimal"
                       value={lessonChargeRub}
+                      placeholder="Авто по услуге и тренеру"
                       onChange={(event) => setLessonChargeRub(event.target.value)}
                     />
                   </label>
                 ) : null}
               </div>
               <span className="studio-helper">
-                Персональная цена тренера хранится в услуге. Здесь сумма нужна
-                только как ручная цена разового посещения.
+                Оставьте цену пустой — CoreBiz возьмёт рассчитанную цену занятия.
+                Введите сумму только для разового ручного исключения.
               </span>
             </div>
           </StudioModal>
