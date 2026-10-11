@@ -31,6 +31,21 @@ export class ProjectsController {
     return {ok:true,data:await this.projects.agencyHealth(this.context(request))};
   }
 
+
+  @Get("agency/templates")
+  @RequirePermission("projects.read")
+  async agencyTemplates(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.agencyTemplates(this.context(request))};
+  }
+
+  @Post(":id/kickoff")
+  @RequirePermission("projects.write")
+  async applyAgencyTemplate(@Req() request:AuthenticatedRequest,@Param("id") id:string,
+    @Body() body:{templateCode:string}):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.applyAgencyTemplate(
+      this.context(request),id,body?.templateCode)};
+  }
+
   @Get("agency/overview")
   @RequirePermission("finance.read")
   async agencyOverview(

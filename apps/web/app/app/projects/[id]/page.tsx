@@ -15,6 +15,11 @@ type ClientApproval={
   recorded_by_membership_id:string|null;
 };
 
+
+type AgencyTemplate={
+  code:string;title:string;description:string;
+  steps:Array<{code:string;title:string;offsetDays:number;checklist:string}>;
+};
 type ProjectStatus = "PLANNED" | "ACTIVE" | "ON_HOLD" | "COMPLETED" | "CANCELLED";
 
 type ProjectDetail = {
@@ -81,6 +86,10 @@ export default function ProjectPage() {
   const [data, setData] = useState<ProjectDetail | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [templates,setTemplates]=useState<AgencyTemplate[]>([]);
+  const [selectedTemplate,setSelectedTemplate]=useState("");
+  const [kickoffBusy,setKickoffBusy]=useState(false);
+  const [kickoffNote,setKickoffNote]=useState("");
   const [deliverables,setDeliverables]=useState<Deliverable[]>([]);
   const [approvals,setApprovals]=useState<ClientApproval[]>([]);
   const [working,setWorking]=useState(false);
@@ -105,6 +114,8 @@ export default function ProjectPage() {
 
   useEffect(() => {
     void load();
+    void apiRequest<AgencyTemplate[]>("/projects/agency/templates")
+      .then(setTemplates).catch(()=>setTemplates([]));
   }, [load]);
 
   const progress = useMemo(() => {
@@ -200,6 +211,24 @@ export default function ProjectPage() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось изменить статус");
     }
+  }
+
+
+  async function applyTemplate(){
+    if(!projectId||!selectedTemplate)return;
+    setKickoffBusy(true);setError("");setKickoffNote("");
+    try{
+      const result=await apiRequest<{applied:boolean;milestones:number}>(
+        "/projects/"+projectId+"/kickoff",{
+          method:"POST",body:JSON.stringify({templateCode:selectedTemplate})
+        }
+      );
+      setKickoffNote(result.applied
+        ?"План работ создан: "+result.milestones+" этапов, результатов и задач."
+        :"Этот шаблон уже применён. Дубли не созданы.");
+      await load();
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось применить шаблон");}
+    finally{setKickoffBusy(false);}
   }
 
   async function addDeliverable(){
@@ -340,6 +369,30 @@ export default function ProjectPage() {
               </div>
             </section>
 
+            <section className="section-block">
+              <div className="section-heading"><div><p className="muted">Быстрый запуск</p>
+                <h2>План проекта из шаблона</h2>
+                <p>Этапы, задачи и результаты будут созданы один раз. Сроки отсчитываются от дня запуска и могут корректироваться в задачах.</p>
+              </div></div>
+              <div className="header-actions">
+                <select aria-label="Сценарий проекта" value={selectedTemplate}
+                  onChange={e=>{setSelectedTemplate(e.target.value);setKickoffNote("");}}>
+                  <option value="">Выберите бизнес-сценарий</option>
+                  {templates.map(t=><option key={t.code} value={t.code}>{t.title}</option>)}
+                </select>
+                <button disabled={!selectedTemplate||kickoffBusy}
+                  onClick={()=>void applyTemplate()} type="button">
+                  {kickoffBusy?"Создание…":"Создать этапы и задачи"}
+                </button>
+              </div>
+              {kickoffNote?<p role="status">{kickoffNote}</p>:null}
+              {templates.filter(t=>t.code===selectedTemplate).map(t=><div key={t.code}>
+                <p>{t.description}</p>
+                <ol>{t.steps.map(step=><li key={step.code}>
+                  <strong>{step.title}</strong> — до {step.offsetDays} дней. {step.checklist}
+                </li>)}</ol>
+              </div>)}
+            </section>
             <section className="section-block">
               <div className="section-heading">
                 <div>

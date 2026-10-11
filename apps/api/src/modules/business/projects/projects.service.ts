@@ -6,6 +6,7 @@ import {
   NotFoundException
 } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
+import { AGENCY_DELIVERY_TEMPLATES } from "./agency-delivery-templates";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { AuthorizationService } from "../../platform/authorization/authorization.service";
@@ -1839,6 +1840,78 @@ export class ProjectsService {
       await this.audit(client,context,"agency.contract_status_changed",
         "agency_client_contract",contractId,{from:row.status,to:status});
       return res.rows[0];
+    });
+  }
+
+  async agencyTemplates(context:TenantContext) {
+    await this.membershipIdsForScope(context,"projects.read");
+    return AGENCY_DELIVERY_TEMPLATES;
+  }
+
+  async applyAgencyTemplate(context:TenantContext,projectId:string,templateCode:string) {
+    const template=AGENCY_DELIVERY_TEMPLATES.find(t=>t.code===templateCode);
+    if(!template)throw new BadRequestException("Неизвестный шаблон проекта");
+    const scoped=await this.membershipIdsForScope(context,"projects.write");
+    const taskPermission=await this.authorization.resolveScope(context,"tasks.write");
+    if(!taskPermission)throw new ForbiddenException("Для создания задач нужны права tasks.write");
+    const taskMembers=await this.authorization.membershipIdsForScope(context,taskPermission);
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.assertWritableProject(client,context.tenantId,projectId,scoped);
+      const pr=await client.query<{status:string;responsible_membership_id:string|null}>(
+        `SELECT status,responsible_membership_id FROM work_project
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,projectId]);
+      const project=pr.rows[0];
+      if(!project)throw new NotFoundException("Проект не найден");
+      if(!["PLANNED","ACTIVE"].includes(project.status))
+        throw new ConflictException("Шаблон можно применить только к открытому проекту");
+      const responsible=project.responsible_membership_id??context.membershipId;
+      if(taskMembers&&!taskMembers.includes(responsible))
+        throw new ForbiddenException("Ответственный проекта недоступен по правам задач");
+      const previous=await client.query(
+        `SELECT 1 FROM work_project_template_application
+         WHERE tenant_id=$1 AND project_id=$2 AND template_code=$3`,
+        [context.tenantId,projectId,template.code]);
+      if(previous.rowCount)return {applied:false,reason:"ALREADY_APPLIED",milestones:0,deliverables:0,tasks:0};
+      const marker=await client.query(
+        `INSERT INTO work_project_template_application(
+           tenant_id,project_id,template_code,applied_by_membership_id
+         ) VALUES ($1,$2,$3,$4) RETURNING id`,
+        [context.tenantId,projectId,template.code,context.membershipId]);
+      if(!marker.rowCount)throw new ConflictException("Не удалось создать запуск проекта");
+      const position=await client.query<{position:number}>(
+        `SELECT COALESCE(max(position),0)::integer AS position
+         FROM work_project_milestone WHERE tenant_id=$1 AND project_id=$2`,
+        [context.tenantId,projectId]);
+      let index=position.rows[0]?.position??0;
+      const started=new Date();
+      for(const step of template.steps){
+        index+=10;
+        const deadline=new Date(started.getTime()+step.offsetDays*86400000).toISOString();
+        const stage=await client.query<{id:string}>(
+          `INSERT INTO work_project_milestone(tenant_id,project_id,name,position,due_at,amount_minor)
+           VALUES($1,$2,$3,$4,$5,0) RETURNING id`,
+          [context.tenantId,projectId,step.title,index,deadline]);
+        const milestoneId=stage.rows[0]!.id;
+        await client.query(
+          `INSERT INTO work_project_deliverable(
+             tenant_id,project_id,milestone_id,title,deliverable_type,due_at,
+             client_approval_required,metadata,created_by_membership_id
+           ) VALUES ($1,$2,$3,$4,$5,$6,true,$7,$8)`,
+          [context.tenantId,projectId,milestoneId,step.title,step.deliverableType,deadline,
+           JSON.stringify({templateCode:template.code,stepCode:step.code,checklist:step.checklist}),
+           context.membershipId]);
+        await client.query(
+          `INSERT INTO task(
+             tenant_id,title,type,priority,due_at,responsible_membership_id,
+             linked_type,linked_id,description,created_by_membership_id
+           ) VALUES ($1,$2,'OTHER','NORMAL',$3,$4,'PROJECT',$5,$6,$7)`,
+          [context.tenantId,step.title,deadline,responsible,projectId,step.checklist,context.membershipId]);
+      }
+      await this.audit(client,context,"project.template_applied","work_project",projectId,
+        {templateCode:template.code,steps:template.steps.length});
+      return {applied:true,templateCode:template.code,milestones:template.steps.length,
+        deliverables:template.steps.length,tasks:template.steps.length};
     });
   }
 
