@@ -97,7 +97,7 @@ COREBIZ_SAAS_TAX_SYSTEM_CODE=1
 ## Обязательная сквозная приёмка на изолированном стенде
 
 1. Отдельная PostgreSQL, non-owner non-BYPASSRLS app-роль и Redis;
-   replay миграций 227, 228, 229 в корректном порядке.
+   replay миграций 227, 228, 229, 230 в корректном порядке.
 2. Сборка `pnpm typecheck`, `pnpm test`, `pnpm build`,
    `pnpm stability:check`; тесты безопасности tenant RLS.
 3. Две компании с двумя разными PSP merchants: компания А не видит
@@ -142,6 +142,16 @@ node scripts/migration-preflight.mjs
 Полный `scripts/production-gate.sh` — только против disposable DB и
 loopback staging URL; в нём есть тестовые мутации бизнес-данных.
 В рабочей базе нельзя выполнять smoke/golden test с реальными деньгами.
+
+Диагностика ledger (строго после миграций и создания тестовых операций):
+```bash
+# На staging подключиться под отдельной read-only SQL-ролью:
+STAGING_TENANT_ID=<staging-tenant-uuid>
+# Не копируйте команду с настоящим tenant ID в публичный лог.
+{ printf "BEGIN; SELECT set_config('app.tenant_id','%s',true);\\n" "$STAGING_TENANT_ID"; cat scripts/commerce_payments_reconcile.sql; printf "\\nROLLBACK;\\n"; } \\
+  | psql "$COREBIZ_DISPOSABLE_DATABASE_URL" -X -v ON_ERROR_STOP=1
+```
+
 
 ## Что осталось P0, несмотря на реализацию API
 
