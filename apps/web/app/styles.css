@@ -3947,3 +3947,45 @@ button, .primary, .secondary { font: inherit; }
   .dance-student-finder{width:100%;min-width:0}
 }
 @media(prefers-reduced-motion:reduce){.dance-setup-progress-chart>div>span{transition:none}}
+
+/* Dance Studio details: deliberately human-size controls and a clean visual hierarchy. */
+.dance-detail{color:#293238;font-size:13px}
+.dance-detail .studio-hero{padding:23px 27px;border-radius:18px}
+.dance-detail .studio-hero h1{font-size:clamp(25px,2.6vw,34px);line-height:1.17;
+  font-weight:670;letter-spacing:-.045em;margin:6px 0 9px}
+.dance-detail .studio-hero p{font-size:12px;line-height:1.65;max-width:720px}
+.dance-detail .studio-hero-actions{gap:8px;align-content:center}
+.dance-detail .studio-hero-actions button{font-size:12px;font-weight:640;
+  min-height:38px;border-radius:10px;padding:10px 14px}
+.dance-detail .section-block,.dance-detail .settings-card{border:1px solid #e7e9ea;
+  border-radius:16px;box-shadow:0 2px 15px rgba(29,39,45,.02)}
+.dance-detail .section-heading h2{font-size:19px;font-weight:665;
+  letter-spacing:-.035em;line-height:1.2}
+.dance-detail .section-heading .muted{font-size:10px;letter-spacing:.06em}
+.dance-detail .studio-helper{font-size:11px;line-height:1.6}
+.dance-detail .data-table{font-size:12px}
+.dance-detail .data-table thead th{font-size:10px;letter-spacing:.025em;
+  color:#7d878d;font-weight:690;padding:12px 13px}
+.dance-detail .data-table tbody td{font-size:12px;color:#4b5359;
+  padding:13px;line-height:1.5}
+.dance-detail .data-table td strong{font-size:12px;color:#333a3f}
+.dance-detail .data-table td small{font-size:10px;color:#909a9f;line-height:1.5}
+.dance-detail .data-table button,.dance-detail .table-actions button{
+  min-height:34px;padding:8px 12px;font-size:11px;font-weight:650;border-radius:9px}
+.dance-detail .owner-kpi{min-height:123px;border-radius:14px;padding:17px 19px}
+.dance-detail .owner-kpi>span{font-size:11px}
+.dance-detail .owner-kpi strong{font-size:clamp(17px,1.9vw,23px);overflow-wrap:anywhere}
+.dance-detail .owner-kpi small{font-size:10px;line-height:1.6}
+.dance-detail .studio-message{font-size:12px;line-height:1.6}
+.dance-detail .studio-filter-chips button{font-size:11px;min-height:35px;border-radius:9px}
+.dance-detail .studio-client-switcher select{font-size:12px;min-height:41px;
+  border-radius:10px}
+.dance-detail input,.dance-detail select,.dance-detail textarea{font-size:12px}
+.dance-detail .payroll-pipeline-step strong{font-size:12px}
+.dance-detail .payroll-pipeline-step small{font-size:10px;line-height:1.55}
+@media(max-width:760px){
+  .dance-detail .studio-hero{padding:20px 17px}
+  .dance-detail .studio-hero-actions{display:flex;flex-wrap:wrap;width:100%}
+  .dance-detail .studio-hero-actions button{flex:1;min-width:140px}
+  .dance-detail .section-block,.dance-detail .settings-card{padding:16px}
+}
