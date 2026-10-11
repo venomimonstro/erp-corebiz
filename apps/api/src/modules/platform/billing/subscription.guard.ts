@@ -35,6 +35,8 @@ export class SubscriptionGuard implements CanActivate {
 
     const path = request.originalUrl || request.url;
     if (path.includes("/api/v1/billing")) return true;
+    // A suspended customer must be able to pay and restore the workspace.
+    if (path.startsWith("/api/v1/payments/saas/")) return true;
     if (path.includes("/api/v1/auth/logout")) return true;
     if (path.includes("/api/v1/auth/switch-tenant")) return true;
 
