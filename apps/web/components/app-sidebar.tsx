@@ -29,6 +29,7 @@ const permissionByKey: Record<string,string> = {
   "finance-forecast": "finance.read",
   "finance-budget": "finance.read",
   accounting: "accounting.read",
+  "accounting-taxes": "accounting.compliance.read",
   "service-home": "service.read",
   "service-setup": "service.read",
   "service-team": "service.read",
@@ -84,6 +85,7 @@ const capabilityByKey: Record<string,string> = {
   "finance-forecast": "finance",
   "finance-budget": "finance",
   accounting: "accounting",
+  "accounting-taxes": "accounting",
   "service-home": "service",
   "service-setup": "service",
   "service-team": "service",
@@ -139,7 +141,8 @@ const sections: Section[] = [
     ["/app/finance", "Деньги", "finance"],
     ["/app/finance/forecast", "Платёжный календарь", "finance-forecast"],
     ["/app/finance/budget", "Бюджет план / факт", "finance-budget"],
-    ["/app/accounting", "Бухгалтерия РФ", "accounting"]
+    ["/app/accounting", "Бухгалтерия РФ", "accounting"],
+    ["/app/accounting/taxes", "Налоги и ФНС", "accounting-taxes"]
   ] },
   { title: "Запись и услуги", items: [
     ["/app/dance", "Студия: обзор", "dance"],
