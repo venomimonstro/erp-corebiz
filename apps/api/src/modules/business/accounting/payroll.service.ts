@@ -48,6 +48,14 @@ export class PayrollService {
       if(!b.rowCount) throw new ConflictException("Payroll batch not found or approved");
       const employeeRef=input.employeeRef.trim();
       await client.query(
+        `DELETE FROM payroll_accrual_component
+         WHERE tenant_id=$1
+           AND batch_id=$2
+           AND employee_ref=$3
+           AND source_type='LEGACY_LINE'`,
+        [ctx.tenantId,input.batchId,employeeRef]
+      );
+      await client.query(
         `INSERT INTO payroll_accrual_component(
            tenant_id,batch_id,employee_ref,source_type,source_key,
            gross_minor,deduction_minor,metadata
