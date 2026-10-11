@@ -213,6 +213,7 @@ export default function BillingPage() {
         <div className="plan-grid">
           {plans.map((plan) => {
             const active = current?.subscription.planCode === plan.code;
+            const requiresPayment = Number(plan.monthlyPriceMinor) > 0 && !active;
             const modules = Array.isArray(plan.entitlements.modules)
               ? plan.entitlements.modules
               : [];
@@ -240,11 +241,14 @@ export default function BillingPage() {
                 </ul>
 
                 <button
-                  disabled={pending || active}
+                  disabled={pending || active || requiresPayment}
                   onClick={() => void selectPlan(plan.code)}
                   type="button"
+                  title={requiresPayment
+                    ? "Платные тарифы станут доступны после подключения оплаты" : undefined}
                 >
-                  {active ? "Текущий" : "Выбрать"}
+                  {active ? "Текущий" : requiresPayment
+                    ? "Оплата пока недоступна" : "Выбрать"}
                 </button>
               </article>
             );
@@ -258,7 +262,7 @@ export default function BillingPage() {
               <span>
                 {current.subscription.cancelAtPeriodEnd
                   ? "Автопродление отключено. Доступ сохранится до конца периода."
-                  : "Подписка продолжится после окончания текущего периода."}
+                  : "Продление тарифа зависит от условий сервиса. Автоматическое списание сейчас не подключено."}
               </span>
             </div>
 
