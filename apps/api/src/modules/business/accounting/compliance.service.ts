@@ -169,6 +169,73 @@ export class ComplianceService {
     });
   }
 
+  async cashAccounts(
+    context:TenantContext,
+    legalEntityId:string
+  ) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const entity=await client.query(
+        `SELECT 1 FROM legal_entity
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+        [context.tenantId,legalEntityId]
+      );
+      if(!entity.rowCount) throw new NotFoundException("Юридическое лицо не найдено");
+
+      const result=await client.query(
+        `SELECT
+           id,name,kind,currency,opening_balance_minor::text,status,is_default,
+           legal_entity_id,
+           CASE
+             WHEN legal_entity_id=$2::uuid THEN 'THIS_ENTITY'
+             WHEN legal_entity_id IS NULL THEN 'UNASSIGNED'
+             ELSE 'OTHER_ENTITY'
+           END AS assignment_state
+         FROM cash_account
+         WHERE tenant_id=$1 AND status='ACTIVE'
+         ORDER BY
+           CASE
+             WHEN legal_entity_id=$2::uuid THEN 0
+             WHEN legal_entity_id IS NULL THEN 1
+             ELSE 2
+           END,
+           is_default DESC,name`,
+        [context.tenantId,legalEntityId]
+      );
+      return result.rows;
+    });
+  }
+
+  async assignCashAccount(
+    context:TenantContext,
+    cashAccountId:string,
+    input:{legalEntityId:string|null}
+  ) {
+    return this.database.withTenantTransaction(context,async client=>{
+      if(input.legalEntityId) {
+        const entity=await client.query(
+          `SELECT 1 FROM legal_entity
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,input.legalEntityId]
+        );
+        if(!entity.rowCount) {
+          throw new NotFoundException("Юридическое лицо не найдено");
+        }
+      }
+
+      const result=await client.query(
+        `UPDATE cash_account
+         SET legal_entity_id=$3::uuid,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+         RETURNING
+           id,name,kind,currency,opening_balance_minor::text,
+           legal_entity_id,is_default`,
+        [context.tenantId,cashAccountId,input.legalEntityId]
+      );
+      if(!result.rows[0]) throw new NotFoundException("Денежный счёт не найден");
+      return result.rows[0];
+    });
+  }
+
   async syncTaxLedger(context:TenantContext,legalEntityId:string) {
     return this.database.withTenantTransaction(context,async client=>{
       const entity=await client.query(
