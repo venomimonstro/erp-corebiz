@@ -108,12 +108,12 @@ export default function ChannelsPage() {
   async function createConnection() {
     const provider = (
       window.prompt(
-        "Канал: OWN_SITE, API, OZON, WILDBERRIES",
+        "Канал: OWN_SITE, API, OZON, WILDBERRIES, YANDEX_MARKET",
         "OZON"
       ) ?? ""
     ).toUpperCase();
 
-    if (!["OWN_SITE", "API", "OZON", "WILDBERRIES"].includes(provider)) {
+    if (!["OWN_SITE", "API", "OZON", "WILDBERRIES", "YANDEX_MARKET"].includes(provider)) {
       setError("Неизвестный тип канала");
       return;
     }
@@ -124,7 +124,9 @@ export default function ChannelsPage() {
         ? "Ozon FBS"
         : provider === "WILDBERRIES"
           ? "Wildberries FBS"
-          : "Интернет-магазин"
+          : provider === "YANDEX_MARKET"
+            ? "Яндекс Маркет FBS"
+            : "Интернет-магазин"
     );
     if (!name?.trim()) return;
 
@@ -152,6 +154,20 @@ export default function ChannelsPage() {
           body: JSON.stringify({
             name: name.trim(),
             apiToken: apiToken.trim()
+          })
+        });
+      } else if(provider==="YANDEX_MARKET"){
+        const apiKey=window.prompt("Яндекс Маркет API-Key (права: заказы и управление товарами)");
+        if(!apiKey?.trim())return;
+        const businessId=window.prompt("ID кабинета Яндекс Маркета (businessId)");
+        if(!businessId?.trim())return;
+        const hasWarehouseGroups=window.confirm(
+          "В кабинете есть группы складов? Если да, остатки из хаба пока можно только просматривать, без автоматической передачи."
+        );
+        await apiRequest("/channels/connections/yandex-market",{
+          method:"POST",body:JSON.stringify({
+            name:name.trim(),apiKey:apiKey.trim(),
+            businessId:businessId.trim(),hasWarehouseGroups
           })
         });
       } else {
