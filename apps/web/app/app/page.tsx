@@ -124,6 +124,8 @@ const nicheHome:Record<string,{label:string;href:string;detail:string}>={
     detail:"Остатки, заказы, закупки и проблемы"},
   MARKETPLACE_SELLER:{label:"Каналы продаж",href:"/app/ecommerce",
     detail:"Ozon/WB, товары и сопоставления"},
+  OMNICHANNEL_RETAIL:{label:"Сеть офлайн и онлайн-магазинов",href:"/app/retail",
+    detail:"Торговые точки, остатки по складам, резервы и онлайн-заказы"},
   RETAIL_STORE:{label:"Продажи и остатки",href:"/app/inventory/stock",
     detail:"Приёмка, остатки и кассовые операции"},
   WHOLESALE_B2B:{label:"Оптовые заказы",href:"/app/sales/orders",
