@@ -1123,6 +1123,226 @@ export class DanceStudioService {
     });
   }
 
+  async updateGroup(
+    context:TenantContext,
+    groupId:string,
+    input:{
+      name?:string;
+      branchId?:string|null;
+      trainerResourceId?:string;
+      roomResourceId?:string|null;
+      roomZoneId?:string|null;
+      roomCapacityUnits?:number;
+      capacity?:number;
+      breakEvenMembers?:number;
+      startsOn?:string;
+      endsOn?:string|null;
+      schedule?:Array<{
+        weekday:number;
+        startMinute:number;
+        durationMinutes?:number;
+      }>;
+      version:number;
+    }
+  ){
+    const scopeIds=await this.scopeIds(context,"dance.write");
+    if(!Number.isSafeInteger(input.version)||input.version<1){
+      throw new BadRequestException("Некорректная версия группы");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const group=await this.assertGroupAccess(
+        client,context.tenantId,groupId,scopeIds,true
+      );
+      if(Number(group.version)!==input.version){
+        throw new ConflictException("Группа уже изменена другим пользователем");
+      }
+
+      const name=(input.name??group.name).trim();
+      if(!name||name.length>180){
+        throw new BadRequestException("Некорректное название группы");
+      }
+
+      const trainerId=input.trainerResourceId??group.trainer_resource_id;
+      const roomId=
+        input.roomResourceId===undefined
+          ?group.room_resource_id
+          :input.roomResourceId;
+      const roomZoneId=
+        input.roomZoneId===undefined
+          ?group.room_zone_id
+          :input.roomZoneId;
+      const roomUnits=Math.floor(
+        input.roomCapacityUnits??group.room_capacity_units??1
+      );
+      const capacity=Math.floor(input.capacity??group.capacity);
+      const breakEven=Math.floor(
+        input.breakEvenMembers??group.break_even_members
+      );
+      const startsOn=input.startsOn??group.starts_on;
+      const endsOn=
+        input.endsOn===undefined?group.ends_on:input.endsOn;
+      const schedule=
+        input.schedule===undefined
+          ?group.schedule
+          :this.normalizeSchedule(input.schedule);
+
+      if(capacity<1||capacity>500||breakEven<1||breakEven>capacity){
+        throw new BadRequestException("Некорректная вместимость группы");
+      }
+      if(roomUnits<1||roomUnits>100000){
+        throw new BadRequestException("Некорректная доля зала");
+      }
+      if(roomZoneId&&!roomId){
+        throw new BadRequestException("Зона указана без зала");
+      }
+      if(startsOn&&!/^\d{4}-\d{2}-\d{2}$/.test(String(startsOn))){
+        throw new BadRequestException("Некорректная дата старта");
+      }
+      if(endsOn&&!/^\d{4}-\d{2}-\d{2}$/.test(String(endsOn))){
+        throw new BadRequestException("Некорректная дата окончания");
+      }
+      if(endsOn&&startsOn&&String(endsOn)<String(startsOn)){
+        throw new BadRequestException("Дата окончания раньше даты старта");
+      }
+
+      const occupied=await client.query<{count:number}>(
+        `SELECT count(*)::integer AS count
+         FROM dance_group_member
+         WHERE tenant_id=$1 AND group_id=$2
+           AND status IN ('TRIAL','ACTIVE','PAUSED')
+           AND reserved_place`,
+        [context.tenantId,groupId]
+      );
+      if((occupied.rows[0]?.count??0)>capacity){
+        throw new ConflictException(
+          "Новая вместимость меньше уже занятых мест в группе"
+        );
+      }
+
+      await this.assertTrainerRoom(
+        client,context.tenantId,trainerId,roomId
+      );
+
+      const trainer=await client.query<{membership_id:string|null}>(
+        `SELECT membership_id
+         FROM service_resource
+         WHERE tenant_id=$1 AND id=$2 AND type='EMPLOYEE'
+           AND status='ACTIVE'`,
+        [context.tenantId,trainerId]
+      );
+      if(
+        scopeIds &&
+        (
+          !trainer.rows[0]?.membership_id ||
+          !scopeIds.includes(trainer.rows[0].membership_id)
+        )
+      ){
+        throw new ForbiddenException("Новый тренер вне доступной области");
+      }
+
+      if(roomId){
+        const room=await client.query<{capacity:number}>(
+          `SELECT capacity
+           FROM service_resource
+           WHERE tenant_id=$1 AND id=$2
+             AND type IN ('ROOM','HALL','WORKPLACE')
+             AND status='ACTIVE'`,
+          [context.tenantId,roomId]
+        );
+        const roomRow=room.rows[0];
+        if(!roomRow) throw new NotFoundException("Зал не найден");
+        let maxUnits=roomRow.capacity;
+
+        if(roomZoneId){
+          const zone=await client.query<{capacity_units:number}>(
+            `SELECT capacity_units
+             FROM service_resource_zone
+             WHERE tenant_id=$1 AND id=$2
+               AND resource_id=$3 AND status='ACTIVE'`,
+            [context.tenantId,roomZoneId,roomId]
+          );
+          if(!zone.rows[0]) throw new NotFoundException("Зона зала не найдена");
+          maxUnits=zone.rows[0].capacity_units;
+        }
+        if(roomUnits>maxUnits){
+          throw new BadRequestException(
+            "Группа занимает больше пространства, чем доступно в выбранном зале или зоне"
+          );
+        }
+      }
+
+      if(input.branchId){
+        const branch=await client.query(
+          `SELECT 1 FROM branch
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,input.branchId]
+        );
+        if(!branch.rowCount) throw new NotFoundException("Филиал не найден");
+      }
+
+      const updated=await client.query(
+        `UPDATE dance_group
+         SET name=$3,
+             branch_id=$4,
+             trainer_resource_id=$5,
+             room_resource_id=$6,
+             room_zone_id=$7,
+             room_capacity_units=$8,
+             capacity=$9,
+             break_even_members=$10,
+             starts_on=$11,
+             ends_on=$12,
+             schedule=$13,
+             version=version+1,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND version=$14
+         RETURNING
+           id,name,program_id,branch_id,trainer_resource_id,
+           room_resource_id,room_zone_id,room_capacity_units,
+           capacity,break_even_members,starts_on,ends_on,schedule,
+           status,version`,
+        [
+          context.tenantId,groupId,name,
+          input.branchId===undefined?group.branch_id:input.branchId,
+          trainerId,roomId,roomZoneId,roomId?roomUnits:1,
+          capacity,breakEven,startsOn,endsOn,
+          JSON.stringify(schedule??[]),input.version
+        ]
+      );
+      const row=updated.rows[0];
+      if(!row){
+        throw new ConflictException("Группа уже изменена другим пользователем");
+      }
+
+      const future=await client.query<{count:number}>(
+        `SELECT count(*)::integer AS count
+         FROM dance_lesson
+         WHERE tenant_id=$1 AND group_id=$2
+           AND starts_at>now()
+           AND status IN ('PLANNED','OPEN_FOR_BOOKING')`,
+        [context.tenantId,groupId]
+      );
+
+      await this.audit(
+        client,context,"dance.group_updated","dance_group",groupId,{
+          trainerResourceId:trainerId,
+          roomResourceId:roomId,
+          roomZoneId,
+          roomCapacityUnits:roomId?roomUnits:0,
+          capacity,
+          breakEvenMembers:breakEven,
+          futureLessonsUnchanged:future.rows[0]?.count??0
+        }
+      );
+
+      return {
+        ...row,
+        future_lessons_unchanged:future.rows[0]?.count??0
+      };
+    });
+  }
+
   async groupMembers(
     context:TenantContext,
     groupId:string
