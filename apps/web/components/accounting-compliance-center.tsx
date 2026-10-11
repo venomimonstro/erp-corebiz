@@ -13,6 +13,7 @@ type TaxProfile = {
   reporting_mode:"ASSISTED"|"SEMI_AUTOMATIC"|"EXTERNAL_ACCOUNTANT";
   usn_rate_bps:number|null;
   usn_min_tax_bps:number|null;
+  kpp:string|null;
   oktmo:string|null;
   tax_office_code:string|null;
 };
@@ -30,6 +31,7 @@ type Obligation = {
   validation_status:string|null;
   signature_status:string|null;
   source_url:string|null;
+  form_code?:string|null;
   connector_provider?:string|null;
   connector_status?:string|null;
 };
@@ -85,6 +87,18 @@ type TaxCalculation = {
   tax_due_minor:string;
   status:string;
   obligation_id?:string|null;
+};
+
+type ComplianceLine = {
+  id:string;
+  line_number:number;
+  kpp:string|null;
+  oktmo:string|null;
+  kbk:string|null;
+  tax_period_code:string|null;
+  reporting_year:number|null;
+  amount_minor:string|null;
+  status:"DRAFT"|"CONFIRMED";
 };
 
 type Props = {
@@ -156,6 +170,16 @@ export function AccountingComplianceCenter({
   const [hasEmployees,setHasEmployees]=useState(false);
   const [usnRate,setUsnRate]=useState("6");
   const [usnMinRate,setUsnMinRate]=useState("1");
+  const [kpp,setKpp]=useState("");
+  const [oktmo,setOktmo]=useState("");
+  const [taxOfficeCode,setTaxOfficeCode]=useState("");
+  const [notificationLine,setNotificationLine]=useState<ComplianceLine|null>(null);
+  const [lineKpp,setLineKpp]=useState("");
+  const [lineOktmo,setLineOktmo]=useState("");
+  const [lineKbk,setLineKbk]=useState("");
+  const [linePeriodCode,setLinePeriodCode]=useState("");
+  const [lineYear,setLineYear]=useState(String(new Date().getFullYear()));
+  const [lineAmountRub,setLineAmountRub]=useState("");
   const [reductionsRub,setReductionsRub]=useState("0");
   const [calculationNote,setCalculationNote]=useState(
     "Налоговая книга и сумма проверены владельцем."
@@ -231,6 +255,9 @@ export function AccountingComplianceCenter({
         if(profileRow.usn_min_tax_bps){
           setUsnMinRate(String(profileRow.usn_min_tax_bps/100));
         }
+        setKpp(profileRow.kpp??"");
+        setOktmo(profileRow.oktmo??"");
+        setTaxOfficeCode(profileRow.tax_office_code??"");
       }else{
         setShowProfile(true);
       }
@@ -309,7 +336,10 @@ export function AccountingComplianceCenter({
             :null,
           usnMinimumTaxBps:taxRegime==="USN_INCOME_EXPENSE"
             ?Math.round(minimumRate*100)
-            :null
+            :null,
+          kpp:kpp.trim()||undefined,
+          oktmo:oktmo.trim()||undefined,
+          taxOfficeCode:taxOfficeCode.trim()||undefined
         })
       });
       setNotice("Налоговый профиль сохранён");
