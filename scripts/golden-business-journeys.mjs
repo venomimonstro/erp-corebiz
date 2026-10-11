@@ -974,6 +974,189 @@ async function danceStudioJourney() {
   };
 }
 
+async function automotiveJourney() {
+  await newTenant(
+    "Golden Automotive " + runId.slice(0, 8),
+    "SERVICE"
+  );
+
+  const vertical = await request(
+    "PUT",
+    "/customization/business-vertical",
+    { verticalCode: "AUTO_SERVICE" }
+  );
+  assert.equal(vertical.verticalCode, "AUTO_SERVICE");
+
+  const customer = await request("POST", "/crm/customers", {
+    displayName: "Golden Automotive Customer",
+    phone: "+79992223344"
+  });
+
+  const vehicle = await request("POST", "/automotive/vehicles", {
+    partyId: customer.id,
+    vin: "WBAKR010000000001",
+    plateNumber: "A001AA77",
+    make: "BMW",
+    model: "X5",
+    generation: "G05",
+    productionYear: 2022,
+    engineCode: "B57",
+    mileageKm: 45000
+  });
+  assert.ok(vehicle.id, "AUTOMOTIVE vehicle");
+
+  const workOrder = await request("POST", "/automotive/work-orders", {
+    vehicleId: vehicle.id,
+    complaint: "Golden brake inspection",
+    mileageInKm: 45010
+  });
+  assert.ok(workOrder.id, "AUTOMOTIVE work order");
+
+  const line = await request(
+    "POST",
+    "/automotive/work-orders/" + workOrder.id + "/lines",
+    {
+      lineType: "LABOR",
+      description: "Golden diagnostics",
+      quantityMilli: "1000",
+      unitPriceMinor: 500000,
+      unitCostMinor: 200000
+    }
+  );
+  assert.ok(line.id, "AUTOMOTIVE work order line");
+
+  await request(
+    "PATCH",
+    "/automotive/work-orders/" + workOrder.id + "/lines/" + line.id,
+    { approved: true, completed: true }
+  );
+
+  for (const status of [
+    "DIAGNOSIS",
+    "WAITING_APPROVAL",
+    "IN_PROGRESS",
+    "QUALITY_CHECK",
+    "READY",
+    "DELIVERED"
+  ]) {
+    await request(
+      "PATCH",
+      "/automotive/work-orders/" + workOrder.id,
+      { status }
+    );
+  }
+
+  const closed = await request(
+    "GET",
+    "/automotive/work-orders/" + workOrder.id
+  );
+  assert.equal(closed.status, "DELIVERED");
+  assert.equal(closed.actual_total_minor, "500000");
+
+  const warehouse = await request(
+    "POST",
+    "/inventory/warehouses",
+    {
+      name: "Golden Automotive warehouse",
+      code: "GAUTO"
+    }
+  );
+  const product = await request(
+    "POST",
+    "/catalog/products",
+    {
+      name: "Golden BMW headlight",
+      kind: "STOCKABLE",
+      salePriceMinor: "5000000",
+      costPriceMinor: "3000000"
+    }
+  );
+
+  const donor = await request("POST", "/automotive/donors", {
+    vin: "WBAKR010000000002",
+    make: "BMW",
+    model: "X5",
+    generation: "G05",
+    productionYear: 2021,
+    engineCode: "B57",
+    purchasePriceMinor: 30000000,
+    dismantlingCostMinor: 5000000
+  });
+  assert.ok(donor.id, "AUTOMOTIVE donor");
+
+  const part = await request(
+    "POST",
+    "/automotive/donors/" + donor.id + "/parts",
+    {
+      skuId: product.skuId,
+      warehouseId: warehouse.id,
+      partName: "Golden left headlight",
+      oemNumber: "63119851001",
+      conditionGrade: "USED_A",
+      quantityMilli: "1000",
+      allocatedCostMinor: 3000000,
+      askingPriceMinor: 5000000
+    }
+  );
+  assert.ok(part.id, "AUTOMOTIVE dismantled part");
+
+  await request("POST", "/automotive/fitments", {
+    skuId: product.skuId,
+    make: "BMW",
+    model: "X5",
+    generation: "G05",
+    yearFrom: 2019,
+    yearTo: 2023,
+    engineCode: "B57",
+    oemNumber: "63119851001",
+    fitmentSource: "MANUAL",
+    confidenceBps: 10000
+  });
+
+  const compatible = await request(
+    "GET",
+    "/automotive/vehicles/" + vehicle.id + "/compatible-parts"
+  );
+  assert.ok(
+    compatible.some((item) => item.id === part.id),
+    "AUTOMOTIVE fitment must find dismantled part"
+  );
+
+  const balances = await request("GET", "/inventory/balances");
+  const balance = balances.find(
+    (item) =>
+      (item.skuId ?? item.sku_id) === product.skuId &&
+      (item.warehouseId ?? item.warehouse_id) === warehouse.id
+  );
+  assert.ok(balance, "AUTOMOTIVE dismantled part inventory balance");
+  assert.equal(
+    String(balance.physicalMilli ?? balance.physical_milli),
+    "1000",
+    "AUTOMOTIVE linked part must be received into stock"
+  );
+
+  const dashboard = await request("GET", "/automotive/dashboard");
+  assert.equal(
+    dashboard.orders.delivered_revenue_minor,
+    "500000",
+    "AUTOMOTIVE dashboard delivered revenue"
+  );
+  assert.ok(
+    Number(dashboard.parts.available_parts) >= 1,
+    "AUTOMOTIVE dashboard available parts"
+  );
+
+  return {
+    profile: "AUTO_SERVICE",
+    result:
+      "customer → VIN → work order → approval → delivery + donor → dismantled SKU → inventory → OEM fitment",
+    vehicleId: vehicle.id,
+    workOrderId: workOrder.id,
+    donorId: donor.id,
+    partId: part.id
+  };
+}
+
 async function warehouse3plJourney() {
   await newTenant(
     "Golden 3PL " + runId.slice(0, 8),
@@ -1093,6 +1276,7 @@ async function main() {
   results.push(await ecommerceJourney());
   results.push(await serviceJourney());
   results.push(await danceStudioJourney());
+  results.push(await automotiveJourney());
   results.push(await warehouse3plJourney());
 
   process.stdout.write(
@@ -1107,7 +1291,7 @@ async function main() {
     ) + "\n"
   );
   console.log(
-    "PASS: TRADE + ECOMMERCE + SERVICE + DANCE_FITNESS + WAREHOUSE_3PL golden journeys"
+    "PASS: TRADE + ECOMMERCE + SERVICE + DANCE_FITNESS + AUTO_SERVICE + WAREHOUSE_3PL golden journeys"
   );
   console.log(
     "Disposable local environment only. This is not production approval."
