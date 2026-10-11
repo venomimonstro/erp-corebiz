@@ -179,6 +179,25 @@ export class ComplianceController {
     };
   }
 
+  @Post("obligations/:id/signature")
+  @RequirePermission("accounting.compliance.approve")
+  async recordProviderSignature(
+    @Req() req:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:{
+      provider:string;
+      certificateFingerprint:string;
+      providerReference:string;
+    }
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.recordProviderSignature(
+        this.context(req),id,body
+      )
+    };
+  }
+
   @Post("obligations/:id/submitted")
   @RequirePermission("accounting.compliance.approve")
   async recordSubmitted(
