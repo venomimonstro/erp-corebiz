@@ -88,7 +88,7 @@ export class YooKassaGateway {
     creds:MerchantCredentials,method:"GET"|"POST",path:string,
     payload?:Record<string,unknown>,idemKey?:string
   ):Promise<ProviderRefund>{
-    if(!/^\\d{3,30}$/.test(creds.shopId)||!creds.secret){
+    if(!/^\d{3,30}$/.test(creds.shopId)||!creds.secret){
       throw new ServiceUnavailableException("Некорректные реквизиты эквайринга");
     }
     const controller=new AbortController();
