@@ -103,6 +103,17 @@ export default function DanceStudentsPage() {
   const [chargeNote, setChargeNote] = useState("");
   const [packageModal, setPackageModal] = useState(false);
   const [packagePlanId, setPackagePlanId] = useState("");
+  const [familyPayModal, setFamilyPayModal] = useState(false);
+  const [familyPayRub, setFamilyPayRub] = useState("");
+  const [beneficiaryModal, setBeneficiaryModal] = useState(false);
+  const [beneficiaryPackId, setBeneficiaryPackId] = useState("");
+  const [beneficiaryStudentId, setBeneficiaryStudentId] = useState("");
+  const [freezeModal, setFreezeModal] = useState(false);
+  const [freezePackId, setFreezePackId] = useState("");
+  const [freezeStartsOn, setFreezeStartsOn] = useState(new Date().toISOString().slice(0,10));
+  const [freezeEndsOn, setFreezeEndsOn] = useState(new Date().toISOString().slice(0,10));
+  const [freezeReason, setFreezeReason] = useState("Отпуск / болезнь");
+  const [freezeCancelReservations, setFreezeCancelReservations] = useState(true);
 
   const load = useCallback(async () => {
     setError("");
@@ -281,21 +292,22 @@ export default function DanceStudentsPage() {
     }
   }
 
+  function openFamilyPayModal() {
+    if(!selected?.payer_party_id||!payerOpenCharges.length)return;
+    const totalOpen=payerOpenCharges.reduce(
+      (sum,item)=>sum+BigInt(item.remaining_minor),0n
+    );
+    setFamilyPayRub(String(Number(totalOpen)/100));
+    setFamilyPayModal(true);
+  }
+
   async function payFamilyDebt() {
     if (!selected?.payer_party_id || !payerOpenCharges.length) return;
-    const totalOpen = payerOpenCharges.reduce(
-      (sum, item) => sum + BigInt(item.remaining_minor),
-      0n
-    );
-    const rub = Number(
-      (
-        window.prompt(
-          "Сумма оплаты семьи, ₽",
-          String(Number(totalOpen) / 100)
-        ) ?? "0"
-      ).replace(",", ".")
-    );
-    if (!Number.isFinite(rub) || rub <= 0) return;
+    const rub = Number(familyPayRub.replace(",", "."));
+    if (!Number.isFinite(rub) || rub <= 0) {
+      setError("Укажите корректную сумму оплаты");
+      return;
+    }
 
     let left = BigInt(Math.round(rub * 100));
     const allocations: Array<{ obligationId: string; amountMinor: string }> = [];
@@ -315,6 +327,8 @@ export default function DanceStudentsPage() {
     }
 
     setPending(true);
+    setError("");
+    setNotice("");
     try {
       await apiRequest("/finance/allocated-payment", {
         method: "POST",
@@ -325,6 +339,8 @@ export default function DanceStudentsPage() {
           note: "Оплата семьи через студию"
         })
       });
+      setFamilyPayModal(false);
+      setNotice("Оплата распределена по долгам семьи.");
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось провести семейную оплату");
@@ -367,70 +383,76 @@ export default function DanceStudentsPage() {
     }
   }
 
-  async function addFamilyBeneficiary(pack: Pack) {
-    if (pack.package_kind_snapshot !== "FAMILY") return;
-    const candidates = students.filter((item) => item.id !== selectedId);
-    if (!candidates.length) return;
-    const child = candidates[
-      Number(window.prompt(
-        "Добавить ребёнка в семейный абонемент:\n" +
-          candidates.map((item, index) => `${index + 1}. ${item.display_name}`).join("\n"),
-        "1"
-      )) - 1
-    ];
-    if (!child) return;
-
-    try {
-      await apiRequest(`/dance/packages/${pack.id}/beneficiaries`, {
-        method: "POST",
-        body: JSON.stringify({ studentId: child.id })
-      });
-      window.alert("Ребёнок добавлен в семейный абонемент");
-      await load();
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Не удалось добавить бенефициара"
-      );
+  function openBeneficiaryModal(pack:Pack) {
+    if(pack.package_kind_snapshot!=="FAMILY")return;
+    const candidates=students.filter((item)=>item.id!==selectedId);
+    if(!candidates.length){
+      setError("Нет другого ученика для добавления в семейный абонемент");
+      return;
     }
+    setBeneficiaryPackId(pack.id);
+    setBeneficiaryStudentId(candidates[0]?.id??"");
+    setBeneficiaryModal(true);
   }
 
-  async function freezePackage(pack: Pack) {
-    const startsOn = window.prompt(
-      "Начало заморозки YYYY-MM-DD",
-      new Date().toISOString().slice(0, 10)
-    );
-    if (!startsOn) return;
-    const endsOn = window.prompt("Конец заморозки YYYY-MM-DD", startsOn);
-    if (!endsOn) return;
+  async function addFamilyBeneficiary() {
+    const pack=selectedPackages.find((item)=>item.id===beneficiaryPackId);
+    if(!pack||pack.package_kind_snapshot!=="FAMILY"||!beneficiaryStudentId)return;
+    setPending(true);setError("");setNotice("");
+    try{
+      await apiRequest(`/dance/packages/${pack.id}/beneficiaries`,{
+        method:"POST",
+        body:JSON.stringify({studentId:beneficiaryStudentId})
+      });
+      setBeneficiaryModal(false);
+      setNotice("Ребёнок добавлен в семейный абонемент.");
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось добавить бенефициара");
+    }finally{setPending(false);}
+  }
 
-    const cancelFutureReservations = window.confirm(
-      "Снять записи на занятия внутри периода заморозки? OK = снять и вернуть посещения, Отмена = оставить существующие записи."
-    );
+  function openFreezeModal(pack:Pack) {
+    const today=new Date().toISOString().slice(0,10);
+    setFreezePackId(pack.id);
+    setFreezeStartsOn(today);
+    setFreezeEndsOn(today);
+    setFreezeReason("Отпуск / болезнь");
+    setFreezeCancelReservations(true);
+    setFreezeModal(true);
+  }
 
-    try {
-      const result = await apiRequest<{
-        cancelledReservations: number;
-        promotedFromWaitlist: number;
-      }>(`/dance/packages/${pack.id}/freeze`, {
-        method: "POST",
-        body: JSON.stringify({
-          startsOn,
-          endsOn,
-          reason: window.prompt("Причина", "Отпуск / болезнь") || undefined,
-          cancelFutureReservations
+  async function freezePackage() {
+    const pack=selectedPackages.find((item)=>item.id===freezePackId);
+    if(!pack)return;
+    if(!freezeStartsOn||!freezeEndsOn||freezeEndsOn<freezeStartsOn){
+      setError("Проверьте период заморозки");
+      return;
+    }
+    setPending(true);setError("");setNotice("");
+    try{
+      const result=await apiRequest<{
+        cancelledReservations:number;
+        promotedFromWaitlist:number;
+      }>(`/dance/packages/${pack.id}/freeze`,{
+        method:"POST",
+        body:JSON.stringify({
+          startsOn:freezeStartsOn,
+          endsOn:freezeEndsOn,
+          reason:freezeReason.trim()||undefined,
+          cancelFutureReservations:freezeCancelReservations
         })
       });
-      if (cancelFutureReservations) {
-        window.alert(
-          `Снято будущих записей: ${result.cancelledReservations}. Мест передано из waitlist: ${result.promotedFromWaitlist}.`
-        );
-      }
+      setFreezeModal(false);
+      setNotice(
+        freezeCancelReservations
+          ? `Абонемент заморожен. Снято записей: ${result.cancelledReservations}; мест передано из waitlist: ${result.promotedFromWaitlist}.`
+          : "Абонемент заморожен без снятия существующих записей."
+      );
       await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось заморозить абонемент");
-    }
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось заморозить абонемент");
+    }finally{setPending(false);}
   }
 
   return (
@@ -594,12 +616,12 @@ export default function DanceStudentsPage() {
                         <td>
                           <div className="table-actions">
                             {pack.package_kind_snapshot === "FAMILY" ? (
-                              <button className="secondary-button" onClick={() => void addFamilyBeneficiary(pack)} type="button">
+                              <button className="secondary-button" onClick={() => openBeneficiaryModal(pack)} type="button">
                                 + Ребёнок
                               </button>
                             ) : null}
                             {pack.status === "ACTIVE" ? (
-                              <button className="secondary-button" onClick={() => void freezePackage(pack)} type="button">
+                              <button className="secondary-button" onClick={() => openFreezeModal(pack)} type="button">
                                 Заморозить
                               </button>
                             ) : null}
@@ -750,6 +772,79 @@ export default function DanceStudentsPage() {
               <span>Ученик</span><strong>{selected.display_name}</strong>
               <span>Плательщик</span><strong>{selected.payer_name ?? selected.display_name}</strong>
             </div>
+          </StudioModal>
+        ) : null}
+
+        {familyPayModal && selected ? (
+          <StudioModal
+            eyebrow="Семейная оплата"
+            title="Погасить долги семьи"
+            description="Сумма автоматически распределится по открытым начислениям плательщика, начиная с ближайшего срока."
+            onClose={() => setFamilyPayModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setFamilyPayModal(false)}>Отмена</button>
+                <button disabled={pending} type="button" onClick={() => void payFamilyDebt()}>{pending ? "Проводим…" : "Провести оплату"}</button>
+              </>
+            }
+          >
+            <label>
+              <span>Сумма оплаты, ₽</span>
+              <input autoFocus inputMode="decimal" value={familyPayRub} onChange={(event)=>setFamilyPayRub(event.target.value)} />
+            </label>
+            <div className="student-package-summary">
+              <span>Плательщик</span><strong>{selected.payer_name ?? "—"}</strong>
+              <span>Открытых начислений</span><strong>{payerOpenCharges.length}</strong>
+            </div>
+          </StudioModal>
+        ) : null}
+
+        {beneficiaryModal ? (
+          <StudioModal
+            eyebrow="Семейный абонемент"
+            title="Добавить ребёнка"
+            description="Ребёнок получит право использовать тот же семейный пакет по его правилам и общему лимиту."
+            onClose={() => setBeneficiaryModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setBeneficiaryModal(false)}>Отмена</button>
+                <button disabled={pending || !beneficiaryStudentId} type="button" onClick={() => void addFamilyBeneficiary()}>{pending ? "Добавляем…" : "Добавить"}</button>
+              </>
+            }
+          >
+            <label>
+              <span>Ученик</span>
+              <select value={beneficiaryStudentId} onChange={(event)=>setBeneficiaryStudentId(event.target.value)}>
+                {students.filter((item)=>item.id!==selectedId).map((item)=>(
+                  <option key={item.id} value={item.id}>{item.display_name}</option>
+                ))}
+              </select>
+            </label>
+          </StudioModal>
+        ) : null}
+
+        {freezeModal ? (
+          <StudioModal
+            eyebrow="Заморозка"
+            title="Приостановить абонемент"
+            description="Срок действия будет продлён по правилам тарифа. Можно одновременно снять будущие записи и освободить места."
+            onClose={() => setFreezeModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setFreezeModal(false)}>Отмена</button>
+                <button disabled={pending} type="button" onClick={() => void freezePackage()}>{pending ? "Сохраняем…" : "Заморозить"}</button>
+              </>
+            }
+          >
+            <div className="studio-form-grid">
+              <label><span>С даты</span><input type="date" value={freezeStartsOn} onChange={(event)=>setFreezeStartsOn(event.target.value)} /></label>
+              <label><span>По дату</span><input type="date" value={freezeEndsOn} onChange={(event)=>setFreezeEndsOn(event.target.value)} /></label>
+            </div>
+            <label><span>Причина</span><input value={freezeReason} onChange={(event)=>setFreezeReason(event.target.value)} /></label>
+            <label className="studio-check-row">
+              <input type="checkbox" checked={freezeCancelReservations} onChange={(event)=>setFreezeCancelReservations(event.target.checked)} />
+              <span>Снять будущие записи внутри периода и вернуть зарезервированные посещения</span>
+            </label>
           </StudioModal>
         ) : null}
 
