@@ -831,6 +831,10 @@ export default function SitesPage() {
                   Включить интернет-магазин
                   <small>Каталог, корзина и checkout</small>
                 </button>
+                <a className="site-store-enable" href="/app/migration">
+                  Импортировать из 1С / Excel
+                  <small>Проверка файла → предпросмотр → перенос</small>
+                </a>
                 <button
                   className="site-store-enable"
                   onClick={() => void createLeadBinding()}
