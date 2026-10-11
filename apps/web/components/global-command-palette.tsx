@@ -83,7 +83,7 @@ export function GlobalCommandPalette() {
     if (!open) return;
 
     const trimmed = query.trim();
-    if (trimmed.length < 2) {
+    if (trimmed.length < 3) {
       setData(null);
       setLoading(false);
       setSelected(0);
@@ -106,7 +106,7 @@ export function GlobalCommandPalette() {
       } finally {
         if (!cancelled) setLoading(false);
       }
-    }, 180);
+    }, 260);
 
     return () => {
       cancelled = true;

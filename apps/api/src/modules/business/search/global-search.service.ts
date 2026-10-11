@@ -34,8 +34,8 @@ export class GlobalSearchService {
     }>;
   }> {
     const query = String(queryInput ?? "").trim();
-    if (query.length < 2) {
-      throw new BadRequestException("Введите минимум 2 символа");
+    if (query.length < 3) {
+      throw new BadRequestException("Введите минимум 3 символа");
     }
     if (query.length > 100) {
       throw new BadRequestException("Слишком длинный поисковый запрос");
@@ -68,7 +68,7 @@ export class GlobalSearchService {
       const allowed = (code: string) =>
         permissions.has("*") || permissions.has(code);
 
-      const pattern = "%" + query + "%";
+      const pattern = "%" + query.replace(/[\\%_]/g,"\\const pattern = "%" + query + "%";") + "%";
       const items: SearchItem[] = [];
 
       if (allowed("crm.read")) {
