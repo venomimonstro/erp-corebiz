@@ -17,3 +17,14 @@ export function assertDanceLessonWindow(from:unknown,to:unknown,maxDays=120){
 export function validCapacity(value:unknown,min:number,max:number){
   return typeof value==="number"&&Number.isSafeInteger(value)&&value>=min&&value<=max;
 }
+
+/** Student DOB may predate the current scheduling window. */
+export function isValidStudentBirthDate(value:unknown,now=new Date()):value is string{
+  if(typeof value!=="string"||!/^(18\d{2}|19\d{2}|20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value))
+    return false;
+  const date=new Date(value+"T00:00:00.000Z");
+  if(!Number.isFinite(date.getTime())||date.toISOString().slice(0,10)!==value)return false;
+  if(date.getTime()>now.getTime())return false;
+  if(now.getUTCFullYear()-date.getUTCFullYear()>125)return false;
+  return true;
+}
