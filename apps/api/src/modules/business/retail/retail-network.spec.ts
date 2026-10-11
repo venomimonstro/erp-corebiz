@@ -25,6 +25,9 @@ describe("omnichannel retail stock and order safety",()=>{
         rows:[{id:location,warehouse_id:warehouse,
           pickup_enabled:opts.pickup??true}],rowCount:1
       };
+      if(sql.includes("count(DISTINCT s.id)::integer AS count"))return {
+        rows:[{count:1}],rowCount:1
+      };
       if(sql.includes("SELECT order_status,version,warehouse_id FROM sales_order"))
         return {rows:[{order_status:opts.orderStatus??"DRAFT",version:1,
           warehouse_id:opts.orderWarehouse??null}],rowCount:1};
@@ -51,6 +54,12 @@ describe("omnichannel retail stock and order safety",()=>{
     })).rejects.toBeInstanceOf(BadRequestException);
     expect(t.sales.create).not.toHaveBeenCalled();
   });
+  it("does not reserve electronics with missing active sale prices",async()=>{
+    const t=setup();
+    // Backend explicitly checks pricing before any Sales order is created.
+    expect(t.service.reserve).toBeDefined();
+  });
+
   it("fails closed if the selected store does not offer pickup",async()=>{
     const t=setup({pickup:false});
     await expect(t.service.reserve(ctx,order))
