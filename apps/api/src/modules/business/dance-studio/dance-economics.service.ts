@@ -1414,45 +1414,111 @@ export class DanceEconomicsService {
       trainer_resource_id:string;
       currency:string;
       lesson_accrual_minor:string;
-      plan_ids:string[];
     }>(
-      `SELECT
-         a.trainer_resource_id,
-         min(a.currency)::text AS currency,
-         coalesce(sum(a.amount_minor),0)::text AS lesson_accrual_minor,
-         array_agg(DISTINCT a.plan_id) FILTER (WHERE a.plan_id IS NOT NULL) AS plan_ids
-       FROM trainer_compensation_accrual a
-       JOIN dance_lesson l
-         ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
-       WHERE a.tenant_id=$1
-         AND l.starts_at>=$2 AND l.starts_at<$3
-         AND a.status IN ('APPROVED','EXPORTED')
-       GROUP BY a.trainer_resource_id`,
-      [tenantId,from,to]
+      `WITH candidates AS (
+         SELECT DISTINCT a.trainer_resource_id
+         FROM trainer_compensation_accrual a
+         JOIN dance_lesson l
+           ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
+         WHERE a.tenant_id=$1
+           AND l.starts_at>=$2 AND l.starts_at<$3
+           AND a.status IN ('APPROVED','EXPORTED')
+         UNION
+         SELECT DISTINCT p.trainer_resource_id
+         FROM trainer_compensation_plan p
+         WHERE p.tenant_id=$1
+           AND p.status='ACTIVE'
+           AND p.valid_from <= $4::date
+           AND (p.valid_to IS NULL OR p.valid_to >= $5::date)
+           AND (
+             p.minimum_guarantee_minor>0
+             OR EXISTS(
+               SELECT 1
+               FROM trainer_compensation_component c
+               WHERE c.tenant_id=p.tenant_id
+                 AND c.plan_id=p.id
+                 AND c.component_type='MONTHLY_BASE'
+             )
+           )
+       )
+       SELECT
+         c.trainer_resource_id,
+         coalesce(min(a.currency),'RUB')::text AS currency,
+         coalesce(sum(a.amount_minor),0)::text AS lesson_accrual_minor
+       FROM candidates c
+       LEFT JOIN trainer_compensation_accrual a
+         ON a.tenant_id=$1
+        AND a.trainer_resource_id=c.trainer_resource_id
+        AND a.status IN ('APPROVED','EXPORTED')
+       LEFT JOIN dance_lesson l
+         ON l.tenant_id=a.tenant_id
+        AND l.id=a.lesson_id
+        AND l.starts_at>=$2
+        AND l.starts_at<$3
+       WHERE a.id IS NULL OR l.id IS NOT NULL
+       GROUP BY c.trainer_resource_id`,
+      [tenantId,from,to,periodTo,periodFrom]
     );
 
     const output:Array<Record<string,unknown>>=[];
     for(const row of trainers.rows){
-      const planIds=row.plan_ids??[];
+      const plans=await client.query<{
+        id:string;
+        minimum_guarantee_minor:string;
+      }>(
+        `WITH used AS (
+           SELECT DISTINCT a.plan_id AS id
+           FROM trainer_compensation_accrual a
+           JOIN dance_lesson l
+             ON l.tenant_id=a.tenant_id AND l.id=a.lesson_id
+           WHERE a.tenant_id=$1
+             AND a.trainer_resource_id=$2
+             AND a.plan_id IS NOT NULL
+             AND l.starts_at>=$3 AND l.starts_at<$4
+             AND a.status IN ('APPROVED','EXPORTED')
+         ),
+         fixed AS (
+           SELECT DISTINCT p.id
+           FROM trainer_compensation_plan p
+           WHERE p.tenant_id=$1
+             AND p.trainer_resource_id=$2
+             AND p.status='ACTIVE'
+             AND p.valid_from <= $5::date
+             AND (p.valid_to IS NULL OR p.valid_to >= $6::date)
+             AND (
+               p.minimum_guarantee_minor>0
+               OR EXISTS(
+                 SELECT 1
+                 FROM trainer_compensation_component c
+                 WHERE c.tenant_id=p.tenant_id
+                   AND c.plan_id=p.id
+                   AND c.component_type IN ('MONTHLY_BASE','DAILY_BASE')
+               )
+             )
+         )
+         SELECT p.id,p.minimum_guarantee_minor::text
+         FROM trainer_compensation_plan p
+         WHERE p.tenant_id=$1
+           AND p.id IN (
+             SELECT id FROM used
+             UNION
+             SELECT id FROM fixed
+           )
+         ORDER BY p.id`,
+        [tenantId,row.trainer_resource_id,from,to,periodTo,periodFrom]
+      );
+      const planIds=plans.rows.map((plan)=>plan.id);
+
       let base=0n;
       let guarantee=0n;
       const baseSnapshot:Array<Record<string,unknown>>=[];
 
-      if(planIds.length){
-        const plans=await client.query<{
-          id:string;
-          minimum_guarantee_minor:string;
-        }>(
-          `SELECT id,minimum_guarantee_minor::text
-           FROM trainer_compensation_plan
-           WHERE tenant_id=$1 AND id=ANY($2::uuid[])`,
-          [tenantId,planIds]
-        );
-        for(const plan of plans.rows){
-          const value=BigInt(plan.minimum_guarantee_minor);
-          if(value>guarantee) guarantee=value;
-        }
+      for(const plan of plans.rows){
+        const value=BigInt(plan.minimum_guarantee_minor);
+        if(value>guarantee) guarantee=value;
+      }
 
+      if(planIds.length){
         const components=await client.query<{
           id:string;
           plan_id:string;
