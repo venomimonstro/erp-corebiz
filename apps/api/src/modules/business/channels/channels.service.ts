@@ -594,14 +594,16 @@ export class ChannelsService {
       const result = await client.query(
         "SELECT o.id,o.connection_id,c.name AS connection_name,c.provider," +
         "o.external_order_id,o.external_status,o.currency,o.ordered_at,o.status," +
-        "o.sales_order_id,o.customer_hint,o.attempts,o.last_error,o.received_at," +
+        "o.sales_order_id,so.order_status AS sales_order_status,so.version AS sales_order_version," +
+        "o.customer_hint,o.attempts,o.last_error,o.received_at," +
         "count(l.id)::int AS line_count," +
         "count(l.id) FILTER (WHERE l.mapped_sku_id IS NULL)::int AS unmapped_lines " +
         "FROM channel_order_inbox o " +
         "JOIN channel_connection c ON c.tenant_id=o.tenant_id AND c.id=o.connection_id " +
+        "LEFT JOIN sales_order so ON so.tenant_id=o.tenant_id AND so.id=o.sales_order_id " +
         "LEFT JOIN channel_order_line_inbox l ON l.tenant_id=o.tenant_id AND l.inbox_order_id=o.id " +
         "WHERE o.tenant_id=$1 AND ($2::text IS NULL OR o.status=$2) " +
-        "GROUP BY o.id,c.name,c.provider ORDER BY o.received_at DESC LIMIT 500",
+        "GROUP BY o.id,c.name,c.provider,so.order_status,so.version ORDER BY o.received_at DESC LIMIT 500",
         [context.tenantId, status ?? null]
       );
       return result.rows;

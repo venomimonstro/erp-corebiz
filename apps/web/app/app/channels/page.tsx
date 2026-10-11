@@ -40,6 +40,8 @@ type InboxRow = {
   ordered_at: string | null;
   status: string;
   sales_order_id: string | null;
+  sales_order_status: string | null;
+  sales_order_version: number | null;
   attempts: number;
   last_error: string | null;
   received_at: string;
@@ -299,6 +301,19 @@ export default function ChannelsPage() {
     }
   }
 
+  async function confirmImportedOrder(row:InboxRow){
+    if(!row.sales_order_id||row.sales_order_version===null)return;
+    if(!window.confirm("Подтвердить заказ в учёте и передать его в OMS? Проверка наличия и резервирование выполняются в OMS отдельно."))return;
+    setError("");
+    try{
+      await apiRequest("/sales/orders/"+row.sales_order_id+"/confirm",{
+        method:"PATCH",
+        body:JSON.stringify({version:row.sales_order_version})
+      });
+      await load();
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось подтвердить заказ");}
+  }
+
   async function importOrder(row: InboxRow) {
     try {
       const result = await apiRequest<{
@@ -490,6 +505,10 @@ export default function ChannelsPage() {
                     </td>
                     <td>
                       <span className="status-pill">{row.status}</span>
+                      {row.status==="IMPORTED"&&row.sales_order_status==="DRAFT"?
+                        <small role="status">Нужны подтверждение заказа и резерв OMS</small>:null}
+                      {row.sales_order_status==="CONFIRMED"?
+                        <small>Подтверждён · требуется проверка комплектации OMS</small>:null}
                       {row.last_error ? <small>{row.last_error}</small> : null}
                     </td>
                     <td>
@@ -507,6 +526,12 @@ export default function ChannelsPage() {
                       >
                         Открыть
                       </button>
+                      {row.status==="IMPORTED"&&row.sales_order_status==="DRAFT"?
+                        <button type="button" onClick={()=>void confirmImportedOrder(row)}>
+                          Подтвердить заказ
+                        </button>:null}
+                      {row.status==="IMPORTED"&&row.sales_order_status==="CONFIRMED"?
+                        <a href="/app/oms" className="secondary-button">Открыть OMS</a>:null}
                       {row.status === "READY" || row.status === "FAILED" ? (
                         <button
                           onClick={() => void importOrder(row)}
