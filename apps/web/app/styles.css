@@ -3081,3 +3081,98 @@ button, .primary, .secondary { font: inherit; }
     justify-items:start;
   }
 }
+
+
+.tax-review-list {
+  display:grid;
+  gap:8px;
+}
+.tax-review-row {
+  display:grid;
+  grid-template-columns:120px minmax(0,1fr) auto;
+  gap:15px;
+  align-items:center;
+  padding:13px 14px;
+  border:1px solid #e4e7e9;
+  border-radius:14px;
+  background:linear-gradient(180deg,#fff,#fcfcfb);
+}
+.tax-review-money {
+  display:grid;
+  gap:4px;
+}
+.tax-review-money strong {
+  color:#2e3439;
+  font-size:15px;
+  letter-spacing:-.03em;
+}
+.tax-review-money span,
+.tax-review-copy small,
+.tax-review-copy span {
+  color:#939aa0;
+  font-size:8px;
+}
+.tax-review-copy {
+  display:grid;
+  gap:4px;
+  min-width:0;
+}
+.tax-review-copy strong {
+  color:#3d444a;
+  font-size:10px;
+}
+.tax-review-copy span {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.tax-review-actions {
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap:6px;
+}
+.tax-review-actions button {
+  min-height:31px;
+  padding:6px 9px;
+  border-radius:9px;
+  font-size:8px;
+  white-space:nowrap;
+}
+.tax-review-clear {
+  display:flex;
+  gap:11px;
+  align-items:center;
+  padding:15px;
+  border:1px solid #dfe5e1;
+  border-radius:14px;
+  background:#f8faf8;
+}
+.tax-review-clear > span {
+  display:grid;
+  place-items:center;
+  width:30px;
+  height:30px;
+  border-radius:10px;
+  background:#e6ece7;
+  color:#52665a;
+  font-size:12px;
+  font-weight:800;
+}
+.tax-review-clear > div {
+  display:grid;
+  gap:3px;
+}
+.tax-review-clear strong {
+  color:#3f4942;
+  font-size:10px;
+}
+.tax-review-clear small {
+  color:#89918b;
+  font-size:8px;
+}
+@media (max-width:820px) {
+  .tax-review-row { grid-template-columns:1fr; }
+  .tax-review-actions { justify-content:flex-start; }
+  .tax-review-copy span { white-space:normal; }
+}
