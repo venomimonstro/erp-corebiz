@@ -6,7 +6,7 @@
 export function csvCell(value:unknown):string{
   if(value===null||value===undefined)return '""';
   const isUserString=typeof value==="string";
-  let raw=typeof value==="object"?JSON.stringify(value):String(value);
+  let raw=typeof value==="object"?(JSON.stringify(value)??""):String(value);
   if(isUserString){
     // Leading tabs/CRs sometimes bypass spreadsheet formula detection.
     // Retain the original content, but force spreadsheet text mode.
