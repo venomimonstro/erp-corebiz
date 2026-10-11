@@ -60,7 +60,8 @@ describe("ecommerce launch safety", () => {
     const row={
       public_slug:"test-shop",store_enabled:true,home_published:true,
       catalog_published:true,priced_sku:true,available_sku:true,
-      primary_domain:"shop.example.com"
+      primary_domain:"shop.example.com",
+      acquiring_configured:true,fiscal_configured:true,delivery_configured:true
     };
     const database={
       withTenantTransaction:jest.fn(async(_context:any,run:any)=>
@@ -69,7 +70,9 @@ describe("ecommerce launch safety", () => {
     const result:any=await storefront(database).readiness(context,siteId);
     expect(result.canTestOrders).toBe(true);
     expect(result.canLaunchWithOnlinePayments).toBe(false);
-    expect(result.checks).toHaveLength(6);
+    expect(result.checks.some((check:any)=>
+      check.code==="ACQUIRING_CONFIGURED" && check.done)).toBe(true);
+    expect(result.checks).toHaveLength(9);
     expect(result.externalBlockers).toHaveLength(4);
     // No PSP is inferred from published pages or a verified domain.
   });
