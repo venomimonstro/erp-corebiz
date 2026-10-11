@@ -343,7 +343,8 @@ export default function DanceSetupPage(){
       return;
     }
 
-    const lines=cardLines.map((line)=>{
+    const lines=[];
+    for(const line of cardLines){
       const quantity=Number(line.quantity.replace(",","."));
       const waste=Number(line.wastePercent.replace(",","."));
       if(
@@ -351,15 +352,18 @@ export default function DanceSetupPage(){
         !Number.isFinite(quantity)||quantity<=0||
         !Number.isFinite(waste)||waste<0||waste>100
       ){
-        throw new Error("Проверьте материалы, количество и технологические потери");
+        setError(
+          "Проверьте материалы, количество и технологические потери"
+        );
+        return;
       }
-      return {
+      lines.push({
         warehouseId:line.warehouseId,
         skuId:line.skuId,
         quantityMilli:String(Math.round(quantity*1000)),
         wasteBps:Math.round(waste*100)
-      };
-    });
+      });
+    }
 
     setPending(true);
     try{
