@@ -12,6 +12,12 @@ import {StorefrontService} from "./storefront.service";
 export class StorefrontController{
   constructor(private readonly storefront:StorefrontService){}
 
+  @Get("site/:siteId/readiness")
+  @RequirePermission("sites.read")
+  async readiness(@Req() req:AuthenticatedRequest,@Param("siteId") siteId:string):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.storefront.readiness(this.ctx(req),siteId)};
+  }
+
   @Put("site/:siteId/config")
   @RequirePermission("sites.manage")
   async config(@Req() req:AuthenticatedRequest,@Param("siteId") siteId:string,@Body() body:any):Promise<ApiSuccess<{updated:true}>>{
