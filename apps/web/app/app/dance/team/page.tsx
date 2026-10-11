@@ -124,10 +124,18 @@ type TrainerStatement = {
   lesson_accrual_minor: string;
   base_minor: string;
   guarantee_adjustment_minor: string;
+  adjustment_minor: string;
   total_minor: string;
   currency: string;
   status: string;
   payroll_batch_id: string | null;
+  adjustments: Array<{
+    id: string;
+    adjustmentType: string;
+    amountMinor: string;
+    reason: string;
+    createdAt: string;
+  }>;
 };
 
 function money(value: string) {
@@ -219,6 +227,14 @@ export default function DanceTeamPage() {
     "PERCENT" | "HOURLY" | "PER_ATTENDEE" | "FIXED_PER_LESSON"
   >("PERCENT");
   const [planVariableRub, setPlanVariableRub] = useState("500");
+  const [adjustmentModal, setAdjustmentModal] = useState(false);
+  const [adjustmentStatement, setAdjustmentStatement] =
+    useState<TrainerStatement | null>(null);
+  const [adjustmentType, setAdjustmentType] = useState<
+    "BONUS" | "DEDUCTION" | "CORRECTION" | "OTHER"
+  >("BONUS");
+  const [adjustmentRub, setAdjustmentRub] = useState("1000");
+  const [adjustmentReason, setAdjustmentReason] = useState("");
 
   const load = useCallback(async () => {
     setError("");
@@ -411,6 +427,57 @@ export default function DanceTeamPage() {
         cause instanceof Error
           ? cause.message
           : "Не удалось сохранить правило зарплаты"
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+
+  function openAdjustment(statement: TrainerStatement) {
+    setAdjustmentStatement(statement);
+    setAdjustmentType("BONUS");
+    setAdjustmentRub("1000");
+    setAdjustmentReason("");
+    setAdjustmentModal(true);
+  }
+
+  async function saveAdjustment() {
+    if (!adjustmentStatement) return;
+    const rub = Number(adjustmentRub.replace(",", "."));
+    if (!Number.isFinite(rub) || rub <= 0) {
+      setError("Введите сумму больше нуля");
+      return;
+    }
+    if (adjustmentReason.trim().length < 3) {
+      setError("Укажите понятную причину корректировки");
+      return;
+    }
+
+    setPending(true);
+    setError("");
+    try {
+      await apiRequest(
+        "/dance/payroll-statements/" +
+          adjustmentStatement.id +
+          "/adjustments",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            type: adjustmentType,
+            amountMinor: String(Math.round(rub * 100)),
+            reason: adjustmentReason.trim()
+          })
+        }
+      );
+      setAdjustmentModal(false);
+      setAdjustmentStatement(null);
+      setNotice("Корректировка ведомости сохранена.");
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось сохранить корректировку"
       );
     } finally {
       setPending(false);
@@ -728,7 +795,30 @@ export default function DanceTeamPage() {
                   <span>За занятия <b>{money(statement.lesson_accrual_minor)}</b></span>
                   <span>База <b>{money(statement.base_minor)}</b></span>
                   <span>Гарантия <b>{money(statement.guarantee_adjustment_minor)}</b></span>
+                  <span>
+                    Корректировки{" "}
+                    <b>{money(statement.adjustment_minor ?? "0")}</b>
+                  </span>
                 </div>
+                {statement.adjustments?.length ? (
+                  <div className="statement-adjustments">
+                    {statement.adjustments.map((item) => (
+                      <small key={item.id}>
+                        {item.amountMinor.startsWith("-") ? "−" : "+"}
+                        {money(item.amountMinor.replace("-", ""))} · {item.reason}
+                      </small>
+                    ))}
+                  </div>
+                ) : null}
+                {statement.status === "FINALIZED" ? (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => openAdjustment(statement)}
+                  >
+                    + Премия / удержание
+                  </button>
+                ) : null}
               </article>
             ))}
             {!trainerStatements.length ? (
@@ -838,6 +928,94 @@ export default function DanceTeamPage() {
             </table>
           </div>
         </section>
+        {adjustmentModal && adjustmentStatement ? (
+          <StudioModal
+            eyebrow="Корректировка зарплаты"
+            title={adjustmentStatement.trainer_name}
+            description={
+              "Итог до корректировки: " +
+              money(adjustmentStatement.total_minor) +
+              ". Изменение попадёт в ведомость и затем в payroll."
+            }
+            onClose={() => setAdjustmentModal(false)}
+            footer={
+              <>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setAdjustmentModal(false)}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => void saveAdjustment()}
+                >
+                  {pending ? "Сохраняем…" : "Применить"}
+                </button>
+              </>
+            }
+          >
+            <div className="studio-form-section">
+              <header>
+                <strong>Что меняем</strong>
+                <span>
+                  Все ручные изменения сохраняются отдельно от автоматического
+                  расчёта, поэтому исходная формула зарплаты остаётся прозрачной.
+                </span>
+              </header>
+              <div className="studio-choice-grid">
+                {[
+                  ["BONUS", "Премия", "Добавить к зарплате"],
+                  ["DEDUCTION", "Удержание", "Уменьшить итог"],
+                  ["CORRECTION", "Корректировка", "Исправление расчёта"],
+                  ["OTHER", "Другое", "Иная согласованная выплата"]
+                ].map(([value, label, hint]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={
+                      "studio-choice " +
+                      (adjustmentType === value ? "active" : "")
+                    }
+                    onClick={() =>
+                      setAdjustmentType(
+                        value as typeof adjustmentType
+                      )
+                    }
+                  >
+                    <strong>{label}</strong>
+                    <span>{hint}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="studio-form-grid">
+                <label>
+                  <span>Сумма, ₽</span>
+                  <input
+                    inputMode="decimal"
+                    value={adjustmentRub}
+                    onChange={(event) =>
+                      setAdjustmentRub(event.target.value)
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Причина</span>
+                  <input
+                    value={adjustmentReason}
+                    onChange={(event) =>
+                      setAdjustmentReason(event.target.value)
+                    }
+                    placeholder="Например: премия за мастер-класс"
+                  />
+                </label>
+              </div>
+            </div>
+          </StudioModal>
+        ) : null}
+
         {roomModal ? (
           <StudioModal
             eyebrow="Аренда пространства"
