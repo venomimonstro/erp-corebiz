@@ -276,6 +276,9 @@ function monthRange() {
 }
 
 export default function DanceTeamPage() {
+  const [access,setAccess]=useState<{
+    canViewFinance:boolean;canManageFinance:boolean;canManageDance:boolean
+  }|null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   const [services, setServices] = useState<Service[]>([]);
@@ -357,6 +360,24 @@ export default function DanceTeamPage() {
     setError("");
     const range = monthRange();
     try {
+      const rights=await apiRequest<{
+        canViewFinance:boolean;canManageFinance:boolean;canManageDance:boolean
+      }>("/dance/access");
+      setAccess(rights);
+      if(!rights.canManageFinance){
+        // Instructor self-service or a finance read-only manager.
+        // Never request rents, all employee profiles or account-wide payroll.
+        const [ownStatements,ownAccruals]=await Promise.all([
+          apiRequest<TrainerStatement[]>(
+            "/dance/payroll-statements?from="+encodeURIComponent(range.from)+
+              "&to="+encodeURIComponent(range.to)),
+          apiRequest<Accrual[]>(
+            "/dance/compensation-accruals?from="+encodeURIComponent(range.from)+
+              "&to="+encodeURIComponent(range.to))
+        ]);
+        setTrainerStatements(ownStatements);setAccruals(ownAccruals);
+        return;
+      }
       const currentMonth = new Date().toISOString().slice(0, 7);
       const [
         customerRows,
@@ -1123,6 +1144,96 @@ export default function DanceTeamPage() {
       setPending(false);
     }
   }
+
+  if(access&&!access.canManageFinance)return (
+    <main className="app-shell">
+      <AppSidebar active="dance-team" />
+      <section className="workspace workspace-wide studio-premium dance-detail">
+        <header className="studio-hero compact">
+          <div><span className="studio-eyebrow">Ведомости и начисления</span>
+            <h1>{access.canViewFinance?"Просмотр зарплаты":"Мои начисления"}</h1>
+            <p>Проверьте расчёт по проведённым занятиям. При расхождениях
+              отметьте ведомость как спорную с пояснением.</p>
+          </div>
+          <button type="button" className="secondary-button" disabled={pending}
+            onClick={()=>void load()}>Обновить</button>
+        </header>
+        <DanceWorkspaceNav active="team" />
+        {error?<div className="studio-message error" role="alert">{error}</div>:null}
+        {notice?<div className="studio-message success" role="status">{notice}</div>:null}
+        <section className="settings-card">
+          <div className="section-heading"><div><h2>Зарплатные ведомости</h2>
+            <p className="muted">Расчёт и статус подтверждения</p></div></div>
+          <div className="data-table-wrap"><table className="data-table">
+            <thead><tr><th>Тренер</th><th>Период</th><th>Сумма</th><th>Статус</th>
+              <th>Действие</th></tr></thead>
+            <tbody>
+              {trainerStatements.map(statement=><tr key={statement.id}>
+                <td><strong>{statement.trainer_name}</strong></td>
+                <td>{statement.period_from} — {statement.period_to}</td>
+                <td>{money(statement.total_minor)}</td>
+                <td>{payrollReviewLabel(statement.review_status)}</td>
+                <td className="table-actions">
+                  <button type="button" className="secondary-button" disabled={pending}
+                    onClick={()=>void openStatementDetails(statement.id)}>
+                    Детали
+                  </button>
+                  {!access.canViewFinance&&statement.review_status==="PENDING"?<>
+                    <button type="button" disabled={pending}
+                      onClick={()=>void reviewStatement(statement,"ACKNOWLEDGED")}>
+                      Подтвердить
+                    </button>
+                    <button type="button" className="secondary-button" disabled={pending}
+                      onClick={()=>void reviewStatement(statement,"DISPUTED")}>
+                      Оспорить
+                    </button>
+                  </>:null}
+                </td>
+              </tr>)}
+              {!trainerStatements.length?<tr><td colSpan={5}>
+                Пока нет ведомостей за этот период. Уточните у администратора,
+                закрыты ли занятия и сформирована ли зарплата.
+              </td></tr>:null}
+            </tbody>
+          </table></div>
+        </section>
+        <section className="settings-card">
+          <h2>Начисления по занятиям</h2>
+          <div className="data-table-wrap"><table className="data-table">
+            <thead><tr><th>Дата</th><th>Тренер</th><th>Учеников</th>
+              <th>Начислено</th><th>Статус</th></tr></thead>
+            <tbody>
+              {accruals.map(item=><tr key={item.id}>
+                <td>{new Date(item.starts_at).toLocaleDateString("ru-RU")}</td>
+                <td>{item.trainer_name}</td>
+                <td>{item.attended_count}</td>
+                <td>{money(item.amount_minor)}</td>
+                <td>{item.status}</td>
+              </tr>)}
+              {!accruals.length?<tr><td colSpan={5}>
+                Начисления появятся после закрытия занятий.
+              </td></tr>:null}
+            </tbody>
+          </table></div>
+        </section>
+        {statementDetail?<StudioModal eyebrow="Моя ведомость"
+          title={statementDetail.statement.trainer_name}
+          description={statementDetail.statement.period_from+" — "+
+            statementDetail.statement.period_to}
+          onClose={()=>setStatementDetail(null)}
+          footer={<button type="button" onClick={()=>setStatementDetail(null)}>Закрыть</button>}>
+          <p>Итог: <strong>{money(statementDetail.statement.total_minor)}</strong></p>
+          <div className="data-table-wrap"><table className="data-table">
+            <thead><tr><th>Занятие</th><th>Заработано</th></tr></thead>
+            <tbody>{statementDetail.lessons.map(lesson=><tr key={lesson.accrual_id}>
+              <td>{lesson.lesson_name} · {new Date(lesson.starts_at).toLocaleDateString("ru-RU")}</td>
+              <td>{money(lesson.amount_minor)}</td>
+            </tr>)}</tbody>
+          </table></div>
+        </StudioModal>:null}
+      </section>
+    </main>
+  );
 
   return (
     <main className="app-shell">
