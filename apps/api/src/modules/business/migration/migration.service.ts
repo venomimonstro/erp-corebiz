@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
@@ -79,12 +80,18 @@ export class MigrationService {
 
     return this.database.withTenantTransaction(context, async (client) => {
       const existing = await client.query(
-        "SELECT id, status, row_count, valid_count, error_count, mapping " +
+        "SELECT id, status, row_count, valid_count, error_count, mapping, checksum, entity_type " +
         "FROM migration_batch WHERE tenant_id = $1 AND idempotency_key = $2",
         [context.tenantId, input.idempotencyKey.trim()]
       );
 
       if (existing.rows[0]) {
+        if (existing.rows[0].checksum !== checksum ||
+            existing.rows[0].entity_type !== input.entityType) {
+          throw new ConflictException(
+            "Этот ключ импорта уже использован для другого файла или типа данных"
+          );
+        }
         return this.batchSummary(existing.rows[0], true);
       }
 
