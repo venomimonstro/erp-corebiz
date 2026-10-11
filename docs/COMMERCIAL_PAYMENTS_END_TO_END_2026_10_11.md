@@ -146,7 +146,7 @@ loopback staging URL; в нём есть тестовые мутации биз�
 Диагностика ledger (строго после миграций и создания тестовых операций):
 ```bash
 # На staging подключиться под отдельной read-only SQL-ролью:
-STAGING_TENANT_ID=<staging-tenant-uuid>
+STAGING_TENANT_ID="replace-with-staging-tenant-uuid"
 # Не копируйте команду с настоящим tenant ID в публичный лог.
 { printf "BEGIN; SELECT set_config('app.tenant_id','%s',true);\\n" "$STAGING_TENANT_ID"; cat scripts/commerce_payments_reconcile.sql; printf "\\nROLLBACK;\\n"; } \\
   | psql "$COREBIZ_DISPOSABLE_DATABASE_URL" -X -v ON_ERROR_STOP=1
