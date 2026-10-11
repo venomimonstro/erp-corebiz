@@ -2714,7 +2714,9 @@ export class BookingService {
     bookingId: string,
     partyId: string
   ): Promise<void> {
+    const scopedMembershipIds=await this.serviceScope(context,"service.write");
     await this.database.withTenantTransaction(context, async (client) => {
+      await this.assertBookingAccess(client,context.tenantId,bookingId,scopedMembershipIds);
       const booking = await client.query<{
         party_id: string | null;
         asset_id: string | null;
@@ -2735,7 +2737,8 @@ export class BookingService {
 
       const row = booking.rows[0];
       if (!row) throw new NotFoundException("Запись не найдена");
-
+      await this.assertStandaloneServiceBooking(client,context.tenantId,bookingId);
+      
       const party = await client.query(
         `SELECT 1 FROM party
          WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
@@ -2857,6 +2860,7 @@ export class BookingService {
       );
       const booking=bookingResult.rows[0];
       if(!booking) throw new NotFoundException("Запись не найдена");
+      await this.assertStandaloneServiceBooking(client,context.tenantId,bookingId);
       if(booking.version!==input.version){
         throw new ConflictException("Запись уже была изменена");
       }
@@ -3050,11 +3054,9 @@ export class BookingService {
     const scopedMembershipIds = await this.serviceScope(context, "service.write");
     return this.database.withTenantTransaction(context, async (client) => {
       await this.assertBookingAccess(
-        client,
-        context.tenantId,
-        bookingId,
-        scopedMembershipIds
+        client,context.tenantId,bookingId,scopedMembershipIds
       );
+      await this.assertStandaloneServiceBooking(client,context.tenantId,bookingId);
       const result = await client.query<{ version: number; status: string }>(
         `UPDATE service_booking
          SET status = $3,
@@ -3475,6 +3477,25 @@ export class BookingService {
     const scope = await this.authorization.resolveScope(context, permission);
     if (!scope) throw new ForbiddenException("Недостаточно прав");
     return this.authorization.membershipIdsForScope(context, scope);
+  }
+
+  /**
+   * A dance class shares one service_booking row, but owns distinct roster,
+   * entitlement, cost and trainer lifecycle. Updating the host through the
+   * generic service endpoint would leave the two records inconsistent.
+   */
+  private async assertStandaloneServiceBooking(
+    client:PoolClient,tenantId:string,bookingId:string
+  ):Promise<void>{
+    const linked=await client.query(
+      `SELECT 1 FROM dance_lesson
+       WHERE tenant_id=$1 AND host_booking_id=$2 LIMIT 1`,
+      [tenantId,bookingId]
+    );
+    if(linked.rowCount)
+      throw new ConflictException(
+        "Запись связана с занятием студии. Изменяйте расписание, посещаемость и оплату через раздел «Студия танцев»"
+      );
   }
 
   private async assertBookingAccess(
