@@ -3871,3 +3871,27 @@ button, .primary, .secondary { font: inherit; }
 .dance-list-tabs button.active{background:#fff;color:#202327;box-shadow:0 1px 5px rgba(20,24,28,.08)}
 @media(max-width:670px){.dance-list-tabs{width:100%;overflow-x:auto;flex-wrap:nowrap}
   .dance-list-tabs button{white-space:nowrap;padding:9px 11px}}
+
+
+/* Progressive first-day dance setup — disappears when all six essentials are ready. */
+.dance-first-day{margin:0 0 18px;padding:22px;border:1px solid #e1e4e7;
+  border-radius:18px;background:#fff}
+.dance-first-day-header{display:flex;align-items:center;justify-content:space-between;gap:15px;
+  margin-bottom:16px}
+.dance-first-day-header>div>span{font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.1em;color:#858b92}
+.dance-first-day-header h2{font-size:20px;font-weight:650;letter-spacing:-.035em;
+  color:#25282d;margin:7px 0}
+.dance-first-day-header p{font-size:12px;color:#7a828c;line-height:1.5;margin:0}
+.dance-first-day-header>strong{font-size:18px;font-weight:650;white-space:nowrap;color:#505961}
+.dance-first-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.dance-first-steps a{display:flex;gap:11px;align-items:center;text-decoration:none;
+  background:#f8f9fa;color:#353b43;border-radius:11px;padding:12px;min-width:0}
+.dance-first-steps a>span:first-child{font-size:17px;color:#929aa3}
+.dance-first-steps a>span:nth-child(2){font-size:12px;font-weight:550;flex:1}
+.dance-first-steps a>span:last-child{color:#737c85}
+.dance-first-steps a.done{color:#727b85;background:#fafafa}
+.dance-first-steps a.done>span:first-child{color:#5f8873}
+.dance-first-steps a:hover:not(.done){background:#eff1f3}
+@media(max-width:820px){.dance-first-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:510px){.dance-first-steps{grid-template-columns:1fr}}
