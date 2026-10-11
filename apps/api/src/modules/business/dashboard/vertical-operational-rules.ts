@@ -211,19 +211,6 @@ export const VERTICAL_OPERATIONAL_RULES:readonly VerticalOperationalRule[]=[
       ORDER BY coalesce(b.expected_at,b.created_at),b.id LIMIT 201`
   },
   {
-    code:"MARKETPLACE_FEED_STALE",domain:"ECOMMERCE",
-    label:"Маркетплейс не передаёт свежие заказы",
-    severity:"CRITICAL",href:"/app/ecommerce",
-    explanation:"Остатки публикуются, но заказы не синхронизированы более пятнадцати минут. Возможна двойная продажа",
-    permission:"channels.read",
-    sql:`SELECT l.id FROM channel_stock_listing l
-      JOIN channel_connection c ON c.tenant_id=l.tenant_id AND c.id=l.connection_id
-      WHERE l.tenant_id=$1 AND l.publish_enabled AND l.enabled
-        AND c.status='ACTIVE' AND
-          (c.last_synced_at IS NULL OR c.last_synced_at<now()-interval '15 minutes')
-      ORDER BY l.updated_at,l.id LIMIT 201`
-  },
-  {
     code:"DANCE_STRANDED_VISIT",domain:"DANCE",
     label:"Зависшие посещения абонементов",
     severity:"CRITICAL",href:"/app/dance/students",
