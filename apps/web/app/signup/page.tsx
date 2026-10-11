@@ -9,7 +9,7 @@ export default function SignupPage() {
   const [companyName, setCompanyName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [verticalCode, setVerticalCode] = useState("DANCE_FITNESS");
+  const [verticalCode, setVerticalCode] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
 
@@ -69,7 +69,8 @@ export default function SignupPage() {
             Чем занимается компания?
             <select value={verticalCode}
               onChange={(event) => setVerticalCode(event.target.value)}
-              aria-label="Основной вид бизнеса">
+              aria-label="Основной вид бизнеса" required>
+              <option value="" disabled>Выберите вашу сферу бизнеса</option>
               <option value="DANCE_FITNESS">Студия танцев или фитнес</option>
               <option value="BEAUTY_SALON">Салон красоты</option>
               <option value="NAIL_SALON">Маникюрная студия</option>
