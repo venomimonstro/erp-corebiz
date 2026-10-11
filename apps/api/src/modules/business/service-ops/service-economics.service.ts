@@ -544,6 +544,31 @@ export class ServiceEconomicsService {
     });
   }
 
+  async draftPayrollBatches(
+    context:TenantContext,
+    month?:string
+  ){
+    await this.requireAll(context,"service.read");
+    const period=this.monthBounds(month);
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           b.id,b.legal_entity_id,e.name AS legal_entity_name,
+           b.period_from,b.period_to,b.status,b.currency
+         FROM payroll_accrual_batch b
+         JOIN legal_entity e
+           ON e.tenant_id=b.tenant_id AND e.id=b.legal_entity_id
+         WHERE b.tenant_id=$1
+           AND b.status='DRAFT'
+           AND b.period_from=$2::date
+           AND b.period_to=$3::date
+         ORDER BY e.name,b.created_at`,
+        [context.tenantId,period.from,period.to]
+      );
+      return result.rows;
+    });
+  }
+
   async payrollStatements(context:TenantContext,month?:string){
     const scope=await this.scope(context,"service.read");
     const period=this.monthBounds(month);
