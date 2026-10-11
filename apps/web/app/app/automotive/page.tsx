@@ -118,7 +118,6 @@ export default function AutomotivePage(){
       const [d,v,o,ds,ps]=await Promise.all([
         apiRequest<Dashboard>("/automotive/dashboard"),
         apiRequest<Vehicle[]>("/automotive/vehicles"),
-        
         apiRequest<WorkOrder[]>("/automotive/work-orders"),
         apiRequest<Donor[]>("/automotive/donors").catch(()=>[]),
         apiRequest<Part[]>("/automotive/parts").catch(()=>[])
