@@ -167,6 +167,129 @@ export class DanceEconomicsService {
     });
   }
 
+  async payrollProfiles(context:TenantContext){
+    await this.scopeIds(context,"dance.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           p.id,p.trainer_resource_id,r.name AS trainer_name,
+           p.monthly_base_minor::text,p.daily_base_minor::text,
+           p.minimum_guarantee_minor::text,p.currency,
+           p.valid_from,p.valid_to,p.status,p.note,p.metadata,
+           r.membership_id
+         FROM trainer_payroll_profile p
+         JOIN service_resource r
+           ON r.tenant_id=p.tenant_id AND r.id=p.trainer_resource_id
+         WHERE p.tenant_id=$1 AND p.status='ACTIVE'
+         ORDER BY r.name,p.valid_from DESC`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async upsertPayrollProfile(
+    context:TenantContext,
+    input:{
+      trainerResourceId:string;
+      monthlyBaseMinor?:string;
+      dailyBaseMinor?:string;
+      minimumGuaranteeMinor?:string;
+      validFrom?:string;
+      validTo?:string;
+      note?:string;
+      metadata?:Record<string,unknown>;
+    }
+  ){
+    await this.requireAll(context,"dance.write");
+    const money=[
+      input.monthlyBaseMinor??"0",
+      input.dailyBaseMinor??"0",
+      input.minimumGuaranteeMinor??"0"
+    ];
+    if(money.some(value=>!/^\d+$/.test(value))){
+      throw new BadRequestException("Некорректные постоянные условия зарплаты");
+    }
+    const validFrom=input.validFrom??new Date().toISOString().slice(0,10);
+    if(
+      !/^\d{4}-\d{2}-\d{2}$/.test(validFrom)||
+      (input.validTo&&!/^\d{4}-\d{2}-\d{2}$/.test(input.validTo))
+    ){
+      throw new BadRequestException("Некорректный период условий тренера");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const trainer=await client.query(
+        `SELECT 1 FROM service_resource
+         WHERE tenant_id=$1 AND id=$2
+           AND type='EMPLOYEE' AND status='ACTIVE'`,
+        [context.tenantId,input.trainerResourceId]
+      );
+      if(!trainer.rowCount) throw new NotFoundException("Тренер не найден");
+
+      const current=await client.query<{id:string}>(
+        `SELECT id
+         FROM trainer_payroll_profile
+         WHERE tenant_id=$1
+           AND trainer_resource_id=$2
+           AND status='ACTIVE'
+           AND valid_from=$3::date
+           AND valid_to IS NOT DISTINCT FROM $4::date
+         LIMIT 1
+         FOR UPDATE`,
+        [
+          context.tenantId,input.trainerResourceId,
+          validFrom,input.validTo??null
+        ]
+      );
+
+      try{
+        if(current.rows[0]){
+          const result=await client.query(
+            `UPDATE trainer_payroll_profile
+             SET monthly_base_minor=$4,
+                 daily_base_minor=$5,
+                 minimum_guarantee_minor=$6,
+                 note=$7,metadata=$8,updated_at=now()
+             WHERE tenant_id=$1 AND id=$2
+               AND trainer_resource_id=$3
+             RETURNING *`,
+            [
+              context.tenantId,current.rows[0].id,input.trainerResourceId,
+              input.monthlyBaseMinor??"0",input.dailyBaseMinor??"0",
+              input.minimumGuaranteeMinor??"0",
+              input.note?.trim()||null,JSON.stringify(input.metadata??{})
+            ]
+          );
+          return result.rows[0];
+        }
+
+        const result=await client.query(
+          `INSERT INTO trainer_payroll_profile(
+             tenant_id,trainer_resource_id,monthly_base_minor,daily_base_minor,
+             minimum_guarantee_minor,valid_from,valid_to,note,metadata
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           RETURNING *`,
+          [
+            context.tenantId,input.trainerResourceId,
+            input.monthlyBaseMinor??"0",input.dailyBaseMinor??"0",
+            input.minimumGuaranteeMinor??"0",validFrom,input.validTo??null,
+            input.note?.trim()||null,JSON.stringify(input.metadata??{})
+          ]
+        );
+        return result.rows[0];
+      }catch(error){
+        const message=error instanceof Error?error.message:String(error);
+        if(message.includes("TRAINER_PAYROLL_PROFILE_OVERLAP")){
+          throw new ConflictException(
+            "У тренера уже есть постоянные условия зарплаты на этот период"
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
   async createCompensationPlan(
     context:TenantContext,
     input:{
