@@ -2009,7 +2009,7 @@ export class DanceStudioService {
         }
 
         const service=await client.query<{price_minor:string}>(
-          `SELECT price_minor::text
+          `SELECT price_minor_snapshot::text AS price_minor
            FROM service_booking
            WHERE tenant_id=$1 AND id=$2`,
           [context.tenantId,lesson.host_booking_id]
