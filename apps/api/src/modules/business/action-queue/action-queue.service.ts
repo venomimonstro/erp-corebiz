@@ -44,7 +44,10 @@ export class ActionQueueService {
             SELECT 1 FROM membership_role mr JOIN role_permission rp
             ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
             WHERE mr.tenant_id=$1 AND mr.membership_id=$2
-              AND rp.permission_code IN ('dashboard.owner.read','*')
+              AND (
+                (rp.permission_code='dashboard.owner.read' AND rp.scope='all')
+                OR rp.permission_code='*'
+              )
           ) AS permitted`,
           [context.tenantId,context.membershipId]
         );
@@ -79,9 +82,9 @@ export class ActionQueueService {
         );
 
         const permissionRows = await client.query<{
-          permission_code: string;
+          permission_code: string;scope:"own"|"team"|"branch"|"all";
         }>(
-          `SELECT DISTINCT rp.permission_code
+          `SELECT DISTINCT rp.permission_code,rp.scope
            FROM membership_role mr
            JOIN role_permission rp
              ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
@@ -92,8 +95,15 @@ export class ActionQueueService {
         const permissions = new Set(
           permissionRows.rows.map((row) => row.permission_code)
         );
+        const fullPermissions = new Set(
+          permissionRows.rows
+            .filter(row=>row.scope==="all"||row.permission_code==="*")
+            .map(row=>row.permission_code)
+        );
         const allowed = (code: string) =>
           permissions.has("*") || permissions.has(code);
+        const allowedFull=(code:string)=>
+          fullPermissions.has("*")||fullPermissions.has(code);
 
         const items: QueueItem[] = [];
 
@@ -147,7 +157,9 @@ export class ActionQueueService {
           }
         }
 
-        const issueCodes=visibleOperationalCodes(permissions);
+        // Operational incidents reference whole-company records. Restrict them
+        // to full-scope grants; narrow grants still show personal work items.
+        const issueCodes=visibleOperationalCodes(fullPermissions);
         if(issueCodes===null||issueCodes.length>0){
           const issues = await client.query<{
             id: string;
@@ -216,7 +228,7 @@ export class ActionQueueService {
           }
         }
 
-        if (allowed("accounting.compliance.read")) {
+        if (allowedFull("accounting.compliance.read")) {
           const tax=await client.query<{
             id:string;
             title:string;
@@ -299,7 +311,7 @@ export class ActionQueueService {
           }
         }
 
-        if (allowed("analytics.read")) {
+        if (allowedFull("analytics.read")) {
           const alerts = await client.query<{
             id: string;
             severity: string;
@@ -341,7 +353,7 @@ export class ActionQueueService {
 
         return {
           items,
-          goLiveAllowed: allowed("go_live.read")
+          goLiveAllowed: allowedFull("go_live.read")
         };
       }
     );
