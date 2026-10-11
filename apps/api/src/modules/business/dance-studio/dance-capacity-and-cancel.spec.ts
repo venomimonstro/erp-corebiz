@@ -147,6 +147,7 @@ describe("dance: simultaneous capacity and cancellation safeguards",()=>{
     (studio as any).assertGroupAccess=jest.fn().mockResolvedValue({id:groupId,capacity:10});
     const cancel=jest.fn().mockResolvedValue({status:"CANCELLED_IN_TIME",version:5});
     (studio as any).markAttendanceTx=cancel;
+    (studio as any).audit=jest.fn().mockResolvedValue(undefined);
     (studio as any).syncGroupRoster=jest.fn().mockResolvedValue({enrolled:0});
     const result=await studio.changeGroupMemberStatus(context,groupId,"member-1",
       {status:"PAUSED",keepPlace:true});
