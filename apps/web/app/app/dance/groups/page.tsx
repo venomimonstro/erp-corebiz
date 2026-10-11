@@ -179,6 +179,7 @@ export default function DanceGroupsPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [pending, setPending] = useState(false);
+  const [attendancePending,setAttendancePending]=useState<string|null>(null);
   const [programModal, setProgramModal] = useState(false);
   const [programName, setProgramName] = useState("Hip-Hop");
   const [programServiceId, setProgramServiceId] = useState("");
@@ -882,19 +883,35 @@ export default function DanceGroupsPage() {
   }
 
   async function attendance(participant: Participant, status: string) {
-    if (!selectedLesson) return;
+    if(!selectedLesson||attendancePending||pending)return;
+    if(["COMPLETED","CANCELLED_BY_STUDIO","CANCELLED_BY_TRAINER"]
+      .includes(selectedLesson.status))return;
+    if(status==="CANCELLED_IN_TIME"&&participant.status!=="WAITLIST"&&
+       Date.parse(selectedLesson.starts_at)<=Date.now()){
+      setError("Урок уже начался. Своевременная отмена и автоматический возврат невозможны.");
+      return;
+    }
+    if(status==="CANCELLED_IN_TIME"&&!window.confirm(
+      participant.status==="WAITLIST"
+        ?"Убрать ученика из списка ожидания?"
+        :"Отменить запись и вернуть резерв занятия или абонемента?"
+    ))return;
+    setAttendancePending(participant.id);setError("");setNotice("");
     try {
       await apiRequest(
         `/dance/lessons/${selectedLesson.id}/participants/${participant.id}/attendance`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ status, version: participant.version })
-        }
+        {method:"PATCH",body:JSON.stringify({status,version:participant.version})}
       );
       await loadParticipants(selectedLesson.id);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось отметить посещение");
-    }
+      if(["CANCELLED_IN_TIME","CANCELLED_LATE"].includes(status)){
+        await load();
+        setNotice("Запись обновлена. Состав и доступные места пересчитаны.");
+      }
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось отметить посещение");
+      // On conflicts the next request must use the current participant version.
+      await loadParticipants(selectedLesson.id);
+    }finally{setAttendancePending(null);}
   }
 
   function openEditLessonModal() {
@@ -1197,13 +1214,35 @@ export default function DanceGroupsPage() {
                       <td>{participant.package_name ?? money(participant.charge_minor)}<small>{participant.price_source}</small></td>
                       <td><span className="status-pill">{participant.status}</span></td>
                       <td className="table-actions">
-                        {selectedLesson.status !== "COMPLETED" ? (
+                        {!["COMPLETED","CANCELLED_BY_STUDIO","CANCELLED_BY_TRAINER"]
+                          .includes(selectedLesson.status) ? (
+                          participant.status==="WAITLIST" ? (
+                            <button className="secondary-button" disabled={Boolean(attendancePending)||pending}
+                              onClick={()=>void attendance(participant,"CANCELLED_IN_TIME")} type="button">
+                              Убрать из ожидания
+                            </button>
+                          ) : participant.status==="CANCELLED_IN_TIME"?
+                            <span>Запись отменена</span>
+                          : (
                           <>
-                            <button onClick={() => void attendance(participant, "ATTENDED")} type="button">Пришёл</button>
-                            <button className="secondary-button" onClick={() => void attendance(participant, "NO_SHOW")} type="button">No-show</button>
-                            <button className="secondary-button" onClick={() => void attendance(participant, "EXCUSED_ABSENCE")} type="button">Уважит.</button>
+                            <button disabled={Boolean(attendancePending)||pending||participant.status==="ATTENDED"}
+                              onClick={()=>void attendance(participant,"ATTENDED")} type="button">
+                              {attendancePending===participant.id?"Сохраняем…":"Пришёл"}
+                            </button>
+                            <button className="secondary-button"
+                              disabled={Boolean(attendancePending)||pending||participant.status==="NO_SHOW"}
+                              onClick={()=>void attendance(participant,"NO_SHOW")} type="button">Не пришёл</button>
+                            <button className="secondary-button"
+                              disabled={Boolean(attendancePending)||pending||participant.status==="EXCUSED_ABSENCE"}
+                              onClick={()=>void attendance(participant,"EXCUSED_ABSENCE")} type="button">Уважительная причина</button>
+                            {participant.status==="BOOKED"&&
+                              new Date(selectedLesson.starts_at).getTime()>Date.now()?
+                              <button className="secondary-button" disabled={Boolean(attendancePending)||pending}
+                                onClick={()=>void attendance(participant,"CANCELLED_IN_TIME")} type="button">
+                                Отменить запись
+                              </button>:null}
                           </>
-                        ) : null}
+                        )) : <span>Журнал закрыт</span>}
                       </td>
                     </tr>
                   ))}
