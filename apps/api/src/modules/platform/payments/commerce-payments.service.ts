@@ -681,6 +681,10 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
            WHERE tenant_id=$1 AND id=$2 AND status IN ('NEW','PENDING')
              AND (provider_refund_id IS NULL OR provider_refund_id=$3)`,
           [context.tenantId,claim.refund.id,refundId]);
+        await client.query(
+          `INSERT INTO commerce_reconcile_task(tenant_id,refund_id)
+           VALUES($1,$2) ON CONFLICT DO NOTHING`,
+          [context.tenantId,claim.refund.id]);
       });
     }
     // All ledger mutations happen only after a verified GET from YooKassa.
@@ -699,7 +703,8 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
         "SELECT id,provider_refund_id,status,fiscal_status FROM commerce_refund WHERE tenant_id=$1 AND id=$2",
         [context.tenantId,refundId]));
     const row=result.rows[0];if(!row)throw new NotFoundException("Возврат не найден");
-    if(row.provider_refund_id&&row.status==="PENDING")
+    if(row.provider_refund_id&&(row.status==="PENDING"||
+       (row.status==="SUCCEEDED"&&row.fiscal_status==="PENDING")))
       await this.reconcileRefund(context.tenantId,row.provider_refund_id);
     const fresh=await this.database.withTenantTransaction(context,async client=>
       client.query<{status:string;fiscal_status:string}>(
@@ -720,7 +725,7 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
          JOIN commerce_payment_intent i ON i.tenant_id=r.tenant_id AND i.id=r.intent_id
          WHERE r.tenant_id=$1 AND r.provider_refund_id=$2`,
         [tenantId,providerRefundId]));
-    const refund=result.rows[0];if(!refund||refund.status==="SUCCEEDED")return;
+    const refund=result.rows[0];if(!refund)return;
     const creds=this.seller(await this.sellerConfig(tenantId,refund.site_id),false);
     const verified=await this.gateway.getRefund(creds,providerRefundId);
     if(verified.id!==providerRefundId ||
@@ -738,6 +743,21 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     if(verified.status!=="succeeded")return;
+    if(refund.status==="SUCCEEDED"){
+      // A successful bank refund must not produce a second ledger entry
+      // when a late fiscal receipt finally becomes available.
+      await this.database.withTenantTransaction(context,async client=>
+        client.query(
+          `UPDATE commerce_refund SET
+            fiscal_status=CASE
+              WHEN $3='succeeded' THEN 'SUCCEEDED'
+              WHEN $3='failed' THEN 'FAILED'
+              ELSE fiscal_status END,
+            updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status='SUCCEEDED'`,
+          [tenantId,refund.id,verified.receipt_registration??""]));
+      return;
+    }
     const operator=await this.database.withTenantTransaction(context,async client=>{
       const r=await client.query<{user_id:string;id:string}>(
         `SELECT m.user_id,m.id FROM storefront_config sc
@@ -774,6 +794,20 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
     const payment=await this.gateway.get(creds,intent.provider_payment_id);
     if(payment.id!==intent.provider_payment_id)return;
     this.verifyAmount(intent,payment);
+    if(intent.status==="SUCCEEDED"){
+      if(payment.status==="succeeded"&&payment.paid===true){
+        await this.database.withTenantTransaction(this.context(intent.tenant_id),
+          async client=>client.query(
+            `UPDATE commerce_payment_intent SET
+              fiscal_status=CASE
+                WHEN $3='succeeded' THEN 'SUCCEEDED'
+                WHEN $3='failed' THEN 'FAILED'
+                ELSE fiscal_status END,last_checked_at=now(),updated_at=now()
+             WHERE tenant_id=$1 AND id=$2 AND status='SUCCEEDED'`,
+            [intent.tenant_id,intent.id,payment.receipt_registration??""]));
+      }
+      return;
+    }
     if(payment.status==="pending"||payment.status==="waiting_for_capture")return;
     const context=this.context(intent.tenant_id);
     if(payment.status==="canceled"){
