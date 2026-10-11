@@ -197,7 +197,7 @@ export const VERTICAL_OPERATIONAL_RULES:readonly VerticalOperationalRule[]=[
         AND priority IN ('HIGH','URGENT')
         AND updated_at<now()-interval '12 hours'
       ORDER BY updated_at,id LIMIT 201`
-  }
+  },
   {
     code:"OMS_BACKORDER_OVERDUE",domain:"ECOMMERCE",
     label:"Незакрытая потребность в товарах",
