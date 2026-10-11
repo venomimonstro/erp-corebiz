@@ -46,6 +46,16 @@ describe("catalog million-SKU cursor and confidential cost fields",()=>{
     expect(result.items[0].salePriceMinor).toBe("90000");
   });
 
+  it("does not treat a narrow own-scope finance grant as company-wide cost access",async()=>{
+    const {service,query}=harness(false,[row(1)]);
+    await service.page(ctx,{limit:25});
+    const permissionCheck=query.mock.calls.find(args=>
+      args[0].includes("membership_role mr"));
+    expect(permissionCheck?.[0]).toContain("rp.scope='all'");
+    expect(permissionCheck?.[0]).toContain("catalog.cost.read");
+    expect(permissionCheck?.[1]).toEqual([ctx.tenantId,ctx.membershipId]);
+  });
+
   it("allows authorized accountants to inspect cost",async()=>{
     const {service}=harness(true,[row(1)]);
     const result=await service.page(ctx,{limit:10});
