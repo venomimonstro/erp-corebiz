@@ -467,6 +467,11 @@ export class CustomizationService {
     enabledCapabilities: string[];
     disabledCapabilities: string[];
   }> {
+    if(typeof verticalInput!=="string" ||
+      verticalInput.length<1 || verticalInput.length>80 ||
+      !/^[A-Z0-9_]+$/i.test(verticalInput.trim())){
+      throw new BadRequestException("Некорректный тип бизнеса");
+    }
     const verticalCode = verticalInput.trim().toUpperCase() as BusinessVerticalCode;
     const template = BUSINESS_VERTICALS[verticalCode];
     if (!template) {
@@ -483,6 +488,20 @@ export class CustomizationService {
         "SELECT id FROM tenant WHERE id=$1 FOR UPDATE",
         [context.tenantId]
       );
+      const previous=await client.query<{vertical_code:string}>(
+        "SELECT vertical_code FROM tenant_business_vertical WHERE tenant_id=$1",
+        [context.tenantId]
+      );
+      // A new niche is a new activation journey. Carrying an old
+      // completed_at would falsely show a fresh business as already launched.
+      if(previous.rows[0] && previous.rows[0].vertical_code!==template.code){
+        await client.query(
+          `UPDATE tenant_activation_state SET first_seen_at=now(),
+            first_value_at=NULL,completed_at=NULL,dismissed_at=NULL,
+            updated_at=now() WHERE tenant_id=$1`,
+          [context.tenantId]
+        );
+      }
 
       await client.query(
         `INSERT INTO tenant_business_profile(
@@ -699,6 +718,10 @@ export class CustomizationService {
     enabled: string[];
     disabled: string[];
   }> {
+    if(typeof profileInput!=="string" ||
+      !/^[A-Z0-9_]{1,40}$/i.test(profileInput.trim())){
+      throw new BadRequestException("Некорректный профиль бизнеса");
+    }
     const profile = profileInput.trim().toUpperCase();
     const allowed = new Set([
       "GENERAL","TRADE","ECOMMERCE","SERVICE","WAREHOUSE_3PL"
