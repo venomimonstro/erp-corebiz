@@ -29,6 +29,109 @@ export class CrmController {
     };
   }
 
+  @Get("pipelines")
+  @RequirePermission("crm.read")
+  async pipelines(
+    @Req() request:AuthenticatedRequest
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.crm.pipelines(this.context(request))};
+  }
+
+  @Post("pipelines")
+  @RequirePermission("crm.write")
+  async createPipeline(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.crm.createPipeline(this.context(request),body)
+    };
+  }
+
+  @Get("deals/:id")
+  @RequirePermission("crm.read")
+  async dealDetails(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.crm.dealDetails(this.context(request),id)
+    };
+  }
+
+  @Patch("deals/:id")
+  @RequirePermission("crm.write")
+  async updateDeal(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.crm.updateDeal(this.context(request),id,body)
+    };
+  }
+
+  @Post("deals/:id/notes")
+  @RequirePermission("crm.write")
+  async addNote(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.crm.addNote(this.context(request),id,body)
+    };
+  }
+
+  @Post("deals/:id/activities")
+  @RequirePermission("crm.write")
+  async addActivity(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.crm.addActivity(this.context(request),id,body)
+    };
+  }
+
+  @Get("tags")
+  @RequirePermission("crm.read")
+  async tags(
+    @Req() request:AuthenticatedRequest
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.crm.tags(this.context(request))};
+  }
+
+  @Post("tags")
+  @RequirePermission("crm.write")
+  async createTag(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.crm.createTag(this.context(request),body)};
+  }
+
+  @Patch("deals/:id/tags")
+  @RequirePermission("crm.write")
+  async setDealTags(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:{tagIds:string[]}
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.crm.setDealTags(
+        this.context(request),id,body.tagIds??[]
+      )
+    };
+  }
+
   @Post("deals")
   @RequirePermission("crm.write")
   async createDeal(
