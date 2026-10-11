@@ -1018,14 +1018,14 @@ export default function DanceGroupsPage() {
   return (
     <main className="app-shell">
       <AppSidebar active="dance-groups" />
-      <section className="workspace workspace-wide studio-premium">
+      <section className="workspace workspace-wide studio-premium dance-detail">
         <header className="studio-hero compact">
           <div>
             <span className="studio-eyebrow">Расписание и посещаемость</span>
             <h1>Группы и занятия</h1>
             <p>
               Недельные группы, индивидуальные занятия, самостоятельная практика,
-              waitlist и журнал посещаемости.
+              лист ожидания и журнал посещаемости.
             </p>
           </div>
           <div className="studio-hero-actions">
@@ -1059,7 +1059,7 @@ export default function DanceGroupsPage() {
           </div>
           <div className="data-table-wrap">
             <table className="data-table">
-              <thead><tr><th>Группа</th><th>Тренер</th><th>Зал</th><th>Участники</th><th>Break-even</th><th>Waitlist</th><th></th></tr></thead>
+              <thead><tr><th>Группа</th><th>Тренер</th><th>Зал</th><th>Участники</th><th>Точка окупаемости</th><th>Ожидают</th><th></th></tr></thead>
               <tbody>
                 {filteredGroups.map((group) => (
                   <tr key={group.id}>
