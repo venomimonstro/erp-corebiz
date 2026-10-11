@@ -97,16 +97,17 @@ export class MarketplaceHubService {
         if(!fresh.rowCount)
           throw new ConflictException("Сначала синхронизируйте заказы маркетплейса и проверьте их актуальность");
       }
-      const existing=await client.query<{id:string;published_units:number|null;external_warehouse_id:string|null}>(
-        `SELECT l.id,t.published_units,l.external_warehouse_id FROM channel_stock_listing l
+      const existing=await client.query<{id:string;published_units:number|null;external_warehouse_id:string|null;external_stock_id:string|null}>(
+        `SELECT l.id,t.published_units,l.external_warehouse_id,l.external_stock_id FROM channel_stock_listing l
          LEFT JOIN channel_stock_target t ON t.tenant_id=l.tenant_id AND t.listing_id=l.id
          WHERE l.tenant_id=$1 AND l.connection_id=$2 AND l.mapping_id=$3 AND l.warehouse_id=$4
          FOR UPDATE OF l`,
         [context.tenantId,connectionId,mappingId,warehouseId]);
       if(existing.rows[0]?.published_units!==null && existing.rows[0]?.published_units!==undefined &&
          existing.rows[0].published_units>0 &&
-         existing.rows[0].external_warehouse_id!==external)
-        throw new ConflictException("Сначала выключите публикацию и дождитесь подтверждения нулевого остатка на старом складе");
+         (existing.rows[0].external_warehouse_id!==external ||
+          (row.provider==="WILDBERRIES"&&existing.rows[0].external_stock_id!==externalStock)))
+        throw new ConflictException("Перед изменением склада или chrtId остановите публикацию и дождитесь подтверждения нулевого остатка");
       const listing=existing.rows[0]
         ?await client.query<{id:string}>(`UPDATE channel_stock_listing
           SET external_warehouse_id=$5,priority=$6,enabled=$7,publish_enabled=$8,

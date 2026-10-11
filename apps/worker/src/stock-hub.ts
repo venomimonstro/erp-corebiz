@@ -62,7 +62,7 @@ async function reconcile(pool:Pool,key:PoolKey):Promise<void>{
        ORDER BY l.priority,l.id FOR UPDATE OF l`,
       [key.tenant_id,key.warehouse_id,key.sku_id]);
     if(!rows.rows.length)return;
-    const [balance,policy,shadow,unknown]=await Promise.all([
+    const [balance,policy,shadow,unknown,siteOrders]=await Promise.all([
       client.query<{physical:string;reserved:string}>(
         `SELECT coalesce(physical_milli,0)::text AS physical,
                 coalesce(reserved_milli,0)::text AS reserved
@@ -91,11 +91,22 @@ async function reconcile(pool:Pool,key:PoolKey):Promise<void>{
               OR o.status='IMPORTED') AND li.mapped_sku_id IS NULL
            AND EXISTS(SELECT 1 FROM channel_stock_listing l
              WHERE l.tenant_id=$1 AND l.warehouse_id=$2 AND l.connection_id=o.connection_id)`,
-        [key.tenant_id,key.warehouse_id])
+        [key.tenant_id,key.warehouse_id]),
+      client.query<{demand:string}>(`SELECT coalesce(sum(li.quantity_milli),0)::text AS demand
+        FROM sales_order_line li
+        JOIN sales_order o ON o.tenant_id=li.tenant_id AND o.id=li.order_id
+        WHERE li.tenant_id=$1 AND li.sku_id=$3
+          AND (o.warehouse_id IS NULL OR o.warehouse_id=$2)
+          AND o.order_status IN ('CONFIRMED','COMPLETED')
+          AND o.fulfillment_status NOT IN ('SHIPPED','CANCELLED')
+          AND NOT EXISTS(
+            SELECT 1 FROM channel_order_inbox co
+            WHERE co.tenant_id=o.tenant_id AND co.sales_order_id=o.id)`,
+        [key.tenant_id,key.warehouse_id,key.sku_id])
     ]);
     const b=balance.rows[0];
     const stock=availableUnits(BigInt(b?.physical??"0"),BigInt(b?.reserved??"0"),
-      BigInt(shadow.rows[0]?.demand??"0"),
+      BigInt(shadow.rows[0]?.demand??"0")+BigInt(siteOrders.rows[0]?.demand??"0"),
       policy.rows[0]?.enabled===false?BigInt(b?.physical??"0"):BigInt(policy.rows[0]?.safety??"0"));
     const blocked=new Set(unknown.rows.map(r=>r.connection_id));
     const ls:MarketListing[]=rows.rows.map(l=>({
@@ -132,6 +143,7 @@ async function reconcile(pool:Pool,key:PoolKey):Promise<void>{
            generation=CASE WHEN channel_stock_target.target_units<>EXCLUDED.target_units
              THEN channel_stock_target.generation+1 ELSE channel_stock_target.generation END,
            status=CASE
+             WHEN channel_stock_target.status='SENDING' THEN 'SENDING'
              WHEN $4='PAUSED' THEN 'PAUSED'
              WHEN channel_stock_target.target_units<>EXCLUDED.target_units THEN 'PENDING'
              WHEN channel_stock_target.published_units IS DISTINCT FROM EXCLUDED.target_units
@@ -140,7 +152,10 @@ async function reconcile(pool:Pool,key:PoolKey):Promise<void>{
            attempts=CASE WHEN channel_stock_target.target_units<>EXCLUDED.target_units
                 THEN 0 ELSE channel_stock_target.attempts END,
            next_attempt_at=CASE WHEN channel_stock_target.target_units<>EXCLUDED.target_units
-                THEN now() ELSE channel_stock_target.next_attempt_at END,
+                AND EXCLUDED.target_units=0 THEN now()
+                WHEN channel_stock_target.target_units<>EXCLUDED.target_units
+                THEN greatest(now(),coalesce(channel_stock_target.next_attempt_at,now()))
+                ELSE channel_stock_target.next_attempt_at END,
            updated_at=now()`,
         [key.tenant_id,l.id,amount,next]);
     }
