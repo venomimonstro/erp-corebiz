@@ -6,6 +6,7 @@ import { DanceWorkspaceNav } from "../../../../components/dance-workspace-nav";
 import { StudioModal } from "../../../../components/studio-modal";
 import { apiRequest } from "../../../../lib/api";
 
+type DanceAccess={canViewFinance:boolean;canManageFinance:boolean;canManageDance:boolean};
 type Customer = {
   id: string;
   displayName: string;
@@ -21,14 +22,14 @@ type Student = {
   status: string;
   payer_party_id: string | null;
   payer_name: string | null;
-  debt_minor: string;
-  overdue_minor: string;
-  overdue_count: number;
-  open_charge_count: number;
-  family_debt_minor: string;
-  family_overdue_minor: string;
-  family_overdue_count: number;
-  family_children_count: number;
+  debt_minor: string | null;
+  overdue_minor: string | null;
+  overdue_count: number | null;
+  open_charge_count: number | null;
+  family_debt_minor: string | null;
+  family_overdue_minor: string | null;
+  family_overdue_count: number | null;
+  family_children_count: number | null;
   active_groups: number;
 };
 
@@ -79,7 +80,8 @@ type Pack = {
   status: string;
 };
 
-function money(value: string) {
+function money(value: string | null) {
+  if(value===null)return "—";
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
     currency: "RUB",
@@ -89,6 +91,9 @@ function money(value: string) {
 
 export default function DanceStudentsPage() {
   const [students, setStudents] = useState<Student[]>([]);
+  const [access,setAccess]=useState<DanceAccess|null>(null);
+  const [studentSearch,setStudentSearch]=useState("");
+  const [studentView,setStudentView]=useState<"PACKAGES"|"FINANCES">("PACKAGES");
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [charges, setCharges] = useState<Charge[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -127,36 +132,29 @@ export default function DanceStudentsPage() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const [
-        studentRows,
-        customerRows,
-        chargeRows,
-        planRows,
-        packageRows,
-        makeupRows
-      ] = await Promise.all([
-          apiRequest<Student[]>("/dance/students"),
-          apiRequest<Customer[]>("/crm/customers"),
-          apiRequest<Charge[]>("/dance/charges"),
-          apiRequest<Plan[]>("/service/package-plans"),
-          apiRequest<Pack[]>("/service/packages"),
-          apiRequest<MakeupCredit[]>("/dance/makeup-credits")
-        ]);
+      const rights=await apiRequest<DanceAccess>("/dance/access");
+      const [studentRows,customerRows,chargeRows,planRows,packageRows,makeupRows]=await Promise.all([
+        apiRequest<Student[]>("/dance/students"),
+        rights.canManageDance?apiRequest<Customer[]>("/crm/customers"):Promise.resolve([] as Customer[]),
+        rights.canViewFinance?apiRequest<Charge[]>("/dance/charges"):Promise.resolve([] as Charge[]),
+        rights.canManageDance?apiRequest<Plan[]>("/service/package-plans"):Promise.resolve([] as Plan[]),
+        rights.canManageDance?apiRequest<Pack[]>("/service/packages"):Promise.resolve([] as Pack[]),
+        apiRequest<MakeupCredit[]>("/dance/makeup-credits")
+      ]);
+      setAccess(rights);
+      if(!rights.canViewFinance){setFinanceFilter("ALL");setStudentView("PACKAGES");}
       setStudents(studentRows);
       setCustomers(customerRows);
       setCharges(chargeRows);
       setPlans(planRows);
       setPackages(packageRows);
       setMakeupCredits(makeupRows);
-      setSelectedId((current) =>
-        studentRows.some((item) => item.id === current)
-          ? current
-          : studentRows[0]?.id ?? ""
-      );
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось загрузить учеников");
+      setSelectedId(current=>
+        studentRows.some(item=>item.id===current)?current:studentRows[0]?.id??"");
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось загрузить учеников");
     }
-  }, []);
+  },[]);
 
   useEffect(() => {
     void load();
@@ -164,6 +162,11 @@ export default function DanceStudentsPage() {
 
   const filteredStudents = useMemo(() => {
     const rows = students.filter((student) => {
+      const search=studentSearch.trim().toLocaleLowerCase("ru-RU");
+      if(search&&!student.display_name.toLocaleLowerCase("ru-RU").includes(search)&&
+         !(student.payer_name??"").toLocaleLowerCase("ru-RU").includes(search))
+        return false;
+      if (!access?.canViewFinance)return true;
       if (financeFilter === "DEBT") {
         return BigInt(student.family_debt_minor ?? "0") > 0n;
       }
@@ -181,7 +184,7 @@ export default function DanceStudentsPage() {
       if(debtA!==debtB) return debtA>debtB?-1:1;
       return a.display_name.localeCompare(b.display_name,"ru");
     });
-  },[students,financeFilter]);
+  },[students,financeFilter,studentSearch,access?.canViewFinance]);
 
   useEffect(() => {
     if (
@@ -522,7 +525,7 @@ export default function DanceStudentsPage() {
           <div>
             <span>Карточка ученика</span>
             <strong>{students.length} учеников в студии</strong>
-            <div className="studio-filter-chips">
+            {access?.canViewFinance?<div className="studio-filter-chips">
               {[
                 ["ALL","Все"],
                 ["DEBT","Есть долг"],
@@ -537,19 +540,24 @@ export default function DanceStudentsPage() {
                   {label}
                 </button>
               ))}
-            </div>
+            </div>:null}
           </div>
+          <div className="dance-student-finder">
+            <input type="search" aria-label="Найти ученика или плательщика"
+              placeholder="Поиск по ученикам и семьям" value={studentSearch}
+              onChange={e=>setStudentSearch(e.target.value)}/>
           <select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
             <option value="">Выберите ученика</option>
             {filteredStudents.map((student) => (
               <option key={student.id} value={student.id}>
-                {student.display_name} · семья {money(student.family_debt_minor)}
-                {BigInt(student.family_overdue_minor ?? "0")>0n
+                {student.display_name}{access?.canViewFinance?" · семья "+money(student.family_debt_minor):""}
+                {access?.canViewFinance&&BigInt(student.family_overdue_minor ?? "0")>0n
                   ? " · просрочено " + money(student.family_overdue_minor)
                   : ""}
               </option>
             ))}
           </select>
+          </div>
         </section>
 
         {selected ? (
@@ -565,7 +573,7 @@ export default function DanceStudentsPage() {
                 <strong>{selected.payer_name ?? "Сам ученик"}</strong>
                 <small>{selected.payer_party_id ? "семейный контур" : "личная оплата"}</small>
               </article>
-              <article className="owner-kpi">
+              {access?.canViewFinance?<article className="owner-kpi">
                 <span>Долг семьи</span>
                 <strong>{money(selected.family_debt_minor)}</strong>
                 <small>
@@ -581,7 +589,7 @@ export default function DanceStudentsPage() {
                 <span>Просрочено</span>
                 <strong>{money(selected.family_overdue_minor)}</strong>
                 <small>{selected.family_overdue_count} просроченных начислений</small>
-              </article>
+              </article>:null}
               <article className="owner-kpi">
                 <span>Группы</span>
                 <strong>{selected.active_groups}</strong>
@@ -589,22 +597,28 @@ export default function DanceStudentsPage() {
               </article>
             </div>
 
+            {access?.canViewFinance?<nav className="dance-segment-nav" aria-label="Рабочие режимы карточки">
+              <button type="button" className={studentView==="PACKAGES"?"active":""}
+                aria-pressed={studentView==="PACKAGES"} onClick={()=>setStudentView("PACKAGES")}>Абонементы и отработки</button>
+              <button type="button" className={studentView==="FINANCES"?"active":""}
+                aria-pressed={studentView==="FINANCES"} onClick={()=>setStudentView("FINANCES")}>Оплаты и начисления</button>
+            </nav>:null}
             <div className="header-actions" style={{ marginBottom: 20, flexWrap: "wrap" }}>
-              <button className="secondary-button" onClick={openPayerModal} type="button">
+              {access?.canManageDance?<button className="secondary-button" onClick={openPayerModal} type="button">
                 Плательщик
-              </button>
-              <button className="secondary-button" onClick={openPackageModal} type="button">
+              </button>:null}
+              {access?.canManageDance&&studentView==="PACKAGES"?<button className="secondary-button" onClick={openPackageModal} type="button">
                 + Абонемент
-              </button>
-              <button className="secondary-button" onClick={openChargeModal} type="button">
+              </button>:null}
+              {access?.canManageFinance&&studentView==="FINANCES"?<button className="secondary-button" onClick={openChargeModal} type="button">
                 + Начисление
-              </button>
-              <button disabled={pending || !payerOpenCharges.length} onClick={() => void payFamilyDebt()} type="button">
+              </button>:null}
+              {access?.canManageFinance&&studentView==="FINANCES"?<button disabled={pending || !payerOpenCharges.length} onClick={() => void payFamilyDebt()} type="button">
                 Оплатить долги семьи
-              </button>
+              </button>:null}
             </div>
 
-            <section className="section-block">
+            <section className="section-block" style={{display:studentView==="FINANCES"?"":"none"}}>
               <div className="section-heading"><div><p className="muted">Финансы</p><h2>Начисления ученика</h2></div></div>
               <div className="data-table-wrap">
                 <table className="data-table">
@@ -629,7 +643,7 @@ export default function DanceStudentsPage() {
               </div>
             </section>
 
-            <section className="section-block">
+            <section className="section-block" style={{display:studentView==="PACKAGES"?"":"none"}}>
               <div className="section-heading">
                 <div>
                   <p className="muted">Отработки</p>
@@ -670,7 +684,7 @@ export default function DanceStudentsPage() {
               </div>
             </section>
 
-            <section className="section-block">
+            <section className="section-block" style={{display:studentView==="PACKAGES"?"":"none"}}>
               <div className="section-heading"><div><p className="muted">Абонементы</p><h2>Права на занятия</h2></div></div>
               <div className="data-table-wrap">
                 <table className="data-table">
