@@ -133,6 +133,16 @@ export class ProjectsController {
     };
   }
 
+
+  @Patch(":id/approvals/:approvalId/decision")
+  @RequirePermission("projects.write")
+  async decideAgencyApproval(@Req() request:AuthenticatedRequest,
+    @Param("id") id:string,@Param("approvalId") approvalId:string,
+    @Body() body:any):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.projects.decideAgencyApproval(
+      this.context(request),id,approvalId,body)};
+  }
+
   @Get(":id/approvals")
   @RequirePermission("projects.read")
   async approvals(
