@@ -9,7 +9,7 @@ const ctx={
 
 describe("dance studio: financial authorization and employee payroll",()=>{
   function build(financeRead:string|null,financeWrite:string|null){
-    const client={query:jest.fn(async()=>({rows:[],rowCount:0}))};
+    const client={query:jest.fn(async(_sql:string,_params:unknown[]=[]):Promise<{rows:any[];rowCount:number}>=>({rows:[],rowCount:0}))};
     const db={withTenantTransaction:jest.fn(async(_ctx:unknown,fn:any)=>fn(client))};
     const auth={
       resolveScope:jest.fn(async(_ctx:unknown,permission:string)=>{
