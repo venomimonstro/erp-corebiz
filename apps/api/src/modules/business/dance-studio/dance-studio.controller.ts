@@ -431,6 +431,21 @@ export class DanceStudioController {
     };
   }
 
+  @Get("payroll-statements")
+  @RequirePermission("dance.read")
+  async payrollStatements(
+    @Req() req:AuthenticatedRequest,
+    @Query("from") from?:string,
+    @Query("to") to?:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.economics.payrollStatements(
+        this.ctx(req),{from,to}
+      )
+    };
+  }
+
   @Post("compensation/approve")
   @RequirePermission("dance.write")
   async approveCompensation(
