@@ -489,34 +489,39 @@ export default function DanceTeamPage() {
     }
 
     const baseMinor = String(Math.round(baseRub * 100));
-    const components =
-      planScheme === "COMPOSITE"
-        ? [
-            {
-              componentType:
-                planBasePeriod === "DAY" ? "DAILY_BASE" : "MONTHLY_BASE",
-              amountMinor: baseMinor,
-              priority: 100
-            },
-            {
-              componentType: planVariableType,
-              amountMinor:
-                planVariableType === "PERCENT"
-                  ? "0"
-                  : String(Math.round(variableRub * 100)),
-              percentBps:
-                planVariableType === "PERCENT"
-                  ? Math.round(percent * 100)
-                  : 0,
-              revenueBasis: planRevenueBasis,
-              priority: 110
-            }
-          ]
-        : undefined;
+    const variableMinor = String(Math.round(variableRub * 100));
+    const compositeCalculation =
+      planVariableType === "PERCENT"
+        ? "PERCENT"
+        : planVariableType === "HOURLY"
+          ? "HOURLY"
+          : planVariableType === "PER_ATTENDEE"
+            ? "ATTENDEE"
+            : "FIXED";
 
     setPending(true);
     setError("");
     try {
+      if (planScheme === "COMPOSITE") {
+        await apiRequest("/dance/payroll-profiles", {
+          method: "POST",
+          body: JSON.stringify({
+            trainerResourceId: planTrainerId,
+            monthlyBaseMinor:
+              planBasePeriod === "MONTH" ? baseMinor : "0",
+            dailyBaseMinor:
+              planBasePeriod === "DAY" ? baseMinor : "0",
+            minimumGuaranteeMinor:
+              String(Math.round(guaranteeRub * 100))
+          })
+        });
+      }
+
+      const calculationType =
+        planScheme === "COMPOSITE"
+          ? compositeCalculation
+          : planScheme;
+
       await apiRequest("/dance/compensation-plans", {
         method: "POST",
         body: JSON.stringify({
@@ -526,26 +531,41 @@ export default function DanceTeamPage() {
           danceProgramId: planProgramId || undefined,
           danceGroupId: planGroupId || undefined,
           branchId: planBranchId || undefined,
-          calculationType: planScheme,
+          calculationType,
           fixedMinor:
-            planScheme === "FIXED" || planScheme === "ATTENDEE"
-              ? baseMinor
+            calculationType === "FIXED"
+              ? (planScheme === "COMPOSITE" ? variableMinor : baseMinor)
+              : calculationType === "ATTENDEE" && planScheme !== "COMPOSITE"
+                ? baseMinor
+                : "0",
+          hourlyMinor:
+            calculationType === "HOURLY"
+              ? (planScheme === "COMPOSITE" ? variableMinor : baseMinor)
               : "0",
-          hourlyMinor: planScheme === "HOURLY" ? baseMinor : "0",
           percentBps:
-            planScheme === "PERCENT" ? Math.round(percent * 100) : 0,
+            calculationType === "PERCENT" ? Math.round(percent * 100) : 0,
           perAttendeeMinor:
-            planScheme === "ATTENDEE"
-              ? String(Math.round(perAttendeeRub * 100))
+            calculationType === "ATTENDEE"
+              ? (
+                  planScheme === "COMPOSITE"
+                    ? variableMinor
+                    : String(Math.round(perAttendeeRub * 100))
+                )
               : "0",
           revenueBasis: planRevenueBasis,
-          minimumGuaranteeMinor: String(Math.round(guaranteeRub * 100)),
-          guaranteePeriod: "MONTH",
-          components
+          minimumGuaranteeMinor:
+            planScheme === "COMPOSITE"
+              ? "0"
+              : "0",
+          guaranteePeriod: "MONTH"
         })
       });
       setPlanModal(false);
-      setNotice("Правило зарплаты сохранено.");
+      setNotice(
+        planScheme === "COMPOSITE"
+          ? "Оклад и переменное правило тренера сохранены."
+          : "Правило начисления сохранено."
+      );
       await load();
     } catch (cause) {
       setError(
