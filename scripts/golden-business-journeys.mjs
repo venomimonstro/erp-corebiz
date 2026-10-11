@@ -1260,6 +1260,123 @@ async function warehouse3plJourney() {
   };
 }
 
+
+async function agencyJourneys() {
+  await newTenant("Golden Agency " + runId.slice(0,8), "SERVICE");
+  await request("PUT","/customization/business-vertical",{verticalCode:"WEB_STUDIO"});
+  const customer=await request("POST","/crm/customers",{
+    type:"ORGANIZATION",displayName:"Golden Agency Buyer"
+  });
+  const project=await request("POST","/projects",{
+    name:"Golden Site Build",partyId:customer.id,billingMode:"FIXED",
+    projectType:"WEB_BUILD",currency:"RUB",budgetMinor:"12000000"
+  });
+  const templates=await request("GET","/projects/agency/templates");
+  assert.ok(templates.some(t=>t.code==="WEB_BUILD"));
+  assert.ok(templates.some(t=>t.code==="MARKETING"));
+  const kickoff=await request("POST","/projects/"+project.id+"/kickoff",{
+    templateCode:"WEB_BUILD"
+  });
+  assert.equal(kickoff.applied,true);
+  assert.equal(kickoff.deliverables,6);
+  const repeat=await request("POST","/projects/"+project.id+"/kickoff",{
+    templateCode:"WEB_BUILD"
+  });
+  assert.equal(repeat.applied,false,"project template cannot duplicate tasks on retry");
+  const deliverables=await request("GET","/projects/"+project.id+"/deliverables");
+  assert.equal(deliverables.length,6);
+  await request("POST","/projects/"+project.id+"/kickoff",
+    {templateCode:"NONEXISTENT"},{expectedStatus:400});
+
+  await request("PUT","/customization/business-vertical",{verticalCode:"MARKETING_AGENCY"});
+  const marketing=await request("POST","/projects",{
+    name:"Golden Marketing Retainer",partyId:customer.id,
+    billingMode:"RETAINER",projectType:"MARKETING",
+    currency:"RUB",monthlyRetainerMinor:"999999",mediaBudgetMinor:"9000000"
+  });
+  const marketingKickoff=await request("POST","/projects/"+marketing.id+"/kickoff",{
+    templateCode:"MARKETING"
+  });
+  assert.equal(marketingKickoff.applied,true);
+  const d=new Date();
+  const previous=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()-1,1));
+  const period=previous.toISOString().slice(0,7);
+  const startsOn=period+"-01";
+  const contract=await request("POST","/projects/"+marketing.id+"/contracts",{
+    contractNumber:"MKT-"+runId.slice(0,12),
+    title:"Golden monthly marketing service",
+    contractType:"MARKETING_RETAINER",billingCycle:"MONTHLY",
+    serviceFeeMinor:"1000000",clientMediaBudgetMinor:"9000000",startsOn
+  });
+  const activated=await request("PATCH",
+    "/projects/"+marketing.id+"/contracts/"+contract.id+"/status",{
+      status:"ACTIVE",version:contract.version,signedOn:startsOn
+    });
+  assert.equal(activated.status,"ACTIVE");
+  const preview=await request("GET",
+    "/projects/"+marketing.id+"/statements/preview?period="+period);
+  assert.equal(preview.serviceRevenueMinor,"1000000",
+    "billing must follow signed contract, not arbitrary project retainer");
+  assert.equal(preview.mediaBudgetMinor,"9000000",
+    "media budget must stay outside agency service revenue");
+  const statement=await request("POST","/projects/"+marketing.id+"/statements/finalize",{
+    period
+  });
+  assert.ok(statement.id);
+  const closedAgain=await request("POST","/projects/"+marketing.id+"/statements/finalize",{
+    period
+  });
+  assert.equal(closedAgain.id,statement.id,"monthly close must be idempotent");
+  const invoice=await request("POST",
+    "/finance/invoices/from-agency/"+statement.id,{});
+  const invoiceAgain=await request("POST",
+    "/finance/invoices/from-agency/"+statement.id,{});
+  assert.equal(invoiceAgain.invoiceId,invoice.invoiceId,
+    "retry must not issue a second invoice");
+  await request("POST","/projects/"+marketing.id+"/expenses",{
+    category:"SOFTWARE",description:"Backdated CRM licence",
+    amountMinor:"5000",expenseOn:startsOn
+  },{expectedStatus:409});
+  const health=await request("GET","/projects/agency/health");
+  assert.ok(health.score.unpaidInvoiceCount>=1);
+  return {profiles:["WEB_STUDIO","MARKETING_AGENCY"],
+    result:"client → project → idempotent template; retainer → signed contract → closed month → invoice",
+    projectId:project.id,marketingProjectId:marketing.id,invoiceId:invoice.invoiceId};
+}
+
+async function marketplaceHubJourney() {
+  await newTenant("Golden Marketplace " + runId.slice(0,8),"ECOMMERCE");
+  await request("PUT","/customization/business-vertical",{verticalCode:"MARKETPLACE_SELLER"});
+  const stock=await stockProduct("hub-"+runId.slice(0,5),"1000");
+  const connection=await request("POST","/channels/connections/ozon",{
+    name:"Golden Ozon FBS",clientId:"sandbox-client",
+    apiKey:"test-key-not-real-credentials-123456"
+  });
+  await request("POST","/channels/connections/"+connection.id+"/mappings",{
+    externalOfferId:"GOLD-"+runId.slice(0,10),skuId:stock.skuId
+  });
+  const setup=await request("GET","/channels/stock-hub");
+  const mapping=setup.mappings.find(m=>m.connection_id===connection.id&&m.sku_id===stock.skuId);
+  assert.ok(mapping,"external offer must map to one ERP SKU");
+  const listing=await request("POST","/channels/stock-hub/listings",{
+    connectionId:connection.id,mappingId:mapping.id,warehouseId:stock.warehouseId,
+    externalWarehouseId:"12345",priority:10,publishEnabled:false
+  });
+  assert.ok(listing.listingId);
+  // Deliberately no provider sync: this must never call an external API.
+  await request("POST","/channels/stock-hub/listings",{
+    connectionId:connection.id,mappingId:mapping.id,warehouseId:stock.warehouseId,
+    externalWarehouseId:"12345",priority:10,publishEnabled:true
+  },{expectedStatus:409});
+  const queued=await request("POST","/channels/stock-hub/reconcile",{});
+  assert.ok(queued.queuedPools>=1);
+  const read=await request("GET","/channels/stock-hub");
+  assert.ok(read.listings.some(l=>l.id===listing.listingId&&l.publish_enabled===false));
+  return {profile:"MARKETPLACE_SELLER",
+    result:"warehouse → SKU → offer mapping → disabled stock listing → safety gate",
+    listingId:listing.listingId};
+}
+
 async function main() {
   const ready = await request("GET", "/health/ready");
   assert.equal(ready.status, "ok");
@@ -1278,6 +1395,8 @@ async function main() {
   results.push(await danceStudioJourney());
   results.push(await automotiveJourney());
   results.push(await warehouse3plJourney());
+  results.push(await agencyJourneys());
+  results.push(await marketplaceHubJourney());
 
   process.stdout.write(
     JSON.stringify(
@@ -1291,7 +1410,7 @@ async function main() {
     ) + "\n"
   );
   console.log(
-    "PASS: TRADE + ECOMMERCE + SERVICE + DANCE_FITNESS + AUTO_SERVICE + WAREHOUSE_3PL golden journeys"
+    "PASS: trade, ecommerce, service, dance, auto, 3PL, web studio, agency, marketplace hub golden journeys"
   );
   console.log(
     "Disposable local environment only. This is not production approval."
