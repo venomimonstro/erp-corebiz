@@ -1,453 +1,292 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AppSidebar } from "../../../components/app-sidebar";
-import { DanceWorkspaceNav } from "../../../components/dance-workspace-nav";
-import { apiRequest } from "../../../lib/api";
+import {useCallback,useEffect,useMemo,useState} from "react";
+import {AppSidebar} from "../../../components/app-sidebar";
+import {DanceWorkspaceNav} from "../../../components/dance-workspace-nav";
+import {apiRequest} from "../../../lib/api";
 
-type Lesson = {
-  id: string;
-  group_name: string | null;
-  program_name: string | null;
-  lesson_type: string;
-  starts_at: string;
-  ends_at: string;
-  capacity: number;
-  status: string;
-  trainer_name: string | null;
-  room_name: string | null;
-  booked_count: number;
-  attended_count: number;
+type Lesson={
+  id:string;group_name:string|null;program_name:string|null;lesson_type:string;
+  starts_at:string;ends_at:string;lesson_timezone:string;capacity:number;
+  status:string;trainer_name:string|null;room_name:string|null;
+  booked_count:number;attended_count:number;
 };
-
-type GroupHealth = {
-  id: string;
-  name: string;
-  capacity: number;
-  break_even_members: number;
-  members: number;
-  waitlist: number;
+type Group={
+  id:string;name:string;capacity:number;break_even_members:number;
+  members:number;waitlist:number;
 };
-
-type EconomicsSlice = {
-  id: string;
-  name: string;
-  lessons: number;
-  revenue_minor: string;
-  trainer_cost_minor: string;
-  room_cost_minor: string;
-  other_cost_minor: string;
-  margin_minor: string;
+type Economics={
+  id:string;name:string;lessons:number;revenue_minor:string;
+  trainer_cost_minor:string;room_cost_minor:string;other_cost_minor:string;margin_minor:string;
 };
-
-type Dashboard = {
-  todayLessons: Lesson[];
-  debt: {
-    open_count: number;
-    open_minor: string;
-    overdue_count: number;
-  };
-  groups: GroupHealth[];
-  economicsByProgram: EconomicsSlice[];
-  economicsByTrainer: EconomicsSlice[];
-  packageAlerts: {
-    expiring: number;
-    low_visits: number;
-  };
-  retentionAlerts: Array<{
-    student_id: string;
-    student_name: string;
-    last_attended_at: string | null;
-    days_since_activity: number;
+type MonthEconomics={
+  revenue_minor:string;trainer_cost_minor:string;room_cost_minor:string;margin_minor:string;
+  payroll_total_minor:string;payroll_extra_minor:string;
+  full_team_cost_minor:string;owner_margin_minor:string;
+  payroll_expected_trainers:number;payroll_statement_count:number;payroll_finalized:boolean;
+};
+type Attention={
+  unclosed_past_lessons:number;attended_without_payment_source:number;
+  completed_without_profitability:number;completed_without_trainer_accrual:number;
+  lesson_waitlist:number;over_capacity:number;
+};
+type Dashboard={
+  canViewFinancials:boolean;
+  todayLessons:Lesson[];groups:Group[];monthEconomics:MonthEconomics|null;
+  debt:{open_count:number;open_minor:string;overdue_count:number}|null;
+  packageAlerts:{expiring:number;low_visits:number};
+  retentionAlerts:Array<{
+    student_id:string;student_name:string;last_attended_at:string|null;
+    days_since_activity:number;
   }>;
-  monthEconomics: {
-    revenue_minor: string;
-    trainer_cost_minor: string;
-    room_cost_minor: string;
-    margin_minor: string;
-    room_statement_adjustment_minor?: string;
-    payroll_total_minor: string;
-    payroll_extra_minor: string;
-    full_team_cost_minor: string;
-    owner_margin_minor: string;
-    payroll_statement_count: number;
-    payroll_expected_trainers: number;
-    payroll_finalized: boolean;
-  };
-  attention: {
-    unclosed_past_lessons: number;
-    attended_without_payment_source: number;
-    completed_without_profitability: number;
-    completed_without_trainer_accrual: number;
-    lesson_waitlist: number;
-    over_capacity: number;
-  };
+  economicsByProgram:Economics[];economicsByTrainer:Economics[];attention:Attention;
 };
 
-function marginPercent(item: EconomicsSlice) {
-  const revenue=Number(item.revenue_minor);
-  if(!Number.isFinite(revenue)||revenue<=0) return 0;
-  return Math.round(Number(item.margin_minor)/revenue*100);
+function money(minor:string){
+  try{return new Intl.NumberFormat("ru-RU",{style:"currency",currency:"RUB",
+    maximumFractionDigits:0}).format(Number(minor)/100);}
+  catch{return "—";}
+}
+function clock(iso:string,timezone:string){
+  try{return new Intl.DateTimeFormat("ru-RU",{hour:"2-digit",minute:"2-digit",
+    timeZone:timezone}).format(new Date(iso));}
+  catch{return new Date(iso).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"});}
+}
+function lessonStatus(status:string){
+  return ({
+    PLANNED:"Запланировано",OPEN_FOR_BOOKING:"Идёт запись",STARTED:"Идёт занятие",
+    COMPLETED:"Завершено",CANCELLED_BY_STUDIO:"Отменено студией",
+    CANCELLED_BY_TRAINER:"Отменено тренером"
+  } as Record<string,string>)[status]??status;
+}
+function percent(item:Economics){
+  const amount=Number(item.revenue_minor);
+  return amount>0?Math.round(Number(item.margin_minor)/amount*100):0;
 }
 
-function money(value: string, currency = "RUB") {
-  return new Intl.NumberFormat("ru-RU", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: 0
-  }).format(Number(value) / 100);
-}
+export default function DanceDashboardPage(){
+  const [data,setData]=useState<Dashboard|null>(null);
+  const [error,setError]=useState("");
+  const [loading,setLoading]=useState(true);
+  const [detail,setDetail]=useState(false);
+  const load=useCallback(async()=>{
+    setLoading(true);setError("");
+    try{setData(await apiRequest<Dashboard>("/dance/dashboard"));}
+    catch(e){setError(e instanceof Error?e.message:"Не удалось получить данные студии");}
+    finally{setLoading(false);}
+  },[]);
+  useEffect(()=>{void load();},[load]);
 
-export default function DanceDashboardPage() {
-  const [data, setData] = useState<Dashboard | null>(null);
-  const [error, setError] = useState("");
+  const alerts=useMemo(()=>{
+    if(!data)return [];
+    const a:Array<{id:string;label:string;count:number;href:string;kind:"danger"|"attention"}>=[];
+    const add=(id:string,label:string,count:number,href:string,kind:"danger"|"attention")=>{
+      if(count>0)a.push({id,label,count,href,kind});
+    };
+    add("late","Прошедшие уроки не закрыты",data.attention.unclosed_past_lessons,
+      "/app/dance/groups","danger");
+    add("capacity","Переполнение занятий",data.attention.over_capacity,
+      "/app/dance/groups","danger");
+    add("payment","Посещения без источника оплаты",
+      data.canViewFinancials?data.attention.attended_without_payment_source:0,
+      "/app/dance/students","danger");
+    add("profit","Не рассчитана экономика закрытых занятий",
+      data.canViewFinancials?data.attention.completed_without_profitability:0,
+      "/app/dance/team","attention");
+    add("accrual","Не начислена оплата тренеру",
+      data.canViewFinancials?data.attention.completed_without_trainer_accrual:0,
+      "/app/dance/team","attention");
+    add("debts","Просроченные платежи",data.canViewFinancials?(data.debt?.overdue_count??0):0,
+      "/app/dance/students","attention");
+    add("waitlist","Ожидают свободное место",data.attention.lesson_waitlist,
+      "/app/dance/groups","attention");
+    add("packages","Абонементы скоро истекут",data.packageAlerts.expiring,
+      "/app/dance/students","attention");
+    return a;
+  },[data]);
+  const weakGroups=useMemo(()=>data?.groups.filter(g=>g.members<g.break_even_members)??[],[data]);
+  const todayTotal=data?.todayLessons.length??0;
+  const scheduledCount=data?.todayLessons.reduce((v,l)=>v+l.booked_count,0)??0;
+  const attendedCount=data?.todayLessons.reduce((v,l)=>v+l.attended_count,0)??0;
+  const upcoming=data?.todayLessons.filter(l=>!["COMPLETED","CANCELLED_BY_STUDIO",
+    "CANCELLED_BY_TRAINER"].includes(l.status))??[];
 
-  const load = useCallback(async () => {
-    setError("");
-    try {
-      setData(await apiRequest<Dashboard>("/dance/dashboard"));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось загрузить студию");
-    }
-  }, []);
+  return <main className="app-shell">
+    <AppSidebar active="dance"/>
+    <section className="workspace workspace-wide studio-premium dance-overview">
+      <header className="dance-head">
+        <div>
+          <span className="studio-eyebrow">Рабочее пространство · Студия танцев</span>
+          <h1>Студия сегодня</h1>
+          <p>Занятия, ученики и задачи, которые требуют решения.</p>
+        </div>
+        <div className="dance-head-actions">
+          <button type="button" className="secondary-button"
+            disabled={loading} onClick={()=>void load()}>
+            {loading?"Обновление…":"Обновить данные"}
+          </button>
+          <a href="/app/dance/groups" className="button-link">Открыть расписание →</a>
+        </div>
+      </header>
+      <DanceWorkspaceNav active="overview"/>
+      {error?<div className="studio-message error" role="alert">
+        <strong>Ошибка загрузки</strong><span>{error}</span>
+        <button onClick={()=>void load()} type="button">Повторить</button>
+      </div>:null}
+      {!data&&loading?<p role="status" className="dance-loading">Загружаем расписание и события студии…</p>:null}
+      {!data&&!loading&&!error?<p className="dance-loading">Нет данных для отображения.</p>:null}
+      {data?<>
+        <div className="dance-pulse">
+          <article><span>Занятий сегодня</span><strong>{todayTotal}</strong>
+            <small>{upcoming.length} ещё не закрыты</small></article>
+          <article><span>Записано учеников</span><strong>{scheduledCount}</strong>
+            <small>{attendedCount} уже отметили посещение</small></article>
+          <article><span>Нужны решения</span>
+            <strong className={alerts.length?"dance-text-attention":""}>{alerts.length}</strong>
+            <small>категорий проблем</small></article>
+          {data.canViewFinancials&&data.monthEconomics?
+            <article><span>Результат месяца</span>
+              <strong>{money(data.monthEconomics.owner_margin_minor)}</strong>
+              <small>{data.monthEconomics.payroll_finalized?
+                "зарплатные ведомости закрыты":"предварительно · ведомости не закрыты"}</small></article>
+          :<article><span>Групп в работе</span><strong>{data.groups.length}</strong>
+            <small>расписание и посещаемость</small></article>}
+        </div>
 
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const belowBreakEven = useMemo(
-    () =>
-      data?.groups.filter(
-        (group) => Number(group.members) < Number(group.break_even_members)
-      ) ?? [],
-    [data]
-  );
-
-  return (
-    <main className="app-shell">
-      <AppSidebar active="dance" />
-      <section className="workspace workspace-wide">
-        <header className="workspace-header">
-          <div>
-            <p className="muted">Студия / Панель владельца</p>
-            <h1>Студия сегодня</h1>
-            <p className="workspace-summary">
-              Посещаемость, долги, абонементы, загрузка групп и экономика месяца.
-            </p>
+        <section className="dance-focus">
+          <div className="dance-panel-head">
+            <div><span className="studio-eyebrow">Приоритеты</span>
+              <h2>Что сделать сейчас</h2></div>
+            <span className="dance-muted">{alerts.length?alerts.length+" требуют внимания":"Всё под контролем"}</span>
           </div>
-          <div className="header-actions">
-            <a className="secondary-button" href="/app/dance/students">Ученики и деньги</a>
-            <a className="secondary-button" href="/app/dance/groups">Группы и уроки</a>
-            <a className="secondary-button" href="/app/dance/team">Тренеры и залы</a>
-            <button onClick={() => void load()} type="button">Обновить</button>
-          </div>
-        </header>
+          {alerts.length?
+            <div className="dance-alert-list">
+              {alerts.map(alert=><a key={alert.id} href={alert.href} className="dance-alert-line">
+                <span className={"dance-alert-indicator "+alert.kind}/>
+                <span className="dance-alert-copy">{alert.label}</span>
+                <strong>{alert.count}</strong><span aria-hidden="true">→</span>
+              </a>)}
+            </div>:
+            <div className="dance-positive"><strong>Срочных вопросов нет</strong>
+              <span>Занятия, абонементы и исключения можно контролировать здесь ежедневно.</span></div>}
+        </section>
 
-        <DanceWorkspaceNav active="overview" />
-
-        <section className="studio-command">
-          <div className="studio-command-copy">
-            <span className="studio-eyebrow">Операционный центр</span>
-            <h2>Всё важное по студии — на одном экране</h2>
-            <p>
-              Расписание, оплаты, загрузка групп и экономика без переходов по отчётам.
-            </p>
+        <section className="dance-focus">
+          <div className="dance-panel-head"><div>
+            <span className="studio-eyebrow">Операционная работа</span>
+            <h2>Расписание на сегодня</h2></div>
+            <a href="/app/dance/groups">Управлять занятиями →</a>
           </div>
-          <div className="studio-command-actions">
-            <a className="studio-action primary-action" href="/app/dance/groups">
-              <strong>Открыть расписание</strong>
-              <span>Занятия, посещаемость, запись</span>
-            </a>
-            <a className="studio-action" href="/app/dance/students">
-              <strong>Ученики и оплаты</strong>
-              <span>Долги, абонементы, семьи</span>
-            </a>
-            <a className="studio-action" href="/app/dance/team">
-              <strong>Команда и залы</strong>
-              <span>Тренеры, зарплата, аренда</span>
-            </a>
+          <div className="dance-lesson-list">
+            {data.todayLessons.map(lesson=><article key={lesson.id} className="dance-lesson">
+              <div className="dance-lesson-time">
+                <strong>{clock(lesson.starts_at,lesson.lesson_timezone||"Europe/Moscow")}</strong>
+                <span>{clock(lesson.ends_at,lesson.lesson_timezone||"Europe/Moscow")}</span>
+              </div>
+              <div className="dance-lesson-main">
+                <strong>{lesson.group_name??lesson.program_name??lesson.lesson_type}</strong>
+                <span>{lesson.trainer_name??"Тренер не назначен"}
+                  {" · "}{lesson.room_name??"Зал не указан"}</span>
+              </div>
+              <div className="dance-lesson-occupancy">
+                <strong>{lesson.booked_count}/{lesson.capacity}</strong>
+                <span>записано · {lesson.attended_count} пришли</span>
+              </div>
+              <span className="dance-status">{lessonStatus(lesson.status)}</span>
+              <a href="/app/dance/groups" className="dance-row-link"
+                aria-label={"Открыть занятие "+(lesson.group_name??lesson.lesson_type)}>→</a>
+            </article>)}
+            {!data.todayLessons.length?<div className="dance-empty">
+              <strong>Сегодня нет запланированных занятий</strong>
+              <p>Проверьте расписание группы или создайте занятие.</p>
+              <a href="/app/dance/groups">Перейти к расписанию →</a>
+            </div>:null}
           </div>
         </section>
 
-        {error ? <div className="inline-error"><strong>Студия</strong><span>{error}</span></div> : null}
-
-        {data ? (
-          <>
-            <div className="owner-kpi-grid studio-kpi-grid">
-              <article className="owner-kpi studio-kpi">
-                <span>Реализация месяца</span>
-                <strong>{money(data.monthEconomics.revenue_minor)}</strong>
-                <small>оказанные занятия</small>
-              </article>
-              <article className="owner-kpi studio-kpi">
-                <span>Маржа до постоянной зарплаты</span>
-                <strong>{money(data.monthEconomics.margin_minor)}</strong>
-                <small>
-                  занятия тренеров {money(data.monthEconomics.trainer_cost_minor)}
-                  {" · "}залы {money(data.monthEconomics.room_cost_minor)}
-                </small>
-              </article>
-              <article className="owner-kpi studio-kpi">
-                <span>Полная стоимость команды</span>
-                <strong>
-                  {money(data.monthEconomics.full_team_cost_minor)}
-                </strong>
-                <small>
-                  {data.monthEconomics.payroll_finalized
-                    ? "месячные ведомости закрыты"
-                    : "предварительно · закройте месячные ведомости"}
-                </small>
-              </article>
-              <article className={
-                "owner-kpi studio-kpi " +
-                (data.monthEconomics.payroll_finalized
-                  ? "owner-kpi-profit"
-                  : "")
-              }>
-                <span>Маржа владельца</span>
-                <strong>
-                  {money(data.monthEconomics.owner_margin_minor)}
-                </strong>
-                <small>
-                  {data.monthEconomics.payroll_finalized
-                    ? "после аренды, оклада, гарантий и корректировок"
-                    : "предварительно без незакрытой постоянной зарплаты"}
-                </small>
-              </article>
-              <article className="owner-kpi studio-kpi">
-                <span>Дебиторка</span>
-                <strong>{money(data.debt.open_minor)}</strong>
-                <small>{data.debt.overdue_count} просрочено</small>
-              </article>
-              <article className="owner-kpi studio-kpi">
-                <span>Абонементы</span>
-                <strong>{data.packageAlerts.expiring + data.packageAlerts.low_visits}</strong>
-                <small>{data.packageAlerts.expiring} заканчиваются · {data.packageAlerts.low_visits} почти исчерпаны</small>
-              </article>
-              <article className="owner-kpi studio-kpi">
-                <span>Группы ниже break-even</span>
-                <strong>{belowBreakEven.length}</strong>
-                <small>{data.groups.length} активных групп</small>
-              </article>
+        <div className="dance-two-col">
+          <section className="dance-focus">
+            <div className="dance-panel-head"><div>
+              <span className="studio-eyebrow">Клиенты</span>
+              <h2>Кого стоит вернуть</h2></div>
+              <a href="/app/dance/students">Ученики →</a>
             </div>
+            <div className="dance-compact-list">
+              {data.retentionAlerts.slice(0,6).map(student=>
+                <a href="/app/dance/students" key={student.student_id}>
+                  <strong>{student.student_name}</strong>
+                  <span>{student.days_since_activity} дн. без занятий →</span>
+                </a>)}
+              {!data.retentionAlerts.length?<p>Учеников с критическим перерывом нет.</p>:null}
+            </div>
+            {data.retentionAlerts.length>6?
+              <p className="dance-footnote">Ещё {data.retentionAlerts.length-6} учеников требуют внимания.</p>:null}
+          </section>
+          <section className="dance-focus">
+            <div className="dance-panel-head"><div>
+              <span className="studio-eyebrow">Набор в группы</span>
+              <h2>Загрузка групп</h2></div>
+              <a href="/app/dance/groups">Все группы →</a>
+            </div>
+            <div className="dance-compact-list">
+              {(weakGroups.length?weakGroups:data.groups).slice(0,6).map(group=>
+                <a key={group.id} href="/app/dance/groups">
+                  <strong>{group.name}</strong>
+                  <span>{group.members}/{group.capacity}
+                    {weakGroups.length?" · набор до "+group.break_even_members:" · "+group.waitlist+" в ожидании"} →</span>
+                </a>)}
+              {!data.groups.length?<p>Пока нет групп. Создайте направление и первую группу.</p>:null}
+            </div>
+          </section>
+        </div>
 
-            <section className="studio-economics-grid">
-              <article className="studio-economics-panel">
-                <header>
-                  <div>
-                    <span>Направления</span>
-                    <h2>Где зарабатываем</h2>
-                  </div>
-                  <small>текущий месяц</small>
-                </header>
-                <div className="studio-economics-list">
-                  {data.economicsByProgram.map((item)=>(
-                    <div key={item.id}>
-                      <div>
-                        <strong>{item.name}</strong>
-                        <span>{item.lessons} занятий</span>
-                      </div>
-                      <div>
-                        <strong>{money(item.margin_minor)}</strong>
-                        <span>
-                          {marginPercent(item)}% маржа · выручка{" "}
-                          {money(item.revenue_minor)}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                  {!data.economicsByProgram.length ? (
-                    <p>Закройте первые занятия — экономика появится здесь.</p>
-                  ) : null}
-                </div>
-              </article>
-
-              <article className="studio-economics-panel">
-                <header>
-                  <div>
-                    <span>Команда</span>
-                    <h2>Экономика по тренерам</h2>
-                  </div>
-                  <a href="/app/dance/team">Открыть зарплату →</a>
-                </header>
-                <div className="studio-economics-list">
-                  {data.economicsByTrainer.map((item)=>(
-                    <div key={item.id}>
-                      <div>
-                        <strong>{item.name}</strong>
-                        <span>{item.lessons} занятий</span>
-                      </div>
-                      <div>
-                        <strong>{money(item.margin_minor)}</strong>
-                        <span>
-                          тренеру {money(item.trainer_cost_minor)} ·{" "}
-                          {marginPercent(item)}% маржа
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                  {!data.economicsByTrainer.length ? (
-                    <p>После закрытия уроков появится сравнение команды.</p>
-                  ) : null}
-                </div>
-              </article>
-            </section>
-
-            {Object.values(data.attention).some((value) => Number(value) > 0) ? (
-              <div className="studio-alert">
-                <strong>Что требует внимания</strong>
-                <span>
-                  {data.attention.unclosed_past_lessons > 0
-                    ? "Незакрытых прошедших уроков: " + data.attention.unclosed_past_lessons + ". "
-                    : ""}
-                  {data.attention.attended_without_payment_source > 0
-                    ? "Посещений без источника оплаты: " + data.attention.attended_without_payment_source + ". "
-                    : ""}
-                  {data.attention.completed_without_profitability > 0
-                    ? "Уроков без расчёта экономики: " + data.attention.completed_without_profitability + ". "
-                    : ""}
-                  {data.attention.completed_without_trainer_accrual > 0
-                    ? "Уроков без начисления тренеру: " + data.attention.completed_without_trainer_accrual + ". "
-                    : ""}
-                  {data.attention.lesson_waitlist > 0
-                    ? "Учеников в waitlist уроков: " + data.attention.lesson_waitlist + ". "
-                    : ""}
-                  {data.attention.over_capacity > 0
-                    ? "Переполненных уроков: " + data.attention.over_capacity + "."
-                    : ""}
-                </span>
-              </div>
-            ) : null}
-
-            {belowBreakEven.length ? (
-              <div className="studio-alert studio-alert-warm">
-                <strong>Группы ниже окупаемости</strong>
-                <span>
-                  Ниже точки безубыточности: {belowBreakEven.map((group) => group.name).join(", ")}
-                </span>
-              </div>
-            ) : null}
-
-            <section className="section-block studio-section">
-              <div className="section-heading">
-                <div>
-                  <p className="muted">Сегодня</p>
-                  <h2>Занятия</h2>
-                </div>
-                <a href="/app/dance/groups">Управлять расписанием →</a>
-              </div>
-              <div className="data-table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Время</th>
-                      <th>Группа / занятие</th>
-                      <th>Тренер</th>
-                      <th>Зал</th>
-                      <th>Запись</th>
-                      <th>Статус</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.todayLessons.map((lesson) => (
-                      <tr key={lesson.id}>
-                        <td>
-                          <strong>{new Date(lesson.starts_at).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})}</strong>
-                          <small>{new Date(lesson.ends_at).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})}</small>
-                        </td>
-                        <td>
-                          <strong>{lesson.group_name ?? lesson.lesson_type}</strong>
-                          <small>{lesson.program_name ?? lesson.lesson_type}</small>
-                        </td>
-                        <td>{lesson.trainer_name ?? "Не назначен"}</td>
-                        <td>{lesson.room_name ?? "Без зала"}</td>
-                        <td>
-                          <strong>{lesson.booked_count}/{lesson.capacity}</strong>
-                          <small>пришло {lesson.attended_count}</small>
-                        </td>
-                        <td><span className="status-pill">{lesson.status}</span></td>
-                      </tr>
-                    ))}
-                    {!data.todayLessons.length ? (
-                      <tr><td colSpan={6}><div className="table-empty"><strong>Сегодня занятий нет</strong><span>Проверьте расписание групп.</span></div></td></tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            {data.retentionAlerts.length ? (
-              <section className="section-block studio-section">
-                <div className="section-heading">
-                  <div>
-                    <p className="muted">Удержание</p>
-                    <h2>Кого можно потерять</h2>
-                  </div>
-                  <a href="/app/dance/students">Открыть учеников →</a>
-                </div>
-                <div className="data-table-wrap">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Ученик</th>
-                        <th>Последнее посещение</th>
-                        <th>Без активности</th>
-                        <th>Действие</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.retentionAlerts.map((item) => (
-                        <tr key={item.student_id}>
-                          <td><strong>{item.student_name}</strong></td>
-                          <td>
-                            {item.last_attended_at
-                              ? new Date(item.last_attended_at).toLocaleDateString("ru-RU")
-                              : "Ещё не посещал"}
-                          </td>
-                          <td>{item.days_since_activity} дн.</td>
-                          <td>Связаться / предложить подходящую группу</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            ) : null}
-
-            <section className="section-block studio-section">
-              <div className="section-heading">
-                <div>
-                  <p className="muted">Группы</p>
-                  <h2>Загрузка и лист ожидания</h2>
-                </div>
-              </div>
-              <div className="data-table-wrap">
-                <table className="data-table">
-                  <thead><tr><th>Группа</th><th>Участников</th><th>Capacity</th><th>Break-even</th><th>Waitlist</th><th>Решение</th></tr></thead>
-                  <tbody>
-                    {data.groups.map((group) => {
-                      const weak = Number(group.members) < Number(group.break_even_members);
-                      const full = Number(group.members) >= Number(group.capacity);
-                      return (
-                        <tr key={group.id}>
-                          <td><strong>{group.name}</strong></td>
-                          <td>{group.members}</td>
-                          <td>{group.capacity}</td>
-                          <td>{group.break_even_members}</td>
-                          <td>{group.waitlist}</td>
-                          <td>
-                            {weak ? "Нужен набор / объединение" : full && group.waitlist > 0 ? "Рассмотреть вторую группу" : "Норма"}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          </>
-        ) : <div className="board-loading">Загружаем студию…</div>}
-      </section>
-    </main>
-  );
+        {data.canViewFinancials&&data.monthEconomics?<>
+          <section className="dance-focus">
+            <div className="dance-panel-head">
+              <div><span className="studio-eyebrow">Для владельца</span><h2>Экономика студии</h2></div>
+              <a href="/app/dance/team">Зарплата и аренда →</a>
+            </div>
+            <div className="dance-finance-grid">
+              <div><span>Выручка от оказанных занятий</span>
+                <strong>{money(data.monthEconomics.revenue_minor)}</strong></div>
+              <div><span>Тренеры и постоянная оплата</span>
+                <strong>{money(data.monthEconomics.full_team_cost_minor)}</strong></div>
+              <div><span>Залы и аренда</span>
+                <strong>{money(data.monthEconomics.room_cost_minor)}</strong></div>
+              <div><span>Результат владельца</span>
+                <strong>{money(data.monthEconomics.owner_margin_minor)}</strong></div>
+            </div>
+            {!data.monthEconomics.payroll_finalized?
+              <p className="dance-footnote">
+                Это предварительный результат. Для окончательного расчёта закройте
+                зарплатные ведомости ({data.monthEconomics.payroll_statement_count} из
+                {" "}{data.monthEconomics.payroll_expected_trainers}).
+              </p>:null}
+            <button className="dance-disclosure" type="button"
+              aria-expanded={detail} onClick={()=>setDetail(v=>!v)}>
+              {detail?"Скрыть детализацию":"Показать рентабельность направлений и тренеров"}
+              <span>{detail?"−":"+"}</span>
+            </button>
+            {detail?<div className="dance-two-col dance-detail-grid">
+              {[{title:"Направления",items:data.economicsByProgram},
+                {title:"Тренеры",items:data.economicsByTrainer}].map(part=>
+                <div key={part.title} className="dance-breakdown">
+                  <h3>{part.title}</h3>
+                  {part.items.map(item=><div key={item.id}>
+                    <div><strong>{item.name}</strong>
+                      <small>{item.lessons} занятий · {percent(item)}% маржа</small></div>
+                    <strong>{money(item.margin_minor)}</strong>
+                  </div>)}
+                  {!part.items.length?<p>Данные появятся после закрытия занятий.</p>:null}
+                </div>)}
+            </div>:null}
+          </section>
+        </>:null}
+        <footer className="dance-workspace-footer">
+          <a href="/app/dance/setup">Настройки студии</a>
+          <span>Управление группами, учениками, расписанием и оплатами из одного пространства.</span>
+        </footer>
+      </>:null}
+    </section>
+  </main>;
 }
