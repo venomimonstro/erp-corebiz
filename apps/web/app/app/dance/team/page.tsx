@@ -578,6 +578,36 @@ export default function DanceTeamPage() {
     }
   }
 
+  async function archivePlan(plan: Plan) {
+    if (
+      !window.confirm(
+        "Отключить правило для " +
+          plan.trainer_name +
+          "? Уже рассчитанные занятия не изменятся."
+      )
+    ) {
+      return;
+    }
+    setPending(true);
+    setError("");
+    try {
+      await apiRequest(
+        "/dance/compensation-plans/" + plan.id + "/archive",
+        { method: "POST" }
+      );
+      setNotice("Правило доплаты отключено.");
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось отключить правило"
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+
   function openAdjustment(statement: TrainerStatement) {
     setAdjustmentStatement(statement);
     setAdjustmentType("BONUS");
@@ -973,14 +1003,29 @@ export default function DanceTeamPage() {
           </div>
           <div className="data-table-wrap">
             <table className="data-table">
-              <thead><tr><th>Тренер</th><th>Для чего</th><th>Схема</th><th>Условия</th><th>База</th></tr></thead>
+              <thead><tr><th>Тренер</th><th>Где действует</th><th>Схема</th><th>Условия</th><th>Расчёт</th><th></th></tr></thead>
               <tbody>
                 {plans.map((plan) => (
                   <tr key={plan.id}>
                     <td><strong>{plan.trainer_name}</strong></td>
                     <td>
-                      {plan.service_name ?? "Любая услуга"}
-                      <small>{plan.lesson_type ?? "любой формат"}</small>
+                      <strong>{plan.service_name ?? "Все услуги"}</strong>
+                      <small>
+                        {[
+                          plan.lesson_type
+                            ? plan.lesson_type
+                            : "любой формат",
+                          plan.program_name
+                            ? "направление: " + plan.program_name
+                            : null,
+                          plan.group_name
+                            ? "группа: " + plan.group_name
+                            : null,
+                          plan.branch_name
+                            ? "филиал: " + plan.branch_name
+                            : null
+                        ].filter(Boolean).join(" · ")}
+                      </small>
                     </td>
                     <td>{compensationLabel(plan.calculation_type)}</td>
                     <td>
@@ -1005,6 +1050,16 @@ export default function DanceTeamPage() {
                         : ""}
                     </td>
                     <td>{revenueBasisLabel(plan.revenue_basis)}</td>
+                    <td>
+                      <button
+                        className="table-action"
+                        type="button"
+                        disabled={pending}
+                        onClick={() => void archivePlan(plan)}
+                      >
+                        Отключить
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
