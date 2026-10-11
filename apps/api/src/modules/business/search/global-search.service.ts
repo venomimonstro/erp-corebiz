@@ -68,7 +68,7 @@ export class GlobalSearchService {
       const allowed = (code: string) =>
         permissions.has("*") || permissions.has(code);
 
-      const pattern = "%" + query.replace(/[\\%_]/g,"\\const pattern = "%" + query + "%";") + "%";
+      const pattern = "%" + query.replace(/[\\%_]/g,"\\$&") + "%";
       const items: SearchItem[] = [];
 
       if (allowed("crm.read")) {
