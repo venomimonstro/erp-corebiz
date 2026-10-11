@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
+import { DanceWorkspaceNav } from "../../../../components/dance-workspace-nav";
 import { apiRequest } from "../../../../lib/api";
 
 type Program = {
@@ -898,6 +899,8 @@ export default function DanceGroupsPage() {
             <button onClick={() => void createIndividualLesson()} type="button">+ Индивидуальный урок</button>
           </div>
         </header>
+
+        <DanceWorkspaceNav active="groups" />
 
         {error ? <div className="inline-error"><strong>Группы</strong><span>{error}</span></div> : null}
 
