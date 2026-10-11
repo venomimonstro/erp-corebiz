@@ -56,7 +56,7 @@ export class RetailNetworkService {
     const name=input?.name?.trim();
     const code=input?.code?.trim().toUpperCase();
     if(!name||name.length<2||name.length>160 ||
-      !code||!/^[A-Z0-9_-]{2,40}$/.test(code)){
+      !code||!/^[A-Z0-9_-]{2,34}$/.test(code)){
       throw new BadRequestException("Название и код магазина некорректны");
     }
     const address=input.address?.trim()||null;
@@ -153,20 +153,25 @@ export class RetailNetworkService {
 
   async reserve(ctx:TenantContext,input:OrderInput){
     await this.permit(ctx,"sales.write");
+    if(!input || typeof input!=="object")
+      throw new BadRequestException("Некорректные параметры заказа");
     this.uuid(input.locationId);
     const key=input.idempotencyKey?.trim();
-    if(!key||key.length<8||key.length>128)
+    if(!key||key.length<8||key.length>110)
       throw new BadRequestException("Требуется ключ операции (8–128 символов)");
     if(!["COUNTER","CLICK_COLLECT"].includes(input.channel))
       throw new BadRequestException("Неизвестный канал");
     if(!Array.isArray(input.lines)||input.lines.length<1||input.lines.length>100)
       throw new BadRequestException("Укажите от 1 до 100 товаров");
     for(const l of input.lines){
+      if(!l || typeof l!=="object" || typeof l.quantityMilli!=="string")
+        throw new BadRequestException("Некорректная позиция заказа");
       this.uuid(l.skuId);
       if(!/^\d+$/.test(l.quantityMilli)||
         BigInt(l.quantityMilli)<=0n||BigInt(l.quantityMilli)>1000000000n)
         throw new BadRequestException("Некорректное количество товара");
     }
+    if(input.partyId!==undefined)this.uuid(input.partyId);
     const loc=await this.db.withTenantTransaction(ctx,async client=>{
       const r=await client.query<{id:string;warehouse_id:string;pickup_enabled:boolean}>(
         `SELECT l.id,l.warehouse_id,l.pickup_enabled
