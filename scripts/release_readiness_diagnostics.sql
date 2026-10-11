@@ -890,3 +890,72 @@ WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
       AND c.status='VERIFIED'
       AND c.supports_filing=true
   );
+
+-- Structured FNS notification integrity.
+SELECT
+  'ACCOUNTING_KND1110355_CONFIRMED_LINES_MISSING' AS code,
+  count(*)::bigint AS affected
+FROM accounting_compliance_obligation o
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND o.form_code='KND_1110355'
+  AND o.workflow_status IN ('READY','APPROVED','SUBMITTED','ACCEPTED')
+  AND NOT EXISTS(
+    SELECT 1
+    FROM accounting_compliance_line l
+    WHERE l.tenant_id=o.tenant_id
+      AND l.obligation_id=o.id
+      AND l.status='CONFIRMED'
+  )
+UNION ALL
+SELECT
+  'ACCOUNTING_KND1110355_LINE_TOTAL_MISMATCH',
+  count(*)::bigint
+FROM accounting_compliance_obligation o
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND o.form_code='KND_1110355'
+  AND o.amount_minor IS NOT NULL
+  AND o.amount_minor<>coalesce((
+    SELECT sum(l.amount_minor)
+    FROM accounting_compliance_line l
+    WHERE l.tenant_id=o.tenant_id
+      AND l.obligation_id=o.id
+      AND l.status='CONFIRMED'
+  ),0)
+UNION ALL
+SELECT
+  'ACCOUNTING_KND1110355_CONFIRMED_LINE_INCOMPLETE',
+  count(*)::bigint
+FROM accounting_compliance_line l
+JOIN accounting_compliance_obligation o
+  ON o.tenant_id=l.tenant_id AND o.id=l.obligation_id
+JOIN accounting_tax_profile p
+  ON p.tenant_id=o.tenant_id AND p.id=o.tax_profile_id
+WHERE l.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND o.form_code='KND_1110355'
+  AND l.status='CONFIRMED'
+  AND (
+    nullif(btrim(l.oktmo),'') IS NULL
+    OR nullif(btrim(l.kbk),'') IS NULL
+    OR nullif(btrim(l.tax_period_code),'') IS NULL
+    OR l.reporting_year IS NULL
+    OR l.amount_minor IS NULL
+    OR (
+      p.entity_kind='ORGANIZATION'
+      AND nullif(btrim(l.kpp),'') IS NULL
+    )
+  )
+UNION ALL
+SELECT
+  'ACCOUNTING_FILING_ACCEPTED_WITHOUT_SIGNED_PACKET',
+  count(*)::bigint
+FROM accounting_compliance_obligation o
+LEFT JOIN accounting_compliance_packet p
+  ON p.tenant_id=o.tenant_id AND p.id=o.packet_id
+WHERE o.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND o.obligation_type IN ('FILE','NOTIFY')
+  AND o.workflow_status IN ('SUBMITTED','ACCEPTED')
+  AND (
+    p.id IS NULL
+    OR p.validation_status<>'VALID'
+    OR p.signature_status<>'SIGNED'
+  );
