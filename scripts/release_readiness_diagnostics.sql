@@ -679,3 +679,82 @@ JOIN payroll_accrual_batch b
 WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
   AND b.status='PAID'
   AND s.status<>'PAID';
+
+-- Payroll statement acknowledgement / dispute integrity.
+SELECT 'PAYROLL_REVIEW_SOURCE_MISMATCH' AS code,count(*)::bigint AS affected
+FROM payroll_statement_review pr
+LEFT JOIN trainer_payroll_statement dt
+  ON pr.statement_kind='DANCE_TRAINER'
+ AND dt.tenant_id=pr.tenant_id
+ AND dt.id=pr.statement_id
+LEFT JOIN service_employee_payroll_statement se
+  ON pr.statement_kind='SERVICE_EMPLOYEE'
+ AND se.tenant_id=pr.tenant_id
+ AND se.id=pr.statement_id
+WHERE pr.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND (
+    (
+      pr.statement_kind='DANCE_TRAINER'
+      AND (
+        dt.id IS NULL
+        OR dt.trainer_resource_id<>pr.employee_resource_id
+        OR dt.total_minor<>pr.statement_total_minor_snapshot
+        OR dt.currency<>pr.currency
+      )
+    )
+    OR
+    (
+      pr.statement_kind='SERVICE_EMPLOYEE'
+      AND (
+        se.id IS NULL
+        OR se.employee_resource_id<>pr.employee_resource_id
+        OR se.total_minor<>pr.statement_total_minor_snapshot
+        OR se.currency<>pr.currency
+      )
+    )
+  )
+UNION ALL
+SELECT 'PAYROLL_OPEN_DISPUTE_IN_APPROVED_OR_PAID_BATCH',count(*)::bigint
+FROM payroll_statement_review pr
+WHERE pr.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND pr.review_status='DISPUTED'
+  AND (
+    (
+      pr.statement_kind='DANCE_TRAINER'
+      AND EXISTS(
+        SELECT 1
+        FROM trainer_payroll_statement st
+        JOIN payroll_accrual_batch b
+          ON b.tenant_id=st.tenant_id AND b.id=st.payroll_batch_id
+        WHERE st.tenant_id=pr.tenant_id
+          AND st.id=pr.statement_id
+          AND b.status IN ('APPROVED','PAID')
+      )
+    )
+    OR
+    (
+      pr.statement_kind='SERVICE_EMPLOYEE'
+      AND EXISTS(
+        SELECT 1
+        FROM service_employee_payroll_statement st
+        JOIN payroll_accrual_batch b
+          ON b.tenant_id=st.tenant_id AND b.id=st.payroll_batch_id
+        WHERE st.tenant_id=pr.tenant_id
+          AND st.id=pr.statement_id
+          AND b.status IN ('APPROVED','PAID')
+      )
+    )
+  )
+UNION ALL
+SELECT 'PAYROLL_REVIEW_RESOLUTION_AUDIT_MISSING',count(*)::bigint
+FROM payroll_statement_review pr
+WHERE pr.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND pr.review_status IN ('ACKNOWLEDGED','DISPUTED','RESOLVED','WAIVED')
+  AND NOT EXISTS(
+    SELECT 1
+    FROM payroll_statement_review_event e
+    WHERE e.tenant_id=pr.tenant_id
+      AND e.review_id=pr.id
+      AND e.new_status=pr.review_status
+  );
+
