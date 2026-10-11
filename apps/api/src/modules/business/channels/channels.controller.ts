@@ -40,6 +40,21 @@ export class ChannelsController {
     return {ok:true,data:await this.hub.overview(this.context(request))};
   }
 
+  @Get("stock-hub/mappings")
+  @RequirePermission("channels.read")
+  async stockHubMappings(
+    @Req() request:AuthenticatedRequest,
+    @Query("connectionId") connectionId?:string,
+    @Query("q") query?:string,
+    @Query("limit") limit?:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.hub.searchMappings(
+      this.context(request),{
+        connectionId,query,limit:limit===undefined?50:Number(limit)
+      }
+    )};
+  }
+
   @Post("stock-hub/listings")
   @RequirePermission("channels.manage")
   async stockHubListing(@Req() request:AuthenticatedRequest,@Body() body:any):Promise<ApiSuccess<unknown>> {
