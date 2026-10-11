@@ -303,13 +303,35 @@ export class DashboardService {
 
       const roles = rolesResult.rows.map((row) => row.code);
       const has = (code: string) => roles.includes(code);
+      // Workspaces are resolved from effective permissions, never only a role
+      // title. Role membership can outlive a revoked or narrowed grant.
+      const permissionRows=await client.query<{
+        permission_code:string;scope:"own"|"team"|"branch"|"all";
+      }>(
+        `SELECT rp.permission_code,rp.scope
+         FROM membership_role mr
+         JOIN role_permission rp ON rp.tenant_id=mr.tenant_id
+           AND rp.role_id=mr.role_id
+         WHERE mr.tenant_id=$1 AND mr.membership_id=$2`,
+        [context.tenantId,context.membershipId]
+      );
+      const grants=permissionRows.rows;
+      const can=(code:string)=>grants.some(row=>
+        row.permission_code==="*"||row.permission_code===code
+      );
+      const canSeeCompanyFinance=grants.some(row=>
+        row.permission_code==="*"||
+        (row.permission_code==="finance.read"&&row.scope==="all")
+      );
 
       let workspace =
-        has("WAREHOUSE") ? "WAREHOUSE" :
-        has("FINANCE") ? "FINANCE" :
-        has("PROCUREMENT") ? "PROCUREMENT" :
-        has("SERVICE_STAFF") ? "SERVICE" :
-        (has("SALES_HEAD") || has("SALES_MANAGER")) ? "SALES" :
+        has("WAREHOUSE")&&can("wms.read") ? "WAREHOUSE" :
+        has("FINANCE")&&canSeeCompanyFinance ? "FINANCE" :
+        has("PROCUREMENT")&&can("procurement.read") ? "PROCUREMENT" :
+        has("SERVICE_STAFF")&&can("service.read") ? "SERVICE" :
+        (has("SALES_HEAD")||has("SALES_MANAGER"))&&
+          can("crm.read")&&can("sales.read")&&can("tasks.read") ? "SALES" :
+        can("projects.read")&&can("tasks.read") ? "PROJECTS" :
         "VIEWER";
 
       const metrics: Array<{
@@ -485,6 +507,50 @@ export class DashboardService {
             severity: "INFO"
           });
         }
+      } else if (workspace === "PROJECTS") {
+        // Internal agency/development assignments: never expose a client
+        // portfolio to contractors merely because they have projects.read.
+        const [projects,tasks,late]=await Promise.all([
+          client.query<{count:string;overdue:string}>(
+            `SELECT count(*)::text AS count,
+               count(*) FILTER(WHERE due_on<current_date)::text AS overdue
+             FROM work_project p
+             WHERE p.tenant_id=$1 AND p.status IN ('PLANNED','ACTIVE','ON_HOLD')
+               AND (p.responsible_membership_id=$2 OR EXISTS(
+                 SELECT 1 FROM work_project_member m WHERE m.tenant_id=p.tenant_id
+                   AND m.project_id=p.id AND m.membership_id=$2
+                   AND m.status='ACTIVE'))`,
+            [context.tenantId,context.membershipId]),
+          client.query<{count:string}>(
+            `SELECT count(*)::text AS count FROM task
+             WHERE tenant_id=$1 AND responsible_membership_id=$2
+               AND state IN ('OPEN','IN_PROGRESS','WAITING')`,
+            [context.tenantId,context.membershipId]),
+          client.query<{id:string;name:string;due_on:string}>(
+            `SELECT p.id,p.name,p.due_on::text
+             FROM work_project p
+             WHERE p.tenant_id=$1 AND p.status IN ('PLANNED','ACTIVE','ON_HOLD')
+               AND p.due_on<current_date
+               AND (p.responsible_membership_id=$2 OR EXISTS(
+                 SELECT 1 FROM work_project_member m WHERE m.tenant_id=p.tenant_id
+                   AND m.project_id=p.id AND m.membership_id=$2
+                   AND m.status='ACTIVE'))
+             ORDER BY p.due_on,p.id LIMIT 15`,
+            [context.tenantId,context.membershipId])
+        ]);
+        metrics.push(
+          {label:"Мои проекты",value:projects.rows[0]?.count??"0",
+            detail:"В работе и на согласовании"},
+          {label:"Мои задачи",value:tasks.rows[0]?.count??"0",
+            detail:"Открыто / в работе"},
+          {label:"Просрочено проектов",value:projects.rows[0]?.overdue??"0",
+            detail:"По согласованному сроку"}
+        );
+        for(const row of late.rows){
+          actions.push({id:"project:"+row.id,title:row.name,
+            detail:"Срок проекта: "+row.due_on,
+            href:"/app/projects/"+row.id,severity:"WARNING"});
+        }
       } else if (workspace === "WAREHOUSE") {
         const tasks = await client.query<{
           status: string;
@@ -651,6 +717,7 @@ export class DashboardService {
           workspace === "WAREHOUSE" ? "Мои складские задания" :
           workspace === "FINANCE" ? "Финансы сегодня" :
           workspace === "PROCUREMENT" ? "Закупки сегодня" :
+          workspace === "PROJECTS" ? "Мои проекты и задачи" :
           "Моя работа",
         metrics,
         actions
