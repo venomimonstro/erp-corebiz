@@ -384,7 +384,8 @@ export class AccountingService {
         `SELECT
            id,legal_entity_id,entity_kind,tax_regime,vat_mode,has_employees,
            tax_region_code,tax_office_code,kpp,oktmo,okved_primary,
-           ens_enabled,reporting_mode,risk_tolerance,status,
+           ens_enabled,reporting_mode,risk_tolerance,
+           usn_rate_bps,usn_min_rate_bps,status,
            effective_from,effective_to,updated_at
          FROM accounting_tax_profile
          WHERE tenant_id=$1 AND legal_entity_id=$2
@@ -462,8 +463,10 @@ export class AccountingService {
            SET entity_kind=$4,tax_regime=$5,vat_mode=$6,has_employees=$7,
                tax_region_code=$8,tax_office_code=$9,kpp=$10,oktmo=$11,
                okved_primary=$12,ens_enabled=$13,reporting_mode=$14,
-               risk_tolerance=$15,status='ACTIVE',effective_to=NULL,
-               updated_by_membership_id=$16,updated_at=now()
+               risk_tolerance=$15,
+               usn_rate_bps=$16,usn_min_rate_bps=$17,
+               status='ACTIVE',effective_to=NULL,
+               updated_by_membership_id=$18,updated_at=now()
            WHERE tenant_id=$1 AND legal_entity_id=$2 AND id=$3
            RETURNING *`,
           [
@@ -472,7 +475,11 @@ export class AccountingService {
             input.taxRegionCode?.trim()||null,input.taxOfficeCode?.trim()||null,
             input.kpp?.trim()||null,input.oktmo?.trim()||null,
             input.okvedPrimary?.trim()||null,input.ensEnabled!==false,
-            reportingMode,riskTolerance,context.membershipId
+            reportingMode,riskTolerance,
+            input.taxRegime==="USN_INCOME"?600:
+              input.taxRegime==="USN_INCOME_EXPENSE"?1500:null,
+            input.taxRegime==="USN_INCOME_EXPENSE"?100:null,
+            context.membershipId
           ]
         );
         return updated.rows[0];
@@ -483,9 +490,10 @@ export class AccountingService {
            tenant_id,legal_entity_id,entity_kind,tax_regime,vat_mode,
            has_employees,tax_region_code,tax_office_code,kpp,oktmo,
            okved_primary,ens_enabled,reporting_mode,risk_tolerance,
+           usn_rate_bps,usn_min_rate_bps,
            effective_from,created_by_membership_id,updated_by_membership_id
          ) VALUES(
-           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18
          )
          RETURNING *`,
         [
@@ -493,8 +501,11 @@ export class AccountingService {
           vatMode,Boolean(input.hasEmployees),input.taxRegionCode?.trim()||null,
           input.taxOfficeCode?.trim()||null,input.kpp?.trim()||null,
           input.oktmo?.trim()||null,input.okvedPrimary?.trim()||null,
-          input.ensEnabled!==false,reportingMode,riskTolerance,effectiveFrom,
-          context.membershipId
+          input.ensEnabled!==false,reportingMode,riskTolerance,
+          input.taxRegime==="USN_INCOME"?600:
+            input.taxRegime==="USN_INCOME_EXPENSE"?1500:null,
+          input.taxRegime==="USN_INCOME_EXPENSE"?100:null,
+          effectiveFrom,context.membershipId
         ]
       );
       return inserted.rows[0];
@@ -586,18 +597,23 @@ export class AccountingService {
           });
         }
 
-        for(const [month,quarter] of [[4,1],[7,2],[10,3]] as const){
+        for(const period of [
+          {month:4,key:"Q1",label:"1 квартал"},
+          {month:7,key:"H1",label:"полугодие"},
+          {month:10,key:"9M",label:"9 месяцев"}
+        ]){
           push({
             code:"USN_ADVANCE_NOTIFICATION",
-            title:"Уведомление по авансу УСН за "+quarter+" квартал",
-            authority:"FNS",type:"NOTIFY",due:iso(month,25),
-            periodKey:year+"-Q"+quarter,formCode:"KND_1110355",sourceUrl:ens
+            title:"Уведомление по авансу УСН за "+period.label,
+            authority:"FNS",type:"NOTIFY",due:iso(period.month,25),
+            periodKey:year+"-"+period.key,
+            formCode:"KND_1110355",sourceUrl:ens
           });
           push({
             code:"USN_ADVANCE_PAYMENT",
-            title:"Авансовый платёж УСН за "+quarter+" квартал",
-            authority:"FNS",type:"PAY",due:iso(month,28),
-            periodKey:year+"-Q"+quarter,sourceUrl:ens
+            title:"Авансовый платёж УСН за "+period.label,
+            authority:"FNS",type:"PAY",due:iso(period.month,28),
+            periodKey:year+"-"+period.key,sourceUrl:ens
           });
         }
       }
@@ -1084,6 +1100,435 @@ export class AccountingService {
         );
       }
 
+      return updated.rows[0];
+    });
+  }
+
+  async taxCategories(context:TenantContext) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT id,name,direction,code,tax_treatment,status
+         FROM cash_flow_category
+         WHERE tenant_id=$1 AND status='ACTIVE'
+         ORDER BY name`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async setTaxCategoryTreatment(context:TenantContext,input:{
+    categoryId:string;
+    treatment:
+      "TAXABLE_INCOME"|"INCOME_REVERSAL"|"DEDUCTIBLE_EXPENSE"|
+      "EXPENSE_REVERSAL"|"NON_TAXABLE"|"NON_DEDUCTIBLE"|"REVIEW";
+  }) {
+    const allowed=[
+      "TAXABLE_INCOME","INCOME_REVERSAL","DEDUCTIBLE_EXPENSE",
+      "EXPENSE_REVERSAL","NON_TAXABLE","NON_DEDUCTIBLE","REVIEW"
+    ];
+    if(!input.categoryId||!allowed.includes(input.treatment)){
+      throw new BadRequestException("Некорректная налоговая классификация");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `UPDATE cash_flow_category
+         SET tax_treatment=$3
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+         RETURNING id,name,direction,code,tax_treatment`,
+        [context.tenantId,input.categoryId,input.treatment]
+      );
+      if(!result.rowCount) throw new NotFoundException("Категория не найдена");
+      return result.rows[0];
+    });
+  }
+
+  async taxCashBasisEstimate(context:TenantContext,input:{
+    legalEntityId:string;
+    dateFrom:string;
+    dateTo:string;
+  }) {
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(input.dateFrom)||
+       !/^\d{4}-\d{2}-\d{2}$/.test(input.dateTo)||
+       input.dateFrom>input.dateTo){
+      throw new BadRequestException("Некорректный период расчёта");
+    }
+
+    return this.database.withTenantTransaction(context,async client=>{
+      const profile=await client.query<{
+        tax_regime:string;
+        usn_rate_bps:number|null;
+        usn_min_rate_bps:number|null;
+      }>(
+        `SELECT tax_regime,usn_rate_bps,usn_min_rate_bps
+         FROM accounting_tax_profile
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+           AND status='ACTIVE'
+           AND effective_from<=$4::date
+           AND (effective_to IS NULL OR effective_to>=$3::date)
+         ORDER BY effective_from DESC LIMIT 1`,
+        [context.tenantId,input.legalEntityId,input.dateFrom,input.dateTo]
+      );
+      const p=profile.rows[0];
+      if(!p) throw new ConflictException("Налоговый профиль не настроен");
+      if(!p.tax_regime.startsWith("USN_")){
+        throw new ConflictException(
+          "Кассовый расчёт сейчас реализован для УСН"
+        );
+      }
+
+      const dimensions=await client.query<{
+        undimensioned_accounts:number;
+        unclassified_count:number;
+        unclassified_minor:string;
+        taxable_income_minor:string;
+        income_reversal_minor:string;
+        deductible_expense_minor:string;
+        expense_reversal_minor:string;
+      }>(
+        `SELECT
+           (
+             SELECT count(*)::integer
+             FROM cash_account a
+             WHERE a.tenant_id=$1
+               AND a.status='ACTIVE'
+               AND a.legal_entity_id IS NULL
+           ) AS undimensioned_accounts,
+           count(*) FILTER (
+             WHERE p.category_id IS NULL OR c.tax_treatment='REVIEW'
+           )::integer AS unclassified_count,
+           coalesce(sum(p.amount_minor) FILTER (
+             WHERE p.category_id IS NULL OR c.tax_treatment='REVIEW'
+           ),0)::text AS unclassified_minor,
+           coalesce(sum(p.amount_minor) FILTER (
+             WHERE p.direction='IN' AND c.tax_treatment='TAXABLE_INCOME'
+           ),0)::text AS taxable_income_minor,
+           coalesce(sum(p.amount_minor) FILTER (
+             WHERE p.direction='OUT' AND c.tax_treatment='INCOME_REVERSAL'
+           ),0)::text AS income_reversal_minor,
+           coalesce(sum(p.amount_minor) FILTER (
+             WHERE p.direction='OUT' AND c.tax_treatment='DEDUCTIBLE_EXPENSE'
+           ),0)::text AS deductible_expense_minor,
+           coalesce(sum(p.amount_minor) FILTER (
+             WHERE p.direction='IN' AND c.tax_treatment='EXPENSE_REVERSAL'
+           ),0)::text AS expense_reversal_minor
+         FROM payment p
+         JOIN cash_account a
+           ON a.tenant_id=p.tenant_id AND a.id=p.cash_account_id
+         LEFT JOIN cash_flow_category c
+           ON c.tenant_id=p.tenant_id AND c.id=p.category_id
+         WHERE p.tenant_id=$1
+           AND a.legal_entity_id=$2
+           AND p.status='POSTED'
+           AND p.posted_at::date BETWEEN $3::date AND $4::date`,
+        [context.tenantId,input.legalEntityId,input.dateFrom,input.dateTo]
+      );
+      const row=dimensions.rows[0]!;
+      const income=
+        BigInt(row.taxable_income_minor)-BigInt(row.income_reversal_minor);
+      const expenses=
+        BigInt(row.deductible_expense_minor)-BigInt(row.expense_reversal_minor);
+      const normalizedIncome=income>0n?income:0n;
+      const normalizedExpenses=expenses>0n?expenses:0n;
+      const rate=BigInt(p.usn_rate_bps??(
+        p.tax_regime==="USN_INCOME"?600:1500
+      ));
+      const minRate=BigInt(p.usn_min_rate_bps??100);
+
+      const base=
+        p.tax_regime==="USN_INCOME"
+          ?normalizedIncome
+          :normalizedIncome>normalizedExpenses
+            ?normalizedIncome-normalizedExpenses
+            :0n;
+      const calculated=(base*rate+9999n)/10000n;
+      const minimumTax=(normalizedIncome*minRate+9999n)/10000n;
+
+      const warnings:string[]=[];
+      if(row.undimensioned_accounts>0){
+        warnings.push(
+          "Есть денежные счета без привязки к юрлицу: "+row.undimensioned_accounts
+        );
+      }
+      if(row.unclassified_count>0){
+        warnings.push(
+          "Есть платежи без подтверждённой налоговой классификации: "+
+          row.unclassified_count
+        );
+      }
+      if(p.tax_regime==="USN_INCOME"){
+        warnings.push(
+          "Уменьшение налога на страховые взносы и специальные льготы пока не применены автоматически."
+        );
+      }else{
+        warnings.push(
+          "Принимаемость расходов по УСН Доходы минус расходы требует первички и проверки условий НК РФ."
+        );
+      }
+
+      return {
+        legalEntityId:input.legalEntityId,
+        dateFrom:input.dateFrom,
+        dateTo:input.dateTo,
+        taxRegime:p.tax_regime,
+        rateBps:Number(rate),
+        minimumRateBps:Number(minRate),
+        taxableIncomeMinor:normalizedIncome.toString(),
+        deductibleExpenseMinor:normalizedExpenses.toString(),
+        taxBaseMinor:base.toString(),
+        calculatedTaxMinor:calculated.toString(),
+        minimumTaxMinor:minimumTax.toString(),
+        unclassifiedCount:row.unclassified_count,
+        unclassifiedMinor:row.unclassified_minor,
+        undimensionedAccounts:row.undimensioned_accounts,
+        reviewRequired:true,
+        warnings
+      };
+    });
+  }
+
+  async calculateUsnObligation(
+    context:TenantContext,
+    obligationId:string
+  ) {
+    return this.database.withTenantTransaction(context,async client=>{
+      const obligation=await client.query<{
+        id:string;
+        legal_entity_id:string;
+        code:string;
+        period_key:string;
+        due_at:Date;
+      }>(
+        `SELECT id,legal_entity_id,code,period_key,due_at
+         FROM accounting_compliance_obligation
+         WHERE tenant_id=$1 AND id=$2
+           AND code IN ('USN_ADVANCE_PAYMENT','USN_ANNUAL_PAYMENT_ORG','USN_ANNUAL_PAYMENT_IP')
+         FOR UPDATE`,
+        [context.tenantId,obligationId]
+      );
+      const o=obligation.rows[0];
+      if(!o) throw new NotFoundException("Задача расчёта УСН не найдена");
+
+      let year:number;
+      let dateFrom:string;
+      let dateTo:string;
+      const annual=/^\d{4}$/.exec(o.period_key);
+      const cumulative=/^(\d{4})-(Q1|H1|9M)$/.exec(o.period_key);
+      if(annual){
+        year=Number(annual[0]);
+        dateFrom=year+"-01-01";
+        dateTo=year+"-12-31";
+      }else if(cumulative){
+        year=Number(cumulative[1]);
+        dateFrom=year+"-01-01";
+        dateTo=
+          cumulative[2]==="Q1"?year+"-03-31":
+          cumulative[2]==="H1"?year+"-06-30":
+          year+"-09-30";
+      }else{
+        throw new ConflictException("Неизвестный период расчёта УСН");
+      }
+
+      const profile=await client.query<{
+        tax_regime:string;
+        usn_rate_bps:number|null;
+        usn_min_rate_bps:number|null;
+      }>(
+        `SELECT tax_regime,usn_rate_bps,usn_min_rate_bps
+         FROM accounting_tax_profile
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+           AND status='ACTIVE'
+           AND effective_from<=$4::date
+           AND (effective_to IS NULL OR effective_to>=$3::date)
+         ORDER BY effective_from DESC LIMIT 1`,
+        [context.tenantId,o.legal_entity_id,dateFrom,dateTo]
+      );
+      const p=profile.rows[0];
+      if(!p||!p.tax_regime.startsWith("USN_")){
+        throw new ConflictException("Для задачи не найден профиль УСН");
+      }
+
+      const sums=await client.query<{
+        unclassified_count:number;
+        taxable_income_minor:string;
+        income_reversal_minor:string;
+        deductible_expense_minor:string;
+        expense_reversal_minor:string;
+      }>(
+        `SELECT
+           count(*) FILTER(
+             WHERE pay.category_id IS NULL OR c.tax_treatment='REVIEW'
+           )::integer AS unclassified_count,
+           coalesce(sum(pay.amount_minor) FILTER(
+             WHERE pay.direction='IN' AND c.tax_treatment='TAXABLE_INCOME'
+           ),0)::text AS taxable_income_minor,
+           coalesce(sum(pay.amount_minor) FILTER(
+             WHERE pay.direction='OUT' AND c.tax_treatment='INCOME_REVERSAL'
+           ),0)::text AS income_reversal_minor,
+           coalesce(sum(pay.amount_minor) FILTER(
+             WHERE pay.direction='OUT' AND c.tax_treatment='DEDUCTIBLE_EXPENSE'
+           ),0)::text AS deductible_expense_minor,
+           coalesce(sum(pay.amount_minor) FILTER(
+             WHERE pay.direction='IN' AND c.tax_treatment='EXPENSE_REVERSAL'
+           ),0)::text AS expense_reversal_minor
+         FROM payment pay
+         JOIN cash_account a
+           ON a.tenant_id=pay.tenant_id AND a.id=pay.cash_account_id
+         LEFT JOIN cash_flow_category c
+           ON c.tenant_id=pay.tenant_id AND c.id=pay.category_id
+         WHERE pay.tenant_id=$1
+           AND a.legal_entity_id=$2
+           AND pay.status='POSTED'
+           AND pay.posted_at::date BETWEEN $3::date AND $4::date`,
+        [context.tenantId,o.legal_entity_id,dateFrom,dateTo]
+      );
+      const row=sums.rows[0]!;
+      const incomeRaw=
+        BigInt(row.taxable_income_minor)-BigInt(row.income_reversal_minor);
+      const expenseRaw=
+        BigInt(row.deductible_expense_minor)-BigInt(row.expense_reversal_minor);
+      const income=incomeRaw>0n?incomeRaw:0n;
+      const expenses=expenseRaw>0n?expenseRaw:0n;
+      const base=p.tax_regime==="USN_INCOME"
+        ?income
+        :income>expenses?income-expenses:0n;
+      const rate=BigInt(p.usn_rate_bps??(
+        p.tax_regime==="USN_INCOME"?600:1500
+      ));
+      let gross=(base*rate+9999n)/10000n;
+
+      if(annual&&p.tax_regime==="USN_INCOME_EXPENSE"){
+        const minRate=BigInt(p.usn_min_rate_bps??100);
+        const minimum=(income*minRate+9999n)/10000n;
+        if(minimum>gross) gross=minimum;
+      }
+
+      const prior=await client.query<{amount_minor:string}>(
+        `SELECT coalesce(sum(amount_minor),0)::text AS amount_minor
+         FROM accounting_compliance_obligation
+         WHERE tenant_id=$1
+           AND legal_entity_id=$2
+           AND code='USN_ADVANCE_PAYMENT'
+           AND amount_minor IS NOT NULL
+           AND due_at<$3
+           AND extract(year FROM due_at)=$4`,
+        [context.tenantId,o.legal_entity_id,o.due_at,year]
+      );
+      const priorAmount=BigInt(prior.rows[0]?.amount_minor??"0");
+      const estimatedDue=gross>priorAmount?gross-priorAmount:0n;
+
+      const warnings:string[]=[];
+      if(row.unclassified_count>0){
+        warnings.push("Есть неклассифицированные платежи: "+row.unclassified_count);
+      }
+      if(p.tax_regime==="USN_INCOME"){
+        warnings.push("Не применено автоматическое уменьшение УСН на страховые взносы.");
+      }
+      if(p.tax_regime==="USN_INCOME_EXPENSE"){
+        warnings.push("Расходы должны быть подтверждены первичными документами и соответствовать условиям признания.");
+      }
+
+      const snapshot={
+        engine:"COREBIZ_USN_CASH_BASIS_V1",
+        calculatedAt:new Date().toISOString(),
+        dateFrom,dateTo,taxRegime:p.tax_regime,
+        taxableIncomeMinor:income.toString(),
+        deductibleExpenseMinor:expenses.toString(),
+        taxBaseMinor:base.toString(),
+        grossTaxMinor:gross.toString(),
+        priorAdvanceMinor:priorAmount.toString(),
+        estimatedDueMinor:estimatedDue.toString(),
+        warnings
+      };
+
+      const updated=await client.query(
+        `UPDATE accounting_compliance_obligation
+         SET amount_minor=$3,
+             calculation_status='REVIEW_REQUIRED',
+             calculation_snapshot=$4,
+             review_note=$5,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING id,amount_minor::text,calculation_status,calculation_snapshot`,
+        [
+          context.tenantId,o.id,estimatedDue.toString(),
+          JSON.stringify(snapshot),
+          warnings.length?warnings.join(" "):"Требуется подтверждение владельцем."
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO accounting_compliance_event(
+           tenant_id,obligation_id,event_type,actor_membership_id,payload
+         ) VALUES($1,$2,'USN_DRAFT_CALCULATED',$3,$4)`,
+        [context.tenantId,o.id,context.membershipId,JSON.stringify(snapshot)]
+      );
+
+      return updated.rows[0];
+    });
+  }
+
+  async confirmComplianceAmount(context:TenantContext,input:{
+    obligationId:string;
+    amountMinor:string;
+    note:string;
+  }) {
+    if(!/^\d+$/.test(input.amountMinor)||!input.note?.trim()||
+       input.note.trim().length<5){
+      throw new BadRequestException(
+        "Для подтверждения нужна сумма и комментарий"
+      );
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const current=await client.query<{
+        workflow_status:string;
+        calculation_snapshot:any;
+      }>(
+        `SELECT workflow_status,calculation_snapshot
+         FROM accounting_compliance_obligation
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [context.tenantId,input.obligationId]
+      );
+      const row=current.rows[0];
+      if(!row) throw new NotFoundException("Налоговая задача не найдена");
+      if(!["PLANNED","READY","REJECTED"].includes(row.workflow_status)){
+        throw new ConflictException(
+          "Сумму нельзя менять после утверждения/отправки"
+        );
+      }
+      const snapshot={
+        ...(row.calculation_snapshot??{}),
+        confirmedAmountMinor:input.amountMinor,
+        confirmedAt:new Date().toISOString(),
+        confirmationNote:input.note.trim(),
+        confirmedByMembershipId:context.membershipId
+      };
+      const updated=await client.query(
+        `UPDATE accounting_compliance_obligation
+         SET amount_minor=$3,calculation_status='CONFIRMED',
+             calculation_snapshot=$4,review_note=$5,
+             workflow_status=CASE
+               WHEN workflow_status IN ('PLANNED','REJECTED') THEN 'READY'
+               ELSE workflow_status
+             END,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING id,amount_minor::text,calculation_status,workflow_status`,
+        [
+          context.tenantId,input.obligationId,input.amountMinor,
+          JSON.stringify(snapshot),input.note.trim()
+        ]
+      );
+      await client.query(
+        `INSERT INTO accounting_compliance_event(
+           tenant_id,obligation_id,event_type,actor_membership_id,payload
+         ) VALUES($1,$2,'AMOUNT_CONFIRMED',$3,$4)`,
+        [
+          context.tenantId,input.obligationId,context.membershipId,
+          JSON.stringify({amountMinor:input.amountMinor,note:input.note.trim()})
+        ]
+      );
       return updated.rows[0];
     });
   }
