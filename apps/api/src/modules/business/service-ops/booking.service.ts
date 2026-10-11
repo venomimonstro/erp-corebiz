@@ -2229,8 +2229,11 @@ export class BookingService {
         starts_at: Date;
         created_at: Date;
         currency: string;
+        price_minor_snapshot:string;
       }>(
-        `SELECT party_id,asset_id,service_id,starts_at,created_at,currency
+        `SELECT
+           party_id,asset_id,service_id,starts_at,created_at,currency,
+           price_minor_snapshot::text
          FROM service_booking
          WHERE tenant_id=$1 AND id=$2
          FOR UPDATE`,
@@ -2274,6 +2277,22 @@ export class BookingService {
            WHERE tenant_id=$1 AND id=$2 AND party_id IS NULL`,
           [context.tenantId, bookingId, partyId]
         );
+      }
+
+      const hasPackage=await client.query(
+        `SELECT 1 FROM service_package_redemption
+         WHERE tenant_id=$1 AND booking_id=$2
+         LIMIT 1`,
+        [context.tenantId,bookingId]
+      );
+      if(!hasPackage.rowCount&&BigInt(row.price_minor_snapshot)>0n){
+        await this.ensureBookingChargeTx(client,context,{
+          bookingId,
+          payerPartyId:partyId,
+          amountMinor:row.price_minor_snapshot,
+          currency:row.currency,
+          dueAt:row.starts_at
+        });
       }
 
       await this.attribution.recordConversion(client, context, {
@@ -2479,6 +2498,36 @@ export class BookingService {
         [context.tenantId,bookingId,startsAt,endsAt]
       );
 
+      await client.query(
+        `UPDATE financial_obligation o
+         SET due_at=$3,updated_at=now()
+         FROM service_booking_charge c
+         WHERE c.tenant_id=$1
+           AND c.booking_id=$2
+           AND c.obligation_id=o.id
+           AND o.tenant_id=c.tenant_id
+           AND o.status IN ('OPEN','PARTIALLY_SETTLED')`,
+        [context.tenantId,bookingId,startsAt]
+      );
+      await client.query(
+        `UPDATE finance_invoice i
+         SET due_at=$3,updated_at=now()
+         FROM service_booking_charge c
+         WHERE c.tenant_id=$1
+           AND c.booking_id=$2
+           AND c.invoice_id=i.id
+           AND i.tenant_id=c.tenant_id
+           AND i.status IN ('ISSUED','PARTIALLY_PAID')`,
+        [context.tenantId,bookingId,startsAt]
+      );
+      await client.query(
+        `UPDATE service_booking_charge
+         SET due_at=$3,updated_at=now()
+         WHERE tenant_id=$1 AND booking_id=$2
+           AND status IN ('OPEN','PARTIALLY_PAID')`,
+        [context.tenantId,bookingId,startsAt]
+      );
+
       await this.events.enqueue(client,context,{
         eventName:"service.booking_rescheduled",
         entityType:"SERVICE_BOOKING",
@@ -2550,12 +2599,19 @@ export class BookingService {
         );
       }
 
+      if(row.status==="CANCELLED"){
+        await this.cancelBookingChargeTx(client,context,bookingId);
+      }
+
       if (row.status === "COMPLETED") {
         const completed = await client.query<{
           party_id: string | null;
           currency: string;
+          price_minor_snapshot:string;
         }>(
-          "SELECT party_id,currency FROM service_booking WHERE tenant_id=$1 AND id=$2",
+          `SELECT party_id,currency,price_minor_snapshot::text
+           FROM service_booking
+           WHERE tenant_id=$1 AND id=$2`,
           [context.tenantId, bookingId]
         );
 
@@ -2564,7 +2620,9 @@ export class BookingService {
           sourceType: "SERVICE_BOOKING",
           sourceId: bookingId,
           conversionType: "COMPLETED_SERVICE",
-          revenueMinor: 0n,
+          revenueMinor: BigInt(
+            completed.rows[0]?.price_minor_snapshot ?? "0"
+          ),
           currency: completed.rows[0]?.currency ?? "RUB",
           metadata: {
             status: "COMPLETED"
@@ -2585,6 +2643,188 @@ export class BookingService {
 
       return row;
     });
+  }
+
+  private async ensureBookingChargeTx(
+    client:PoolClient,
+    context:TenantContext,
+    input:{
+      bookingId:string;
+      payerPartyId:string;
+      amountMinor:string;
+      currency:string;
+      dueAt:Date;
+    }
+  ):Promise<{id:string;invoiceId:string;obligationId:string}>{
+    if(BigInt(input.amountMinor)<=0n){
+      throw new BadRequestException("Сумма начисления должна быть больше нуля");
+    }
+
+    const existing=await client.query<{
+      id:string;
+      obligation_id:string|null;
+      invoice_id:string|null;
+      amount_minor:string;
+      payer_party_id:string;
+    }>(
+      `SELECT
+         id,obligation_id,invoice_id,amount_minor::text,payer_party_id
+       FROM service_booking_charge
+       WHERE tenant_id=$1 AND booking_id=$2
+       FOR UPDATE`,
+      [context.tenantId,input.bookingId]
+    );
+    if(existing.rows[0]){
+      const row=existing.rows[0];
+      if(
+        row.payer_party_id!==input.payerPartyId ||
+        row.amount_minor!==input.amountMinor
+      ){
+        throw new ConflictException(
+          "Финансовое начисление записи уже создано с другими параметрами"
+        );
+      }
+      if(!row.obligation_id||!row.invoice_id){
+        throw new ConflictException(
+          "Финансовый контур записи создан не полностью"
+        );
+      }
+      return {
+        id:row.id,
+        obligationId:row.obligation_id,
+        invoiceId:row.invoice_id
+      };
+    }
+
+    const actorMembershipId=
+      context.membershipId==="00000000-0000-0000-0000-000000000000"
+        ?null
+        :context.membershipId;
+
+    const charge=await client.query<{id:string}>(
+      `INSERT INTO service_booking_charge(
+         tenant_id,booking_id,payer_party_id,currency,amount_minor,due_at,
+         created_by_membership_id
+       ) VALUES($1,$2,$3,$4,$5,$6,$7)
+       RETURNING id`,
+      [
+        context.tenantId,input.bookingId,input.payerPartyId,input.currency,
+        input.amountMinor,input.dueAt,actorMembershipId
+      ]
+    );
+    const chargeId=charge.rows[0]?.id;
+    if(!chargeId) throw new Error("SERVICE_BOOKING_CHARGE_CREATE_FAILED");
+
+    const obligation=await client.query<{id:string}>(
+      `INSERT INTO financial_obligation(
+         tenant_id,direction,party_id,source_type,source_id,
+         currency,amount_minor,due_at
+       ) VALUES(
+         $1,'RECEIVABLE',$2,'SERVICE_BOOKING_CHARGE',$3,$4,$5,$6
+       )
+       RETURNING id`,
+      [
+        context.tenantId,input.payerPartyId,chargeId,input.currency,
+        input.amountMinor,input.dueAt
+      ]
+    );
+    const obligationId=obligation.rows[0]?.id;
+    if(!obligationId) throw new Error("SERVICE_BOOKING_OBLIGATION_CREATE_FAILED");
+
+    const invoiceNumber=await this.nextNumber(
+      client,context.tenantId,"finance_invoice","INV"
+    );
+    const invoice=await client.query<{id:string}>(
+      `INSERT INTO finance_invoice(
+         tenant_id,business_number,party_id,source_type,source_id,
+         obligation_id,currency,amount_minor,due_at,
+         created_by_membership_id
+       ) VALUES(
+         $1,$2,$3,'SERVICE_BOOKING_CHARGE',$4,$5,$6,$7,$8,$9
+       )
+       RETURNING id`,
+      [
+        context.tenantId,invoiceNumber,input.payerPartyId,chargeId,
+        obligationId,input.currency,input.amountMinor,input.dueAt,
+        actorMembershipId
+      ]
+    );
+    const invoiceId=invoice.rows[0]?.id;
+    if(!invoiceId) throw new Error("SERVICE_BOOKING_INVOICE_CREATE_FAILED");
+
+    await client.query(
+      `UPDATE service_booking_charge
+       SET obligation_id=$3,invoice_id=$4,updated_at=now()
+       WHERE tenant_id=$1 AND id=$2`,
+      [context.tenantId,chargeId,obligationId,invoiceId]
+    );
+
+    return {id:chargeId,obligationId,invoiceId};
+  }
+
+  private async cancelBookingChargeTx(
+    client:PoolClient,
+    context:TenantContext,
+    bookingId:string
+  ):Promise<void>{
+    const charge=await client.query<{
+      id:string;
+      payer_party_id:string;
+      obligation_id:string|null;
+      currency:string;
+      amount_minor:string;
+      status:string;
+      obligation_status:string|null;
+      settled_minor:string|null;
+    }>(
+      `SELECT
+         c.id,c.payer_party_id,c.obligation_id,c.currency,
+         c.amount_minor::text,c.status,
+         o.status AS obligation_status,o.settled_minor::text
+       FROM service_booking_charge c
+       LEFT JOIN financial_obligation o
+         ON o.tenant_id=c.tenant_id AND o.id=c.obligation_id
+       WHERE c.tenant_id=$1 AND c.booking_id=$2
+       FOR UPDATE OF c,o`,
+      [context.tenantId,bookingId]
+    );
+    const row=charge.rows[0];
+    if(!row||!row.obligation_id||row.status==="CANCELLED") return;
+
+    const settled=BigInt(row.settled_minor??"0");
+    if(settled>0n){
+      const refund=await client.query<{id:string}>(
+        `INSERT INTO financial_obligation(
+           tenant_id,direction,party_id,source_type,source_id,
+           currency,amount_minor,due_at
+         ) VALUES(
+           $1,'PAYABLE',$2,'SERVICE_BOOKING_REFUND',$3,$4,$5,now()
+         )
+         ON CONFLICT(tenant_id,direction,source_type,source_id)
+         DO UPDATE SET updated_at=now()
+         RETURNING id`,
+        [
+          context.tenantId,row.payer_party_id,bookingId,
+          row.currency,settled.toString()
+        ]
+      );
+      if(!refund.rows[0]){
+        throw new Error("SERVICE_BOOKING_REFUND_OBLIGATION_FAILED");
+      }
+    }
+
+    if(
+      row.obligation_status &&
+      row.obligation_status!=="CANCELLED"
+    ){
+      await client.query(
+        `UPDATE financial_obligation
+         SET status='CANCELLED',updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+           AND status<>'CANCELLED'`,
+        [context.tenantId,row.obligation_id]
+      );
+    }
   }
 
   private async serviceScope(
