@@ -1801,7 +1801,12 @@ export class DanceStudioService {
          ORDER BY l.starts_at`,
         [context.tenantId,from,to,scopeIds]
       );
-      return result.rows;
+      const allowed=Boolean(await this.authorization.resolveScope(context,"finance.read"));
+      if(allowed)return result.rows;
+      return result.rows.map(row=>({
+        ...row,earned_revenue_minor:null,trainer_cost_minor:null,
+        room_cost_minor:null,contribution_margin_minor:null
+      }));
     });
   }
 
@@ -2507,7 +2512,12 @@ export class DanceStudioService {
          ORDER BY p.display_name`,
         [context.tenantId,lessonId]
       );
-      return result.rows;
+      const allowed=Boolean(await this.authorization.resolveScope(context,"finance.read"));
+      if(allowed)return result.rows;
+      return result.rows.map(row=>({
+        ...row,charge_minor:null,currency:null,
+        visit_limit_snapshot:null,reserved_visits:null,used_visits:null
+      }));
     });
   }
 
