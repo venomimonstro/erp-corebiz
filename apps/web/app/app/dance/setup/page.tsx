@@ -25,6 +25,16 @@ type Resource = {
   branch_name:string|null;
 };
 
+type Branch = {
+  id:string;
+  name:string;
+  status?:string;
+};
+
+type Organization = {
+  branches:Branch[];
+};
+
 type DeliveryRule = {
   id:string;
   service_id:string;
@@ -115,6 +125,7 @@ function rubToMinor(value:string){
 export default function DanceSetupPage(){
   const [services,setServices]=useState<Service[]>([]);
   const [resources,setResources]=useState<Resource[]>([]);
+  const [branches,setBranches]=useState<Branch[]>([]);
   const [rules,setRules]=useState<DeliveryRule[]>([]);
   const [cards,setCards]=useState<TechnologyCard[]>([]);
   const [warehouses,setWarehouses]=useState<Warehouse[]>([]);
@@ -129,6 +140,7 @@ export default function DanceSetupPage(){
 
   const [ruleService,setRuleService]=useState("");
   const [ruleEmployee,setRuleEmployee]=useState("");
+  const [ruleBranch,setRuleBranch]=useState("");
   const [ruleFormat,setRuleFormat]=useState<DeliveryRule["delivery_format"]>("GROUP");
   const [rulePrice,setRulePrice]=useState("");
   const [ruleDuration,setRuleDuration]=useState("60");
@@ -151,17 +163,24 @@ export default function DanceSetupPage(){
     setError("");
     try{
       const [
-        serviceRows,resourceRows,ruleRows,cardRows,warehouseRows,productRows
+        serviceRows,resourceRows,ruleRows,cardRows,warehouseRows,productRows,
+        organization
       ]=await Promise.all([
         apiRequest<Service[]>("/service/catalog"),
         apiRequest<Resource[]>("/service/resources"),
         apiRequest<DeliveryRule[]>("/service/delivery-rules"),
         apiRequest<TechnologyCard[]>("/service/technology-cards"),
         apiRequest<Warehouse[]>("/inventory/warehouses"),
-        apiRequest<Product[]>("/catalog/products")
+        apiRequest<Product[]>("/catalog/products"),
+        apiRequest<Organization>("/organization")
       ]);
       setServices(serviceRows);
       setResources(resourceRows);
+      setBranches(
+        (organization.branches??[]).filter(
+          (branch)=>!branch.status||branch.status==="ACTIVE"
+        )
+      );
       setRules(ruleRows);
       setCards(cardRows);
       setWarehouses(warehouseRows);
@@ -312,6 +331,7 @@ export default function DanceSetupPage(){
         body:JSON.stringify({
           serviceId:ruleService,
           employeeResourceId:ruleEmployee||undefined,
+          branchId:ruleBranch||undefined,
           deliveryFormat:ruleFormat,
           priceMinor:priceMinor??undefined,
           durationMinutes:duration,
@@ -566,11 +586,14 @@ export default function DanceSetupPage(){
                   <div>
                     <span className="studio-chip">{rule.delivery_format.replace("_"," ")}</span>
                     <h3>{rule.service_name}</h3>
-                    <p>{rule.employee_name??(
-                      rule.delivery_format==="SELF_PRACTICE"
-                        ?"Без тренера"
-                        :"Правило для всех сотрудников"
-                    )}</p>
+                    <p>
+                      {rule.employee_name??(
+                        rule.delivery_format==="SELF_PRACTICE"
+                          ?"Без тренера"
+                          :"Правило для всех сотрудников"
+                      )}
+                      {rule.branch_name ? " · " + rule.branch_name : ""}
+                    </p>
                   </div>
                   <strong>{money(rule.price_minor)}</strong>
                 </header>
@@ -777,6 +800,19 @@ export default function DanceSetupPage(){
                     </select>
                   </label>
                 </div>
+
+                <label>
+                  <span>Филиал</span>
+                  <select value={ruleBranch} onChange={event=>setRuleBranch(event.target.value)}>
+                    <option value="">Все филиалы</option>
+                    {branches.map(branch=>(
+                      <option key={branch.id} value={branch.id}>{branch.name}</option>
+                    ))}
+                  </select>
+                  <small>
+                    Оставьте пустым, если правило одинаковое во всех локациях.
+                  </small>
+                </label>
 
                 <div className="studio-form-grid">
                   <label>
