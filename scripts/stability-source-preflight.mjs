@@ -309,6 +309,7 @@ async function inspectRequiredHardening(root) {
       /payrollProfiles/,
       /MONTHLY_BASE/,
       /DANCE_TRAINER_STATEMENT/,
+      /payroll_accrual_component/,
       /payroll_batch_id/,
       /service_booking_material/
     ],
@@ -364,9 +365,20 @@ async function inspectRequiredHardening(root) {
       /Постоянные условия тренеров/,
       /Правила доплат за работу/,
       /payroll-profiles/,
-      /archivePlan/
+      /archivePlan/,
+      /Зарегистрировать выплату/,
+      /approvePayrollBatch/
     ],
     message: "Premium trainer payroll workspace is missing"
+  },
+  {
+    path: "apps/api/src/modules/business/accounting/payroll.service.ts",
+    patterns: [
+      /async markPaid/,
+      /status='PAID'/,
+      /payment_reference/
+    ],
+    message: "Explicit payroll payment lifecycle is missing"
   },
   {
     path: "apps/web/app/app/dance/groups/page.tsx",
@@ -461,7 +473,8 @@ async function inspectRequiredHardening(root) {
     "181_trainer_payroll_profile.sql",
     "182_payroll_component_guard_fix.sql",
     "183_service_booking_charge_integrity.sql",
-    "184_service_booking_charge_deferred_fix.sql"
+    "184_service_booking_charge_deferred_fix.sql",
+    "185_payroll_payment_lifecycle.sql"
   ];
 
   for (const name of requiredMigrations) {
