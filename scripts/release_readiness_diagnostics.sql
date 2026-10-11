@@ -628,3 +628,54 @@ WHERE a.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
       AND p.booking_id=a.booking_id
       AND p.employee_resource_id=a.employee_resource_id
   );
+
+
+-- Service waitlist integrity.
+SELECT 'SERVICE_WAITLIST_EXPIRED_OFFER_STUCK' AS code,count(*)::bigint AS affected
+FROM service_waitlist_entry w
+WHERE w.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND w.status='OFFERED'
+  AND w.offer_expires_at<=now()
+UNION ALL
+SELECT 'SERVICE_WAITLIST_BOOKED_WITHOUT_BOOKING',count(*)::bigint
+FROM service_waitlist_entry w
+LEFT JOIN service_booking b
+  ON b.tenant_id=w.tenant_id AND b.id=w.booked_booking_id
+WHERE w.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND w.status='BOOKED'
+  AND (
+    b.id IS NULL
+    OR b.party_id<>w.party_id
+    OR b.service_id<>w.service_id
+  )
+UNION ALL
+SELECT 'SERVICE_PAYROLL_EXPORTED_SOURCE_MISSING',count(*)::bigint
+FROM service_employee_payroll_statement s
+JOIN service_resource r
+  ON r.tenant_id=s.tenant_id AND r.id=s.employee_resource_id
+WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND s.status IN ('EXPORTED','PAID')
+  AND (
+    s.payroll_batch_id IS NULL
+    OR NOT EXISTS(
+      SELECT 1
+      FROM payroll_accrual_component c
+      WHERE c.tenant_id=s.tenant_id
+        AND c.batch_id=s.payroll_batch_id
+        AND c.employee_ref=coalesce(
+          r.membership_id::text,
+          'service-resource:'||r.id::text
+        )
+        AND c.source_type='SERVICE_EMPLOYEE_STATEMENT'
+        AND c.source_key=s.id::text
+        AND c.gross_minor=s.total_minor
+    )
+  )
+UNION ALL
+SELECT 'SERVICE_PAYROLL_PAID_BATCH_STATEMENT_DRIFT',count(*)::bigint
+FROM service_employee_payroll_statement s
+JOIN payroll_accrual_batch b
+  ON b.tenant_id=s.tenant_id AND b.id=s.payroll_batch_id
+WHERE s.tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid
+  AND b.status='PAID'
+  AND s.status<>'PAID';
