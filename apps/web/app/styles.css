@@ -3393,3 +3393,100 @@ button, .primary, .secondary { font: inherit; }
   background:#f2dfda;
   color:#8c4b3f;
 }
+
+/* Structured FNS notification editor */
+.compliance-document-editor {
+  grid-column:1 / -1;
+  display:grid;
+  gap:13px;
+  margin-top:4px;
+  padding:15px;
+  border:1px solid #e1e4e6;
+  border-radius:15px;
+  background:linear-gradient(180deg,#fbfcfc,#f7f8f8);
+}
+.compliance-document-head,
+.compliance-document-footer {
+  display:flex;
+  justify-content:space-between;
+  gap:18px;
+  align-items:flex-start;
+}
+.compliance-document-head > div {
+  display:grid;
+  gap:4px;
+}
+.compliance-document-head span:first-child {
+  color:#8b9398;
+  font-size:8px;
+  font-weight:800;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
+.compliance-document-head strong {
+  color:#343a3f;
+  font-size:11px;
+}
+.compliance-document-head p,
+.compliance-document-footer p {
+  max-width:720px;
+  margin:0;
+  color:#858c92;
+  font-size:8px;
+  line-height:1.55;
+}
+.compliance-document-grid {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:9px;
+}
+.compliance-document-grid label {
+  display:grid;
+  gap:5px;
+}
+.compliance-document-grid label > span {
+  color:#7f878c;
+  font-size:8px;
+  font-weight:700;
+}
+.compliance-document-grid input {
+  width:100%;
+  min-height:38px;
+  padding:8px 10px;
+  border:1px solid #dfe3e5;
+  border-radius:10px;
+  background:#fff;
+  color:#30363a;
+  font-size:10px;
+  outline:none;
+}
+.compliance-document-grid input:focus {
+  border-color:#aeb6bb;
+  box-shadow:0 0 0 3px rgba(38,43,47,.05);
+}
+.compliance-document-footer {
+  align-items:center;
+  padding-top:2px;
+}
+.compliance-document-footer button {
+  flex:0 0 auto;
+}
+@media (max-width:900px) {
+  .compliance-document-grid {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
+@media (max-width:600px) {
+  .compliance-document-head,
+  .compliance-document-footer {
+    display:grid;
+    grid-template-columns:1fr;
+  }
+  .compliance-document-grid {
+    grid-template-columns:1fr;
+  }
+  .compliance-document-footer button {
+    width:100%;
+  }
+}
+
