@@ -101,6 +101,16 @@ export function PublicStorefront({
           setCart(current);
           return current;
         }
+        if (current.status === "PROCESSING") {
+          // Do not replace an in-flight checkout with a fresh cart after a
+          // network timeout; the backend will reconcile the original order.
+          setCart(current);
+          setError("Заказ уже оформляется. Не отправляйте его повторно. Обновите страницу через некоторое время.");
+          return current;
+        }
+        if (current.status === "CHECKED_OUT") {
+          setSuccess("Предыдущий заказ уже принят. Повторно оформлять его не нужно.");
+        }
       } catch {
         window.localStorage.removeItem(storageKey);
       }
@@ -177,6 +187,10 @@ export function PublicStorefront({
     quantityMilli: number
   ) {
     const current = cart ?? (await ensureCart());
+    if (current.status !== "OPEN") {
+      setError("Заказ уже оформляется. Дождитесь подтверждения его состояния.");
+      return;
+    }
     setBusy(skuId);
     setError("");
 
@@ -202,7 +216,7 @@ export function PublicStorefront({
   }
 
   async function checkout() {
-    if (!cart || !name.trim()) return;
+    if (!cart || cart.status !== "OPEN" || !name.trim()) return;
 
     setBusy("checkout");
     setError("");
@@ -429,7 +443,7 @@ export function PublicStorefront({
           </p>
           <button
             className="public-primary-button"
-            disabled={Boolean(busy) || !name.trim() ||
+            disabled={Boolean(busy) || cart.status !== "OPEN" || !name.trim() ||
               (!phone.trim() && !email.trim()) ||
               !cart.lines.length || cart.lines.some(line => !line.is_available)}
             onClick={() => void checkout()}
