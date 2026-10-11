@@ -445,6 +445,41 @@ async function inspectRequiredHardening(root) {
     message: "Shared service pricing, technology card, or zone setup UX is missing"
   },
   {
+    path: "apps/api/src/modules/business/accounting/tax-compliance.service.ts",
+    patterns: [
+      /async dashboard/,
+      /async saveProfile/,
+      /async generateCalendar/,
+      /async autoClassifyPayments/,
+      /async calculateUsn/,
+      /accounting_tax_payment_classification/,
+      /accounting_ens_snapshot/
+    ],
+    message: "Russian tax compliance automation service is incomplete"
+  },
+  {
+    path: "apps/api/src/modules/business/accounting/tax-compliance.controller.ts",
+    patterns: [
+      /TaxComplianceController/,
+      /generateCalendar/,
+      /autoClassify/,
+      /calculateUsn/,
+      /confirmCalculation/
+    ],
+    message: "Russian tax compliance API is incomplete"
+  },
+  {
+    path: "apps/web/components/tax-compliance-panel.tsx",
+    patterns: [
+      /TaxCompliancePanel/,
+      /Налоговый помощник/,
+      /Обновить календарь/,
+      /Проверить операции/,
+      /VAT_22/
+    ],
+    message: "Owner-first tax compliance UI is incomplete"
+  },
+  {
     path: "apps/worker/src/tenant-export.ts",
     patterns: [
       /dance_students/,
