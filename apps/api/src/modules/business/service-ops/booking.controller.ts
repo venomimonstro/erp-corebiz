@@ -121,6 +121,48 @@ export class BookingController {
     };
   }
 
+  @Get("waitlist")
+  @RequirePermission("service.read")
+  async waitlist(
+    @Req() request:AuthenticatedRequest,
+    @Query("status") status?:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.booking.waitlist(
+        this.context(request),{status}
+      )
+    };
+  }
+
+  @Post("waitlist")
+  @RequirePermission("service.write")
+  async createWaitlist(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:any
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.booking.createWaitlistEntry(
+        this.context(request),body
+      )
+    };
+  }
+
+  @Post("waitlist/:id/cancel")
+  @RequirePermission("service.write")
+  async cancelWaitlist(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.booking.cancelWaitlistEntry(
+        this.context(request),id
+      )
+    };
+  }
+
   @Get("availability")
   @RequirePermission("service.read")
   async availability(
