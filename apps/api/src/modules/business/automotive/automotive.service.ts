@@ -150,7 +150,7 @@ export class AutomotiveService {
     if(!input.vehicleId) throw new BadRequestException("Выберите автомобиль");
     if(input.authorizationLimitMinor!==undefined&&input.authorizationLimitMinor!==null){
       const value=String(input.authorizationLimitMinor);
-      if(!/^\\d{1,15}$/.test(value)||BigInt(value)<=0n)
+      if(!/^\d{1,15}$/.test(value)||BigInt(value)<=0n)
         throw new BadRequestException("Согласованный лимит должен быть положительной суммой в копейках");
     }
 
@@ -296,7 +296,7 @@ export class AutomotiveService {
       if(["DELIVERED","CANCELLED"].includes(row.status))
         throw new BadRequestException("Закрытый заказ-наряд изменяется только корректирующим документом");
       if(input.authorizationLimitMinor!==undefined){
-        if(!/^\\d{1,15}$/.test(input.authorizationLimitMinor)||
+        if(!/^\d{1,15}$/.test(input.authorizationLimitMinor)||
            BigInt(input.authorizationLimitMinor)<=0n)
           throw new BadRequestException("Лимит должен быть положительной суммой в копейках");
         if(!input.authorizationNote?.trim()||
