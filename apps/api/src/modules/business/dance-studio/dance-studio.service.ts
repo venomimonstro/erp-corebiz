@@ -2431,18 +2431,10 @@ export class DanceStudioService {
         );
       }
 
-      await client.query(
-        `UPDATE financial_obligation o
-         SET due_at=$3,updated_at=now()
-         FROM dance_student_charge c
-         WHERE c.tenant_id=$1
-           AND c.source_type='LESSON'
-           AND c.source_id=$2
-           AND c.obligation_id=o.id
-           AND o.tenant_id=c.tenant_id
-           AND o.status IN ('OPEN','PARTIALLY_SETTLED')`,
-        [context.tenantId,lessonId,startsAt]
-      );
+      // A rescheduled lesson is not permission to rewrite the payment terms
+      // already shown to the customer on the issued invoice. Keep the
+      // obligation and invoice due dates together; use a separate audited
+      // financial amendment if contract terms are changed.
 
       await client.query(
         `DELETE FROM service_booking_resource
@@ -2521,7 +2513,8 @@ export class DanceStudioService {
           roomCapacityUnits:roomId?roomCapacityUnits:0,
           capacity,
           deliveryRuleId:rule?.id??null,
-          priceSnapshotPreservedMinor:booking.price_minor_snapshot
+          priceSnapshotPreservedMinor:booking.price_minor_snapshot,
+          paymentDueDatesPreserved:true
         }
       );
       return row;
