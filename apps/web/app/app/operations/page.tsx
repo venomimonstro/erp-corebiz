@@ -28,6 +28,9 @@ type Operational = {
   generatedAt: string;
   snapshots: Snapshot[];
   issues: Issue[];
+  issuesTotal?:number;
+  resultsLimited?:boolean;
+  incompleteScans?:string[];
 };
 
 const LABELS: Record<string,string> = {
@@ -160,17 +163,25 @@ export default function OperationsPage() {
               <div className="section-heading">
                 <div>
                   <p className="muted">Контроль бизнес-процессов</p>
-                  <h2>Нужны решения · {data.issues.length}</h2>
+                  <h2>Нужны решения · {data.issuesTotal??data.issues.length}</h2>
                   <p className="muted">{criticalCount
                     ?criticalCount+" критичных отклонений — сначала устраните их"
                     :"Сначала просроченные операции, затем предупреждения"}</p>
                 </div>
               </div>
+              {(data.resultsLimited||(data.incompleteScans?.length??0)>0)?(
+                <p className="muted" role="status" style={{padding:"8px 0 16px"}}>
+                  {data.resultsLimited?
+                    `Отображены первые ${data.issues.length} из ${data.issuesTotal} открытых событий. `:""}
+                  {(data.incompleteScans?.length??0)>0?
+                    "Проверка некоторых процессов ограничена объёмом данных: проблемы за пределами выборки не закрывались автоматически.":""}
+                </p>
+              ):null}
               <div className="operations-filters" role="group" aria-label="Фильтр процессов">
                 <button type="button" className={activeDomain==="ALL"?"active":""}
                   aria-pressed={activeDomain==="ALL"}
                   onClick={()=>{setActiveDomain("ALL");setShowAll(false);}}>
-                  Все · {data.issues.length}
+                  Все · {data.issuesTotal??data.issues.length}
                 </button>
                 {domains.map(([domain,count])=>
                   <button type="button" key={domain}
