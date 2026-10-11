@@ -1405,6 +1405,11 @@ export class DanceStudioService {
       const lesson=await this.assertLessonAccess(
         client,context.tenantId,lessonId,scopeIds,true
       );
+      const charge=
+        requestedCharge ??
+        (priceSource==="DIRECT"
+          ? String(lesson.booking_price_minor??"0")
+          : "0");
       if(!["PLANNED","OPEN_FOR_BOOKING"].includes(lesson.status)){
         throw new ConflictException("Можно изменять только будущий открытый урок");
       }
@@ -1846,8 +1851,9 @@ export class DanceStudioService {
     }
   ){
     const scopeIds=await this.scopeIds(context,"dance.write");
-    const charge=String(input.chargeMinor??"0");
-    if(!/^\d+$/.test(charge)){
+    const requestedCharge=
+      input.chargeMinor===undefined ? null : String(input.chargeMinor);
+    if(requestedCharge!==null&&!/^\d+$/.test(requestedCharge)){
       throw new BadRequestException("Некорректная стоимость");
     }
     if(input.packageId&&input.makeupCreditId){
@@ -1861,7 +1867,11 @@ export class DanceStudioService {
         : input.makeupCreditId
           ? "MAKEUP"
           : (input.priceSource ?? "DIRECT");
-    if(input.makeupCreditId&&BigInt(charge)>0n){
+    if(
+      input.makeupCreditId &&
+      requestedCharge!==null &&
+      BigInt(requestedCharge)>0n
+    ){
       throw new BadRequestException(
         "Отработка не должна создавать дополнительное начисление"
       );
@@ -3763,6 +3773,7 @@ export class DanceStudioService {
       `SELECT
          l.*,g.program_id,
          coalesce(p.service_id,b.service_id) AS service_id,
+         b.price_minor_snapshot::text AS booking_price_minor,
          p.default_duration_minutes,
          tr.membership_id AS trainer_membership_id
        FROM dance_lesson l
