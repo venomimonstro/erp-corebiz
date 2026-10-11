@@ -867,6 +867,44 @@ async function danceStudioJourney() {
     "DANCE payroll aggregate must equal adjusted trainer statement"
   );
 
+  const approvedPayroll = await request(
+    "POST",
+    "/accounting/payroll/batches/" + payrollBatch.id + "/approve"
+  );
+  assert.equal(
+    approvedPayroll.status,
+    "APPROVED",
+    "DANCE payroll must be approved before payment"
+  );
+
+  const paidPayroll = await request(
+    "POST",
+    "/accounting/payroll/batches/" + payrollBatch.id + "/paid",
+    {
+      paidAt: new Date().toISOString(),
+      reference: "GOLDEN-" + runId.slice(0, 12),
+      note: "Golden payroll payment"
+    }
+  );
+  assert.equal(
+    paidPayroll.status,
+    "PAID",
+    "DANCE payroll payment lifecycle"
+  );
+
+  const paidStatements = await request(
+    "GET",
+    "/dance/payroll-statements?from=" +
+      encodeURIComponent(payrollFrom.toISOString()) +
+      "&to=" +
+      encodeURIComponent(payrollTo.toISOString())
+  );
+  assert.equal(
+    paidStatements.find((item) => item.id === trainerStatement.id)?.status,
+    "PAID",
+    "DANCE trainer statement must follow paid payroll batch"
+  );
+
   const month = startsAt.toISOString().slice(0, 7);
   const rent = await request(
     "POST",
