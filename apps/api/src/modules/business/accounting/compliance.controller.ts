@@ -141,6 +141,20 @@ export class ComplianceController {
     };
   }
 
+  @Get("calculations")
+  @RequirePermission("accounting.compliance.read")
+  async calculations(
+    @Req() req:AuthenticatedRequest,
+    @Query("legalEntityId") legalEntityId:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.compliance.calculations(
+        this.context(req),legalEntityId
+      )
+    };
+  }
+
   @Post("calendar/generate")
   @RequirePermission("accounting.compliance.manage")
   async generateCalendar(
