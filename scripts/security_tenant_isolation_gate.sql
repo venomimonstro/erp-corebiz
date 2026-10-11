@@ -53,5 +53,10 @@ SELECT n.nspname,p.proname,p.oid::pg_catalog.regprocedure AS function_signature
 FROM pg_catalog.pg_proc p
 JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
 WHERE n.nspname='public' AND p.prosecdef
-  AND has_function_privilege('PUBLIC',p.oid,'EXECUTE')
+  AND EXISTS (
+    SELECT 1 FROM pg_catalog.aclexplode(
+      coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))
+    ) acl
+    WHERE acl.grantee=0 AND acl.privilege_type='EXECUTE'
+  )
 ORDER BY p.proname;
