@@ -4212,3 +4212,10 @@ button, .primary, .secondary { font: inherit; }
 .deal-card footer{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px}
 .deal-card footer button{font-size:11px;padding:5px 9px;min-height:28px;white-space:nowrap}
 @media(max-width:650px){.crm-workspace-controls{padding:12px}.crm-workspace-controls>label{min-width:100%}}
+
+
+.crm-funnel-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0}
+.crm-funnel-metrics article{border:1px solid var(--border,#dededb);background:var(--surface,#fff);border-radius:12px;padding:13px 16px;display:flex;flex-direction:column;gap:8px}
+.crm-funnel-metrics small{font-size:12px;color:var(--muted,#777)}
+.crm-funnel-metrics strong{font-size:19px;font-variant-numeric:tabular-nums;line-height:1.2}
+@media(max-width:600px){.crm-funnel-metrics{grid-template-columns:1fr}}
