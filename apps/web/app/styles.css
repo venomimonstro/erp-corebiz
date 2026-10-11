@@ -3989,3 +3989,18 @@ button, .primary, .secondary { font: inherit; }
   .dance-detail .studio-hero-actions button{flex:1;min-width:140px}
   .dance-detail .section-block,.dance-detail .settings-card{padding:16px}
 }
+
+
+/* Compact process filters for the cross-vertical owner control tower */
+.operations-filters{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  padding:0 0 17px;margin-bottom:8px;border-bottom:1px solid #eceff1}
+.operations-filters button{border:1px solid #e6e9ec;border-radius:10px;
+  color:#69727c;background:#fff;padding:9px 12px;font-size:12px;font-weight:550;
+  line-height:1.4;cursor:pointer;transition:background .15s,color .15s}
+.operations-filters button:hover{background:#f6f7f8;color:#242b31}
+.operations-filters button.active{background:#20262c;color:#fff;border-color:#20262c}
+.operations-filters button:focus-visible{outline:2px solid #5e788e;outline-offset:3px}
+@media(max-width:640px){
+  .operations-filters{flex-wrap:nowrap;overflow:auto;scroll-snap-type:x proximity}
+  .operations-filters button{white-space:nowrap;flex:0 0 auto;scroll-snap-align:start}
+}
