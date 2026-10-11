@@ -565,6 +565,8 @@ export class DanceEconomicsService {
   async roomContracts(context:TenantContext){
     await this.requireAll(context,"dance.read");
     await this.requireFinance(context,"finance.read");
+    if(await this.authorization.resolveScope(context,"finance.read")!=="all")
+      throw new ForbiddenException("Арендные договоры доступны только руководителю с полным финансовым доступом");
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
@@ -597,6 +599,8 @@ export class DanceEconomicsService {
   ){
     await this.requireAll(context,"dance.read");
     await this.requireFinance(context,"finance.read");
+    if(await this.authorization.resolveScope(context,"finance.read")!=="all")
+      throw new ForbiddenException("Арендные договоры доступны только руководителю с полным финансовым доступом");
     const target=this.normalizeMonth(month);
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
@@ -3233,20 +3237,29 @@ export class DanceEconomicsService {
     context:TenantContext,permission:"finance.read"|"finance.write"
   ):Promise<void>{
     const granted=await this.authorization.resolveScope(context,permission);
-    if(!granted)throw new ForbiddenException(
-      "Для финансовых операций требуется отдельное разрешение"
-    );
+    // Financial mutations change the money of the whole studio: a team or
+    // own finance scope must never be treated as tenant-wide approval.
+    if(!granted||(permission==="finance.write"&&granted!=="all"))
+      throw new ForbiddenException(
+        "Финансовая операция требует разрешения руководителя на всю организацию"
+      );
   }
 
   private async trainerFinanceScope(
     context:TenantContext
   ):Promise<string[]|null>{
-    const allowed=await this.scopeIds(context,"dance.read");
+    const danceAllowed=await this.scopeIds(context,"dance.read");
     const finance=await this.authorization.resolveScope(context,"finance.read");
-    if(finance)return allowed;
-    // Employee self-service: an instructor without finance.read can only
-    // see their own accruals. Never inherit a team-wide dance.read scope.
-    return allowed===null||allowed.includes(context.membershipId)
+    if(finance){
+      const financeAllowed=await this.authorization.membershipIdsForScope(
+        context,finance
+      );
+      if(danceAllowed===null)return financeAllowed;
+      if(financeAllowed===null)return danceAllowed;
+      return danceAllowed.filter(id=>financeAllowed.includes(id));
+    }
+    // Self-service is only for the signed-in employee, never their team.
+    return danceAllowed===null||danceAllowed.includes(context.membershipId)
       ?[context.membershipId]:[];
   }
 
