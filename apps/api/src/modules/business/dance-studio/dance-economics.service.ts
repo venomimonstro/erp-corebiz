@@ -1924,7 +1924,8 @@ export class DanceEconomicsService {
            lesson_accrual_minor=EXCLUDED.lesson_accrual_minor,
            base_minor=EXCLUDED.base_minor,
            guarantee_adjustment_minor=EXCLUDED.guarantee_adjustment_minor,
-           total_minor=EXCLUDED.total_minor,
+           total_minor=
+             EXCLUDED.total_minor+trainer_payroll_statement.adjustment_minor,
            currency=EXCLUDED.currency,
            status='FINALIZED',
            calculation_snapshot=EXCLUDED.calculation_snapshot,
