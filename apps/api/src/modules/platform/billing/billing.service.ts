@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
@@ -227,8 +228,10 @@ export class BillingService {
     const code = planCode.trim().toUpperCase();
 
     return this.database.withTenantTransaction(context, async (client) => {
-      const plan = await client.query<{ id: string; code: string }>(
-        `SELECT id, code
+      const plan = await client.query<{
+        id: string; code: string; monthly_price_minor: string;
+      }>(
+        `SELECT id, code, monthly_price_minor::text
          FROM billing_plan
          WHERE code = $1 AND status = 'ACTIVE'`,
         [code]
@@ -281,16 +284,31 @@ export class BillingService {
         );
       }
 
-      const subscription = await client.query<{ status: string }>(
-        `SELECT status
-         FROM tenant_subscription
-         WHERE tenant_id = $1
-         FOR UPDATE`,
+      const subscription = await client.query<{
+        status: string; current_plan_code: string;
+      }>(
+        `SELECT s.status,p.code AS current_plan_code
+         FROM tenant_subscription s
+         JOIN billing_plan p ON p.id=s.plan_id
+         WHERE s.tenant_id = $1
+         FOR UPDATE OF s`,
         [context.tenantId]
       );
 
       if (!subscription.rows[0]) {
         throw new NotFoundException("Подписка не найдена");
+      }
+
+      // No payment gateway is wired to SaaS subscriptions yet. Selecting a
+      // paid plan must NEVER activate paid entitlements without a verified
+      // payment event. Same-plan requests remain idempotent; free plans work.
+      if (subscription.rows[0].current_plan_code === row.code) {
+        return { selected: true, planCode: row.code };
+      }
+      if (BigInt(row.monthly_price_minor) > 0n) {
+        throw new ConflictException(
+          "Активация платного тарифа недоступна: приём и подтверждение оплаты пока не подключены"
+        );
       }
 
       await client.query(
