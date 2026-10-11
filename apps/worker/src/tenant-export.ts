@@ -78,6 +78,7 @@ const EXPORT_ENTITIES: ExportEntity[] = [
   { table: "accounting_compliance_packet", label: "accounting_compliance_packets" },
   { table: "accounting_compliance_receipt", label: "accounting_compliance_receipts" },
   { table: "accounting_tax_payment_classification", label: "accounting_tax_payment_classifications" },
+  { table: "accounting_tax_ledger_item", label: "accounting_tax_ledger_items" },
   { table: "service_catalog_item", label: "services" },
   { table: "service_asset", label: "service_assets" },
   { table: "service_package_plan", label: "service_package_plans" },
