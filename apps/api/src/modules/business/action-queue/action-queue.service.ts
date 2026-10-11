@@ -186,12 +186,15 @@ export class ActionQueueService {
             workflow_status:string;
             obligation_type:string;
           }>(
-            `SELECT id,title,due_at,workflow_status,obligation_type
-             FROM accounting_compliance_obligation
-             WHERE tenant_id=$1
-               AND workflow_status NOT IN ('ACCEPTED','PAID','CANCELLED')
-               AND due_at<now()+interval '30 days'
-             ORDER BY due_at,id
+            `SELECT o.id,o.title,o.due_at,o.workflow_status,o.obligation_type
+             FROM accounting_compliance_obligation o
+             JOIN accounting_tax_profile p
+               ON p.tenant_id=o.tenant_id AND p.id=o.tax_profile_id
+             WHERE o.tenant_id=$1
+               AND p.compliance_enabled=true
+               AND o.workflow_status NOT IN ('ACCEPTED','PAID','CANCELLED')
+               AND o.due_at<now()+interval '30 days'
+             ORDER BY o.due_at,o.id
              LIMIT 30`,
             [context.tenantId]
           );
