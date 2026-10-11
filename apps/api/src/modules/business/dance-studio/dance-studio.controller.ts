@@ -533,6 +533,42 @@ export class DanceStudioController {
     };
   }
 
+  @Post("payroll-statements/:statementId/review")
+  @RequirePermission("dance.read")
+  async reviewPayrollStatement(
+    @Req() req:AuthenticatedRequest,
+    @Param("statementId") statementId:string,
+    @Body() body:{
+      status:"ACKNOWLEDGED"|"DISPUTED";
+      comment?:string;
+    }
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.economics.reviewPayrollStatement(
+        this.ctx(req),statementId,body
+      )
+    };
+  }
+
+  @Post("payroll-reviews/:reviewId/resolve")
+  @RequirePermission("dance.write")
+  async resolvePayrollReview(
+    @Req() req:AuthenticatedRequest,
+    @Param("reviewId") reviewId:string,
+    @Body() body:{
+      status:"RESOLVED"|"WAIVED";
+      comment:string;
+    }
+  ):Promise<ApiSuccess<unknown>> {
+    return {
+      ok:true,
+      data:await this.economics.resolvePayrollReview(
+        this.ctx(req),reviewId,body
+      )
+    };
+  }
+
   @Post("payroll-statements/:statementId/adjustments")
   @RequirePermission("dance.write")
   async addPayrollAdjustment(
