@@ -9,6 +9,7 @@ type Dashboard={
   donors:{active_donors:number;invested_minor:string};
   parts:{available_parts:number;reserved_parts:number;stock_cost_minor:string;stock_asking_minor:string};
 };
+type Customer={id:string;displayName:string;phone:string|null};
 type Vehicle={
   id:string;vin:string|null;plate_number:string|null;make:string;model:string;
   generation:string|null;production_year:number|null;mileage_km:number|null;
@@ -63,6 +64,8 @@ export default function AutomotivePage(){
   const [tab,setTab]=useState<"orders"|"vehicles"|"dismantling">("orders");
   const [dashboard,setDashboard]=useState<Dashboard|null>(null);
   const [vehicles,setVehicles]=useState<Vehicle[]>([]);
+  const [customers,setCustomers]=useState<Customer[]>([]);
+  const [vehiclePartyId,setVehiclePartyId]=useState("");
   const [orders,setOrders]=useState<WorkOrder[]>([]);
   const [donors,setDonors]=useState<Donor[]>([]);
   const [parts,setParts]=useState<Part[]>([]);
@@ -115,6 +118,7 @@ export default function AutomotivePage(){
       const [d,v,o,ds,ps]=await Promise.all([
         apiRequest<Dashboard>("/automotive/dashboard"),
         apiRequest<Vehicle[]>("/automotive/vehicles"),
+        
         apiRequest<WorkOrder[]>("/automotive/work-orders"),
         apiRequest<Donor[]>("/automotive/donors").catch(()=>[]),
         apiRequest<Part[]>("/automotive/parts").catch(()=>[])
@@ -126,6 +130,11 @@ export default function AutomotivePage(){
     }finally{ setBusy(false); }
   },[orderVehicleId]);
 
+  useEffect(()=>{
+    void apiRequest<Customer[]>("/crm/customers")
+      .then(setCustomers)
+      .catch(()=>{ /* Staff without CRM read may still use service operations. */ });
+  },[]);
   useEffect(()=>{void load();},[load]);
 
   const activeOrders=useMemo(
@@ -139,12 +148,13 @@ export default function AutomotivePage(){
       await apiRequest("/automotive/vehicles",{
         method:"POST",
         body:JSON.stringify({
+          partyId:vehiclePartyId||undefined,
           make:vMake,model:vModel,vin:vVin||undefined,plateNumber:vPlate||undefined,
           productionYear:vYear?Number(vYear):undefined,
           mileageKm:vMileage?Number(vMileage):undefined
         })
       });
-      setVMake("");setVModel("");setVVin("");setVPlate("");setVYear("");setVMileage("");
+      setVMake("");setVModel("");setVVin("");setVPlate("");setVYear("");setVMileage("");setVehiclePartyId("");
       setShowVehicleForm(false);setNotice("Автомобиль добавлен.");await load();
     }catch(cause){setError(cause instanceof Error?cause.message:"Не удалось добавить автомобиль");}
     finally{setBusy(false);}
@@ -373,6 +383,20 @@ export default function AutomotivePage(){
           <section className="studio-section">
             {showVehicleForm?(
               <form className="studio-form-grid" onSubmit={createVehicle}>
+                <div className="studio-form-wide">
+                  <label><span>Владелец автомобиля</span>
+                    <select value={vehiclePartyId}
+                      onChange={e=>setVehiclePartyId(e.target.value)}>
+                      <option value="">Не указан · добавить позже</option>
+                      {customers.map(c=><option value={c.id} key={c.id}>
+                        {c.displayName}{c.phone?" · "+c.phone:""}
+                      </option>)}
+                    </select>
+                  </label>
+                  <small>Связанный клиент попадёт в историю заказ-нарядов и расчётов.
+                    <a href="/app/crm/customers"> Добавить клиента →</a>
+                  </small>
+                </div>
                 <label><span>Марка</span><input value={vMake} onChange={e=>setVMake(e.target.value)} required placeholder="BMW" /></label>
                 <label><span>Модель</span><input value={vModel} onChange={e=>setVModel(e.target.value)} required placeholder="X5" /></label>
                 <label><span>VIN</span><input value={vVin} onChange={e=>setVVin(e.target.value.toUpperCase())} placeholder="17 символов" /></label>
