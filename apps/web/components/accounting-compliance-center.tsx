@@ -7,7 +7,7 @@ type TaxProfile = {
   id:string;
   entity_kind:"ORGANIZATION"|"IP";
   tax_regime:"USN_INCOME"|"USN_INCOME_EXPENSE"|"OSNO"|"AUSN"|"OTHER";
-  vat_mode:"NO_VAT"|"VAT_5"|"VAT_7"|"VAT_20"|"VAT_MIXED";
+  vat_mode:"NO_VAT"|"VAT_5"|"VAT_7"|"VAT_22"|"VAT_MIXED";
   has_employees:boolean;
   ens_enabled:boolean;
   reporting_mode:"ASSISTED"|"SEMI_AUTOMATIC"|"EXTERNAL_ACCOUNTANT";
@@ -185,7 +185,7 @@ export function AccountingComplianceCenter({
     ].includes(taxRegime)) return;
 
     const vatMode=(window.prompt(
-      "НДС: NO_VAT, VAT_5, VAT_7, VAT_20 или VAT_MIXED",
+      "НДС: NO_VAT, VAT_5, VAT_7, VAT_22 или VAT_MIXED",
       profile?.vat_mode??"NO_VAT"
     )??"NO_VAT").trim().toUpperCase();
 
