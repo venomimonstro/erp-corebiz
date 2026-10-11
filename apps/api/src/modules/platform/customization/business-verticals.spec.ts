@@ -21,6 +21,17 @@ describe("business vertical operating models", () => {
     }
   });
 
+  it("offers distinct operational presets for web studios and marketing agencies", () => {
+    const studio = BUSINESS_VERTICALS.WEB_STUDIO;
+    const marketing = BUSINESS_VERTICALS.MARKETING_AGENCY;
+    expect(studio.enabledCapabilities).toContain("projects");
+    expect(marketing.enabledCapabilities).toContain("growth");
+    expect(studio.customFields.some((field) => field.fieldKey === "website_platform")).toBe(true);
+    expect(marketing.customFields.some((field) => field.fieldKey === "advertising_budget")).toBe(true);
+    expect(studio.operatingFlows.some((flow) => flow.includes("QA"))).toBe(true);
+    expect(marketing.operatingFlows.some((flow) => flow.includes("ретейнер") || flow.includes("Ретейнер"))).toBe(true);
+  });
+
   it("keeps lean service businesses free from stock modules by default", () => {
     for (const code of ["DANCE_FITNESS", "PROFESSIONAL_SERVICES"] as const) {
       const capabilities = new Set(
