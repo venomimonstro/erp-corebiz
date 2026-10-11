@@ -381,7 +381,15 @@ export class StorefrontService {
                ON m.tenant_id=c.tenant_id
               AND m.id=c.responsible_membership_id
               AND m.status='ACTIVE'
-             WHERE c.tenant_id=$1 AND c.site_id=$2 AND c.enabled=true`,
+             WHERE c.tenant_id=$1 AND c.site_id=$2 AND c.enabled=true
+               AND EXISTS (
+                 SELECT 1 FROM site_page p
+                 JOIN site_page_version v
+                   ON v.tenant_id=p.tenant_id
+                  AND v.id=p.published_version_id AND v.page_id=p.id
+                 WHERE p.tenant_id=c.tenant_id AND p.site_id=c.site_id
+                   AND p.slug='/' AND p.status='ACTIVE' AND v.status='PUBLISHED'
+               )`,
             [cart.tenant_id, cart.site_id]
           );
           return result.rows[0] ?? null;
@@ -403,16 +411,34 @@ export class StorefrontService {
           await client.query<{
             sku_id: string;
             quantity_milli: string;
+            is_available: boolean;
           }>(
-            `SELECT l.sku_id,l.quantity_milli::text
+            `SELECT l.sku_id,l.quantity_milli::text,
+               COALESCE(
+                 s.status='ACTIVE' AND v.status='ACTIVE' AND p.status='ACTIVE'
+                 AND s.sale_price_minor>0 AND s.currency=$3,
+                 false
+               ) AS is_available
              FROM storefront_cart_line l
+             LEFT JOIN sku s ON s.tenant_id=l.tenant_id AND s.id=l.sku_id
+             LEFT JOIN product_variant v
+               ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+             LEFT JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
              WHERE l.tenant_id=$1 AND l.cart_id=$2
              ORDER BY l.created_at`,
-            [cart.tenant_id,cart.cart_id]
+            [cart.tenant_id,cart.cart_id,config.currency]
           )
         ).rows
       );
       if (!lines.length) throw new BadRequestException("Корзина пуста");
+      if (lines.length > 200) {
+        throw new BadRequestException("Слишком много товаров в одном заказе");
+      }
+      if (lines.some(line => line.is_available !== true)) {
+        throw new ConflictException(
+          "Товары в корзине изменились или сняты с продажи. Удалите недоступные позиции и повторите заказ"
+        );
+      }
 
       let customerId = claimed.checkout_party_id;
       if (!customerId) {
