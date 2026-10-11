@@ -1774,6 +1774,98 @@ button, .primary, .secondary { font: inherit; }
 }
 
 
+/* Trainer salary conditions */
+.trainer-condition-grid {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:12px;
+}
+.trainer-condition-card {
+  min-height:230px;
+  border:1px solid #e1e4e7;
+  border-radius:18px;
+  background:
+    radial-gradient(circle at 90% 0,rgba(34,39,45,.035),transparent 32%),
+    #fff;
+  padding:17px;
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+  box-shadow:0 10px 32px rgba(27,31,36,.035);
+}
+.trainer-condition-card > header {
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  align-items:flex-start;
+}
+.trainer-condition-card > header > div {
+  display:grid;
+  gap:3px;
+}
+.trainer-condition-card > header > div > span {
+  color:#92979d;
+  font-size:8px;
+  text-transform:uppercase;
+  letter-spacing:.09em;
+}
+.trainer-condition-card h3 {
+  margin:0;
+  font-size:15px;
+  letter-spacing:-.025em;
+}
+.trainer-condition-money {
+  display:grid;
+  gap:3px;
+  padding:14px;
+  border-radius:14px;
+  background:#f5f6f7;
+}
+.trainer-condition-money strong {
+  font-size:25px;
+  letter-spacing:-.045em;
+}
+.trainer-condition-money small {
+  color:#8b9197;
+  font-size:9px;
+}
+.trainer-condition-facts {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:6px;
+}
+.trainer-condition-facts span {
+  display:grid;
+  gap:4px;
+  min-width:0;
+  padding:8px;
+  border:1px solid #eceeef;
+  border-radius:10px;
+  color:#90969d;
+  font-size:8px;
+}
+.trainer-condition-facts b {
+  overflow:hidden;
+  color:#34393f;
+  font-size:9px;
+  text-overflow:ellipsis;
+}
+.trainer-condition-note {
+  margin:0;
+  color:#757c83;
+  font-size:9px;
+  line-height:1.45;
+}
+.trainer-condition-card > button {
+  margin-top:auto;
+}
+@media (max-width:1050px) {
+  .trainer-condition-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (max-width:680px) {
+  .trainer-condition-grid { grid-template-columns:1fr; }
+}
+
 /* Trainer payroll statements */
 .trainer-statement-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
 .trainer-statement-grid > article { min-height:170px; border:1px solid #e3e6e8; border-radius:15px; background:#fff; padding:15px; display:flex; flex-direction:column; gap:12px; }
