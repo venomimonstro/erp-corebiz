@@ -2233,6 +2233,472 @@ export class ComplianceService {
     });
   }
 
+  async autopilot(
+    context:TenantContext,
+    legalEntityId:string
+  ){
+    if(!legalEntityId){
+      throw new BadRequestException("Выберите юридическое лицо");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const entity=await client.query(
+        `SELECT id,name,inn
+         FROM legal_entity
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+        [context.tenantId,legalEntityId]
+      );
+      if(!entity.rows[0]){
+        throw new NotFoundException("Юридическое лицо не найдено");
+      }
+
+      const generated:Array<{
+        key:string;
+        category:string;
+        severity:"INFO"|"WARNING"|"CRITICAL";
+        title:string;
+        description:string;
+        actionCode?:string;
+        actionHref?:string;
+        sourceType?:string;
+        sourceId?:string|null;
+        dueAt?:Date|null;
+        amountMinor?:string|null;
+        payload?:Record<string,unknown>;
+      }>=[];
+      const add=(task:(typeof generated)[number])=>generated.push(task);
+
+      const profileResult=await client.query<any>(
+        `SELECT *
+         FROM accounting_tax_profile
+         WHERE tenant_id=$1 AND legal_entity_id=$2 AND status='ACTIVE'
+         ORDER BY effective_from DESC,created_at DESC
+         LIMIT 1`,
+        [context.tenantId,legalEntityId]
+      );
+      const profile=profileResult.rows[0]??null;
+
+      if(!profile){
+        add({
+          key:"setup:tax-profile",
+          category:"SETUP",
+          severity:"CRITICAL",
+          title:"Настройте налоговый профиль",
+          description:
+            "Без налогового режима, формы бизнеса и НДС CoreBiz не может надёжно собрать календарь ФНС и рассчитать налоги.",
+          actionCode:"OPEN_TAX_PROFILE",
+          actionHref:"/app/accounting/taxes"
+        });
+      }else if(profile.compliance_enabled!==false){
+        const obligations=await client.query<any>(
+          `SELECT
+             id,code,title,obligation_type,due_at,amount_minor::text,currency,
+             workflow_status
+           FROM accounting_compliance_obligation
+           WHERE tenant_id=$1 AND legal_entity_id=$2
+             AND workflow_status NOT IN ('ACCEPTED','PAID','CANCELLED')
+             AND due_at<=now()+interval '30 days'
+           ORDER BY due_at`,
+          [context.tenantId,legalEntityId]
+        );
+        for(const item of obligations.rows){
+          const dueAt=new Date(item.due_at);
+          const days=Math.ceil((dueAt.getTime()-Date.now())/86400000);
+          add({
+            key:"obligation:"+item.id,
+            category:item.obligation_type==="PAY"?"TAX":"FNS",
+            severity:days<0?"CRITICAL":days<=7?"WARNING":"INFO",
+            title:item.title,
+            description:
+              days<0
+                ?"Срок уже прошёл. Проверьте расчёт, отправку или оплату и зафиксируйте квитанцию."
+                :"До срока "+Math.max(0,days)+" дн. Подготовьте документ заранее, чтобы не зависеть от последнего дня.",
+            actionCode:"OPEN_OBLIGATION",
+            actionHref:"/app/accounting/taxes",
+            sourceType:"ACCOUNTING_COMPLIANCE",
+            sourceId:item.id,
+            dueAt,
+            amountMinor:item.amount_minor,
+            payload:{
+              code:item.code,
+              workflowStatus:item.workflow_status,
+              obligationType:item.obligation_type
+            }
+          });
+        }
+
+        const ledger=await client.query<{count:number;amount:string}>(
+          `SELECT
+             count(*)::integer AS count,
+             coalesce(sum(amount_minor),0)::text AS amount
+           FROM accounting_tax_ledger_item
+           WHERE tenant_id=$1 AND legal_entity_id=$2
+             AND tax_treatment='REVIEW_REQUIRED'`,
+          [context.tenantId,legalEntityId]
+        );
+        const ledgerRow=ledger.rows[0];
+        if((ledgerRow?.count??0)>0){
+          add({
+            key:"tax-ledger:review",
+            category:"TAX",
+            severity:"WARNING",
+            title:"Проверьте операции налоговой книги",
+            description:
+              String(ledgerRow.count)+" операций ещё не классифицированы. Пока они не проверены, итоговый расчёт УСН нельзя считать подтверждённым.",
+            actionCode:"REVIEW_TAX_LEDGER",
+            actionHref:"/app/accounting/taxes",
+            amountMinor:ledgerRow.amount,
+            payload:{count:ledgerRow.count}
+          });
+        }
+
+        const upcomingPay=await client.query<{amount:string;count:number}>(
+          `SELECT
+             coalesce(sum(amount_minor),0)::text AS amount,
+             count(*)::integer AS count
+           FROM accounting_compliance_obligation
+           WHERE tenant_id=$1 AND legal_entity_id=$2
+             AND obligation_type='PAY'
+             AND workflow_status NOT IN ('PAID','CANCELLED')
+             AND due_at>=now()
+             AND due_at<=now()+interval '30 days'
+             AND amount_minor IS NOT NULL`,
+          [context.tenantId,legalEntityId]
+        );
+        const ens=await client.query<{balance_minor:string;snapshot_at:Date}>(
+          `SELECT balance_minor::text,snapshot_at
+           FROM accounting_ens_snapshot
+           WHERE tenant_id=$1 AND legal_entity_id=$2
+           ORDER BY snapshot_at DESC
+           LIMIT 1`,
+          [context.tenantId,legalEntityId]
+        );
+        const ensRow=ens.rows[0];
+        const upcoming=BigInt(upcomingPay.rows[0]?.amount??"0");
+        if(!ensRow&&upcoming>0n){
+          add({
+            key:"ens:no-snapshot",
+            category:"ENS",
+            severity:"WARNING",
+            title:"Обновите баланс ЕНС",
+            description:
+              "Есть ближайшие налоговые платежи, но CoreBiz не знает актуальный баланс единого налогового счёта.",
+            actionCode:"UPDATE_ENS",
+            actionHref:"/app/accounting/taxes",
+            amountMinor:upcoming.toString()
+          });
+        }else if(ensRow){
+          const balance=BigInt(ensRow.balance_minor);
+          if(balance<0n){
+            add({
+              key:"ens:negative",
+              category:"ENS",
+              severity:"CRITICAL",
+              title:"На ЕНС отрицательный баланс",
+              description:
+                "Последний зафиксированный баланс ЕНС отрицательный. Нужна сверка с ФНС и проверка недоимки/пени.",
+              actionCode:"RECONCILE_ENS",
+              actionHref:"/app/accounting/taxes",
+              amountMinor:(-balance).toString(),
+              payload:{snapshotAt:ensRow.snapshot_at}
+            });
+          }else if(upcoming>balance){
+            add({
+              key:"ens:funding-gap",
+              category:"ENS",
+              severity:"WARNING",
+              title:"Денег на ЕНС может не хватить",
+              description:
+                "Ближайшие подтверждённые налоговые платежи за 30 дней выше последнего известного положительного баланса ЕНС.",
+              actionCode:"PLAN_TAX_FUNDING",
+              actionHref:"/app/accounting/taxes",
+              amountMinor:(upcoming-balance).toString(),
+              payload:{
+                ensBalanceMinor:balance.toString(),
+                upcomingTaxMinor:upcoming.toString()
+              }
+            });
+          }
+        }
+
+        const filingSoon=await client.query<{count:number}>(
+          `SELECT count(*)::integer AS count
+           FROM accounting_compliance_obligation
+           WHERE tenant_id=$1 AND legal_entity_id=$2
+             AND obligation_type IN ('FILE','NOTIFY')
+             AND workflow_status NOT IN ('ACCEPTED','CANCELLED')
+             AND due_at<=now()+interval '30 days'`,
+          [context.tenantId,legalEntityId]
+        );
+        if((filingSoon.rows[0]?.count??0)>0){
+          const connector=await client.query<any>(
+            `SELECT
+               id,provider,certificate_valid_to,last_error
+             FROM accounting_reporting_connector
+             WHERE tenant_id=$1 AND legal_entity_id=$2
+               AND status='VERIFIED' AND supports_filing=true
+             ORDER BY last_verified_at DESC NULLS LAST
+             LIMIT 1`,
+            [context.tenantId,legalEntityId]
+          );
+          const c=connector.rows[0];
+          if(!c){
+            add({
+              key:"filing:no-connector",
+              category:"FNS",
+              severity:"WARNING",
+              title:"Подключите канал сдачи отчётности",
+              description:
+                "В ближайшие 30 дней есть отчёт или уведомление, но нет проверенного коннектора, который поддерживает отправку.",
+              actionCode:"SETUP_FILING_CONNECTOR",
+              actionHref:"/app/accounting/taxes"
+            });
+          }else if(
+            c.certificate_valid_to &&
+            new Date(c.certificate_valid_to).getTime()<=
+              Date.now()+30*86400000
+          ){
+            add({
+              key:"filing:certificate-expiry:"+c.id,
+              category:"FNS",
+              severity:"WARNING",
+              title:"Скоро истечёт сертификат КЭП",
+              description:
+                "Продлите сертификат заранее, чтобы отправка отчётности не остановилась в день срока.",
+              actionCode:"RENEW_CERTIFICATE",
+              actionHref:"/app/accounting/taxes",
+              sourceType:"REPORTING_CONNECTOR",
+              sourceId:c.id,
+              dueAt:new Date(c.certificate_valid_to)
+            });
+          }
+        }
+
+        if(profile.tax_regime==="NPD"){
+          const npd=await client.query<{drafts:number;errors:number}>(
+            `SELECT
+               count(*) FILTER (
+                 WHERE fiscal_status IN ('DRAFT','READY')
+               )::integer AS drafts,
+               count(*) FILTER (
+                 WHERE fiscal_status='ERROR'
+               )::integer AS errors
+             FROM accounting_npd_receipt
+             WHERE tenant_id=$1 AND legal_entity_id=$2`,
+            [context.tenantId,legalEntityId]
+          );
+          const n=npd.rows[0];
+          if((n?.errors??0)>0||(n?.drafts??0)>0){
+            add({
+              key:"npd:unregistered-receipts",
+              category:"NPD",
+              severity:(n?.errors??0)>0?"CRITICAL":"WARNING",
+              title:"Оформите чеки НПД",
+              description:
+                "Есть "+String(n?.drafts??0)+" доходов без подтверждённого чека и "+
+                String(n?.errors??0)+" ошибок регистрации.",
+              actionCode:"FIX_NPD_RECEIPTS",
+              actionHref:"/app/accounting/taxes",
+              payload:{drafts:n?.drafts??0,errors:n?.errors??0}
+            });
+          }
+        }
+      }
+
+      const bank=await client.query<{count:number;amount:string}>(
+        `SELECT
+           count(*)::integer AS count,
+           coalesce(sum(l.amount_minor),0)::text AS amount
+         FROM finance_bank_statement_line l
+         JOIN finance_bank_statement s
+           ON s.tenant_id=l.tenant_id AND s.id=l.statement_id
+         JOIN cash_account ca
+           ON ca.tenant_id=s.tenant_id AND ca.id=s.cash_account_id
+         WHERE l.tenant_id=$1
+           AND ca.legal_entity_id=$2
+           AND l.payment_id IS NULL
+           AND l.booked_on>=current_date-60`,
+        [context.tenantId,legalEntityId]
+      );
+      const bankRow=bank.rows[0];
+      if((bankRow?.count??0)>0){
+        add({
+          key:"bank:unmatched",
+          category:"BANK",
+          severity:"WARNING",
+          title:"Сверьте операции банка",
+          description:
+            String(bankRow.count)+" строк выписки за последние 60 дней не сопоставлены с платежами CoreBiz.",
+          actionCode:"OPEN_BANK_RECONCILIATION",
+          actionHref:"/app/finance",
+          amountMinor:bankRow.amount,
+          payload:{count:bankRow.count}
+        });
+      }
+
+      const close=await client.query<any>(
+        `SELECT
+           p.id,p.date_from,p.date_to,p.state,
+           count(c.id) FILTER (WHERE c.status='DONE')::integer AS done_count,
+           count(c.id) FILTER (WHERE c.status='BLOCKED')::integer AS blocked_count
+         FROM accounting_period p
+         LEFT JOIN accounting_month_close_check c
+           ON c.tenant_id=p.tenant_id AND c.period_id=p.id
+         WHERE p.tenant_id=$1 AND p.legal_entity_id=$2
+           AND p.state='OPEN'
+           AND p.date_to<current_date
+         GROUP BY p.id
+         ORDER BY p.date_to DESC
+         LIMIT 1`,
+        [context.tenantId,legalEntityId]
+      );
+      const period=close.rows[0];
+      if(period&&Number(period.done_count??0)<7){
+        add({
+          key:"period-close:"+period.id,
+          category:"PERIOD_CLOSE",
+          severity:Number(period.blocked_count??0)>0?"CRITICAL":"WARNING",
+          title:"Закройте прошедший бухгалтерский период",
+          description:
+            "За период до "+String(period.date_to)+
+            " выполнено "+String(period.done_count??0)+" из 7 контрольных проверок.",
+          actionCode:"OPEN_PERIOD_CLOSE",
+          actionHref:"/app/accounting",
+          sourceType:"ACCOUNTING_PERIOD",
+          sourceId:period.id,
+          payload:{
+            doneCount:Number(period.done_count??0),
+            blockedCount:Number(period.blocked_count??0)
+          }
+        });
+      }
+
+      const activeKeys=generated.map(item=>item.key);
+      for(const task of generated){
+        await client.query(
+          `INSERT INTO accounting_assistant_task(
+             tenant_id,legal_entity_id,task_key,category,severity,status,
+             title,description,action_code,action_href,source_type,source_id,
+             due_at,amount_minor,currency,payload
+           ) VALUES(
+             $1,$2,$3,$4,$5,'OPEN',$6,$7,$8,$9,$10,$11,$12,$13,'RUB',$14
+           )
+           ON CONFLICT(tenant_id,legal_entity_id,task_key)
+           DO UPDATE SET
+             category=EXCLUDED.category,
+             severity=EXCLUDED.severity,
+             status=CASE
+               WHEN accounting_assistant_task.status='DISMISSED'
+                 THEN 'DISMISSED'
+               ELSE 'OPEN'
+             END,
+             title=EXCLUDED.title,
+             description=EXCLUDED.description,
+             action_code=EXCLUDED.action_code,
+             action_href=EXCLUDED.action_href,
+             source_type=EXCLUDED.source_type,
+             source_id=EXCLUDED.source_id,
+             due_at=EXCLUDED.due_at,
+             amount_minor=EXCLUDED.amount_minor,
+             currency=EXCLUDED.currency,
+             payload=EXCLUDED.payload,
+             resolved_by_membership_id=NULL,
+             resolved_at=NULL,
+             updated_at=now()`,
+          [
+            context.tenantId,legalEntityId,task.key,task.category,
+            task.severity,task.title,task.description,
+            task.actionCode??null,task.actionHref??null,
+            task.sourceType??null,task.sourceId??null,task.dueAt??null,
+            task.amountMinor??null,JSON.stringify(task.payload??{})
+          ]
+        );
+      }
+
+      if(activeKeys.length){
+        await client.query(
+          `UPDATE accounting_assistant_task
+           SET status='DONE',
+               resolved_by_membership_id=$3,
+               resolved_at=now(),updated_at=now()
+           WHERE tenant_id=$1 AND legal_entity_id=$2
+             AND status IN ('OPEN','IN_PROGRESS')
+             AND NOT (task_key=ANY($4::text[]))`,
+          [context.tenantId,legalEntityId,context.membershipId,activeKeys]
+        );
+      }else{
+        await client.query(
+          `UPDATE accounting_assistant_task
+           SET status='DONE',
+               resolved_by_membership_id=$3,
+               resolved_at=now(),updated_at=now()
+           WHERE tenant_id=$1 AND legal_entity_id=$2
+             AND status IN ('OPEN','IN_PROGRESS')`,
+          [context.tenantId,legalEntityId,context.membershipId]
+        );
+      }
+
+      const tasks=await client.query(
+        `SELECT
+           id,task_key,category,severity,status,title,description,
+           action_code,action_href,source_type,source_id,due_at,
+           amount_minor::text,currency,payload,updated_at
+         FROM accounting_assistant_task
+         WHERE tenant_id=$1 AND legal_entity_id=$2
+           AND status IN ('OPEN','IN_PROGRESS','DISMISSED')
+         ORDER BY
+           CASE severity
+             WHEN 'CRITICAL' THEN 0 WHEN 'WARNING' THEN 1 ELSE 2
+           END,
+           due_at NULLS LAST,updated_at DESC`,
+        [context.tenantId,legalEntityId]
+      );
+
+      const summary={
+        critical:tasks.rows.filter((task:any)=>task.status!=="DISMISSED"&&task.severity==="CRITICAL").length,
+        warning:tasks.rows.filter((task:any)=>task.status!=="DISMISSED"&&task.severity==="WARNING").length,
+        info:tasks.rows.filter((task:any)=>task.status!=="DISMISSED"&&task.severity==="INFO").length
+      };
+      return {
+        legalEntity:entity.rows[0],
+        profile,
+        summary,
+        tasks:tasks.rows
+      };
+    });
+  }
+
+  async updateAutopilotTask(
+    context:TenantContext,
+    taskId:string,
+    input:{status:"OPEN"|"IN_PROGRESS"|"DISMISSED"}
+  ){
+    if(!["OPEN","IN_PROGRESS","DISMISSED"].includes(input.status)){
+      throw new BadRequestException("Некорректный статус задачи");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `UPDATE accounting_assistant_task
+         SET status=$3,
+             resolved_by_membership_id=CASE
+               WHEN $3='DISMISSED' THEN $4::uuid ELSE NULL
+             END,
+             resolved_at=CASE
+               WHEN $3='DISMISSED' THEN now() ELSE NULL
+             END,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING
+           id,task_key,category,severity,status,title,description,
+           action_code,action_href,due_at,amount_minor::text,currency,payload`,
+        [context.tenantId,taskId,input.status,context.membershipId]
+      );
+      if(!result.rows[0]){
+        throw new NotFoundException("Задача автопилота не найдена");
+      }
+      return result.rows[0];
+    });
+  }
+
   private ruleMatches(rule:any,profile:any) {
     if(rule.entity_kind&&rule.entity_kind!==profile.entity_kind) return false;
     if(
