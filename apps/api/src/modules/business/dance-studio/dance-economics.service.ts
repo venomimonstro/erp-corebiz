@@ -1241,6 +1241,42 @@ export class DanceEconomicsService {
     });
   }
 
+  async payrollStatements(
+    context:TenantContext,
+    input:{from?:string;to?:string}
+  ){
+    const scopeIds=await this.scopeIds(context,"dance.read");
+    const from=input.from?new Date(input.from):new Date(new Date().getFullYear(),new Date().getMonth(),1);
+    const to=input.to?new Date(input.to):new Date(Date.now()+86400000);
+    if(Number.isNaN(from.getTime())||Number.isNaN(to.getTime())||to<=from){
+      throw new BadRequestException("Некорректный период ведомостей");
+    }
+    const periodFrom=from.toISOString().slice(0,10);
+    const periodTo=new Date(to.getTime()-86400000).toISOString().slice(0,10);
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT
+           s.id,s.trainer_resource_id,r.name AS trainer_name,
+           s.period_from,s.period_to,s.lesson_accrual_minor::text,
+           s.base_minor::text,s.guarantee_adjustment_minor::text,
+           s.total_minor::text,s.currency,s.status,s.payroll_batch_id,
+           s.calculation_snapshot,s.finalized_at,s.exported_at
+         FROM trainer_payroll_statement s
+         JOIN service_resource r
+           ON r.tenant_id=s.tenant_id AND r.id=s.trainer_resource_id
+         WHERE s.tenant_id=$1
+           AND s.period_from=$2::date AND s.period_to=$3::date
+           AND (
+             $4::uuid[] IS NULL
+             OR r.membership_id = ANY($4::uuid[])
+           )
+         ORDER BY r.name`,
+        [context.tenantId,periodFrom,periodTo,scopeIds]
+      );
+      return result.rows;
+    });
+  }
+
   async approveCompensation(
     context:TenantContext,
     input:{from:string;to:string}
@@ -1780,12 +1816,29 @@ export class DanceEconomicsService {
          AND valid_from <= $3::date
          AND (valid_to IS NULL OR valid_to >= $3::date)
          AND (lesson_type IS NULL OR lesson_type=$4)
-       ORDER BY (lesson_type IS NOT NULL) DESC,priority,valid_from DESC
+         AND (service_id IS NULL OR service_id=$5::uuid)
+         AND (dance_program_id IS NULL OR dance_program_id=$6::uuid)
+         AND (dance_group_id IS NULL OR dance_group_id=$7::uuid)
+         AND (branch_id IS NULL OR branch_id=$8::uuid)
+       ORDER BY
+         (
+           (lesson_type IS NOT NULL)::int +
+           (service_id IS NOT NULL)::int +
+           (dance_program_id IS NOT NULL)::int +
+           (dance_group_id IS NOT NULL)::int +
+           (branch_id IS NOT NULL)::int
+         ) DESC,
+         priority ASC,
+         valid_from DESC
        LIMIT 1`,
       [
         tenantId,lesson.trainer_resource_id,
         new Date(lesson.starts_at).toISOString().slice(0,10),
-        lesson.lesson_type
+        lesson.lesson_type,
+        lesson.service_id??null,
+        lesson.program_id??null,
+        lesson.group_id??null,
+        lesson.branch_id??null
       ]
     );
     const plan=planResult.rows[0];
