@@ -120,7 +120,7 @@ export class DanceEconomicsService {
   }
 
   async compensationPlans(context:TenantContext){
-    await this.scopeIds(context,"dance.read");
+    const scopeIds=await this.scopeIds(context,"dance.read");
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
@@ -160,15 +160,19 @@ export class DanceEconomicsService {
          LEFT JOIN branch b
            ON b.tenant_id=p.tenant_id AND b.id=p.branch_id
          WHERE p.tenant_id=$1 AND p.status='ACTIVE'
+           AND (
+             $2::uuid[] IS NULL
+             OR r.membership_id = ANY($2::uuid[])
+           )
          ORDER BY r.name,p.priority,p.valid_from DESC`,
-        [context.tenantId]
+        [context.tenantId,scopeIds]
       );
       return result.rows;
     });
   }
 
   async payrollProfiles(context:TenantContext){
-    await this.scopeIds(context,"dance.read");
+    const scopeIds=await this.scopeIds(context,"dance.read");
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
@@ -181,8 +185,12 @@ export class DanceEconomicsService {
          JOIN service_resource r
            ON r.tenant_id=p.tenant_id AND r.id=p.trainer_resource_id
          WHERE p.tenant_id=$1 AND p.status='ACTIVE'
+           AND (
+             $2::uuid[] IS NULL
+             OR r.membership_id = ANY($2::uuid[])
+           )
          ORDER BY r.name,p.valid_from DESC`,
-        [context.tenantId]
+        [context.tenantId,scopeIds]
       );
       return result.rows;
     });
@@ -498,7 +506,7 @@ export class DanceEconomicsService {
   }
 
   async roomContracts(context:TenantContext){
-    await this.scopeIds(context,"dance.read");
+    await this.requireAll(context,"dance.read");
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
@@ -529,7 +537,7 @@ export class DanceEconomicsService {
     context:TenantContext,
     month?:string
   ){
-    await this.scopeIds(context,"dance.read");
+    await this.requireAll(context,"dance.read");
     const target=this.normalizeMonth(month);
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
