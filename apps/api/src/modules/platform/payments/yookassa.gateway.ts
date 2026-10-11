@@ -2,6 +2,10 @@ import { BadGatewayException, ServiceUnavailableException } from "@nestjs/common
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from "node:crypto";
 
 export type MerchantCredentials = { shopId: string; secret: string };
+export type ProviderRefund = {
+  id:string;payment_id:string;status:"pending"|"succeeded"|"canceled";
+  amount:{value:string;currency:string};receipt_registration?:string;
+};
 export type ProviderPayment = {
   id: string;
   status: "pending" | "waiting_for_capture" | "succeeded" | "canceled";
@@ -67,6 +71,52 @@ export class YooKassaGateway {
     if(!/^[a-zA-Z0-9_-]{8,100}$/.test(id)) throw new BadGatewayException("Неверный идентификатор оплаты");
     return this.request(creds,"GET","/payments/"+encodeURIComponent(id));
   }
+  async createRefund(
+    creds:MerchantCredentials,key:string,paymentId:string,amountMinor:string
+  ):Promise<ProviderRefund>{
+    return this.refundRequest(creds,"POST","/refunds",{
+      payment_id:paymentId,amount:{value:minorToMoney(amountMinor),currency:"RUB"}
+    },key);
+  }
+  async getRefund(creds:MerchantCredentials,id:string):Promise<ProviderRefund>{
+    if(!/^[a-zA-Z0-9_-]{8,100}$/.test(id)){
+      throw new BadGatewayException("Некорректный идентификатор возврата");
+    }
+    return this.refundRequest(creds,"GET","/refunds/"+encodeURIComponent(id));
+  }
+  private async refundRequest(
+    creds:MerchantCredentials,method:"GET"|"POST",path:string,
+    payload?:Record<string,unknown>,idemKey?:string
+  ):Promise<ProviderRefund>{
+    if(!/^\\d{3,30}$/.test(creds.shopId)||!creds.secret){
+      throw new ServiceUnavailableException("Некорректные реквизиты эквайринга");
+    }
+    const controller=new AbortController();
+    const timeout=setTimeout(()=>controller.abort(),10000);
+    try{
+      const res=await fetch(ORIGIN+path,{
+        method,signal:controller.signal,
+        headers:{
+          "Authorization":"Basic "+Buffer.from(creds.shopId+":"+creds.secret).toString("base64"),
+          "Content-Type":"application/json",
+          ...(idemKey?{"Idempotence-Key":idemKey}:{})
+        },
+        ...(payload?{body:JSON.stringify(payload)}:{})
+      });
+      if(!res.ok)throw new BadGatewayException("Провайдер не подтвердил возврат");
+      const row=await res.json() as ProviderRefund;
+      if(!row||typeof row.id!=="string"||typeof row.payment_id!=="string"||
+         !["pending","succeeded","canceled"].includes(row.status) ||
+         typeof row.amount?.value!=="string") {
+        throw new BadGatewayException("Некорректный ответ провайдера возврата");
+      }
+      return row;
+    }catch(error){
+      if(error instanceof BadGatewayException)throw error;
+      throw new ServiceUnavailableException("Провайдер возврата временно недоступен");
+    }finally{clearTimeout(timeout);}
+  }
+
   private async request(
     creds:MerchantCredentials,
     method:"GET"|"POST",
