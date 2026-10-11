@@ -275,35 +275,44 @@ async function readEntity(
   if (!(await tableExists(client, entity.table))) return 0;
   if (!(await hasTenantId(client, entity.table))) return 0;
 
-  const table = quoteIdentifier(entity.table);
-  const order = (await hasId(client, entity.table))
-    ? "id"
-    : "tenant_id";
-
-  let offset = 0;
-  let total = 0;
+  const table=quoteIdentifier(entity.table);
+  const byId=await hasId(client,entity.table);
+  let offset=0;
+  let lastId:unknown=null;
+  let total=0;
 
   for (;;) {
-    const result = await client.query<Record<string, unknown>>(
-      `SELECT *
-       FROM ${table}
-       WHERE tenant_id=$1
-       ORDER BY ${quoteIdentifier(order)}
-       LIMIT $2 OFFSET $3`,
-      [tenantId, PAGE_SIZE, offset]
+    // Primary-key seek avoids quadratic OFFSET scans for million-SKU
+    // tenants. Tables without 'id' keep the legacy bounded fallback.
+    const result=byId
+      ?await client.query<Record<string,unknown>>(
+        `SELECT * FROM ${table}
+         WHERE tenant_id=$1 ${lastId===null?"":"AND id>$3"}
+         ORDER BY id LIMIT $2`,
+        lastId===null?[tenantId,PAGE_SIZE]:[tenantId,PAGE_SIZE,lastId]
+      )
+      :await client.query<Record<string,unknown>>(
+        `SELECT * FROM ${table}
+         WHERE tenant_id=$1 ORDER BY tenant_id
+         LIMIT $2 OFFSET $3`,
+        [tenantId,PAGE_SIZE,offset]
+      );
+    if(!result.rowCount)break;
+    const cleaned=result.rows.map(
+      row=>cleanValue(row) as Record<string,unknown>
     );
-
-    if (!result.rowCount) break;
-
-    const cleaned = result.rows.map(
-      (row) => cleanValue(row) as Record<string, unknown>
-    );
-
     onRows(cleaned);
-    total += cleaned.length;
-    offset += cleaned.length;
-
-    if (cleaned.length < PAGE_SIZE) break;
+    total+=cleaned.length;
+    if(byId){
+      const tail=result.rows[result.rows.length-1]?.id;
+      if(tail===null||tail===undefined)
+        throw new Error("EXPORT_CURSOR_MISSING");
+      if(tail===lastId)throw new Error("EXPORT_CURSOR_STALLED");
+      lastId=tail;
+    }else{
+      offset+=cleaned.length;
+    }
+    if(cleaned.length<PAGE_SIZE)break;
   }
 
   return total;
