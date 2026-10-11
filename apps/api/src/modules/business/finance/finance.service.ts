@@ -505,18 +505,18 @@ export class FinanceService {
       const stmt=await client.query<{
         id:string;status:string;party_id:string|null;currency:string;
         period_from:string;period_to:string;amount_minor:string;
-      }>(\`SELECT s.id,s.status,p.party_id,p.currency,
+      }>(`SELECT s.id,s.status,p.party_id,p.currency,
                  s.period_from::text,s.period_to::text,
                  s.service_revenue_minor::text AS amount_minor
           FROM work_project_monthly_statement s
           JOIN work_project p ON p.tenant_id=s.tenant_id AND p.id=s.project_id
-          WHERE s.tenant_id=$1 AND s.id=$2 FOR UPDATE OF s\`,
+          WHERE s.tenant_id=$1 AND s.id=$2 FOR UPDATE OF s`,
         [context.tenantId,statementId]);
       const row=stmt.rows[0];
       if(!row)throw new NotFoundException("Агентский отчёт не найден");
       const prior=await client.query<{id:string;business_number:string;obligation_id:string}>(
-        \`SELECT id,business_number,obligation_id FROM finance_invoice
-         WHERE tenant_id=$1 AND source_type='AGENCY_PROJECT_STATEMENT' AND source_id=$2\`,
+        `SELECT id,business_number,obligation_id FROM finance_invoice
+         WHERE tenant_id=$1 AND source_type='AGENCY_PROJECT_STATEMENT' AND source_id=$2`,
         [context.tenantId,statementId]);
       if(prior.rows[0]){
         const invoice=prior.rows[0];
@@ -528,29 +528,29 @@ export class FinanceService {
       if(BigInt(row.amount_minor)<=0n)
         throw new ConflictException("Нельзя выставить счёт с нулевой выручкой");
       const obligation=await client.query<{id:string}>(
-        \`INSERT INTO financial_obligation(
+        `INSERT INTO financial_obligation(
            tenant_id,direction,party_id,source_type,source_id,
            currency,amount_minor,due_at
          ) VALUES($1,'RECEIVABLE',$2,'AGENCY_PROJECT_STATEMENT',$3,$4,$5,$6)
          ON CONFLICT (tenant_id,direction,source_type,source_id)
          DO UPDATE SET updated_at=financial_obligation.updated_at
-         RETURNING id\`,
+         RETURNING id`,
         [context.tenantId,row.party_id,row.id,row.currency,row.amount_minor,dueAt]);
       const obligationId=obligation.rows[0]!.id;
       const number=await this.nextNumber(client,context.tenantId,"finance_invoice","INV");
       const invoice=await client.query<{id:string}>(
-        \`INSERT INTO finance_invoice(
+        `INSERT INTO finance_invoice(
            tenant_id,business_number,party_id,source_type,source_id,
            obligation_id,period_from,period_to,currency,amount_minor,due_at,
            created_by_membership_id
          ) VALUES($1,$2,$3,'AGENCY_PROJECT_STATEMENT',$4,$5,$6,$7,$8,$9,$10,$11)
-         RETURNING id\`,
+         RETURNING id`,
         [context.tenantId,number,row.party_id,row.id,obligationId,
          row.period_from,row.period_to,row.currency,row.amount_minor,dueAt,context.membershipId]);
       const invoiceId=invoice.rows[0]!.id;
       await client.query(
-        \`UPDATE work_project_monthly_statement SET status='INVOICED',updated_at=now()
-         WHERE tenant_id=$1 AND id=$2 AND status='FINALIZED'\`,
+        `UPDATE work_project_monthly_statement SET status='INVOICED',updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='FINALIZED'`,
         [context.tenantId,row.id]);
       await this.audit(client,context,"finance.agency_invoice_issued","finance_invoice",invoiceId,
         {statementId,obligationId,amountMinor:row.amount_minor,currency:row.currency});
