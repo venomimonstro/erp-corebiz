@@ -623,9 +623,14 @@ export class BookingService {
       allowedDebtMinor?: string | number;
       gracePeriodDays?: number;
       entitlements?: Array<{
-        lessonType?: "GROUP" | "INDIVIDUAL" | "TRIAL" | "MASTER_CLASS" | "OPEN_CLASS" | "REHEARSAL" | "RENTAL_EVENT";
+        serviceId?: string;
+        trainerResourceId?: string;
+        lessonType?: "GROUP" | "INDIVIDUAL" | "TRIAL" | "MASTER_CLASS" | "OPEN_CLASS" | "REHEARSAL" | "RENTAL_EVENT" | "SELF_PRACTICE";
         danceProgramId?: string;
         danceGroupId?: string;
+        weekdays?: number[];
+        startMinute?: number;
+        endMinute?: number;
         visitLimit?: number | null;
         managementVisitValueMinor?: string | number;
         priority?: number;
@@ -708,10 +713,32 @@ export class BookingService {
         if (priority < 1 || priority > 100000) {
           throw new BadRequestException("Некорректный приоритет квоты");
         }
+        const weekdays=Array.from(
+          new Set(entitlement.weekdays ?? [1,2,3,4,5,6,7])
+        ).map(Number).sort((a,b)=>a-b);
+        if(
+          !weekdays.length ||
+          weekdays.some(day=>!Number.isInteger(day)||day<1||day>7)
+        ){
+          throw new BadRequestException("Некорректные дни недели квоты");
+        }
+        const startMinute=Math.floor(entitlement.startMinute ?? 0);
+        const endMinute=Math.floor(entitlement.endMinute ?? 1440);
+        if(
+          startMinute<0||startMinute>1439||
+          endMinute<1||endMinute>1440||endMinute<=startMinute
+        ){
+          throw new BadRequestException("Некорректное время действия квоты");
+        }
         return {
+          serviceId: entitlement.serviceId ?? null,
+          trainerResourceId: entitlement.trainerResourceId ?? null,
           lessonType: entitlement.lessonType ?? null,
           danceProgramId: entitlement.danceProgramId ?? null,
           danceGroupId: entitlement.danceGroupId ?? null,
+          weekdays,
+          startMinute,
+          endMinute,
           visitLimit,
           managementVisitValueMinor: visitValue,
           priority
@@ -722,9 +749,14 @@ export class BookingService {
     const entitlementKeys=new Set<string>();
     for(const entitlement of normalizedEntitlements){
       const key=[
+        entitlement.serviceId??"*",
+        entitlement.trainerResourceId??"*",
         entitlement.lessonType??"*",
         entitlement.danceProgramId??"*",
         entitlement.danceGroupId??"*",
+        entitlement.weekdays.join(","),
+        entitlement.startMinute,
+        entitlement.endMinute,
         entitlement.priority
       ].join("|");
       if(entitlementKeys.has(key)){
@@ -830,6 +862,22 @@ export class BookingService {
         if (!row) throw new Error("SERVICE_PACKAGE_PLAN_CREATE_FAILED");
 
         for (const entitlement of normalizedEntitlements) {
+          if (entitlement.serviceId) {
+            await this.assertService(
+              client,context.tenantId,entitlement.serviceId
+            );
+          }
+          if (entitlement.trainerResourceId) {
+            const trainer=await client.query(
+              `SELECT 1 FROM service_resource
+               WHERE tenant_id=$1 AND id=$2
+                 AND type='EMPLOYEE' AND status='ACTIVE'`,
+              [context.tenantId,entitlement.trainerResourceId]
+            );
+            if(!trainer.rowCount){
+              throw new NotFoundException("Тренер квоты не найден");
+            }
+          }
           if (entitlement.danceProgramId) {
             const program = await client.query(
               "SELECT 1 FROM dance_program WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
@@ -859,12 +907,18 @@ export class BookingService {
           }
           await client.query(
             `INSERT INTO service_package_plan_entitlement(
-               tenant_id,plan_id,lesson_type,dance_program_id,dance_group_id,
+               tenant_id,plan_id,service_id,trainer_resource_id,
+               lesson_type,dance_program_id,dance_group_id,
+               weekdays,start_minute,end_minute,
                visit_limit,management_visit_value_minor,priority
-             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+             ) VALUES(
+               $1,$2,$3,$4,$5,$6,$7,$8::smallint[],$9,$10,$11,$12,$13
+             )`,
             [
-              context.tenantId,row.id,entitlement.lessonType,
+              context.tenantId,row.id,entitlement.serviceId,
+              entitlement.trainerResourceId,entitlement.lessonType,
               entitlement.danceProgramId,entitlement.danceGroupId,
+              entitlement.weekdays,entitlement.startMinute,entitlement.endMinute,
               entitlement.visitLimit,entitlement.managementVisitValueMinor,
               entitlement.priority
             ]
