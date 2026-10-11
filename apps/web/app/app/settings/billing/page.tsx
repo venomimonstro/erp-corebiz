@@ -19,6 +19,11 @@ type Plan = {
   }>;
 };
 
+type ReconciliationStatus = {
+  enabled:boolean;
+  jobs:Array<{state:string;count:number;oldestDue:string|null}>;
+};
+
 type CurrentBilling = {
   state: "ACTIVE" | "GRACE" | "READ_ONLY";
   subscription: {
@@ -51,6 +56,7 @@ function money(value: string, currency: string): string {
 
 export default function BillingPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [reconciliation,setReconciliation]=useState<ReconciliationStatus|null>(null);
   const [current, setCurrent] = useState<CurrentBilling | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -64,6 +70,10 @@ export default function BillingPage() {
       ]);
       setPlans(data[0]);
       setCurrent(data[1]);
+      // Reconciliation is a separate operational integration. Failure to
+      // load its statistics must not hide subscription information.
+      void apiRequest<ReconciliationStatus>("/payments/reconciliation/status")
+        .then(setReconciliation).catch(()=>setReconciliation(null));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить подписку");
     }
@@ -178,6 +188,26 @@ export default function BillingPage() {
           ) : null}
         </header>
 
+        {reconciliation?<section className="studio-section">
+          <h2>Контроль подтверждения платежей</h2>
+          <p>Фоновая сверка: <strong>{reconciliation.enabled?
+            "включена":"не включена на сервере"}</strong>.
+            Это независимая проверка ЮKassa, которая восстанавливает
+            потерянные уведомления, не продлевая тариф дважды.</p>
+          <div className="crm-funnel-metrics">
+            <article><small>Ожидают проверки</small>
+              <strong>{reconciliation.jobs.filter(j=>["DUE","LEASED"].includes(j.state))
+                .reduce((sum,j)=>sum+j.count,0)}</strong>
+            </article>
+            <article><small>Требуют вмешательства</small>
+              <strong>{reconciliation.jobs.find(j=>j.state==="EXHAUSTED")?.count??0}</strong>
+            </article>
+          </div>
+          {!reconciliation.enabled?<p className="muted">
+            Для коммерческих оплат включите на сервере
+            COREBIZ_PAYMENT_RECONCILE_ENABLED после миграции 234.
+          </p>:null}
+        </section>:null}
         {error ? (
           <div className="inline-error">
             <strong>Не удалось выполнить действие</strong>
