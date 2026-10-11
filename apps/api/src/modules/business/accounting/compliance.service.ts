@@ -31,6 +31,8 @@ type TaxProfileInput = {
   oktmo?:string;
   reportingMode?:"ASSISTED"|"SEMI_AUTOMATIC"|"EXTERNAL_ACCOUNTANT";
   riskTolerance?:"CONSERVATIVE"|"STANDARD";
+  complianceEnabled?:boolean;
+  complianceDisabledReason?:string;
   usnRateBps?:number|null;
   usnMinimumTaxBps?:number|null;
   effectiveFrom?:string;
@@ -112,8 +114,12 @@ export class ComplianceService {
                has_employees=$6,tax_region_code=$7,tax_office_code=$8,
                ens_enabled=$9,okved_primary=$10,kpp=$11,oktmo=$12,
                reporting_mode=$13,risk_tolerance=$14,
-               usn_rate_bps=$15,usn_min_tax_bps=$16,
-               updated_by_membership_id=$17,updated_at=now()
+                compliance_enabled=$15,compliance_disabled_reason=$16,
+                compliance_disabled_by_membership_id=CASE
+                  WHEN $15::boolean THEN NULL ELSE $19
+                END,
+                usn_rate_bps=$17,usn_min_tax_bps=$18,
+                updated_by_membership_id=$19,updated_at=now()
            WHERE tenant_id=$1 AND id=$2
            RETURNING *`,
           [
@@ -122,8 +128,14 @@ export class ComplianceService {
             input.taxOfficeCode?.trim()||null,input.ensEnabled!==false,
             input.okvedPrimary?.trim()||null,input.kpp?.trim()||null,
             input.oktmo?.trim()||null,input.reportingMode??"ASSISTED",
-            input.riskTolerance??"CONSERVATIVE",input.usnRateBps??null,
-            input.usnMinimumTaxBps??null,context.membershipId
+            input.riskTolerance??"CONSERVATIVE",
+            input.complianceEnabled!==false,
+            input.complianceEnabled===false
+              ?(input.complianceDisabledReason?.trim()||
+                "Налоговый контур отключён владельцем")
+              :null,
+            input.usnRateBps??null,input.usnMinimumTaxBps??null,
+            context.membershipId
           ]
         );
         return updated.rows[0];
@@ -149,10 +161,13 @@ export class ComplianceService {
            tenant_id,legal_entity_id,entity_kind,tax_regime,vat_mode,
            has_employees,tax_region_code,tax_office_code,ens_enabled,
            okved_primary,kpp,oktmo,reporting_mode,risk_tolerance,
+           compliance_enabled,compliance_disabled_reason,
+           compliance_disabled_by_membership_id,
            usn_rate_bps,usn_min_tax_bps,effective_from,
            created_by_membership_id,updated_by_membership_id
          ) VALUES(
-           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+           $18,$19,$20,$20
          )
          RETURNING *`,
         [
@@ -161,8 +176,15 @@ export class ComplianceService {
           input.taxOfficeCode?.trim()||null,input.ensEnabled!==false,
           input.okvedPrimary?.trim()||null,input.kpp?.trim()||null,
           input.oktmo?.trim()||null,input.reportingMode??"ASSISTED",
-          input.riskTolerance??"CONSERVATIVE",input.usnRateBps??null,
-          input.usnMinimumTaxBps??null,effectiveFrom,context.membershipId
+          input.riskTolerance??"CONSERVATIVE",
+          input.complianceEnabled!==false,
+          input.complianceEnabled===false
+            ?(input.complianceDisabledReason?.trim()||
+              "Налоговый контур отключён владельцем")
+            :null,
+          input.complianceEnabled===false?context.membershipId:null,
+          input.usnRateBps??null,input.usnMinimumTaxBps??null,
+          effectiveFrom,context.membershipId
         ]
       );
       return created.rows[0];
