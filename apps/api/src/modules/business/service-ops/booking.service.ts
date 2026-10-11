@@ -3054,6 +3054,21 @@ export class BookingService {
     context:TenantContext,
     bookingId:string
   ):Promise<void>{
+    await client.query(
+      `UPDATE service_waitlist_entry
+       SET status=CASE
+             WHEN desired_to<now() THEN 'EXPIRED'
+             ELSE 'WAITING'
+           END,
+           offered_starts_at=NULL,
+           offer_expires_at=NULL,
+           source_booking_id=NULL,
+           updated_at=now()
+       WHERE tenant_id=$1
+         AND status='OFFERED'
+         AND offer_expires_at<=now()`,
+      [context.tenantId]
+    );
     const opening=await client.query<{
       service_id:string;
       branch_id:string|null;
