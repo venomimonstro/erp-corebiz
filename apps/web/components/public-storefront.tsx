@@ -21,6 +21,7 @@ type Catalog = {
   siteId: string;
   currency: string;
   products: Product[];
+  nextCursor: string | null;
 };
 
 type CartLine = {
@@ -78,6 +79,8 @@ export function PublicStorefront({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [search, setSearch] = useState("");
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
 
   const storageKey = "corebiz_cart_" + publicSlug;
 
@@ -115,15 +118,57 @@ export function PublicStorefront({
   }, [publicSlug, storageKey]);
 
   useEffect(() => {
-    void Promise.all([
-      request<Catalog>(
-        "/storefront/" + encodeURIComponent(publicSlug) + "/catalog"
-      ).then(setCatalog),
-      ensureCart()
-    ]).catch((cause) => {
-      setError(cause instanceof Error ? cause.message : "Магазин временно недоступен");
+    void ensureCart().catch((cause) => {
+      setError(cause instanceof Error ? cause.message : "Корзина временно недоступна");
     });
-  }, [publicSlug, ensureCart]);
+  }, [ensureCart]);
+
+  const pageSize = Math.max(1, Math.min(100, Math.floor(limit) || 12));
+  useEffect(() => {
+    let active = true;
+    const needle = search.trim();
+    if (needle.length === 1) {
+      setCatalog(null);
+      setLoadingCatalog(false);
+      return;
+    }
+    setLoadingCatalog(true);
+    setCatalog(null);
+    const handle = setTimeout(() => {
+      const params = new URLSearchParams({ limit: String(pageSize) });
+      if (needle) params.set("q", needle);
+      void request<Catalog>(
+        "/storefront/" + encodeURIComponent(publicSlug) + "/catalog?" + params
+      ).then((result) => {
+        if (active) { setCatalog(result); setError(""); }
+      }).catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : "Не удалось загрузить каталог");
+      }).finally(() => { if (active) setLoadingCatalog(false); });
+    }, 250);
+    return () => { active = false; clearTimeout(handle); };
+  }, [publicSlug, pageSize, search]);
+
+  async function loadMore() {
+    if (!catalog?.nextCursor || busy) return;
+    setBusy("catalog");
+    try {
+      const params = new URLSearchParams({
+        limit: String(pageSize), cursor: catalog.nextCursor
+      });
+      if (search.trim()) params.set("q", search.trim());
+      const page = await request<Catalog>(
+        "/storefront/" + encodeURIComponent(publicSlug) + "/catalog?" + params
+      );
+      setCatalog((current) => current?.nextCursor === catalog.nextCursor
+        ? { ...current, products: [...current.products, ...page.products],
+          nextCursor: page.nextCursor }
+        : current);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось загрузить товары");
+    } finally {
+      setBusy("");
+    }
+  }
 
   async function changeQuantity(
     skuId: string,
@@ -215,10 +260,7 @@ export function PublicStorefront({
     }
   }
 
-  const visible = useMemo(
-    () => catalog?.products.slice(0, Math.max(1, Math.min(100, limit))) ?? [],
-    [catalog, limit]
-  );
+  const visible = useMemo(() => catalog?.products ?? [], [catalog]);
 
   function rub(value: string, currency = "RUB") {
     return new Intl.NumberFormat("ru-RU", {
@@ -229,7 +271,7 @@ export function PublicStorefront({
   }
 
   return (
-    <section className="public-block public-storefront">
+    <section id="products" className="public-block public-storefront">
       <div className="public-storefront-heading">
         <div>
           <h2>{heading || "Товары"}</h2>
@@ -244,8 +286,16 @@ export function PublicStorefront({
         </button>
       </div>
 
-      {error ? <div className="public-store-error">{error}</div> : null}
-      {success ? <div className="public-store-success">{success}</div> : null}
+      <label className="public-store-search">
+        <span>Поиск по каталогу</span>
+        <input aria-label="Поиск по названию или артикулу"
+          value={search} onChange={(event) => setSearch(event.target.value)}
+          placeholder="Название или артикул (от 2 символов)" />
+      </label>
+      {error ? <div className="public-store-error" role="alert">{error}</div> : null}
+      {success ? <div className="public-store-success" role="status">{success}</div> : null}
+      {loadingCatalog ? <p>Загружаем товары…</p> : null}
+      {search.trim().length === 1 ? <p>Введите ещё один символ для поиска.</p> : null}
 
       <div className="public-product-grid">
         {visible.map((product) => {
@@ -312,6 +362,14 @@ export function PublicStorefront({
         })}
       </div>
 
+      {!loadingCatalog && catalog && !visible.length ? <p>По вашему запросу товары не найдены.</p> : null}
+      {catalog?.nextCursor ? (
+        <button className="public-cart-button" type="button"
+          disabled={busy === "catalog"} onClick={() => void loadMore()}>
+          {busy === "catalog" ? "Загружаем…" : "Показать ещё товары"}
+        </button>
+      ) : null}
+
       {checkoutOpen && cart ? (
         <div className="public-checkout">
           <div className="public-checkout-head">
@@ -348,9 +406,14 @@ export function PublicStorefront({
             <input value={email} onChange={(e) => setEmail(e.target.value)} />
           </label>
 
+          <p className="public-order-notice">
+            Это заявка на заказ без онлайн-оплаты. Способ получения и оплату
+            сотрудник магазина согласует с вами отдельно.
+          </p>
           <button
             className="public-primary-button"
-            disabled={busy === "checkout" || !name.trim() || !cart.lines.length}
+            disabled={busy === "checkout" || !name.trim() ||
+              (!phone.trim() && !email.trim()) || !cart.lines.length}
             onClick={() => void checkout()}
             type="button"
           >
