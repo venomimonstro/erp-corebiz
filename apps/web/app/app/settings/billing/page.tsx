@@ -11,6 +11,12 @@ type Plan = {
   monthlyPriceMinor: string;
   currency: string;
   entitlements: Record<string, unknown>;
+  usage: Record<string, {
+    used: number;
+    limit: number | null;
+    remaining: number | null;
+    percent: number | null;
+  }>;
 };
 
 type CurrentBilling = {
@@ -26,6 +32,13 @@ type CurrentBilling = {
     cancelAtPeriodEnd: boolean;
   };
   entitlements: Record<string, unknown>;
+};
+
+const usageLabels: Record<string,string> = {
+  max_users: "Пользователи",
+  max_branches: "Филиалы",
+  max_warehouses: "Склады",
+  max_service_resources: "Сотрудники и ресурсы"
 };
 
 function money(value: string, currency: string): string {
@@ -100,15 +113,24 @@ export default function BillingPage() {
     <main className="app-shell">
       <AppSidebar active="billing" />
 
-      <section className="workspace">
-        <header className="workspace-header">
+      <section className="workspace workspace-wide studio-premium">
+        <header className="studio-hero compact billing-hero">
           <div>
-            <p className="muted">Настройки / Подписка</p>
-            <h1>Тариф и доступ</h1>
-            <p className="workspace-summary">
-              Данные не удаляются при grace или read-only.
+            <span className="studio-eyebrow">Коммерческий контур</span>
+            <h1>Тариф и ресурсы</h1>
+            <p>
+              Понимайте, за что платит компания, сколько лимита уже использовано
+              и что произойдёт при смене тарифа. CoreBiz не удаляет данные при
+              grace или read-only.
             </p>
           </div>
+          {current ? (
+            <div className="billing-plan-badge">
+              <span>Текущий план</span>
+              <strong>{current.subscription.planName}</strong>
+              <small>{current.state}</small>
+            </div>
+          ) : null}
         </header>
 
         {error ? (
@@ -145,6 +167,49 @@ export default function BillingPage() {
           </section>
         ) : null}
 
+        {current ? (
+          <section className="studio-section billing-usage-section">
+            <div className="studio-section-head">
+              <div>
+                <span>Использование тарифа</span>
+                <h2>Запас для роста компании</h2>
+                <p>
+                  Лимиты контролируются сервером и базой данных. Их нельзя
+                  обойти импортом, API или прямой операцией из другого раздела.
+                </p>
+              </div>
+            </div>
+            <div className="billing-usage-grid">
+              {Object.entries(current.usage).map(([key,value]) => (
+                <article key={key}>
+                  <header>
+                    <span>{usageLabels[key] ?? key}</span>
+                    <strong>
+                      {value.used}
+                      <small>
+                        {value.limit === null ? " / ∞" : " / " + value.limit}
+                      </small>
+                    </strong>
+                  </header>
+                  <div className="billing-usage-track">
+                    <span style={{width: (value.percent ?? 0) + "%"}} />
+                  </div>
+                  <footer>
+                    <span>
+                      {value.limit === null
+                        ? "Без ограничения"
+                        : value.remaining + " доступно"}
+                    </span>
+                    <b>
+                      {value.percent === null ? "∞" : value.percent + "%"}
+                    </b>
+                  </footer>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         <div className="plan-grid">
           {plans.map((plan) => {
             const active = current?.subscription.planCode === plan.code;
@@ -152,6 +217,9 @@ export default function BillingPage() {
               ? plan.entitlements.modules
               : [];
             const maxUsers = plan.entitlements.max_users;
+            const maxBranches = plan.entitlements.max_branches;
+            const maxWarehouses = plan.entitlements.max_warehouses;
+            const maxResources = plan.entitlements.max_service_resources;
 
             return (
               <article className={active ? "plan-card active" : "plan-card"} key={plan.id}>
@@ -162,9 +230,10 @@ export default function BillingPage() {
                 </div>
 
                 <ul>
-                  <li>
-                    Пользователей: {String(maxUsers ?? "—")}
-                  </li>
+                  <li>Пользователей: {String(maxUsers ?? "—")}</li>
+                  <li>Филиалов: {String(maxBranches ?? "—")}</li>
+                  <li>Складов: {String(maxWarehouses ?? "—")}</li>
+                  <li>Сотрудников / ресурсов: {String(maxResources ?? "—")}</li>
                   <li>
                     Модули: {modules.includes("*") ? "Все" : modules.join(", ")}
                   </li>
