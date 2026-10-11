@@ -5,9 +5,9 @@ import { API_COST_CLASS } from "./api-cost.decorator";
 
 describe("ApiRateLimitGuard", () => {
   const redis = {
-    incrementWindow: jest.fn(async () => 1),
-    acquireSemaphore: jest.fn(async () => true),
-    releaseSemaphore: jest.fn(async () => undefined)
+    incrementWindow: jest.fn(async (_key:string,_windowSeconds:number) => 1),
+    acquireSemaphore: jest.fn(async (_key:string,_token:string,_limit:number,_ttlSeconds:number) => true),
+    releaseSemaphore: jest.fn(async (_key:string,_token:string) => undefined)
   };
 
   const pressure = {
