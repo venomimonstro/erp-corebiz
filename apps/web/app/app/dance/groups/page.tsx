@@ -175,6 +175,7 @@ export default function DanceGroupsPage() {
   const [selectedLessonId, setSelectedLessonId] = useState("");
   const [roster, setRoster] = useState<Roster | null>(null);
   const [participants, setParticipants] = useState<Participant[]>([]);
+  const [sectionView,setSectionView]=useState<"GROUPS"|"LESSONS">("LESSONS");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [pending, setPending] = useState(false);
@@ -1028,19 +1029,28 @@ export default function DanceGroupsPage() {
             </p>
           </div>
           <div className="studio-hero-actions">
-            <button className="secondary-button" onClick={openProgramModal} type="button">+ Направление</button>
-            <button className="secondary-button" onClick={openGroupModal} type="button">+ Группа</button>
-            <button className="secondary-button" onClick={() => openLessonModal("SELF_PRACTICE")} type="button">+ Практика</button>
-            <button onClick={() => openLessonModal("INDIVIDUAL")} type="button">+ Индивидуально</button>
+            {sectionView==="GROUPS"?<>
+              <button className="secondary-button" onClick={openProgramModal} type="button">Направление</button>
+              <button onClick={openGroupModal} type="button">Новая группа</button>
+            </>:<>
+              <button className="secondary-button" onClick={()=>openLessonModal("SELF_PRACTICE")} type="button">Практика</button>
+              <button onClick={()=>openLessonModal("INDIVIDUAL")} type="button">Индивидуально</button>
+            </>}
           </div>
         </header>
 
         <DanceWorkspaceNav active="groups" />
+        <nav className="dance-segment-nav" aria-label="Режим расписания">
+          <button className={sectionView==="LESSONS"?"active":""} type="button"
+            aria-pressed={sectionView==="LESSONS"} onClick={()=>setSectionView("LESSONS")}>Занятия и посещения</button>
+          <button className={sectionView==="GROUPS"?"active":""} type="button"
+            aria-pressed={sectionView==="GROUPS"} onClick={()=>setSectionView("GROUPS")}>Постоянные группы</button>
+        </nav>
 
         {error ? <div className="studio-message error"><strong>Группы</strong><span>{error}</span></div> : null}
         {notice ? <div className="studio-message success"><strong>Готово</strong><span>{notice}</span></div> : null}
 
-        <section className="section-block">
+        <section className="section-block" style={{display:sectionView==="GROUPS"?"":"none"}}>
           <div className="section-heading">
             <div><p className="muted">Постоянные группы</p><h2>Группы студии</h2></div>
             <input className="dance-list-filter" type="search" aria-label="Найти группу"
@@ -1074,7 +1084,7 @@ export default function DanceGroupsPage() {
         </section>
 
         {selectedGroup ? (
-          <section className="settings-card">
+          <section className="settings-card" style={{display:sectionView==="GROUPS"?"":"none"}}>
             <div className="section-heading">
               <div><p className="muted">Состав группы</p><h2>{selectedGroup.name}</h2></div>
               <div className="header-actions">
@@ -1123,7 +1133,7 @@ export default function DanceGroupsPage() {
           </section>
         ) : null}
 
-        <section className="section-block">
+        <section className="section-block" style={{display:sectionView==="LESSONS"?"":"none"}}>
           <div className="section-heading">
             <div><p className="muted">Работа с занятиями</p><h2>Расписание и журналы</h2></div>
             <div className="dance-list-tabs" role="group" aria-label="Фильтр занятий">
@@ -1160,7 +1170,7 @@ export default function DanceGroupsPage() {
         </section>
 
         {selectedLesson ? (
-          <section className="settings-card">
+          <section className="settings-card" style={{display:sectionView==="LESSONS"?"":"none"}}>
             <div className="section-heading">
               <div>
                 <p className="muted">Журнал занятия</p>
