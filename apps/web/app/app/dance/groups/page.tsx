@@ -112,7 +112,7 @@ type Roster = {
     student_name: string;
     status: string;
     payer_name: string | null;
-    discount_bps?: number;
+    discount_bps?: number | null;
     reserved_place?: boolean;
   }>;
   waitlist: Array<{
@@ -1133,15 +1133,16 @@ export default function DanceGroupsPage() {
                       <td><strong>{member.student_name}</strong></td>
                       <td>{member.status}</td>
                       <td>{member.payer_name ?? "—"}</td>
-                      <td>{((member.discount_bps ?? 0) / 100).toLocaleString("ru-RU")}%</td>
+                      <td>{member.discount_bps===null||member.discount_bps===undefined
+  ?"—":(member.discount_bps/100).toLocaleString("ru-RU")+"%"}</td>
                       <td className="table-actions">
-                        {member.status !== "ACTIVE" ? (
+                        {canManageDance&&member.status !== "ACTIVE" ? (
                           <button onClick={() => void changeMember(member, "ACTIVE")} type="button">Вернуть</button>
                         ) : null}
-                        {member.status === "ACTIVE" ? (
+                        {canManageDance&&member.status === "ACTIVE" ? (
                           <button className="secondary-button" onClick={() => void changeMember(member, "PAUSED")} type="button">Пауза</button>
                         ) : null}
-                        {member.status !== "LEFT" ? (
+                        {canManageDance&&member.status !== "LEFT" ? (
                           <button className="secondary-button" onClick={() => void changeMember(member, "LEFT")} type="button">Вывести</button>
                         ) : null}
                       </td>
