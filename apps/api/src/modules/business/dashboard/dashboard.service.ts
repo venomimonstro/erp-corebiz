@@ -1319,6 +1319,73 @@ export class DashboardService {
         definitions.ECOMMERCE[2]!.done=(config.rows[0]?.configured??0)>0;
       }
 
+      if(verticalCode==="RETAIL_STORE"){
+        const result=await client.query<{stock:number}>(
+          `SELECT count(*)::integer AS stock FROM inventory_balance b
+           JOIN warehouse w ON w.tenant_id=b.tenant_id
+             AND w.id=b.warehouse_id AND w.status='ACTIVE'
+           WHERE b.tenant_id=$1 AND b.physical_milli>b.reserved_milli`,
+          [context.tenantId]
+        );
+        definitions.TRADE=[
+          {key:"retail-product",title:"Добавьте товар с ценой",
+            detail:"Артикул, себестоимость и цена нужны для расчёта маржи.",
+            href:"/app/catalog/products",done:values.product>0},
+          {key:"retail-stock",title:"Примите первый товар на склад",
+            detail:"Сначала создайте склад и проведите приход, а не рисуйте остаток.",
+            href:"/app/inventory/stock",done:(result.rows[0]?.stock??0)>0},
+          {key:"retail-order",title:"Продайте первый товар",
+            detail:"Подтвердите заказ и проверьте резерв и движение денег.",
+            href:"/app/sales/orders",done:values.order>0,firstValue:true}
+        ];
+      }
+
+      if(verticalCode==="WHOLESALE_B2B"){
+        const result=await client.query<{terms:number}>(
+          `SELECT count(*)::integer AS terms FROM party_commercial_terms
+           WHERE tenant_id=$1`,[context.tenantId]);
+        definitions.TRADE=[
+          {key:"b2b-client",title:"Добавьте компанию-клиента",
+            detail:"Контрагент станет владельцем договора, заказа и задолженности.",
+            href:"/app/crm/customers",done:values.party>0},
+          {key:"b2b-terms",title:"Определите договорные условия",
+            detail:"Валюта, срок оплаты, скидка и кредитный лимит.",
+            href:"/app/crm/customers",done:(result.rows[0]?.terms??0)>0},
+          {key:"b2b-product",title:"Создайте прайс и номенклатуру",
+            detail:"Для клиента можно настроить персональную цену по SKU.",
+            href:"/app/catalog/products",done:values.product>0},
+          {key:"b2b-order",title:"Подтвердите первый оптовый заказ",
+            detail:"После подтверждения появляются дебиторка и обеспеченность.",
+            href:"/app/sales/orders",done:values.order>0,firstValue:true}
+        ];
+      }
+
+      if(verticalCode==="MARKETPLACE_SELLER"){
+        const result=await client.query<{mapped:number}>(
+          `SELECT count(*)::integer AS mapped FROM channel_product_mapping
+           WHERE tenant_id=$1`,[context.tenantId]);
+        definitions.ECOMMERCE=[
+          {key:"market-sku",title:"Загрузите товары и SKU",
+            detail:"Один внутренний SKU используется для склада и всех каналов.",
+            href:"/app/catalog/products",done:values.product>0},
+          {key:"market-account",title:"Подключите Ozon или Wildberries",
+            detail:"Активное подключение ещё не подтверждает успешный обмен.",
+            href:"/app/channels",done:values.channel>0},
+          {key:"market-mapping",title:"Сопоставьте артикулы продавца с SKU",
+            detail:"Без соответствий канал не может надёжно обновлять остатки.",
+            href:"/app/ecommerce",done:(result.rows[0]?.mapped??0)>0},
+          {key:"market-order",title:"Получите реальный заказ из канала",
+            detail:"Проверьте источник и OMS; ручной заказ не равен синхронизации.",
+            href:"/app/oms",done:false,firstValue:true}
+        ];
+        const imported=await client.query<{orders:number}>(
+          `SELECT count(*)::integer AS orders FROM channel_order_inbox
+           WHERE tenant_id=$1 AND sales_order_id IS NOT NULL`,
+          [context.tenantId]
+        );
+        definitions.ECOMMERCE[3]!.done=(imported.rows[0]?.orders??0)>0;
+      }
+
       const milestones = definitions[profile] ?? definitions.GENERAL;
       const firstValueDone = milestones.some(
         (item) => item.firstValue && item.done
