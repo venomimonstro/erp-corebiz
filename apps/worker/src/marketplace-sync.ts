@@ -234,8 +234,40 @@ async function persistOrder(
         ]
       );
 
+      const externalStatus=(order.externalStatus??"").trim().toLowerCase();
+      const cancelled=/^(cancelled|canceled|cancel|declined)(?:$|[\\/_\\s])/.test(externalStatus);
+      // An imported order already has a linked sale and possibly OMS reservations:
+      // never silently release its stock solely because a provider changed status.
       if (existing?.status === "IMPORTED") {
+        if(existing.payload_hash!==payloadHash) {
+          await client.query(
+            `UPDATE channel_order_inbox
+             SET external_status=$4,payload=$5,payload_hash=$6,
+                 updated_at=now(),
+                 last_error=CASE WHEN $7 THEN
+                   'Площадка отменила уже импортированный заказ. Проверьте и отмените заказ/резервы в OMS вручную.'
+                   ELSE last_error END
+             WHERE tenant_id=$1 AND connection_id=$2 AND id=$3`,
+            [job.tenant_id,job.connection_id,existing.id,order.externalStatus,
+             JSON.stringify(order.payload),payloadHash,cancelled]
+          );
+        }
         return "imported";
+      }
+      // Unimported final cancellation cannot reserve merchant stock forever.
+      if(cancelled) {
+        if(existing) {
+          await client.query(
+            `UPDATE channel_order_inbox
+             SET external_status=$4,payload=$5,payload_hash=$6,
+                 status='IGNORED',last_error=NULL,updated_at=now()
+             WHERE tenant_id=$1 AND connection_id=$2 AND id=$3`,
+            [job.tenant_id,job.connection_id,existing.id,order.externalStatus,
+             JSON.stringify(order.payload),payloadHash]
+          );
+          return "updated";
+        }
+        return "unchanged";
       }
 
       if (existing && existing.payload_hash === payloadHash) {
