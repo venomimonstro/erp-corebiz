@@ -161,8 +161,7 @@ export default function DealsPage() {
           !d.hasNextAction || d.overdueTasks>0).length;
         acc.forecastMinor += stage.deals.reduce((sum,deal)=>
           sum+Math.round(Number(deal.amountMinor)*
-            (stage.kind==="WON"?1:stage.kind==="LOST"?0:
-              (stage.probability??0)/100)),0);
+            (stage.kind==="NORMAL"?(stage.probability??0)/100:0)),0);
         acc.amountMinor += stage.deals.reduce(
           (sum, deal) => sum + Number(deal.amountMinor),
           0
@@ -277,7 +276,7 @@ export default function DealsPage() {
             <h1>{board?.pipeline.name ?? "Сделки"}</h1>
             {board ? (
               <p className="workspace-summary">
-                {totals.deals} сделок · {formatMoney(String(totals.amountMinor), "RUB")} в работе
+                {totals.deals} сделок · {formatMoney(String(totals.amountMinor), "RUB")} в воронке
               </p>
             ) : null}
           </div>
