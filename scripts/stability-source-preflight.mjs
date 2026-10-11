@@ -527,7 +527,9 @@ async function inspectRequiredHardening(root) {
     "189_service_rebooking_cycle.sql",
     "190_payroll_statement_reviews.sql",
     "192_accounting_compliance_center.sql",
-    "193_accounting_compliance_workflow.sql"
+    "193_accounting_tax_automation.sql",
+    "193_accounting_compliance_workflow.sql",
+    "194_accounting_tax_payment_classification.sql"
   ];
 
   for (const name of requiredMigrations) {
