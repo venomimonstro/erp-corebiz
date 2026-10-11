@@ -203,6 +203,19 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"apps/api/src/modules/platform/go-live/commercial-checkout-policy.ts",
+      patterns:[/WEB_PAYMENT_E2E/, /WEB_FISCAL_E2E/,
+        /WEB_FULFILLMENT_E2E/, /POS_BANK_E2E/,
+        /POS_FISCAL_E2E/, /ELECTRONICS_MARKING_REVIEW/],
+      message:"Commercial GO gate no longer requires independently verified payment, receipt, POS and marking evidence"
+    },
+    {
+      path:"apps/api/src/modules/platform/go-live/go-live.service.ts",
+      patterns:[/commercialCheckoutChecks/, /RELEASE_APPROVED/,
+        /target_version=\$2/, /status='APPROVED'/],
+      message:"Go-Live gate may accept evidence from a different release or overlook unverified commerce"
+    },
+    {
       path:"apps/api/src/modules/platform/auth/auth.service.ts",
       patterns:[/async registerInvited\(/, /corebiz_auth_accept_invitation/,
         /argon2id/, /createSession/],
