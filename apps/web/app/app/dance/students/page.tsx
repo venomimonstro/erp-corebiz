@@ -573,7 +573,7 @@ export default function DanceStudentsPage() {
                 <strong>{selected.payer_name ?? "Сам ученик"}</strong>
                 <small>{selected.payer_party_id ? "семейный контур" : "личная оплата"}</small>
               </article>
-              {access?.canViewFinance?<article className="owner-kpi">
+              {access?.canViewFinance?<><article className="owner-kpi">
                 <span>Долг семьи</span>
                 <strong>{money(selected.family_debt_minor)}</strong>
                 <small>
@@ -589,7 +589,7 @@ export default function DanceStudentsPage() {
                 <span>Просрочено</span>
                 <strong>{money(selected.family_overdue_minor)}</strong>
                 <small>{selected.family_overdue_count} просроченных начислений</small>
-              </article>:null}
+              </article></>:null}
               <article className="owner-kpi">
                 <span>Группы</span>
                 <strong>{selected.active_groups}</strong>
