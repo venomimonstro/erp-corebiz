@@ -154,7 +154,29 @@ export default function DanceGroupsPage() {
   const [roster, setRoster] = useState<Roster | null>(null);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [pending, setPending] = useState(false);
+  const [programModal, setProgramModal] = useState(false);
+  const [programName, setProgramName] = useState("Hip-Hop");
+  const [programServiceId, setProgramServiceId] = useState("");
+  const [programMinAge, setProgramMinAge] = useState("6");
+  const [programMaxAge, setProgramMaxAge] = useState("17");
+  const [groupModal, setGroupModal] = useState(false);
+  const [groupProgramId, setGroupProgramId] = useState("");
+  const [groupTrainerId, setGroupTrainerId] = useState("");
+  const [groupRoomId, setGroupRoomId] = useState("");
+  const [groupName, setGroupName] = useState("");
+  const [groupCapacity, setGroupCapacity] = useState("14");
+  const [groupBreakEven, setGroupBreakEven] = useState("5");
+  const [groupDays, setGroupDays] = useState<number[]>([1,3]);
+  const [groupTime, setGroupTime] = useState("18:00");
+  const [memberModal, setMemberModal] = useState(false);
+  const [memberStudentId, setMemberStudentId] = useState("");
+  const [memberDiscount, setMemberDiscount] = useState("0");
+  const [memberWaitlist, setMemberWaitlist] = useState(true);
+  const [generateModal, setGenerateModal] = useState(false);
+  const [generateFrom, setGenerateFrom] = useState(dateInput(0));
+  const [generateTo, setGenerateTo] = useState(dateInput(35));
   const [lessonModal, setLessonModal] = useState<
     "INDIVIDUAL" | "SELF_PRACTICE" | null
   >(null);
@@ -239,110 +261,120 @@ export default function DanceGroupsPage() {
     [lessons]
   );
 
-  async function createProgram() {
+  function openProgramModal() {
     if (!services.length) {
       setError("Сначала создайте услугу занятия");
       return;
     }
-    const name = window.prompt("Направление", "Hip-Hop");
-    if (!name?.trim()) return;
-    const serviceList = services.map((item, index) => `${index + 1}. ${item.name}`).join("\n");
-    const serviceIndex = Number(window.prompt("Услуга для направления:\n" + serviceList, "1")) - 1;
-    const service = services[serviceIndex];
-    if (!service) return;
-    const minAge = Number(window.prompt("Возраст от", "6") ?? "6");
-    const maxAge = Number(window.prompt("Возраст до", "17") ?? "17");
+    setProgramName("Hip-Hop");
+    setProgramServiceId(services[0]?.id ?? "");
+    setProgramMinAge("6");
+    setProgramMaxAge("17");
+    setProgramModal(true);
+  }
 
-    try {
-      await apiRequest("/dance/programs", {
-        method: "POST",
-        body: JSON.stringify({
-          name: name.trim(),
-          serviceId: service.id,
-          minAge,
-          maxAge,
-          defaultDurationMinutes: service.duration_minutes
+  async function createProgram() {
+    const service=services.find((item)=>item.id===programServiceId);
+    const minAge=Number(programMinAge);
+    const maxAge=Number(programMaxAge);
+    if(!programName.trim()||!service){
+      setError("Укажите название и услугу направления");
+      return;
+    }
+    if(
+      !Number.isSafeInteger(minAge)||!Number.isSafeInteger(maxAge)||
+      minAge<0||maxAge<minAge||maxAge>120
+    ){
+      setError("Проверьте возраст участников");
+      return;
+    }
+    setPending(true);setError("");setNotice("");
+    try{
+      await apiRequest("/dance/programs",{
+        method:"POST",
+        body:JSON.stringify({
+          name:programName.trim(),
+          serviceId:service.id,
+          minAge,maxAge,
+          defaultDurationMinutes:service.duration_minutes
         })
       });
+      setProgramModal(false);
+      setNotice("Направление создано.");
       await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось создать направление");
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось создать направление");
+    }finally{setPending(false);}
+  }
+
+  function openGroupModal() {
+    if(!programs.length||!trainers.length){
+      setError("Сначала создайте направление и добавьте тренера");
+      return;
     }
+    const program=programs[0]!;
+    setGroupProgramId(program.id);
+    setGroupTrainerId(trainers[0]?.id??"");
+    setGroupRoomId(rooms[0]?.id??"");
+    setGroupName(program.name+" · группа");
+    setGroupCapacity("14");
+    setGroupBreakEven("5");
+    setGroupDays([1,3]);
+    setGroupTime("18:00");
+    setGroupModal(true);
+  }
+
+  function toggleGroupDay(day:number){
+    setGroupDays((current)=>
+      current.includes(day)
+        ?current.filter((item)=>item!==day)
+        :[...current,day].sort((x,y)=>x-y)
+    );
   }
 
   async function createGroup() {
-    if (!programs.length || !trainers.length) {
-      setError("Нужны направление и тренер");
+    const program=programs.find((item)=>item.id===groupProgramId);
+    const trainer=trainers.find((item)=>item.id===groupTrainerId);
+    const capacity=Number(groupCapacity);
+    const breakEven=Number(groupBreakEven);
+    const [hours,minutes]=groupTime.split(":").map(Number);
+    const startMinute=hours*60+minutes;
+    if(!program||!trainer||!groupName.trim()){
+      setError("Выберите направление, тренера и название группы");
       return;
     }
-    const programList = programs.map((item, index) => `${index + 1}. ${item.name}`).join("\n");
-    const program = programs[Number(window.prompt("Направление:\n" + programList, "1")) - 1];
-    if (!program) return;
-
-    const trainerList = trainers.map((item, index) => `${index + 1}. ${item.name}`).join("\n");
-    const trainer = trainers[Number(window.prompt("Тренер:\n" + trainerList, "1")) - 1];
-    if (!trainer) return;
-
-    const roomList = rooms.map((item, index) => `${index + 1}. ${item.name}`).join("\n");
-    const roomRaw = roomList ? window.prompt("Зал:\n" + roomList, "1") : null;
-    const room = roomRaw ? rooms[Number(roomRaw) - 1] : undefined;
-
-    const name = window.prompt("Название группы", program.name + " · группа")?.trim();
-    if (!name) return;
-    const capacity = Number(window.prompt("Вместимость", "14") ?? "14");
-    const breakEven = Number(window.prompt("Точка безубыточности, учеников", "5") ?? "5");
-    const scheduleRaw =
-      window.prompt(
-        "Расписание через запятую: день=HH:MM. 1=Пн ... 7=Вс",
-        "1=18:00,3=18:00"
-      ) ?? "";
-    const schedule = scheduleRaw
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .map((item) => {
-        const [weekdayRaw, timeRaw] = item.split("=");
-        const weekday = Number(weekdayRaw);
-        const [hours, minutes] = String(timeRaw ?? "").split(":").map(Number);
-        return {
-          weekday,
-          startMinute: hours * 60 + minutes,
-          durationMinutes: program.default_duration_minutes
-        };
-      });
-    if (
-      !schedule.length ||
-      schedule.some(
-        (slot) =>
-          !Number.isInteger(slot.weekday) ||
-          slot.weekday < 1 ||
-          slot.weekday > 7 ||
-          !Number.isFinite(slot.startMinute) ||
-          slot.startMinute < 0 ||
-          slot.startMinute > 1439
-      )
-    ) {
-      setError("Некорректное недельное расписание");
+    if(
+      !Number.isSafeInteger(capacity)||capacity<1||capacity>500||
+      !Number.isSafeInteger(breakEven)||breakEven<1||breakEven>capacity||
+      !groupDays.length||!Number.isFinite(startMinute)||startMinute<0||startMinute>1439
+    ){
+      setError("Проверьте вместимость, break-even и расписание");
       return;
     }
-
-    try {
-      await apiRequest("/dance/groups", {
-        method: "POST",
-        body: JSON.stringify({
-          programId: program.id,
-          name,
-          trainerResourceId: trainer.id,
-          roomResourceId: room?.id,
+    setPending(true);setError("");setNotice("");
+    try{
+      await apiRequest("/dance/groups",{
+        method:"POST",
+        body:JSON.stringify({
+          programId:program.id,
+          name:groupName.trim(),
+          trainerResourceId:trainer.id,
+          roomResourceId:groupRoomId||undefined,
           capacity,
-          breakEvenMembers: breakEven,
-          schedule
+          breakEvenMembers:breakEven,
+          schedule:groupDays.map((weekday)=>({
+            weekday,
+            startMinute,
+            durationMinutes:program.default_duration_minutes
+          }))
         })
       });
+      setGroupModal(false);
+      setNotice("Группа создана. Добавьте учеников и создайте занятия.");
       await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось создать группу");
-    }
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось создать группу");
+    }finally{setPending(false);}
   }
 
   async function createGroupPackage() {
@@ -437,40 +469,42 @@ export default function DanceGroupsPage() {
     }
   }
 
+  function openMemberModal() {
+    if(!selectedGroup||!students.length){
+      setError("Нет выбранной группы или учеников");
+      return;
+    }
+    setMemberStudentId(students[0]?.id??"");
+    setMemberDiscount("0");
+    setMemberWaitlist(true);
+    setMemberModal(true);
+  }
+
   async function addMember() {
-    if (!selectedGroup || !students.length) return;
-    const list = students.map((item, index) => `${index + 1}. ${item.display_name}`).join("\n");
-    const student = students[Number(window.prompt("Ученик:\n" + list, "1")) - 1];
-    if (!student) return;
-    const allowWaitlist = window.confirm("Если группа заполнена — поставить в лист ожидания?");
-    const discountPercent = Number(
-      (window.prompt("Персональная/семейная скидка, %", "0") ?? "0")
-        .replace(",", ".")
-    );
-    if (
-      !Number.isFinite(discountPercent) ||
-      discountPercent < 0 ||
-      discountPercent > 100
-    ) {
+    if(!selectedGroup||!memberStudentId)return;
+    const discountPercent=Number(memberDiscount.replace(",","."));
+    if(!Number.isFinite(discountPercent)||discountPercent<0||discountPercent>100){
       setError("Скидка должна быть от 0 до 100%");
       return;
     }
-
-    try {
-      await apiRequest(`/dance/groups/${selectedGroup.id}/members`, {
-        method: "POST",
-        body: JSON.stringify({
-          studentId: student.id,
-          status: "ACTIVE",
-          discountBps: Math.round(discountPercent * 100),
-          allowWaitlist
+    setPending(true);setError("");setNotice("");
+    try{
+      await apiRequest(`/dance/groups/${selectedGroup.id}/members`,{
+        method:"POST",
+        body:JSON.stringify({
+          studentId:memberStudentId,
+          status:"ACTIVE",
+          discountBps:Math.round(discountPercent*100),
+          allowWaitlist:memberWaitlist
         })
       });
+      setMemberModal(false);
+      setNotice("Ученик добавлен в группу.");
       await load();
       await loadRoster(selectedGroup.id);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось добавить ученика");
-    }
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось добавить ученика");
+    }finally{setPending(false);}
   }
 
   async function syncRoster() {
@@ -539,26 +573,33 @@ export default function DanceGroupsPage() {
     }
   }
 
-  async function generateLessons() {
-    if (!selectedGroup) return;
-    const from = window.prompt("Создать занятия с", dateInput(0));
-    if (!from) return;
-    const to = window.prompt("По", dateInput(35));
-    if (!to) return;
+  function openGenerateModal() {
+    if(!selectedGroup)return;
+    setGenerateFrom(dateInput(0));
+    setGenerateTo(dateInput(35));
+    setGenerateModal(true);
+  }
 
-    setPending(true);
-    try {
-      const result = await apiRequest<{ created: unknown[]; skipped: unknown[] }>(
-        `/dance/groups/${selectedGroup.id}/lessons/generate`,
-        { method: "POST", body: JSON.stringify({ from, to }) }
-      );
-      window.alert(`Создано: ${result.created.length}, пропущено: ${result.skipped.length}`);
-      await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось создать серию занятий");
-    } finally {
-      setPending(false);
+  async function generateLessons() {
+    if(!selectedGroup)return;
+    if(!generateFrom||!generateTo||generateTo<generateFrom){
+      setError("Проверьте период создания занятий");
+      return;
     }
+    setPending(true);setError("");setNotice("");
+    try{
+      const result=await apiRequest<{created:unknown[];skipped:unknown[]}>(
+        `/dance/groups/${selectedGroup.id}/lessons/generate`,
+        {method:"POST",body:JSON.stringify({from:generateFrom,to:generateTo})}
+      );
+      setGenerateModal(false);
+      setNotice(
+        `Создано занятий: ${result.created.length}. Уже существовало/пропущено: ${result.skipped.length}.`
+      );
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось создать серию занятий");
+    }finally{setPending(false);}
   }
 
   function openLessonModal(
@@ -865,26 +906,28 @@ export default function DanceGroupsPage() {
   return (
     <main className="app-shell">
       <AppSidebar active="dance-groups" />
-      <section className="workspace workspace-wide">
-        <header className="workspace-header">
+      <section className="workspace workspace-wide studio-premium">
+        <header className="studio-hero compact">
           <div>
-            <p className="muted">Студия / Операции</p>
-            <h1>Группы и уроки</h1>
-            <p className="workspace-summary">
-              Постоянные группы, серии занятий, вместимость, waitlist и журнал посещаемости.
+            <span className="studio-eyebrow">Расписание и посещаемость</span>
+            <h1>Группы и занятия</h1>
+            <p>
+              Недельные группы, индивидуальные занятия, самостоятельная практика,
+              waitlist и журнал посещаемости.
             </p>
           </div>
-          <div className="header-actions">
-            <button className="secondary-button" onClick={() => void createProgram()} type="button">+ Направление</button>
-            <button className="secondary-button" onClick={() => void createGroup()} type="button">+ Группа</button>
-            <button className="secondary-button" onClick={() => openLessonModal("SELF_PRACTICE")} type="button">+ Самостоятельная практика</button>
-            <button onClick={() => openLessonModal("INDIVIDUAL")} type="button">+ Индивидуальное занятие</button>
+          <div className="studio-hero-actions">
+            <button className="secondary-button" onClick={openProgramModal} type="button">+ Направление</button>
+            <button className="secondary-button" onClick={openGroupModal} type="button">+ Группа</button>
+            <button className="secondary-button" onClick={() => openLessonModal("SELF_PRACTICE")} type="button">+ Практика</button>
+            <button onClick={() => openLessonModal("INDIVIDUAL")} type="button">+ Индивидуально</button>
           </div>
         </header>
 
         <DanceWorkspaceNav active="groups" />
 
-        {error ? <div className="inline-error"><strong>Группы</strong><span>{error}</span></div> : null}
+        {error ? <div className="studio-message error"><strong>Группы</strong><span>{error}</span></div> : null}
+        {notice ? <div className="studio-message success"><strong>Готово</strong><span>{notice}</span></div> : null}
 
         <section className="section-block">
           <div className="section-heading"><div><p className="muted">Постоянные группы</p><h2>Загрузка</h2></div></div>
@@ -913,10 +956,10 @@ export default function DanceGroupsPage() {
             <div className="section-heading">
               <div><p className="muted">Состав группы</p><h2>{selectedGroup.name}</h2></div>
               <div className="header-actions">
-                <button className="secondary-button" onClick={() => void addMember()} type="button">+ Ученик</button>
+                <button className="secondary-button" onClick={openMemberModal} type="button">+ Ученик</button>
                 <button className="secondary-button" onClick={() => void createGroupPackage()} type="button">+ Тариф группы</button>
                 <button className="secondary-button" disabled={pending} onClick={() => void syncRoster()} type="button">Синхронизировать состав</button>
-                <button disabled={pending} onClick={() => void generateLessons()} type="button">Создать занятия</button>
+                <button disabled={pending} onClick={openGenerateModal} type="button">Создать занятия</button>
               </div>
             </div>
             <div className="data-table-wrap">
@@ -1022,6 +1065,134 @@ export default function DanceGroupsPage() {
             </div>
           </section>
         ) : null}
+        {programModal ? (
+          <StudioModal
+            eyebrow="Направление"
+            title="Новое направление"
+            description="Направление связывает услугу, длительность и возраст. Затем внутри него создаются группы."
+            onClose={() => setProgramModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setProgramModal(false)}>Отмена</button>
+                <button disabled={pending} type="button" onClick={() => void createProgram()}>{pending ? "Сохраняем…" : "Создать"}</button>
+              </>
+            }
+          >
+            <label><span>Название</span><input autoFocus value={programName} onChange={(event)=>setProgramName(event.target.value)} /></label>
+            <label>
+              <span>Базовая услуга</span>
+              <select value={programServiceId} onChange={(event)=>setProgramServiceId(event.target.value)}>
+                <option value="">Выберите услугу</option>
+                {services.map((service)=><option key={service.id} value={service.id}>{service.name} · {service.duration_minutes} мин.</option>)}
+              </select>
+            </label>
+            <div className="studio-form-grid">
+              <label><span>Возраст от</span><input type="number" min="0" max="120" value={programMinAge} onChange={(event)=>setProgramMinAge(event.target.value)} /></label>
+              <label><span>Возраст до</span><input type="number" min="0" max="120" value={programMaxAge} onChange={(event)=>setProgramMaxAge(event.target.value)} /></label>
+            </div>
+          </StudioModal>
+        ) : null}
+
+        {groupModal ? (
+          <StudioModal
+            eyebrow="Постоянная группа"
+            title="Собрать группу"
+            description="Задайте тренера, зал, вместимость и обычные дни занятий. Серия уроков создаётся отдельно."
+            onClose={() => setGroupModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setGroupModal(false)}>Отмена</button>
+                <button disabled={pending} type="button" onClick={() => void createGroup()}>{pending ? "Сохраняем…" : "Создать группу"}</button>
+              </>
+            }
+          >
+            <div className="studio-form-grid">
+              <label>
+                <span>Направление</span>
+                <select
+                  value={groupProgramId}
+                  onChange={(event)=>{
+                    const id=event.target.value;
+                    setGroupProgramId(id);
+                    const program=programs.find((item)=>item.id===id);
+                    if(program)setGroupName(program.name+" · группа");
+                  }}
+                >
+                  {programs.map((program)=><option key={program.id} value={program.id}>{program.name}</option>)}
+                </select>
+              </label>
+              <label><span>Название группы</span><input value={groupName} onChange={(event)=>setGroupName(event.target.value)} /></label>
+            </div>
+            <div className="studio-form-grid">
+              <label><span>Тренер</span><select value={groupTrainerId} onChange={(event)=>setGroupTrainerId(event.target.value)}>{trainers.map((trainer)=><option key={trainer.id} value={trainer.id}>{trainer.name}</option>)}</select></label>
+              <label><span>Зал</span><select value={groupRoomId} onChange={(event)=>setGroupRoomId(event.target.value)}><option value="">Без зала</option>{rooms.map((room)=><option key={room.id} value={room.id}>{room.name}</option>)}</select></label>
+            </div>
+            <div className="studio-form-grid">
+              <label><span>Вместимость</span><input type="number" min="1" max="500" value={groupCapacity} onChange={(event)=>setGroupCapacity(event.target.value)} /></label>
+              <label><span>Break-even, учеников</span><input type="number" min="1" value={groupBreakEven} onChange={(event)=>setGroupBreakEven(event.target.value)} /></label>
+            </div>
+            <div className="studio-form-section">
+              <header><strong>Недельное расписание</strong><span>Выберите дни и обычное время начала.</span></header>
+              <fieldset className="studio-weekdays">
+                <legend>Дни недели</legend>
+                {[["1","Пн"],["2","Вт"],["3","Ср"],["4","Чт"],["5","Пт"],["6","Сб"],["7","Вс"]].map(([day,label]) => (
+                  <button
+                    key={day}
+                    type="button"
+                    className={groupDays.includes(Number(day)) ? "active" : ""}
+                    onClick={() => toggleGroupDay(Number(day))}
+                  >{label}</button>
+                ))}
+              </fieldset>
+              <label><span>Время начала</span><input type="time" value={groupTime} onChange={(event)=>setGroupTime(event.target.value)} /></label>
+            </div>
+          </StudioModal>
+        ) : null}
+
+        {memberModal && selectedGroup ? (
+          <StudioModal
+            eyebrow="Состав группы"
+            title="Добавить ученика"
+            description="Если мест не останется, ученик автоматически попадёт в waitlist с сохранением скидки."
+            onClose={() => setMemberModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setMemberModal(false)}>Отмена</button>
+                <button disabled={pending} type="button" onClick={() => void addMember()}>{pending ? "Добавляем…" : "Добавить"}</button>
+              </>
+            }
+          >
+            <label><span>Ученик</span><select value={memberStudentId} onChange={(event)=>setMemberStudentId(event.target.value)}>{students.map((student)=><option key={student.id} value={student.id}>{student.display_name}</option>)}</select></label>
+            <div className="studio-form-grid">
+              <label><span>Персональная скидка, %</span><input inputMode="decimal" value={memberDiscount} onChange={(event)=>setMemberDiscount(event.target.value)} /></label>
+              <label className="studio-check-row">
+                <input type="checkbox" checked={memberWaitlist} onChange={(event)=>setMemberWaitlist(event.target.checked)} />
+                <span>Если группа заполнена — поставить в лист ожидания</span>
+              </label>
+            </div>
+          </StudioModal>
+        ) : null}
+
+        {generateModal && selectedGroup ? (
+          <StudioModal
+            eyebrow="Серия занятий"
+            title={"Создать уроки · " + selectedGroup.name}
+            description="CoreBiz создаст занятия только по недельному расписанию группы и пропустит уже существующие даты."
+            onClose={() => setGenerateModal(false)}
+            footer={
+              <>
+                <button className="secondary-button" type="button" onClick={() => setGenerateModal(false)}>Отмена</button>
+                <button disabled={pending} type="button" onClick={() => void generateLessons()}>{pending ? "Создаём…" : "Создать занятия"}</button>
+              </>
+            }
+          >
+            <div className="studio-form-grid">
+              <label><span>С даты</span><input type="date" value={generateFrom} onChange={(event)=>setGenerateFrom(event.target.value)} /></label>
+              <label><span>По дату</span><input type="date" value={generateTo} onChange={(event)=>setGenerateTo(event.target.value)} /></label>
+            </div>
+          </StudioModal>
+        ) : null}
+
         {lessonModal ? (
           <StudioModal
             eyebrow={lessonModal === "SELF_PRACTICE" ? "Зал без тренера" : "Персональное занятие"}
