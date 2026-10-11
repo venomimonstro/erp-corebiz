@@ -60,6 +60,16 @@ type SiteDomain = {
   activated_at: string | null;
 };
 
+type StoreReadiness = {
+  siteId: string;
+  publicUrl: string;
+  primaryDomain: string | null;
+  canTestOrders: boolean;
+  canLaunchWithOnlinePayments: boolean;
+  checks: Array<{ code: string; title: string; done: boolean; action: string }>;
+  externalBlockers: string[];
+};
+
 type Editor = {
   page: Page & {
     site_id: string;
@@ -126,6 +136,21 @@ export default function SitesPage() {
   const [ogImage, setOgImage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [readiness, setReadiness] = useState<StoreReadiness | null>(null);
+  const [readinessError, setReadinessError] = useState("");
+
+  const loadReadiness = useCallback(async (id: string) => {
+    try {
+      const report = await apiRequest<StoreReadiness>(
+        "/storefront/site/" + id + "/readiness"
+      );
+      setReadiness(report);
+      setReadinessError("");
+    } catch (cause) {
+      setReadiness(null);
+      setReadinessError(cause instanceof Error ? cause.message : "Не удалось проверить готовность магазина");
+    }
+  }, []);
 
   const loadSites = useCallback(async () => {
     try {
@@ -152,6 +177,11 @@ export default function SitesPage() {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить страницы");
     }
   }, []);
+
+  useEffect(() => {
+    setReadiness(null);
+    if (siteId) void loadReadiness(siteId);
+  }, [siteId, loadReadiness]);
 
   useEffect(() => {
     void loadPages(siteId);
@@ -182,8 +212,11 @@ export default function SitesPage() {
       });
   }, [siteId, loadPages]);
 
-  async function createSite() {
-    const name = window.prompt("Название сайта", "Основной сайт");
+  async function createSite(template: "WEBSITE" | "STORE" = "WEBSITE") {
+    const name = window.prompt(
+      template === "STORE" ? "Название интернет-магазина" : "Название сайта",
+      template === "STORE" ? "Мой интернет-магазин" : "Основной сайт"
+    );
     if (!name?.trim()) return;
 
     const suggested = name
@@ -203,6 +236,7 @@ export default function SitesPage() {
         method: "POST",
         body: JSON.stringify({
           name: name.trim(),
+          template,
           publicSlug: publicSlug?.trim() || undefined
         })
       });
@@ -210,6 +244,7 @@ export default function SitesPage() {
       setSiteId(created.id);
       await loadPages(created.id);
       await openPage(created.pageId);
+      await loadReadiness(created.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось создать сайт");
     }
@@ -226,6 +261,7 @@ export default function SitesPage() {
         })
       });
       window.alert("Интернет-магазин включён. Добавьте блок «Товары» или «Каталог» и опубликуйте страницу.");
+      await loadReadiness(siteId);
       setError("");
     } catch (cause) {
       setError(
@@ -429,6 +465,7 @@ export default function SitesPage() {
       setDomains(
         await apiRequest<SiteDomain[]>("/site-domains/site/" + siteId)
       );
+      await loadReadiness(siteId);
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось активировать домен");
@@ -639,6 +676,7 @@ export default function SitesPage() {
         { method: "POST" }
       );
       await loadPages(siteId);
+      await loadReadiness(siteId);
       window.open(result.publicUrl, "_blank", "noopener,noreferrer");
       await openPage(editor.page.id);
     } catch (cause) {
@@ -668,8 +706,11 @@ export default function SitesPage() {
           </div>
 
           <div className="header-actions">
-            <button className="secondary-button" onClick={() => void createSite()}>
+            <button className="secondary-button" onClick={() => void createSite("WEBSITE")}>
               + Сайт
+            </button>
+            <button onClick={() => void createSite("STORE")}>
+              + Интернет-магазин
             </button>
             <button onClick={() => void createPage()} disabled={!siteId}>
               + Страница
@@ -682,6 +723,50 @@ export default function SitesPage() {
             <strong>Конструктор</strong>
             <span>{error}</span>
           </div>
+        ) : null}
+
+        {selectedSite ? (
+          <section className="store-launch">
+            <div className="store-launch-top">
+              <div>
+                <span className="muted">COREBIZ · ЗАПУСК ПРОДАЖ</span>
+                <h2>Готовность магазина</h2>
+                <p>Товары и заказы связаны с ERP. Перед публичным запуском проверьте все этапы.</p>
+              </div>
+              <div className="store-launch-top-actions">
+                <a href={readiness?.publicUrl ?? "/s/" + selectedSite.public_slug}
+                  target="_blank" rel="noreferrer" className="secondary-button">Предпросмотр ↗</a>
+                <button className="secondary-button" onClick={() => void loadReadiness(siteId)}>
+                  Обновить проверку
+                </button>
+              </div>
+            </div>
+            {readinessError ? <p role="alert" className="inline-error">{readinessError}</p> : null}
+            {readiness ? (
+              <>
+                <div className="store-launch-progress">
+                  <strong>{readiness.checks.filter(check => check.done).length} из {readiness.checks.length} шагов</strong>
+                  <span>{readiness.canTestOrders ? "Можно проверять тестовые заказы" :
+                    "Для тестовых заказов выполните обязательные шаги"}</span>
+                </div>
+                <div className="store-launch-checks">
+                  {readiness.checks.map(check => (
+                    <div key={check.code} className={check.done ? "store-launch-done" : "store-launch-todo"}>
+                      <strong>{check.done ? "✓" : "○"} {check.title}</strong>
+                      {!check.done ? <small>{check.action}</small> : null}
+                    </div>
+                  ))}
+                </div>
+                <div className="store-launch-warning">
+                  <strong>Публичный запуск с оплатой пока заблокирован</strong>
+                  <p>Оформление заказа в ERP не означает, что покупатель оплатил товар.</p>
+                  <ul>
+                    {readiness.externalBlockers.map(blocker => <li key={blocker}>{blocker}</li>)}
+                  </ul>
+                </div>
+              </>
+            ) : !readinessError ? <p>Проверяем каталог, публикацию и домен…</p> : null}
+          </section>
         ) : null}
 
         <div className="site-builder-layout">
