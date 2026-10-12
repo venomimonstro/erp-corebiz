@@ -61,8 +61,17 @@ export class CdekGateway{
       fromCityCode:number;toCityCode:number;
       recipientName:string;recipientPhone:string;
       weightGrams:number;lengthCm:number;widthCm:number;heightCm:number;
+      items:Array<{name:string;wareKey:string;cost:string;amount:number}>;
     }
   ):Promise<{uuid:string;requestState:string}>{
+    if(!Array.isArray(input.items)||input.items.length===0||
+       input.items.length>126||
+       !input.items.every(x=>
+         typeof x.name==="string"&&x.name.length>0&&x.name.length<=255&&
+         typeof x.wareKey==="string"&&x.wareKey.length>0&&x.wareKey.length<=80&&
+         Number.isSafeInteger(x.amount)&&x.amount>0&&x.amount<=10000&&
+         /^\d{1,10}\.\d{2}$/.test(x.cost)))
+      throw new BadGatewayException("СДЭК: отсутствуют действительные позиции товаров");
     const token=await this.token(cred,env);
     const data=await providerRequest<{
       entity?:{uuid?:string};
@@ -77,7 +86,11 @@ export class CdekGateway{
       recipient:{name:input.recipientName,
         phones:[{number:input.recipientPhone}]},
       packages:[{number:"1",weight:input.weightGrams,
-        length:input.lengthCm,width:input.widthCm,height:input.heightCm}]
+        length:input.lengthCm,width:input.widthCm,height:input.heightCm,
+        items:input.items.map(item=>({
+          name:item.name,ware_key:item.wareKey,cost:Number(item.cost),
+          amount:item.amount,payment:{value:0}
+        }))}]
     }));
     const uuid=data.entity?.uuid;
     const request=data.requests?.[0]?.state;
