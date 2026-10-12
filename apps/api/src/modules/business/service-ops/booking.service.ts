@@ -2395,26 +2395,64 @@ export class BookingService {
     return this.database.withTenantTransaction(context, async (client) => {
       if (input.idempotencyKey) {
         const existing = await client.query<{
-          id: string;
-          business_number: string;
-          version: number;
+          id:string;business_number:string;version:number;
+          service_id:string;starts_at:Date;party_id:string|null;
+          asset_id:string|null;branch_id:string|null;
+          delivery_format_snapshot:string;source:string;notes:string|null;
         }>(
-          `SELECT id,business_number,version
+          `SELECT id,business_number,version,service_id,starts_at,
+                  party_id,asset_id,branch_id,delivery_format_snapshot,
+                  source,notes
            FROM service_booking
            WHERE tenant_id=$1 AND idempotency_key=$2`,
           [context.tenantId, input.idempotencyKey.trim()]
         );
-        if (existing.rows[0]) {
+        const prior=existing.rows[0];
+        if(prior){
           await this.assertBookingAccess(
-            client,
-            context.tenantId,
-            existing.rows[0].id,
-            scopedMembershipIds
+            client,context.tenantId,prior.id,scopedMembershipIds
           );
+          // Reusing an idempotency key for a DIFFERENT appointment must
+          // not return the old booking as if the new one were confirmed.
+          // Compare immutable request fields and allocated resource IDs.
+          const priorResources=await client.query<{resource_id:string;
+            capacity_units:number;zone_id:string|null}>(
+            `SELECT resource_id,capacity_units,zone_id
+             FROM service_booking_resource
+             WHERE tenant_id=$1 AND booking_id=$2
+             ORDER BY resource_id`,
+            [context.tenantId,prior.id]
+          );
+          const expectedAllocations=[...rawAllocations].sort(
+            (x,y)=>x.resourceId.localeCompare(y.resourceId)
+          );
+          const sameResources=priorResources.rows.length===expectedAllocations.length &&
+            priorResources.rows.every((resource,index)=>{
+              const expected=expectedAllocations[index];
+              return resource.resource_id===expected?.resourceId &&
+                (!expected.zoneId||resource.zone_id===expected.zoneId) &&
+                (expected.capacityUnits===1||resource.capacity_units===expected.capacityUnits);
+            });
+          if(
+            prior.service_id!==input.serviceId ||
+            new Date(prior.starts_at).getTime()!==startsAt.getTime() ||
+            prior.asset_id!==(input.assetId??null) ||
+            prior.branch_id!==(input.branchId??null) ||
+            prior.source!==(input.source??"MANUAL") ||
+            (input.deliveryFormat!==undefined &&
+              prior.delivery_format_snapshot!==input.deliveryFormat) ||
+            (input.partyId!==undefined && prior.party_id!==input.partyId) ||
+            prior.notes!==(input.notes?.trim()||null) ||
+            !sameResources
+          ){
+            throw new ConflictException(
+              "Ключ идемпотентности уже использован для другой записи"
+            );
+          }
           return {
-            id: existing.rows[0].id,
-            number: existing.rows[0].business_number,
-            version: existing.rows[0].version
+            id:prior.id,
+            number:prior.business_number,
+            version:prior.version
           };
         }
       }
