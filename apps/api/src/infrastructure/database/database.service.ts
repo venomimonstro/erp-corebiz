@@ -33,6 +33,15 @@ export class DatabaseService implements OnModuleDestroy {
     return value;
   }
 
+  constructor() {
+    // node-postgres emits "error" for disconnected IDLE pool clients.
+    // Without a listener EventEmitter would crash the entire API process.
+    // The pool evicts that connection; never log credentials/connection strings.
+    this.pool.on("error", () => {
+      console.error("[corebiz-postgres] idle client disconnected; pool recovering");
+    });
+  }
+
   async query<T extends QueryResultRow = QueryResultRow>(
     text: string,
     values: readonly unknown[] = []
@@ -45,6 +54,7 @@ export class DatabaseService implements OnModuleDestroy {
   ): Promise<T> {
     const client = await this.pool.connect();
 
+    let discardConnection = false;
     try {
       await client.query("BEGIN");
       // Bound waiting and abandoned transactions under concurrent tenant load.
@@ -56,10 +66,22 @@ export class DatabaseService implements OnModuleDestroy {
       await client.query("COMMIT");
       return result;
     } catch (error) {
-      await client.query("ROLLBACK");
+      // A broken connection must not return to the idle pool. ROLLBACK may
+      // also fail, but must never conceal the original database exception.
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        discardConnection = true;
+      }
+      if(error && typeof error === "object" && "code" in error) {
+        const code = String(error.code);
+        if(code.startsWith("08") || code === "57P01" ||
+           code === "ECONNRESET" || code === "EPIPE")
+          discardConnection = true;
+      }
       throw error;
     } finally {
-      client.release();
+      client.release(discardConnection);
     }
   }
 
