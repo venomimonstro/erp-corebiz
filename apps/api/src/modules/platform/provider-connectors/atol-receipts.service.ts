@@ -33,6 +33,8 @@ function vatFor(type:string,totalMinor:bigint){
 
 function buildReceipt(input:{
   id:string;amountMinor:string;email:string;company:Company;
+  operation?:"prepayment"|"settlement"|"refund_prepayment"|"refund_settlement";
+  refundId?:string;
   lines:Array<{description:string;quantity_milli:string;line_total_minor:string}>;
 }):Record<string,unknown>{
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email)||
@@ -40,6 +42,7 @@ function buildReceipt(input:{
     throw new ConflictException("Email покупателя не подходит для ФФД 1.2");
   if(input.lines.length===0||input.lines.length>100)
     throw new ConflictException("Количество позиций для АТОЛ вне допустимого диапазона");
+  const mode=input.operation??"prepayment";
   let summed=0n;
   const items=input.lines.map(line=>{
     const count=BigInt(line.quantity_milli);
@@ -57,8 +60,10 @@ function buildReceipt(input:{
       quantity:Number(count/1000n),
       measure:0,
       sum:Number(minorToMoney(cents.toString())),
-      payment_method:"full_prepayment",
-      payment_object:line.description.toLowerCase().startsWith("доставка:")?4:1,
+      payment_method:mode==="settlement"||mode==="refund_settlement"
+        ?"full_payment":"full_prepayment",
+      payment_object:mode==="prepayment"||mode==="refund_prepayment"
+        ?10:line.description.toLowerCase().startsWith("доставка:")?4:1,
       vat:vatFor(input.company.vatType,cents)
     };
   });
@@ -69,7 +74,10 @@ function buildReceipt(input:{
     hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"
   }).format(new Date()).replace(", "," ");
   return {
-    external_id:"corebiz_"+input.id+"_prepayment",
+    external_id:mode==="prepayment"?
+      "corebiz_"+input.id+"_prepayment":
+      mode==="settlement"?"corebiz_"+input.id+"_settlement":
+      "corebiz_"+input.id+"_refund_"+input.refundId,
     timestamp,
     receipt:{
       client:{email:input.email},
@@ -78,7 +86,8 @@ function buildReceipt(input:{
         inn:input.company.inn,payment_address:input.company.paymentAddress
       },
       items,
-      payments:[{type:1,sum:Number(minorToMoney(summed.toString()))}],
+      payments:[{type:mode==="settlement"?2:1,
+        sum:Number(minorToMoney(summed.toString()))}],
       total:Number(minorToMoney(summed.toString())),
       internet:true
     }
