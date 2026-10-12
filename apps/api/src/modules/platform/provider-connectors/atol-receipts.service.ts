@@ -387,11 +387,18 @@ export class AtolReceiptsService implements OnModuleInit,OnModuleDestroy{
     try{
       const creds=JSON.parse(openMerchantSecret(claim.encrypted)) as AtolCredentials;
       const result=await this.atol.registerSell(creds,claim.environment,claim.receipt!);
-      await this.db.withTenantTransaction(ctx,async client=>client.query(
-        "UPDATE commerce_fiscal_document SET state='WAIT',provider_uuid=$3,"+
-        "submitted_at=now(),updated_at=now(),last_error_code=NULL "+
-        "WHERE tenant_id=$1 AND id=$2 AND state='SENDING'",
-        [ctx.tenantId,claim.documentId,result.uuid]));
+      await this.db.withTenantTransaction(ctx,async client=>{
+        const saved=await client.query(
+          "UPDATE commerce_fiscal_document SET state='WAIT',provider_uuid=$3,"+
+          "submitted_at=now(),updated_at=now(),last_error_code=NULL "+
+          "WHERE tenant_id=$1 AND id=$2 AND state='SENDING'",
+          [ctx.tenantId,claim.documentId,result.uuid]);
+        if(!saved.rowCount)throw new ConflictException("Фискальный документ изменён");
+        await client.query(
+          "INSERT INTO commerce_fiscal_reconcile_task(tenant_id,document_id) "+
+          "VALUES($1,$2) ON CONFLICT(tenant_id,document_id) DO NOTHING",
+          [ctx.tenantId,claim.documentId]);
+      });
       return {documentId:claim.documentId,state:"WAIT",providerUuid:result.uuid};
     }catch{
       // The POST might have succeeded before the response was lost.
@@ -648,12 +655,18 @@ export class AtolReceiptsService implements OnModuleInit,OnModuleDestroy{
         credentials,claim.environment,claim.receipt!,
         operation==="sell_refund"?"sell_refund":"sell"
       );
-      await this.db.withTenantTransaction(ctx,async client=>client.query(
-        "UPDATE commerce_fiscal_document SET state='WAIT',provider_uuid=$3,"+
-        "submitted_at=now(),updated_at=now(),last_error_code=NULL "+
-        "WHERE tenant_id=$1 AND id=$2 AND state='SENDING'",
-        [ctx.tenantId,claim.documentId,provider.uuid]
-      ));
+      await this.db.withTenantTransaction(ctx,async client=>{
+        const saved=await client.query(
+          "UPDATE commerce_fiscal_document SET state='WAIT',provider_uuid=$3,"+
+          "submitted_at=now(),updated_at=now(),last_error_code=NULL "+
+          "WHERE tenant_id=$1 AND id=$2 AND state='SENDING'",
+          [ctx.tenantId,claim.documentId,provider.uuid]);
+        if(!saved.rowCount)throw new ConflictException("Фискальный документ изменён");
+        await client.query(
+          "INSERT INTO commerce_fiscal_reconcile_task(tenant_id,document_id) "+
+          "VALUES($1,$2) ON CONFLICT(tenant_id,document_id) DO NOTHING",
+          [ctx.tenantId,claim.documentId]);
+      });
       return {documentId:claim.documentId,state:"WAIT",providerUuid:provider.uuid};
     }catch{
       await this.db.withTenantTransaction(ctx,async client=>client.query(
@@ -722,7 +735,27 @@ export class AtolReceiptsService implements OnModuleInit,OnModuleDestroy{
         [ctx.tenantId,siteId,documentId,receiptUuid,status.state,
           status.fnNumber??null,status.documentNumber??null,
           status.fiscalSign??null,status.receiptUrl??null]);
-      if(!update.rowCount)throw new ConflictException("Документ изменён, повторите сверку");
+      if(!update.rowCount){
+        const last=await client.query<{state:string}>(
+          "SELECT state FROM commerce_fiscal_document WHERE tenant_id=$1 AND id=$2",
+          [ctx.tenantId,documentId]);
+        if(last.rows[0]?.state!=="DONE")
+          throw new ConflictException("Документ изменён, повторите сверку");
+        return;
+      }
+      // A manually recovered UNKNOWN gains a safe GET-only poll task;
+      // final documents are removed from the due queue.
+      await client.query(
+        "INSERT INTO commerce_fiscal_reconcile_task(tenant_id,document_id,state) "+
+        "VALUES($1,$2,$3) ON CONFLICT(tenant_id,document_id) DO NOTHING",
+        [ctx.tenantId,documentId,status.state==="WAIT"?"DUE":"DONE"]);
+      if(status.state!=="WAIT"){
+        await client.query(
+          "UPDATE commerce_fiscal_reconcile_task SET state='DONE',"+
+          "lease_id=NULL,lease_until=NULL,last_error_code=NULL,updated_at=now() "+
+          "WHERE tenant_id=$1 AND document_id=$2",
+          [ctx.tenantId,documentId]);
+      }
       if(status.state==="DONE"){
         if(row.operation==="sell"){
           await client.query(
