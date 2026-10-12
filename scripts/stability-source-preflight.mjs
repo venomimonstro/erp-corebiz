@@ -203,6 +203,46 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"apps/api/src/infrastructure/database/database.service.ts",
+      patterns:[/pool\.on\("error"/,/client\.release\(discardConnection\)/,
+        /SET LOCAL lock_timeout/],
+      message:"Postgres idle disconnect or failed rollback may crash API"
+    },
+    {
+      path:"apps/api/src/modules/platform/auth/auth.service.ts",
+      patterns:[/SESSION_TOUCH_INTERVAL_MS/,/sessionTouchAt/,
+        /corebiz_auth_resolve_session/],
+      message:"Session last-seen updates can overwhelm PostgreSQL under load"
+    },
+    {
+      path:"apps/api/src/modules/platform/auth/auth-rate-limit.service.ts",
+      patterns:[/this\.key\("login-ip"/,/ipCount > 100/,
+        /this\.key\("login"/],
+      message:"Password hashing can be exhausted by rotating login emails"
+    },
+    {
+      path:"infrastructure/postgres/245_outbox_rls_recovery.sql",
+      patterns:[/ALTER TABLE domain_event_outbox ENABLE ROW LEVEL SECURITY/,
+        /SECURITY DEFINER/,/FOR UPDATE OF e SKIP LOCKED/,
+        /locked_at<now\(\)-interval '15 minutes'/,
+        /REVOKE ALL ON FUNCTION corebiz_claim_domain_event\(\) FROM PUBLIC/],
+      message:"Worker outbox missing tenant RLS or crash-safe recovery"
+    },
+    {
+      path:"apps/worker/src/main.ts",
+      patterns:[/pool\.on\("error"/,
+        /corebiz_claim_domain_event/,/locked_at=\$3 FOR UPDATE/,
+        /SELECT set_config\('app\.tenant_id'/],
+      message:"Worker must fence leases, honor RLS and survive idle socket errors"
+    },
+    {
+      path:"scripts/worker-outbox-release-gate.sql",
+      patterns:[/OUTBOX_RELEASE_BLOCKED/,/domain_event_outbox/,
+        /relrowsecurity/],
+      message:"Stuck workflow events cannot be ignored at release"
+    },
+
+    {
       path:"infrastructure/postgres/244_single_carrier_per_order.sql",
       patterns:[/CREATE FUNCTION corebiz_one_carrier_per_sales_order/,
         /FOR UPDATE/,/BEFORE INSERT OR UPDATE OF tenant_id,sales_order_id/,
