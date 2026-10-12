@@ -150,7 +150,8 @@ echo "[production-gate] 4/13 API business journey"
 node scripts/smoke-user-journey.mjs
 pass_step "API:INTEGRATION"
 
-echo "[production-gate] 5/13 golden vertical business journeys"
+echo "[production-gate] 5/13 owner first-day + golden vertical business journeys"
+node scripts/owner-first-day-journey.mjs
 node scripts/golden-business-journeys.mjs
 
 echo "[production-gate] 6/13 100-user business contention simulation"
