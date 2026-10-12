@@ -235,17 +235,19 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
       if(selectedProvider==="ATOL_ONLINE" && input.enabled){
         if(process.env.COREBIZ_ATOL_RECEIPTS_ENABLED!=="true")
           throw new ConflictException("Сначала включите проверенный контур чеков АТОЛ");
-        const verified=await client.query(
-          `SELECT 1 FROM commerce_provider_connection
+        const verified=await client.query<{environment:string}>(
+          `SELECT environment FROM commerce_provider_connection
            WHERE tenant_id=$1 AND site_id=$2 AND provider='ATOL_ONLINE'
              AND enabled AND state='VERIFIED'
-             AND (environment='SANDBOX'
-               OR $3='true') LIMIT 1`,
-          [context.tenantId,siteId,
-            process.env.COREBIZ_ATOL_PRODUCTION_RECEIPTS_ENABLED??"false"]);
-        if(!verified.rowCount)throw new ConflictException(
-          "Для чеков через АТОЛ нужно подтвердить настройки кассы"
-        );
+             LIMIT 1`,[context.tenantId,siteId]);
+        const env=verified.rows[0]?.environment;
+        if(!env||
+           (process.env.NODE_ENV==="production"&&env!=="PRODUCTION")||
+           (env==="PRODUCTION"&&
+             process.env.COREBIZ_ATOL_PRODUCTION_RECEIPTS_ENABLED!=="true"))
+          throw new ConflictException(
+            "Нужна подтверждённая касса АТОЛ: рабочий контур в production, тестовый только на staging"
+          );
       }
       if(old.rows[0]&&old.rows[0].fiscal_provider!==selectedProvider){
         const stillActive=await client.query(
@@ -510,9 +512,23 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
           "Эквайринг и фискализация магазина не настроены"
         );
         const fiscalProvider=merchant.rows[0].fiscal_provider;
-        if(fiscalProvider==="ATOL_ONLINE" &&
-           process.env.COREBIZ_ATOL_RECEIPTS_ENABLED!=="true")
-          throw new ConflictException("Кассовый провайдер АТОЛ не готов");
+        if(fiscalProvider==="ATOL_ONLINE"){
+          if(process.env.COREBIZ_ATOL_RECEIPTS_ENABLED!=="true")
+            throw new ConflictException("Кассовый провайдер АТОЛ не готов");
+          const readiness=await client.query<{environment:string}>(
+            `SELECT environment FROM commerce_provider_connection
+             WHERE tenant_id=$1 AND site_id=$2 AND provider='ATOL_ONLINE'
+               AND state='VERIFIED' AND enabled LIMIT 1`,
+            [cart.tenant_id,cart.site_id]);
+          const env=readiness.rows[0]?.environment;
+          if(!env||
+             (process.env.NODE_ENV==="production"&&env!=="PRODUCTION")||
+             (env==="PRODUCTION"&&
+               process.env.COREBIZ_ATOL_PRODUCTION_RECEIPTS_ENABLED!=="true"))
+            throw new ConflictException(
+              "Рабочую оплату нельзя принимать с тестовым или неподтверждённым АТОЛ"
+            );
+        }
         const id=randomUUID();
         const inserted=await client.query<Intent>(
           `INSERT INTO commerce_payment_intent(
