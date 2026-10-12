@@ -7,12 +7,14 @@ import {createHash} from "node:crypto";
 import {DatabaseService} from "../../../infrastructure/database/database.service";
 import {AuthorizationService} from "../authorization/authorization.service";
 import {openMerchantSecret,sealMerchantSecret} from "../payments/yookassa.gateway";
+import {RussianPostGateway,validRussianPostCredentials,
+  type RussianPostCredentials} from "./russian-post.gateway";
 import {
   AtolOnlineGateway,CdekGateway,type ProviderEnvironment,
   type AtolCredentials,type CdekCredentials
 } from "./merchant-gateways";
 
-type Provider="CDEK"|"ATOL_ONLINE";
+type Provider="CDEK"|"ATOL_ONLINE"|"POCHTA_RUSSIA";
 type Connection={
   id:string;tenant_id:string;site_id:string;provider:Provider;
   environment:ProviderEnvironment;encrypted_credentials:string;
@@ -25,6 +27,7 @@ const validUuid=(x:unknown):x is string=>
 export class MerchantConnectorService{
   private readonly cdek=new CdekGateway();
   private readonly atol=new AtolOnlineGateway();
+  private readonly post=new RussianPostGateway();
   constructor(
     private readonly db:DatabaseService,
     private readonly auth:AuthorizationService
@@ -39,8 +42,8 @@ export class MerchantConnectorService{
   }
 
   private validateProvider(input:unknown):Provider{
-    if(input!=="CDEK"&&input!=="ATOL_ONLINE")
-      throw new BadRequestException("Пока доступны СДЭК v2 и АТОЛ Онлайн v5");
+    if(input!=="CDEK"&&input!=="ATOL_ONLINE"&&input!=="POCHTA_RUSSIA")
+      throw new BadRequestException("Неизвестный провайдер доставки или фискализации");
     return input;
   }
   private validateSite(id:unknown):string{
@@ -66,6 +69,7 @@ export class MerchantConnectorService{
   async configure(ctx:TenantContext,siteId:string,body:{
     provider:Provider;environment:ProviderEnvironment;
     credentials:Record<string,unknown>;fromCityCode?:number;
+    fromPostcode?:string;
     fiscalCompany?:{
       inn:string;email:string;sno:string;paymentAddress:string;
       vatType:string
@@ -79,7 +83,7 @@ export class MerchantConnectorService{
     if(!body.credentials||typeof body.credentials!=="object" ||
        Array.isArray(body.credentials))
       throw new BadRequestException("Укажите реквизиты подключения");
-    let credentials:CdekCredentials|AtolCredentials;
+    let credentials:CdekCredentials|AtolCredentials|RussianPostCredentials;
     let config:Record<string,unknown>={};
     if(provider==="CDEK"){
       const {clientId,clientSecret}=body.credentials;
@@ -92,6 +96,18 @@ export class MerchantConnectorService{
         throw new BadRequestException("Требуется код города отправления СДЭК");
       credentials={clientId,clientSecret};
       config={fromCityCode:body.fromCityCode};
+    }else if(provider==="POCHTA_RUSSIA"){
+      if(body.environment!=="PRODUCTION")
+        throw new BadRequestException(
+          "API Почты России «Отправка» работает в рабочем контуре; тестовая имитация не поддерживается"
+        );
+      const postcode=body.fromPostcode;
+      if(typeof postcode!=="string"||!/^[0-9]{6}$/.test(postcode))
+        throw new BadRequestException("Укажите индекс места отправления: шесть цифр");
+      if(!validRussianPostCredentials(body.credentials))
+        throw new BadRequestException("Токен приложения и ключ пользователя Почты России некорректны");
+      credentials=body.credentials;
+      config={fromPostcode:postcode};
     }else{
       const {login,password,groupCode}=body.credentials;
       if(typeof login!=="string"||typeof password!=="string"||
@@ -171,16 +187,32 @@ export class MerchantConnectorService{
       return result.rows[0]??null;
     });
   }
-  async verify(ctx:TenantContext,siteId:string,providerInput:unknown){
+  async verify(ctx:TenantContext,siteId:string,providerInput:unknown,
+    postCheck?:{toPostcode:string;massGrams:number}){
     await this.requireAll(ctx,"sites.manage");
     this.validateSite(siteId);const provider=this.validateProvider(providerInput);
     const conn=await this.connection(ctx,siteId,provider);
     if(!conn)throw new NotFoundException("Сначала сохраните реквизиты");
     const secret=JSON.parse(openMerchantSecret(conn.encrypted_credentials)) as
-      CdekCredentials & AtolCredentials;
+      CdekCredentials & AtolCredentials & RussianPostCredentials;
     try{
-      if(provider==="CDEK")await this.cdek.token(secret,conn.environment);
-      else await this.atol.verify(secret,conn.environment);
+      if(provider==="CDEK"){
+        await this.cdek.token(secret,conn.environment);
+      }else if(provider==="ATOL_ONLINE"){
+        await this.atol.verify(secret,conn.environment);
+      }else{
+        const origin=conn.public_config?.fromPostcode;
+        if(typeof origin!=="string"||!/^[0-9]{6}$/.test(origin)||
+          !postCheck||typeof postCheck.toPostcode!=="string"||
+          !/^[0-9]{6}$/.test(postCheck.toPostcode)||
+          !Number.isSafeInteger(postCheck.massGrams)||
+          postCheck.massGrams<1||postCheck.massGrams>20000)
+          throw new BadRequestException(
+            "Для проверки API Почты России укажите индекс назначения и вес 1–20000 г"
+          );
+        await this.post.tariff(secret,{fromPostcode:origin,
+          toPostcode:postCheck.toPostcode,massGrams:postCheck.massGrams});
+      }
       const committed=await this.db.withTenantTransaction(ctx,async client=>
         client.query(
           `UPDATE commerce_provider_connection
@@ -195,7 +227,9 @@ export class MerchantConnectorService{
       return {provider,environment:conn.environment,state:"VERIFIED",
         note:provider==="ATOL_ONLINE"
           ?"Авторизация АТОЛ подтверждена; настоящие фискальные чеки ещё не испытаны."
-          :"СДЭК авторизовал API-ключ. Расчёт и создание реальных отправлений проверяются отдельно."};
+          :provider==="CDEK"
+          ?"СДЭК авторизовал API-ключ. Расчёт и создание реальных отправлений проверяются отдельно."
+          :"Почта России подтвердила тариф; это ещё не создание посылки или ярлыка."};
     }catch{
       await this.db.withTenantTransaction(ctx,async client=>
         client.query(
