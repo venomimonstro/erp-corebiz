@@ -112,12 +112,19 @@ export default function ServiceDeskPage(){
   const from=useMemo(()=>weekStart(weekOffset),[weekOffset]);
   const end=useMemo(()=>{const d=new Date(from);d.setDate(d.getDate()+7);return d;},[from]);
   const staff=useMemo(()=>resources.filter(isStaff),[resources]);
-  const filtered=useMemo(()=>visits.filter(v=>!staffFilter||v.resources.some(r=>r.resourceId===staffFilter)),[visits,staffFilter]);
   const zoneForVisit=(visit:Visit)=>{
     const resourceId=visit.resources.find(x=>x.type==="EMPLOYEE")?.resourceId
       ??visit.resources[0]?.resourceId;
     return resources.find(x=>x.id===resourceId)?.timezone||"Europe/Moscow";
   };
+  const filtered=useMemo(()=>visits.filter(v=>{
+    const resourceId=v.resources.find(x=>x.type==="EMPLOYEE")?.resourceId
+      ??v.resources[0]?.resourceId;
+    const zone=resources.find(x=>x.id===resourceId)?.timezone||"Europe/Moscow";
+    const scheduled=venueDay(v.starts_at,zone);
+    return scheduled>=localDate(from)&&scheduled<localDate(end)&&
+      (!staffFilter||v.resources.some(r=>r.resourceId===staffFilter));
+  }),[visits,resources,staffFilter,from,end]);
 
   const refresh=useCallback(async()=>{
     setLoading(true);
@@ -173,18 +180,26 @@ export default function ServiceDeskPage(){
     let active=true;
     setSlots([]);
     setBookSlot("");
-    if(!bookService||!day){setSlotsBusy(false);return;}
-    const start=new Date(day+"T00:00:00");
+    if(!bookService||!bookStaff||!day){setSlotsBusy(false);return;}
+    // Encompass every IANA-local day, including DST/UTC+14/UTC-12.
+    // Backend filters by resourceId BEFORE the 500-slot response cap.
+    const start=new Date(day+"T00:00:00Z");
     if(Number.isNaN(start.getTime())){setSlotsBusy(false);return;}
-    const finish=new Date(start);finish.setDate(finish.getDate()+1);
+    start.setUTCDate(start.getUTCDate()-1);
+    const finish=new Date(start);finish.setUTCDate(finish.getUTCDate()+3);
+    const resourceZone=staff.find(x=>x.id===bookStaff)?.timezone||"Europe/Moscow";
     setSlotsBusy(true);
     void apiRequest<Slot[]>("/service/availability?serviceId="+encodeURIComponent(bookService)+
+      "&resourceId="+encodeURIComponent(bookStaff)+
       "&from="+encodeURIComponent(start.toISOString())+"&to="+encodeURIComponent(finish.toISOString()))
-      .then(value=>{if(active)setSlots(value);})
+      .then(value=>{if(active)setSlots(value.filter(slot=>
+        slot.resourceId===bookStaff&&venueDay(slot.startsAt,resourceZone)===day&&
+        new Date(slot.startsAt).getTime()>Date.now()
+      ));})
       .catch(cause=>{if(active)setError(readableError(cause));})
       .finally(()=>{if(active)setSlotsBusy(false);});
     return ()=>{active=false;};
-  },[bookService,day]);
+  },[bookService,bookStaff,day,staff]);
 
   async function mutate(action:()=>Promise<void>,message:string){
     if(busy)return;
@@ -391,7 +406,7 @@ export default function ServiceDeskPage(){
 
         {tab==="calendar"?<>
           <div className="service-desk-bar">
-            <div><h2>Журнал записи</h2><p className="muted">{fmtDate(from.toISOString())} — {fmtDate(end.toISOString())} · {filtered.length} визитов</p></div>
+            <div><h2>Журнал записи</h2><p className="muted">{fmtDate(from.toISOString())} — {fmtDate(weekDays[6]!.toISOString())} · {filtered.length} визитов</p></div>
             <div className="service-desk-actions">
               <button type="button" className="secondary-button" onClick={()=>setWeekOffset(v=>v-1)} aria-label="Предыдущая неделя">←</button>
               <button type="button" className="secondary-button" onClick={()=>setWeekOffset(0)}>Сегодня</button>
@@ -540,7 +555,7 @@ export default function ServiceDeskPage(){
                   –{fmtTime(s.endsAt,staff.find(r=>r.id===s.resourceId)?.timezone||"Europe/Moscow")}
                 </option>)}
               </select></label>
-              {bookStaff&&!slotsBusy&&!visibleSlots.length?<p className="muted" role="status">У этого специалиста на выбранную дату нет доступных интервалов.</p>:null}
+              {bookStaff&&!slotsBusy&&!visibleSlots.length?<p className="muted" role="status">У этого специалиста на выбранную дату нет доступных интервалов. Проверьте его график, часовой пояс и блокировки.</p>:null}
               <label>Клиент (необязательно)<select value={bookCustomer} onChange={e=>setBookCustomer(e.target.value)}>
                 <option value="">Без привязанного клиента</option>{customers.map(c=><option key={c.id} value={c.id}>{c.displayName}</option>)}
               </select></label>
