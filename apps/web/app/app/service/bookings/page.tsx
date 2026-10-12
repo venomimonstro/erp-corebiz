@@ -127,12 +127,17 @@ function toLocalDateTimeInput(date: Date): string {
     pad(date.getDate()) + "T" + pad(date.getHours()) + ":" + pad(date.getMinutes());
 }
 
-function money(value: string, currency: string): string {
+function money(value: string|null|undefined, currency: string|null|undefined): string {
+  // service.read is not finance.read. The API deliberately redacts visitor
+  // prices and settlements; do not render missing data as "0 ₽".
+  if(value===null||value===undefined||!currency)return "—";
+  const amount=Number(value);
+  if(!Number.isFinite(amount))return "—";
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
     currency,
     maximumFractionDigits: 0
-  }).format(Number(value) / 100);
+  }).format(amount / 100);
 }
 
 export default function BookingsPage() {
