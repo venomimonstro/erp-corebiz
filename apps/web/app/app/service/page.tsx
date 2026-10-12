@@ -232,8 +232,8 @@ export default function ServiceHomePage(){
             <a className="secondary-button" href="/app/service/team">
               Команда и зарплата
             </a>
-            <a className="button-link" href="/app/service/bookings">
-              Открыть календарь
+            <a className="button-link" href="/app/service/desk">
+              Единое рабочее место
             </a>
           </div>
         </header>
