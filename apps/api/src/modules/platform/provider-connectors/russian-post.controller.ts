@@ -43,4 +43,31 @@ export class RussianPostController{
   :Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.post.quote(this.ctx(request),siteId,body)};
   }
+  @Get("sites/:siteId/russian-post/shipments")
+  @RequirePermission("sites.manage")
+  async shipments(@Req() request:AuthenticatedRequest,
+    @Param("siteId") siteId:string):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.post.shipments(this.ctx(request),siteId)};
+  }
+  @Post("sites/:siteId/russian-post/shipments")
+  @RequirePermission("sites.manage")
+  @ApiCost("EXPENSIVE")
+  async book(@Req() request:AuthenticatedRequest,
+    @Param("siteId") siteId:string,@Body() body:{
+      orderId:string;quoteId:string;recipientName:string;
+      recipientPhone:string;destination:{
+        index:string;region:string;place:string;street:string;house:string
+      }
+    }):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.post.book(this.ctx(request),siteId,body)};
+  }
+  @Post("sites/:siteId/russian-post/shipments/:shipmentId/reconcile")
+  @RequirePermission("sites.manage")
+  @ApiCost("EXPENSIVE")
+  async reconcile(@Req() request:AuthenticatedRequest,
+    @Param("siteId") siteId:string,@Param("shipmentId") shipmentId:string)
+  :Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.post.reconcileShipment(
+      this.ctx(request),siteId,shipmentId)};
+  }
 }
