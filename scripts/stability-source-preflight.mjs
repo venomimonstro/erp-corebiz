@@ -218,7 +218,7 @@ async function inspectRequiredHardening(root) {
     },
     {
       path:"apps/api/src/modules/platform/provider-connectors/russian-post.service.ts",
-      patterns:[/sealMerchantSecret/, /scope/ ,
+      patterns:[/sealMerchantSecret/, /resolveScope/,
         /encrypted_credentials/, /commerce_post_tariff_quote/,
         /state='VERIFIED'/],
       message:"Russian Post secrets or merchant quotes are not securely isolated"
