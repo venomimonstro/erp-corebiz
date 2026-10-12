@@ -203,6 +203,28 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"apps/web/app/app/service/desk/page.tsx",
+      patterns:[/service\/bookings/,/service\/delivery-rules/,
+        /service\/workspace\/customers/,/service\/economics/,
+        /bookingKey\.current/,/idempotencyKey/,/pendingTransition/,
+        /finance\.read/,/service-desk-drawer/],
+      message:"Unified service desk must retain safe booking, visit and price workflows"
+    },
+    {
+      path:"apps/api/src/modules/business/service-ops/booking.service.ts",
+      patterns:[/redactBookingFinancials/,/finance\.read/,
+        /billing_status:null/,/settled_minor:null/,/refund:null/],
+      message:"Service-only employees must not receive booking finance data"
+    },
+    {
+      path:"scripts/service-desk-browser-journey.mjs",
+      patterns:[/COREBIZ_CONFIRM_DISPOSABLE_DB/,/BEAUTY_SALON/,
+        /Сохранить персональную цену/,/Свободное время/,
+        /Сохранить запись/,/390/],
+      message:"Salon onboarding must be executable through the unified desk"
+    },
+
+    {
       path:"scripts/owner-business-setup-e2e.mjs",
       patterns:[
         /COREBIZ_CONFIRM_DISPOSABLE_DB/,
