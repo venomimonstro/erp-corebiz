@@ -111,8 +111,8 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
               ?await client.query<{status:string;fiscal_status:string;fiscal_provider?:string}>(
                 "SELECT status,fiscal_status,fiscal_provider FROM commerce_payment_intent WHERE tenant_id=$1 AND id=$2",
                 [job.tenant_id,job.intent_id])
-              :await client.query<{status:string;fiscal_status:string}>(
-                "SELECT status,fiscal_status FROM commerce_refund WHERE tenant_id=$1 AND id=$2",
+              :await client.query<{status:string;fiscal_status:string;fiscal_provider?:string}>(
+                "SELECT status,fiscal_status,NULL::text AS fiscal_provider FROM commerce_refund WHERE tenant_id=$1 AND id=$2",
                 [job.tenant_id,job.refund_id]);
             const row=state.rows[0];
             const done=!row || ["CANCELED","FAILED"].includes(row.status) ||
