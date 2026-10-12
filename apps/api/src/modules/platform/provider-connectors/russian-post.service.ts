@@ -14,7 +14,7 @@ import {
 } from "./russian-post.gateway";
 
 const isUuid=(value:unknown):value is string=>
-  typeof value==="string"&&/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value);
+  typeof value==="string"&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 const isPostcode=(value:unknown):value is string=>
   typeof value==="string"&&/^[0-9]{6}$/.test(value);
 
