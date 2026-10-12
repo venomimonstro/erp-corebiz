@@ -251,13 +251,22 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
       }
       if(old.rows[0]&&old.rows[0].fiscal_provider!==selectedProvider){
         const stillActive=await client.query(
-          `SELECT 1 FROM commerce_payment_intent
-           WHERE tenant_id=$1 AND site_id=$2
-             AND (status IN ('NEW','PENDING')
-               OR (status='SUCCEEDED' AND fiscal_status<>'SUCCEEDED'))
+          `SELECT 1 FROM commerce_payment_intent i
+           WHERE i.tenant_id=$1 AND i.site_id=$2
+             AND (i.status IN ('NEW','PENDING')
+               OR (i.status='SUCCEEDED' AND
+                 (i.fiscal_status<>'SUCCEEDED'
+                   OR (i.fiscal_provider='ATOL_ONLINE' AND NOT EXISTS (
+                     SELECT 1 FROM commerce_fiscal_document d
+                     WHERE d.tenant_id=i.tenant_id
+                       AND d.payment_intent_id=i.id
+                       AND d.operation IN ('sell_full_payment','sell_refund')
+                       AND d.state='DONE'
+                   ))))
+             )
            LIMIT 1`,[context.tenantId,siteId]);
         if(stillActive.rowCount)throw new ConflictException(
-          "Нельзя менять источник чека до фискализации всех оплат"
+          "Нельзя менять источник чека, пока есть открытые предоплаты, невыданные заказы или возвраты"
         );
       }
       const encrypted=input.secret?sealMerchantSecret(input.secret):old.rows[0]!.encrypted_secret;
