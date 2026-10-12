@@ -203,6 +203,27 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"infrastructure/postgres/239_atol_advance_offset_refund.sql",
+      patterns:[/sell_full_payment/, /sell_refund/,
+        /commerce_fiscal_single_refund_per_bank_refund/,
+        /commerce_fiscal_refund_identity/],
+      message:"Closing and refund fiscal operations must have unique, immutable bank-backed identifiers"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/atol-receipts.service.ts",
+      patterns:[/async issueClosing/, /async issueRefund/, /confirmHandover/,
+        /payment_method:mode/, /"full_payment":"full_prepayment"/,
+        /mode==="settlement"\?2:1/, /status\.amountMinor!==row\.amount_minor/,
+        /UPDATE commerce_refund SET fiscal_status='SUCCEEDED'/],
+      message:"ATOL full settlement and verified bank refund must not be confused with advance receipt or duplicate provider money"
+    },
+    {
+      path:"apps/api/src/modules/platform/payments/commerce-payments.service.ts",
+      patterns:[/refund\.fiscal_provider==="ATOL_ONLINE"\?"PENDING"/,
+        /operation IN \('sell_full_payment','sell_refund'\)/],
+      message:"Payment service may mark a bank refund as fiscalized without ATOL or allow unsafe provider switching"
+    },
+    {
       path:"infrastructure/postgres/238_atol_fiscal_document_routing.sql",
       patterns:[/fiscal_provider/, /commerce_fiscal_document/,
         /UNIQUE\(tenant_id,payment_intent_id,operation\)/,
