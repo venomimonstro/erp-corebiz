@@ -143,7 +143,7 @@ export class AtolReceiptsService{
     if(!uuid(siteId))throw new BadRequestException("Неверный сайт");
     return this.db.withTenantTransaction(ctx,async client=>{
       const r=await client.query(
-        "SELECT id,payment_intent_id,operation,state,environment,provider_uuid,fn_number,"+
+        "SELECT id,payment_intent_id,refund_id,operation,state,environment,provider_uuid,fn_number,"+
         "fiscal_document_number,fiscal_document_attribute,receipt_url,last_error_code,"+
         "created_at,verified_at FROM commerce_fiscal_document "+
         "WHERE tenant_id=$1 AND site_id=$2 ORDER BY created_at DESC LIMIT 100",
@@ -452,13 +452,16 @@ export class AtolReceiptsService{
       client.query<{
         id:string;payment_intent_id:string;external_id:string;
         provider_uuid:string|null;state:string;environment:ProviderEnvironment;
-        encrypted_credentials:string;amount_minor:string
+        encrypted_credentials:string;amount_minor:string;
+        operation:string;refund_id:string|null
       }>(
         "SELECT d.id,d.payment_intent_id,d.external_id,d.provider_uuid,d.state,"+
-        "d.environment,c.encrypted_credentials,i.amount_minor::text "+
+        "d.environment,d.operation,d.refund_id,c.encrypted_credentials,"+
+        "COALESCE(r.amount_minor,i.amount_minor)::text AS amount_minor "+
         "FROM commerce_fiscal_document d "+
         "JOIN commerce_provider_connection c ON c.tenant_id=d.tenant_id AND c.id=d.connector_id "+
         "JOIN commerce_payment_intent i ON i.tenant_id=d.tenant_id AND i.id=d.payment_intent_id "+
+        "LEFT JOIN commerce_refund r ON r.tenant_id=d.tenant_id AND r.id=d.refund_id "+
         "WHERE d.tenant_id=$1 AND d.site_id=$2 AND d.id=$3",
         [ctx.tenantId,siteId,documentId]));
     const row=result.rows[0];
@@ -486,17 +489,31 @@ export class AtolReceiptsService{
         "receipt_url=$9,verified_at=CASE WHEN $5='DONE' THEN now() ELSE verified_at END,"+
         "last_error_code=CASE WHEN $5='FAIL' THEN 'PROVIDER_REJECTED' ELSE NULL END,"+
         "updated_at=now() WHERE tenant_id=$1 AND site_id=$2 AND id=$3 "+
-        "AND (provider_uuid IS NULL OR provider_uuid=$4)",
+        "AND (provider_uuid IS NULL OR provider_uuid=$4) AND state<>'DONE'",
         [ctx.tenantId,siteId,documentId,receiptUuid,status.state,
           status.fnNumber??null,status.documentNumber??null,
           status.fiscalSign??null,status.receiptUrl??null]);
       if(!update.rowCount)throw new ConflictException("Документ изменён, повторите сверку");
       if(status.state==="DONE"){
+        if(row.operation==="sell"){
+          await client.query(
+            "UPDATE commerce_payment_intent SET fiscal_status='SUCCEEDED',updated_at=now() "+
+            "WHERE tenant_id=$1 AND id=$2 AND fiscal_provider='ATOL_ONLINE' "+
+            "AND status='SUCCEEDED' AND finance_payment_id IS NOT NULL",
+            [ctx.tenantId,row.payment_intent_id]);
+        }else if(row.operation==="sell_refund"&&row.refund_id){
+          await client.query(
+            "UPDATE commerce_refund SET fiscal_status='SUCCEEDED',updated_at=now() "+
+            "WHERE tenant_id=$1 AND id=$2 AND status='SUCCEEDED' "+
+            "AND finance_payment_id IS NOT NULL",
+            [ctx.tenantId,row.refund_id]);
+        }
+      }else if(status.state==="FAIL" &&
+         row.operation==="sell_refund"&&row.refund_id){
         await client.query(
-          "UPDATE commerce_payment_intent SET fiscal_status='SUCCEEDED',updated_at=now() "+
-          "WHERE tenant_id=$1 AND id=$2 AND fiscal_provider='ATOL_ONLINE' "+
-          "AND status='SUCCEEDED' AND finance_payment_id IS NOT NULL",
-          [ctx.tenantId,row.payment_intent_id]);
+          "UPDATE commerce_refund SET fiscal_status='FAILED',updated_at=now() "+
+          "WHERE tenant_id=$1 AND id=$2 AND status='SUCCEEDED'",
+          [ctx.tenantId,row.refund_id]);
       }
     });
     return {documentId,state:status.state,
