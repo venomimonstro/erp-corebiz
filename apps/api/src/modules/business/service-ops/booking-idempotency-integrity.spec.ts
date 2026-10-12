@@ -26,6 +26,8 @@ const existing={
 
 function fixture(){
   const client={query:jest.fn(async(sql:string)=>{
+    if(sql.includes("pg_advisory_xact_lock"))
+      return {rows:[{}],rowCount:1};
     if(sql.includes("FROM service_booking_resource"))
       return {rows:[{resource_id:master,capacity_units:1,zone_id:null}],rowCount:1};
     if(sql.includes("FROM service_booking"))
@@ -51,6 +53,13 @@ describe("appointment idempotency input integrity",()=>{
     expect(replay).toEqual({id:bookingId,number:"BOOK-2026-1",version:2});
     expect(subject.assertBookingAccess).toHaveBeenCalled();
     expect(subject.lockResources).not.toHaveBeenCalled();
+    expect(subject.database.withTenantTransaction).toHaveBeenCalledTimes(1);
+  });
+  it("rejects blank retry keys before acquiring PostgreSQL connections",async()=>{
+    const {service,subject}=fixture();
+    await expect(service.createBooking(tenant,{...input,idempotencyKey:" "}))
+      .rejects.toThrow("Некорректный ключ");
+    expect(subject.database.withTenantTransaction).not.toHaveBeenCalled();
   });
   it.each([
     ["different time",{startsAt:"2026-10-15T15:00:00.000Z"}],
