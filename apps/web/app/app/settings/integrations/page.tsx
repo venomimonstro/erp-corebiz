@@ -2,7 +2,7 @@
 import {AppSidebar} from "../../../../components/app-sidebar";
 
 type Connector={
-  name:string;kind:string;state:"CONFIGURATION_AVAILABLE"|"ADAPTER_REQUIRED";
+  name:string;kind:string;state:"CONFIGURATION_AVAILABLE"|"PARTIAL_AVAILABLE"|"ADAPTER_REQUIRED";
   description:string;needed:string;deliverable:string;docs:string;
   href?:string;
 };
@@ -15,11 +15,12 @@ const connectors:Connector[]=[
     docs:"https://yookassa.ru/developers/payment-acceptance/getting-started/quick-start",
     href:"/app/sites/payments"},
   {name:"АТОЛ Онлайн",kind:"Облачная фискализация",
-    state:"ADAPTER_REQUIRED",
+    state:"PARTIAL_AVAILABLE",
     description:"Касса регистрирует чек по ФФД. Она не заменяет банк-эквайер и не подтверждает поступление денег.",
     needed:"Договор, логин, пароль, идентификатор группы ККТ; проверка ФФД 1.2 и чека маркированного товара.",
     deliverable:"Чек прихода/возврата/зачёта аванса; idempotency, callback, фискальные признаки, ошибки ФН/ОФД.",
-    docs:"https://help.atol.online/article/11244"},
+    docs:"https://help.atol.online/article/11244",
+    href:"/app/settings/integrations/connect"},
   {name:"Эвотор",kind:"Физические кассы / облачная фискализация",
     state:"ADAPTER_REQUIRED",
     description:"Два разных контура: смарт-терминал и документы из Облака Эвотор либо Цифровая касса для удалённых чеков.",
@@ -39,17 +40,19 @@ const connectors:Connector[]=[
     deliverable:"Приём/выбытие конкретного кода, проверка состояния, ошибка или повтор операции, события в журнале.",
     docs:"https://markirovka.ru/knowledge/tovarnye-gruppy/radioelektronnaya-produktsiya-noutbuki-i-smartfony/integratsiya-sistemy-markirovki-s-tovarouchetnoy-sistemoy-uchastnika-ikra"},
   {name:"СДЭК",kind:"Доставка и ПВЗ",
-    state:"ADAPTER_REQUIRED",
+    state:"PARTIAL_AVAILABLE",
     description:"Отдельный договор продавца; расчёт тарифа, ПВЗ, создание накладной, ярлык, статусы и возвраты.",
     needed:"Client ID/Secret API v2, договор, адрес склада, габариты и вес SKU, плательщик доставки.",
     deliverable:"Проверенная стоимость до оформления, идемпотентное создание отправления, печать и отслеживание.",
-    docs:"https://developer.cdek.ru/"},
+    docs:"https://developer.cdek.ru/",
+    href:"/app/settings/integrations/connect"},
   {name:"Почта России",kind:"Доставка и постаматы",
-    state:"ADAPTER_REQUIRED",
-    description:"Сервис «Отправка»: договор, подготовка отправлений, списки/партии, печатные ярлыки и трекинг.",
+    state:"PARTIAL_AVAILABLE",
+    description:"Доступны защищённое подключение договора и официальный расчёт стоимости с НДС. Создание отправлений, ярлыков, ШПИ и трекинг ещё не реализованы.",
     needed:"Токен приложения, ключ авторизации пользователя, доступ к сервису «Отправка».",
     deliverable:"Нормализация адреса, тарификация, заказ/партия, ШПИ, ярлык, статусы, отмена.",
-    docs:"https://otpravka.pochta.ru/specification"}
+    docs:"https://otpravka.pochta.ru/specification",
+    href:"/app/settings/integrations/post"}
 ];
 
 export default function IntegrationsPage(){
@@ -65,12 +68,16 @@ export default function IntegrationsPage(){
         </div>
       </header>
       <section className="studio-section">
-        <h2>Подключить СДЭК или АТОЛ Онлайн</h2>
+        <h2>Подключить СДЭК, АТОЛ или Почту России</h2>
         <p>Можно сохранить реквизиты отдельного продавца, проверить
           авторизацию у провайдера и рассчитать тариф доставки СДЭК.</p>
         <a className="secondary-button"
           href="/app/settings/integrations/connect">
-          Открыть подключения продавца →
+          СДЭК и АТОЛ →
+        </a>
+        <a className="secondary-button"
+          href="/app/settings/integrations/post">
+          Подключить Почту России →
         </a>
       </section>
       <section className="studio-section">
@@ -96,9 +103,11 @@ export default function IntegrationsPage(){
             <article key={p.name} className="first-day-summary">
               <small className="muted">{p.kind}</small>
               <h3>{p.name}</h3>
-              <p><strong>{p.state==="CONFIGURATION_AVAILABLE"?
-                "Настройка доступна; готовность проверяется отдельно":
-                "Коннектор ещё требуется разработать и проверить"}</strong></p>
+              <p><strong>{p.state==="CONFIGURATION_AVAILABLE"
+                ?"Настройка доступна; готовность проверяется отдельно"
+                :p.state==="PARTIAL_AVAILABLE"
+                  ?"Часть операций работает; для полного цикла нужны дополнительные адаптеры"
+                  :"Коннектор ещё требуется разработать и проверить"}</strong></p>
               <p>{p.description}</p>
               <p><strong>Что потребуется:</strong> {p.needed}</p>
               <p><strong>Условия готовности:</strong> {p.deliverable}</p>
