@@ -127,7 +127,7 @@ export class AtolReceiptsService{
       throw new ConflictException(
         "В этой версии АТОЛ разрешены только немаркируемые товары после проверки продавцом"
       );
-    const claim=await this.db.withTenantTransaction(ctx,async client=>{
+    const claim:Claim=await this.db.withTenantTransaction(ctx,async client=>{
       const query=await client.query<{
         id:string;amount_minor:string;customer_email:string;
         connection_id:string;encrypted_credentials:string;
