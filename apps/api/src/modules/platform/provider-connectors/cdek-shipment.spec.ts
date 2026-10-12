@@ -29,6 +29,9 @@ function fixture(known=false,canShip=true){
       if(sql.includes("FROM commerce_shipping_quote WHERE"))
         return {rows:[{tariff_code:136,from_city_code:44,to_city_code:137,
           package_weight_grams:1000,amount_minor:"55000"}],rowCount:1};
+      if(sql.includes("FROM sales_order_line l JOIN sku s"))
+        return {rows:[{description:"Ноутбук",quantity_milli:"1000",
+          line_total_minor:"4500000",sku_code:"NOTEBOOK-1"}],rowCount:1};
       if(sql.includes("FROM commerce_shipment")&&sql.includes("FOR UPDATE"))
         return {rows:known?[{id:shipment,payload_digest:"different"}]:[],
           rowCount:known?1:0};
