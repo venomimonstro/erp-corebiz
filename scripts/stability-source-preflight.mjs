@@ -203,6 +203,32 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"infrastructure/postgres/241_russian_post_tariff_quotes.sql",
+      patterns:[/commerce_post_tariff_quote/, /from_postcode/,
+        /vat_minor/, /ENABLE ROW LEVEL SECURITY/,
+        /amount_minor=base_rate_minor\+vat_minor/],
+      message:"Russian Post quote lost tenant isolation, postal indexes or exact VAT pricing"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/russian-post.gateway.ts",
+      patterns:[/otpravka-api\.pochta\.ru\/1\.0\/tariff/,
+        /X-User-Authorization/, /AccessToken/,
+        /total-rate/, /total-vat/, /redirect:"error"/],
+      message:"Russian Post must use only verified provider tariff responses and fixed HTTPS host"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/russian-post.service.ts",
+      patterns:[/sealMerchantSecret/, /scope/ ,
+        /encrypted_credentials/, /commerce_post_tariff_quote/,
+        /state='VERIFIED'/],
+      message:"Russian Post secrets or merchant quotes are not securely isolated"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/russian-post.gateway.spec.ts",
+      patterns:[/accurate VAT tariffs/, /invalid credentials before network/],
+      message:"Russian Post provider validation tests missing"
+    },
+    {
       path:"infrastructure/postgres/240_atol_fiscal_reconciliation_queue.sql",
       patterns:[/commerce_fiscal_reconcile_task/, /FOR UPDATE OF t SKIP LOCKED/,
         /corebiz_claim_atol_fiscal_reconciliation/, /ENABLE ROW LEVEL SECURITY/,
