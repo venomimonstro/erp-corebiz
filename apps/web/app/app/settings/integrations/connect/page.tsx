@@ -127,14 +127,22 @@ export default function MerchantConnectorsPage(){
         :provider==="POCHTA_RUSSIA"
           ?{accessToken:postToken,userAuthorizationKey:postAuthKey}
           :{login:atolLogin,password:atolPassword,groupCode:atolGroup};
-      await apiRequest("/provider-connectors/sites/"+siteId+"/configure",{
-        method:"POST",body:JSON.stringify({
-          provider,environment:provider==="POCHTA_RUSSIA"?"PRODUCTION":environment,
-          credentials,
-          ...(provider==="CDEK"?{fromCityCode:Number(city)}
-            :provider==="POCHTA_RUSSIA"?{fromPostcode:postFrom}:{fiscalCompany})
-        })
-      });
+      if(provider==="POCHTA_RUSSIA"){
+        await apiRequest("/provider-connectors/sites/"+siteId+
+          "/russian-post/configure",{
+          method:"POST",body:JSON.stringify({
+            accessToken:postToken,userAuthorizationKey:postAuthKey,
+            fromPostcode:postFrom
+          })
+        });
+      }else{
+        await apiRequest("/provider-connectors/sites/"+siteId+"/configure",{
+          method:"POST",body:JSON.stringify({
+            provider,environment,credentials,
+            ...(provider==="CDEK"?{fromCityCode:Number(city)}:{fiscalCompany})
+          })
+        });
+      }
       setClientSecret("");setAtolPassword("");
       setPostToken("");setPostAuthKey("");
       setNote("Реквизиты сохранены зашифрованными. Теперь проверьте авторизацию.");
@@ -147,9 +155,10 @@ export default function MerchantConnectorsPage(){
     setBusy(true);setError("");setNote("");
     try{
       const row=await apiRequest<{state:string;note:string}>(
-        "/provider-connectors/sites/"+siteId+"/"+provider+"/verify",{
+        "/provider-connectors/sites/"+siteId+
+          (provider==="POCHTA_RUSSIA"?"/russian-post/verify":"/"+provider+"/verify"),{
           method:"POST",body:JSON.stringify(provider==="POCHTA_RUSSIA"
-            ?{toPostcode:postTo,massGrams:Number(postWeight)}:{})
+            ?{toPostcode:postTo}:{})
         });
       setNote(row.note);await load();
     }catch(e){setError(e instanceof Error?e.message:"Провайдер отклонил проверку");}
@@ -344,11 +353,18 @@ export default function MerchantConnectorsPage(){
           <label>Контур
             <select value={environment}
               onChange={e=>setEnvironment(e.target.value as typeof environment)}>
-              <option value="SANDBOX">Тестовый</option>
+              <option value="SANDBOX" disabled={provider==="POCHTA_RUSSIA"}>
+                Тестовый (недоступен для Почты России)
+              </option>
               <option value="PRODUCTION">Рабочий</option>
             </select>
           </label>
         </div>
+        {provider==="POCHTA_RUSSIA"?<p className="muted">
+          Для Почты России используется официальный рабочий тарифный API;
+          доступного тестового стенда нет. Проверка только рассчитывает цену,
+          отправление и оплату перевозчику не создаёт.
+        </p>:null}
         <p><strong>Статус:</strong> {current?.state??"Реквизиты не сохранены"}
           {current?.verified_at?" · проверено "+new Date(current.verified_at).toLocaleString("ru-RU"):""}
           {current?.environment?" · "+current.environment:""}
