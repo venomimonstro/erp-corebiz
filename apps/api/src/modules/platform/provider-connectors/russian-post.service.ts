@@ -286,6 +286,15 @@ export class RussianPostService{
         throw new ConflictException(
           "Тариф истёк или не совпадает с индексом получателя"
         );
+      // Match CDEK's sales_order row lock: never issue both carrier
+      // consignments for a single checkout, including UNKNOWN bookings.
+      const competing=await client.query(
+        `SELECT 1 FROM commerce_shipment
+         WHERE tenant_id=$1 AND sales_order_id=$2 LIMIT 1`,
+        [ctx.tenantId,input.orderId]);
+      if(competing.rowCount)throw new ConflictException(
+        "Для заказа уже оформлена накладная СДЭК. Вторая отправка запрещена."
+      );
       const old=await client.query<{id:string;payload_digest:string}>(
         `SELECT id,payload_digest FROM commerce_post_shipment
          WHERE tenant_id=$1 AND sales_order_id=$2 FOR UPDATE`,
