@@ -156,9 +156,9 @@ export class AtolReceiptsService{
         "JOIN sales_order o ON o.tenant_id=i.tenant_id AND o.id=i.sales_order_id "+
         "JOIN commerce_order_delivery d ON d.tenant_id=i.tenant_id "+
         "AND d.sales_order_id=i.sales_order_id "+
-        "JOIN commerce_fiscal_document first ON first.tenant_id=i.tenant_id "+
-        "AND first.payment_intent_id=i.id AND first.operation='sell' "+
-        "AND first.state='DONE' "+
+        "JOIN commerce_fiscal_document prepayment ON prepayment.tenant_id=i.tenant_id "+
+        "AND prepayment.payment_intent_id=i.id AND prepayment.operation='sell' "+
+        "AND prepayment.state='DONE' "+
         "LEFT JOIN commerce_refund r ON r.tenant_id=i.tenant_id AND r.intent_id=i.id "+
         "LEFT JOIN commerce_fiscal_document closing ON closing.tenant_id=i.tenant_id "+
         "AND closing.payment_intent_id=i.id AND closing.operation='sell_full_payment' "+
