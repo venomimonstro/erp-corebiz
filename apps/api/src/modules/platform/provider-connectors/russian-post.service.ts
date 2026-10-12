@@ -180,7 +180,7 @@ export class RussianPostService{
       provider:"POCHTA_RUSSIA",fromPostcode:from,
       toPostcode:input.toPostcode,mailType:"POSTAL_PARCEL",
       massGrams:input.massGrams,amountMinor:result.amountMinor,
-      vatMinor:result.vatMinor,
+      rateMinor:result.rateMinor,vatMinor:result.vatMinor,
       periodMin:result.periodMin,periodMax:result.periodMax,
       disclaimer:"Расчёт тарифа не создаёт отправление и не включает "+
         "оплату Почте России. Цена уточняется по договору продавца."
