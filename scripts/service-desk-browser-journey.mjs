@@ -22,7 +22,11 @@ const {chromium}=await import("playwright").catch(()=>{
 });
 const browser=await chromium.launch({headless:true});
 try{
-  const page=await browser.newPage({viewport:{width:1440,height:900}});
+  // Deliberately use a timezone different from the salon's Moscow timezone:
+  // the calendar and free slots must follow the resource, not the operator.
+  const page=await browser.newPage({
+    viewport:{width:1440,height:900},timezoneId:"America/New_York"
+  });
   const email="service-ui-"+randomUUID()+"@example.invalid";
   const password="Disposable-"+randomUUID();
   const suffix=randomUUID().slice(0,8);
