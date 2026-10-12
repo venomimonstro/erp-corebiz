@@ -332,6 +332,15 @@ export class MerchantConnectorService{
         return {name:x.description.slice(0,255),
           wareKey:x.sku_code.slice(0,80),cost,amount:Number(qty/1000n)};
       });
+      // One paid order may have only one carrier, even across two APIs.
+      // Both booking transactions hold FOR UPDATE on the same sales_order.
+      const competing=await client.query(
+        `SELECT 1 FROM commerce_post_shipment
+         WHERE tenant_id=$1 AND sales_order_id=$2 LIMIT 1`,
+        [ctx.tenantId,body.orderId]);
+      if(competing.rowCount)throw new ConflictException(
+        "Для заказа уже оформлена заявка Почты России. Две службы доставки запрещены."
+      );
       const old=await client.query<{id:string;payload_digest:string;state:string}>(
         `SELECT id,payload_digest,state FROM commerce_shipment
          WHERE tenant_id=$1 AND sales_order_id=$2 FOR UPDATE`,
