@@ -24,7 +24,8 @@ BEGIN
        AND updated_at < now() - interval '15 minutes'
   ) t;
   SELECT count(*) INTO lost_payment FROM commerce_payment_intent
-   WHERE status='SUCCEEDED' AND finance_payment_id IS NULL
+   WHERE purpose='STOREFRONT' AND status='SUCCEEDED'
+     AND finance_payment_id IS NULL
      AND updated_at < now() - interval '15 minutes';
   SELECT count(*) INTO orphan_checkout
   FROM storefront_cart c JOIN sales_order o
