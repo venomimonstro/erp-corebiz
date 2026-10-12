@@ -469,6 +469,65 @@ export class MerchantConnectorService{
       providerOrderUuid:uuid};
   }
 
+  async postalQuote(ctx:TenantContext,siteId:string,input:{
+    toPostcode:string;massGrams:number
+  }){
+    await this.requireAll(ctx,"sites.manage");
+    this.validateSite(siteId);
+    if(!input||typeof input.toPostcode!=="string"||
+       !/^[0-9]{6}$/.test(input.toPostcode)||
+       !Number.isSafeInteger(input.massGrams)||
+       input.massGrams<1||input.massGrams>20000)
+      throw new BadRequestException(
+        "Почтовый индекс назначения должен содержать шесть цифр, вес 1–20000 г"
+      );
+    const conn=await this.connection(ctx,siteId,"POCHTA_RUSSIA");
+    if(!conn||conn.state!=="VERIFIED"||!conn.enabled||
+       conn.environment!=="PRODUCTION")
+      throw new ConflictException("Проверьте действующий договор и API-доступ Почты России");
+    const origin=conn.public_config?.fromPostcode;
+    if(typeof origin!=="string"||!/^[0-9]{6}$/.test(origin))
+      throw new ConflictException("Не установлен индекс отправителя");
+    const credentials=JSON.parse(
+      openMerchantSecret(conn.encrypted_credentials)) as RussianPostCredentials;
+    const quote=await this.post.tariff(credentials,{
+      fromPostcode:origin,toPostcode:input.toPostcode,
+      massGrams:input.massGrams
+    });
+    return this.db.withTenantTransaction(ctx,async client=>{
+      const stored=await client.query<{id:string;expires_at:Date}>(
+        `INSERT INTO commerce_post_tariff_quote(
+           tenant_id,site_id,connection_id,from_postcode,to_postcode,
+           mail_type,mass_grams,amount_minor,base_rate_minor,vat_minor,
+           expires_at)
+         SELECT $1,$2,c.id,$4,$5,'POSTAL_PARCEL',$6,$7,$8,$9,
+           now()+interval '15 minutes'
+         FROM commerce_provider_connection c
+         WHERE c.tenant_id=$1 AND c.site_id=$2 AND c.id=$3
+           AND c.provider='POCHTA_RUSSIA' AND c.state='VERIFIED'
+           AND c.enabled AND c.environment='PRODUCTION'
+           AND c.encrypted_credentials=$10
+         RETURNING id,expires_at`,
+        [ctx.tenantId,siteId,conn.id,origin,input.toPostcode,
+          input.massGrams,quote.amountMinor,quote.rateMinor,
+          quote.vatMinor,conn.encrypted_credentials]);
+      if(!stored.rows[0])throw new ConflictException(
+        "Доступ к Почте России изменился после расчёта тарифа"
+      );
+      return {
+        quoteId:stored.rows[0].id,
+        provider:"POCHTA_RUSSIA",
+        amountMinor:quote.amountMinor,
+        rateMinor:quote.rateMinor,
+        vatMinor:quote.vatMinor,
+        periodMin:quote.periodMin,periodMax:quote.periodMax,
+        expiresAt:stored.rows[0].expires_at.toISOString(),
+        fromPostcode:origin,toPostcode:input.toPostcode,
+        notice:"Предварительный тариф; отправление, ШПИ и ярлык не создавались"
+      };
+    });
+  }
+
   async quote(ctx:TenantContext,siteId:string,input:{
     toCityCode:number;weightGrams:number;
     lengthCm:number;widthCm:number;heightCm:number
