@@ -83,13 +83,7 @@ try{
     String(target.getDate()).padStart(2,"0")].join("-");
   await drawer.getByLabel("Дата").fill(day);
   const options=drawer.getByLabel("Свободное время").locator("option");
-  await page.waitForFunction(()=>{
-    const select=document.querySelector(
-      '[role="dialog"][aria-label="Новая запись"] select[required]:last-of-type'
-    );
-    return !!select;
-  });
-  // Wait for the actual dropdown option to be returned by the API.
+  // The option is produced only after the server validates the slot.
   await options.nth(1).waitFor({state:"attached",timeout:20000});
   await drawer.getByLabel("Свободное время").selectOption({index:1});
   await drawer.getByLabel("Клиент (необязательно)").selectOption({index:1});
@@ -97,8 +91,8 @@ try{
   await drawer.waitFor({state:"hidden",timeout:20000});
 
   await page.getByRole("button",{name:"Клиенты",exact:true}).click();
-  await page.getByRole("button",{name:"История →",{exact:false})
-    .first().click();
+  await page.locator(".service-desk-customer-list button")
+    .filter({hasText:"Disposable Client "+suffix}).click();
   await page.getByRole("heading",{name:"Disposable Client "+suffix})
     .waitFor({timeout:20000});
 
