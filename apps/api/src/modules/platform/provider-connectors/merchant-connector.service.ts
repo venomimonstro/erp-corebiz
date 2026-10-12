@@ -176,8 +176,10 @@ export class MerchantConnectorService{
     this.validateSite(siteId);
     if(!validUuid(body?.orderId)||!validUuid(body?.quoteId))
       throw new BadRequestException("Некорректный заказ или тариф");
-    const recipientName=body.recipientName?.trim();
-    const recipientPhone=body.recipientPhone?.replace(/[()\s-]/g,"");
+    const recipientName=typeof body?.recipientName==="string"
+      ?body.recipientName.trim():"";
+    const recipientPhone=typeof body?.recipientPhone==="string"
+      ?body.recipientPhone.replace(/[()\s-]/g,""):"";
     if(!recipientName||recipientName.length<2||recipientName.length>160||
        !recipientPhone||!/^\+?[0-9]{10,15}$/.test(recipientPhone)||
        ![body.lengthCm,body.widthCm,body.heightCm].every(x=>
@@ -206,10 +208,17 @@ export class MerchantConnectorService{
            AND o.payment_status='PAID'
            AND o.order_status IN ('CONFIRMED','COMPLETED')
            AND o.fulfillment_status IN ('RESERVED','READY')
+           AND EXISTS(
+             SELECT 1 FROM commerce_payment_intent pi
+             WHERE pi.tenant_id=o.tenant_id AND pi.sales_order_id=o.id
+               AND pi.purpose='STOREFRONT' AND pi.status='SUCCEEDED'
+               AND pi.finance_payment_id IS NOT NULL
+               AND pi.fiscal_status='SUCCEEDED'
+           )
          FOR UPDATE OF o`,
         [ctx.tenantId,body.orderId,siteId]);
       if(!order.rowCount)throw new ConflictException(
-        "Сначала подтвердите оплату, резерв и курьерскую доставку заказа"
+        "Для накладной необходимы подтверждённая оплата YooKassa, чек, резерв и курьерская доставка"
       );
       const quote=await client.query<{
         tariff_code:number;from_city_code:number;to_city_code:number;
