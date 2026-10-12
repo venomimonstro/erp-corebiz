@@ -329,8 +329,10 @@ export class MerchantConnectorService{
          WHERE q.tenant_id=$1 AND q.id=$2
            AND q.site_id=$3 AND q.connection_id=$4 AND q.expires_at>now()
            AND q.created_at>=cp.verified_at
-           AND cp.state='VERIFIED' AND cp.enabled`,
-        [ctx.tenantId,body.quoteId,siteId,connection.id]);
+           AND cp.state='VERIFIED' AND cp.enabled
+           AND cp.encrypted_credentials=$5`,
+        [ctx.tenantId,body.quoteId,siteId,connection.id,
+          connection.encrypted_credentials]);
       const q=quote.rows[0];if(!q)throw new ConflictException(
         "Тариф истёк или относится к другому магазину"
       );
