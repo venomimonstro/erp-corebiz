@@ -18,11 +18,12 @@ type Intent = {
   sales_order_id:string|null; plan_id:string|null; amount_minor:string;
   status:string; currency:string; provider_payment_id:string|null;
   provider_idempotency_key:string; confirmation_url:string|null;
-  customer_email:string;
+  customer_email:string;fiscal_provider?:"YOOKASSA"|"ATOL_ONLINE";
 };
 type SellerConfig = {
   shop_id:string; encrypted_secret:string; vat_code:number;
   tax_system_code:number|null; enabled:boolean; fiscal_enabled:boolean;
+  fiscal_provider?:"YOOKASSA"|"ATOL_ONLINE";
 };
 const SYSTEM_ID="00000000-0000-0000-0000-000000000000";
 const isEmail=(value:string)=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length<=320;
@@ -191,6 +192,7 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
   async configureSeller(context:TenantContext,siteId:string,input:{
     shopId:string;secret?:string;vatCode:number;taxSystemCode?:number|null;
     fiscalEnabled:boolean;enabled:boolean;
+    fiscalProvider?:"YOOKASSA"|"ATOL_ONLINE";
   }):Promise<{configured:true}> {
     this.readonlyUuid(siteId);
     if(!input || typeof input.shopId!=="string" ||
@@ -201,6 +203,8 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
            input.taxSystemCode<1 || input.taxSystemCode>6)) ||
        typeof input.fiscalEnabled!=="boolean" ||
        typeof input.enabled!=="boolean" ||
+       (input.fiscalProvider!==undefined &&
+         !["YOOKASSA","ATOL_ONLINE"].includes(input.fiscalProvider)) ||
        (input.secret!==undefined && (typeof input.secret!=="string" ||
         input.secret.length<8 || input.secret.length>300))) {
       throw new BadRequestException("Некорректные настройки эквайринга");
@@ -221,10 +225,38 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
           "Дождитесь завершения незакрытых оплат перед сменой секретного ключа"
         );
       }
-      const old=await client.query<{encrypted_secret:string;shop_id:string}>(
-        "SELECT encrypted_secret,shop_id FROM commerce_merchant_config WHERE tenant_id=$1 AND site_id=$2",
+      const old=await client.query<{encrypted_secret:string;shop_id:string;fiscal_provider:string}>(
+        "SELECT encrypted_secret,shop_id,fiscal_provider FROM commerce_merchant_config WHERE tenant_id=$1 AND site_id=$2 FOR UPDATE",
         [context.tenantId,siteId]);
       if(!input.secret && !old.rows[0])throw new BadRequestException("Укажите секретный ключ");
+      const selectedProvider=input.fiscalProvider??
+        (old.rows[0]?.fiscal_provider??"YOOKASSA");
+      if(selectedProvider==="ATOL_ONLINE" && input.enabled){
+        if(process.env.COREBIZ_ATOL_RECEIPTS_ENABLED!=="true")
+          throw new ConflictException("Сначала включите проверенный контур чеков АТОЛ");
+        const verified=await client.query(
+          `SELECT 1 FROM commerce_provider_connection
+           WHERE tenant_id=$1 AND site_id=$2 AND provider='ATOL_ONLINE'
+             AND enabled AND state='VERIFIED'
+             AND (environment='SANDBOX'
+               OR $3='true') LIMIT 1`,
+          [context.tenantId,siteId,
+            process.env.COREBIZ_ATOL_PRODUCTION_RECEIPTS_ENABLED??"false"]);
+        if(!verified.rowCount)throw new ConflictException(
+          "Для чеков через АТОЛ нужно подтвердить настройки кассы"
+        );
+      }
+      if(old.rows[0]&&old.rows[0].fiscal_provider!==selectedProvider){
+        const stillActive=await client.query(
+          `SELECT 1 FROM commerce_payment_intent
+           WHERE tenant_id=$1 AND site_id=$2
+             AND (status IN ('NEW','PENDING')
+               OR (status='SUCCEEDED' AND fiscal_status<>'SUCCEEDED'))
+           LIMIT 1`,[context.tenantId,siteId]);
+        if(stillActive.rowCount)throw new ConflictException(
+          "Нельзя менять источник чека до фискализации всех оплат"
+        );
+      }
       const encrypted=input.secret?sealMerchantSecret(input.secret):old.rows[0]!.encrypted_secret;
       if(!input.secret && old.rows[0]!.shop_id!==input.shopId){
         throw new BadRequestException("При смене магазина укажите новый секретный ключ");
@@ -232,15 +264,16 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
       await client.query(
         `INSERT INTO commerce_merchant_config(
            tenant_id,site_id,shop_id,encrypted_secret,vat_code,tax_system_code,
-           fiscal_enabled,enabled
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           fiscal_enabled,enabled,fiscal_provider
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          ON CONFLICT (tenant_id,site_id) DO UPDATE SET
            shop_id=EXCLUDED.shop_id,encrypted_secret=EXCLUDED.encrypted_secret,
            vat_code=EXCLUDED.vat_code,tax_system_code=EXCLUDED.tax_system_code,
            fiscal_enabled=EXCLUDED.fiscal_enabled,enabled=EXCLUDED.enabled,
+           fiscal_provider=EXCLUDED.fiscal_provider,
            updated_at=now()`,
         [context.tenantId,siteId,input.shopId,encrypted,input.vatCode,
-          input.taxSystemCode??null,input.fiscalEnabled,input.enabled]);
+          input.taxSystemCode??null,input.fiscalEnabled,input.enabled,selectedProvider]);
     });
     return {configured:true};
   }
@@ -250,8 +283,9 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
       const row=await client.query<{
         shop_id:string;vat_code:number;tax_system_code:number|null;
         fiscal_enabled:boolean;enabled:boolean;
+        fiscal_provider:string;
       }>(
-        `SELECT shop_id,vat_code,tax_system_code,fiscal_enabled,enabled
+        `SELECT shop_id,vat_code,tax_system_code,fiscal_enabled,enabled,fiscal_provider
          FROM commerce_merchant_config WHERE tenant_id=$1 AND site_id=$2`,
         [context.tenantId,siteId]);
       return {configured:!!row.rows[0],...(row.rows[0]??{})};
@@ -314,7 +348,7 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
   private async sellerConfig(tenantId:string,siteId:string):Promise<SellerConfig>{
     const config=await this.database.withTenantTransaction(this.context(tenantId),
       async client=>client.query<SellerConfig>(
-        "SELECT shop_id,encrypted_secret,vat_code,tax_system_code,enabled,fiscal_enabled FROM commerce_merchant_config WHERE tenant_id=$1 AND site_id=$2",
+        "SELECT shop_id,encrypted_secret,vat_code,tax_system_code,enabled,fiscal_enabled,fiscal_provider FROM commerce_merchant_config WHERE tenant_id=$1 AND site_id=$2",
         [tenantId,siteId]));
     if(!config.rows[0]) throw new ServiceUnavailableException(
       "Продавец не подключил эквайринг"
@@ -465,14 +499,27 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
            ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
           [cart.tenant_id,o.order_id]);
         if(existing.rows[0])return {intent:existing.rows[0],siteSlug:o.site_slug};
+        const merchant=await client.query<{
+          fiscal_provider:"YOOKASSA"|"ATOL_ONLINE";
+        }>(
+          `SELECT fiscal_provider FROM commerce_merchant_config
+           WHERE tenant_id=$1 AND site_id=$2 AND enabled AND fiscal_enabled
+           FOR SHARE`,[cart.tenant_id,cart.site_id]);
+        if(!merchant.rows[0])throw new ConflictException(
+          "Эквайринг и фискализация магазина не настроены"
+        );
+        const fiscalProvider=merchant.rows[0].fiscal_provider;
+        if(fiscalProvider==="ATOL_ONLINE" &&
+           process.env.COREBIZ_ATOL_RECEIPTS_ENABLED!=="true")
+          throw new ConflictException("Кассовый провайдер АТОЛ не готов");
         const id=randomUUID();
         const inserted=await client.query<Intent>(
           `INSERT INTO commerce_payment_intent(
              id,tenant_id,purpose,site_id,sales_order_id,amount_minor,
-             provider_idempotency_key,customer_email
-           ) VALUES ($1,$2,'STOREFRONT',$3,$4,$5,$6,$7) RETURNING *`,
+             provider_idempotency_key,customer_email,fiscal_provider
+           ) VALUES ($1,$2,'STOREFRONT',$3,$4,$5,$6,$7,$8) RETURNING *`,
           [id,cart.tenant_id,cart.site_id,o.order_id,o.amount_minor,
-            providerIdempotencyKey("corebiz-store-"+id),o.email]);
+            providerIdempotencyKey("corebiz-store-"+id),o.email,fiscalProvider]);
         return {intent:inserted.rows[0]!,siteSlug:o.site_slug};
       });
     const intent=claim.intent;
@@ -481,12 +528,13 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
     const creds=this.seller(cfg);
     const receipt=await this.snapshotReceipt(cart.tenant_id,intent.sales_order_id!,
       cfg.vat_code,intent.customer_email,cfg.tax_system_code);
-    return this.createProviderPayment(intent,creds,receipt,
+    return this.createProviderPayment(intent,creds,
+      intent.fiscal_provider==="ATOL_ONLINE"?undefined:receipt,
       "Заказ CoreBiz "+intent.sales_order_id,
       this.returnUrl("/s/"+encodeURIComponent(claim.siteSlug)));
   }
   private async createProviderPayment(
-    intent:Intent,cred:MerchantCredentials,receipt:Record<string,unknown>,
+    intent:Intent,cred:MerchantCredentials,receipt:Record<string,unknown>|undefined,
     description:string,returnUrl:string
   ){
     if(intent.status==="SUCCEEDED")return {intentId:intent.id,status:"SUCCEEDED"};
@@ -499,7 +547,7 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
       capture:true,
       confirmation:{type:"redirect",return_url:returnUrl},
       description:description.slice(0,128),
-      receipt,
+      ...(receipt?{receipt}:{}),
       metadata:{corebiz_intent_id:intent.id,corebiz_purpose:intent.purpose}
     });
     this.verifyAmount(intent,response);
@@ -795,7 +843,8 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
     if(payment.id!==intent.provider_payment_id)return;
     this.verifyAmount(intent,payment);
     if(intent.status==="SUCCEEDED"){
-      if(payment.status==="succeeded"&&payment.paid===true){
+      if(payment.status==="succeeded"&&payment.paid===true &&
+         intent.fiscal_provider!=="ATOL_ONLINE"){
         await this.database.withTenantTransaction(this.context(intent.tenant_id),
           async client=>client.query(
             `UPDATE commerce_payment_intent SET
@@ -843,6 +892,7 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
              fiscal_status=$4,last_checked_at=now(),updated_at=now()
            WHERE tenant_id=$1 AND id=$2 AND status IN ('NEW','PENDING','SUCCEEDED')`,
           [intent.tenant_id,intent.id,posted.paymentId,
+            intent.fiscal_provider==="ATOL_ONLINE"?"PENDING":
             payment.receipt_registration==="succeeded"?"SUCCEEDED":
             payment.receipt_registration==="failed"?"FAILED":"PENDING"]);
       });
