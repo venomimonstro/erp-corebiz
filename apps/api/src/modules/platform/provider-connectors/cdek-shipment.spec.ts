@@ -25,7 +25,7 @@ function fixture(known=false,canShip=true){
           environment:"SANDBOX",encrypted_credentials:"ciphertext",
           enabled:true,state:"VERIFIED"}],rowCount:1};
       if(sql.includes("SELECT o.id FROM sales_order"))
-        return {rows:canShip?[{id:order}]:[],rowCount:canShip?1:0};
+        return {rows:canShip?[{id:order,delivery_address:"Москва, ул. Ленина 1"}]:[],rowCount:canShip?1:0};
       if(sql.includes("FROM commerce_shipping_quote WHERE"))
         return {rows:[{tariff_code:136,from_city_code:44,to_city_code:137,
           package_weight_grams:1000,amount_minor:"55000"}],rowCount:1};
