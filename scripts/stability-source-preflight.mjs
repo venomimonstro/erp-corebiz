@@ -203,6 +203,27 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"infrastructure/postgres/240_atol_fiscal_reconciliation_queue.sql",
+      patterns:[/commerce_fiscal_reconcile_task/, /FOR UPDATE OF t SKIP LOCKED/,
+        /corebiz_claim_atol_fiscal_reconciliation/, /ENABLE ROW LEVEL SECURITY/,
+        /d.provider_uuid IS NOT NULL/],
+      message:"ATOL polling cannot scan other tenants or retry unknown receipts without provider UUID"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/atol-receipts.service.ts",
+      patterns:[/async pollReports/, /corebiz_claim_atol_fiscal_reconciliation/,
+        /private async verifyDocument/, /commerce_fiscal_reconcile_task/,
+        /REPORT_OR_IDENTITY_MISMATCH/, /COREBIZ_ATOL_REPORT_POLL_ENABLED/],
+      message:"Fiscal report GET-only polling and leased retry protections have regressed"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/atol-report-poll.spec.ts",
+      patterns:[/does not send any provider operation/,
+        /does not run overlapping reconciliations/,
+        /sanitized errors/],
+      message:"GET-only fiscal recovery regression scenarios are missing"
+    },
+    {
       path:"infrastructure/postgres/239_atol_advance_offset_refund.sql",
       patterns:[/sell_full_payment/, /sell_refund/,
         /commerce_fiscal_single_refund_per_bank_refund/,
