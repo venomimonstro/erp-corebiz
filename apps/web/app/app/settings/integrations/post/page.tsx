@@ -8,6 +8,11 @@ type Connection={
   configured:boolean;provider:string;state?:string;enabled?:boolean;
   fromPostcode?:string|null;verifiedAt?:string|null
 };
+type PostalShipment={
+  id:string;sales_order_id:string;business_number:string;state:string;
+  provider_order_id:string|null;barcode:string|null;
+  amount_minor:string;last_error_code:string|null;created_at:string
+};
 type Quote={
   quoteId:string;amountMinor:string;vatMinor:string;fromPostcode:string;
   toPostcode:string;massGrams:number;periodMin:number|null;
@@ -27,6 +32,15 @@ export default function RussianPostPage(){
   const [toPostcode,setToPostcode]=useState("");
   const [mass,setMass]=useState("1000");
   const [quote,setQuote]=useState<Quote|null>(null);
+  const [shipments,setShipments]=useState<PostalShipment[]>([]);
+  const [orderId,setOrderId]=useState("");
+  const [recipientName,setRecipientName]=useState("");
+  const [recipientPhone,setRecipientPhone]=useState("");
+  const [region,setRegion]=useState("");
+  const [place,setPlace]=useState("");
+  const [street,setStreet]=useState("");
+  const [house,setHouse]=useState("");
+
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
@@ -43,6 +57,9 @@ export default function RussianPostPage(){
         "/provider-connectors/sites/"+siteId+"/russian-post");
       setConnection(result);
       setFromPostcode(result.fromPostcode??"");
+      const records=await apiRequest<PostalShipment[]>(
+        "/provider-connectors/sites/"+siteId+"/russian-post/shipments");
+      setShipments(records);
     }catch(e){
       setError(e instanceof Error?e.message:"Не удалось получить настройки Почты");
     }
@@ -89,6 +106,43 @@ export default function RussianPostPage(){
       setQuote(result);
     }catch(e){setError(e instanceof Error?e.message:"Расчёт недоступен");}
     finally{setBusy(false);}
+  }
+
+  async function book(){
+    if(!quote||busy||!siteId)return;
+    if(!window.confirm("Создать реальный заказ в системе Почты России? "+
+      "Может возникнуть расход по договору. Проверьте адрес, "+
+      "подтверждённую оплату и резерв товара."))return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      const result=await apiRequest<{state:string;note:string}>(
+        "/provider-connectors/sites/"+siteId+"/russian-post/shipments",{
+          method:"POST",body:JSON.stringify({
+            orderId:orderId.trim(),quoteId:quote.quoteId,
+            recipientName:recipientName.trim(),
+            recipientPhone:recipientPhone.trim(),
+            destination:{index:toPostcode,region,place,street,house}
+          })
+        });
+      setNotice(result.note);setQuote(null);await load();
+    }catch(e){
+      setError(e instanceof Error?e.message:
+        "Заказ не подтверждён. Перед повтором проверьте кабинет Почты.");
+    }finally{setBusy(false);}
+  }
+  async function reconcileShipment(shipment:PostalShipment){
+    if(busy)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      const result=await apiRequest<{state:string;note:string;
+        barcode:string|null}>(
+        "/provider-connectors/sites/"+siteId+"/russian-post/shipments/"+
+          shipment.id+"/reconcile",{method:"POST"});
+      setNotice(result.note+(result.barcode?" · ШПИ "+result.barcode:""));
+      await load();
+    }catch(e){
+      setError(e instanceof Error?e.message:"Сверка Почты России недоступна");
+    }finally{setBusy(false);}
   }
 
   return <main className="app-shell">
@@ -183,11 +237,67 @@ export default function RussianPostPage(){
         </div>:null}
       </section>
       <section className="studio-section">
-        <h2>Пока недоступно</h2>
-        <p>Создание и отмена почтовых отправлений, присвоение ШПИ,
-          формирование партии, печать ярлыка, отслеживание и возвраты.
-          Эти операции будут доступны только после отдельной интеграции,
-          проверенной на реальном договоре и тестовых заказах.</p>
+        <h2>Оформление заказа в Почте России</h2>
+        <p className="muted">Используйте только оплаченный заказ с подтверждённым
+          чеком, резервом и способом «Курьер продавца». Стоимость Почты
+          оплачивается по договору продавца, а не списывается с покупателя.
+          Город, улица и дом должны совпадать с адресом покупки.</p>
+        <div className="studio-form-grid">
+          <label>ID заказа CoreBiz
+            <input value={orderId} onChange={e=>setOrderId(e.target.value)}
+              placeholder="UUID заказа"/>
+          </label>
+          <label>ФИО получателя
+            <input value={recipientName}
+              onChange={e=>setRecipientName(e.target.value)}/>
+          </label>
+          <label>Телефон получателя
+            <input value={recipientPhone} onChange={e=>setRecipientPhone(e.target.value)}
+              placeholder="+79990000000"/>
+          </label>
+          <label>Регион
+            <input value={region} onChange={e=>setRegion(e.target.value)}/>
+          </label>
+          <label>Населённый пункт
+            <input value={place} onChange={e=>setPlace(e.target.value)}/>
+          </label>
+          <label>Улица
+            <input value={street} onChange={e=>setStreet(e.target.value)}/>
+          </label>
+          <label>Дом
+            <input value={house} onChange={e=>setHouse(e.target.value)}/>
+          </label>
+        </div>
+        <button type="button" onClick={()=>void book()}
+          disabled={busy||!siteId||!quote||!orderId||!recipientName||
+            !recipientPhone||!region||!place||!street||!house||
+            new Date(quote.expiresAt).getTime()<=Date.now()}>
+          Создать заказ в «Отправка»
+        </button>
+        <p className="muted">После создания получите ID внутреннего заказа.
+          ШПИ и почтовый ярлык появятся только после отдельного
+          оформления партии в личном кабинете перевозчика.</p>
+      </section>
+      <section className="studio-section">
+        <h2>Почтовые заявки · сверка</h2>
+        {shipments.length===0?<p className="muted">Отправлений пока нет.</p>:null}
+        {shipments.map(item=><div key={item.id} className="first-day-summary">
+          <p><strong>{item.business_number}</strong> · {item.state}</p>
+          <p>ID Почты: {item.provider_order_id??"ещё не подтверждён"}
+            {item.barcode?" · ШПИ "+item.barcode:""}</p>
+          <p className="muted">Тариф: {money(item.amount_minor)} ·
+            {item.last_error_code??"нет ошибок"}</p>
+          <button type="button" className="secondary-button"
+            onClick={()=>void reconcileShipment(item)} disabled={busy}>
+            Сверить с Почтой России (без создания повторного заказа)
+          </button>
+        </div>)}
+      </section>
+      <section className="studio-section">
+        <h2>Следующий этап</h2>
+        <p>Формирование партий, печать ярлыков, подтверждённое
+          отслеживание движения посылки, отмена и возврат.
+          Созданный заказ в «Новых» ещё не означает сдачу перевозчику.</p>
       </section>
     </section>
   </main>;
