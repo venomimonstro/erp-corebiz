@@ -105,6 +105,26 @@ export class AtolReceiptsService{
         "Реальные чеки АТОЛ заблокированы до проверки с фискальным оператором"
       );
   }
+  async pending(ctx:TenantContext,siteId:string){
+    await this.permit(ctx);
+    if(!uuid(siteId))throw new BadRequestException("Неверный сайт");
+    return this.db.withTenantTransaction(ctx,async client=>{
+      const r=await client.query(
+        "SELECT i.id AS payment_intent_id,i.sales_order_id,"+
+        "o.business_number,i.amount_minor::text AS amount_minor,"+
+        "i.fiscal_status,i.updated_at FROM commerce_payment_intent i "+
+        "JOIN sales_order o ON o.tenant_id=i.tenant_id AND o.id=i.sales_order_id "+
+        "LEFT JOIN commerce_fiscal_document d ON d.tenant_id=i.tenant_id "+
+        "AND d.payment_intent_id=i.id AND d.operation='sell' "+
+        "WHERE i.tenant_id=$1 AND i.site_id=$2 "+
+        "AND i.purpose='STOREFRONT' AND i.fiscal_provider='ATOL_ONLINE' "+
+        "AND i.status='SUCCEEDED' AND i.finance_payment_id IS NOT NULL "+
+        "AND i.fiscal_status='PENDING' AND d.id IS NULL "+
+        "ORDER BY i.updated_at LIMIT 50",
+        [ctx.tenantId,siteId]);
+      return r.rows;
+    });
+  }
   async list(ctx:TenantContext,siteId:string){
     await this.permit(ctx);
     if(!uuid(siteId))throw new BadRequestException("Неверный сайт");
