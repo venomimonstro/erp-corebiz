@@ -16,13 +16,20 @@ const carrierUuid="77777777-7777-4777-8777-777777777777";
 const external="corebiz_"+payment+"_prepayment";
 function fixture(options:{
   scope?:string;eligible?:boolean;old?:boolean;amount?:string;
-  delivered?:boolean;refunded?:boolean;closed?:boolean;
+  delivered?:boolean;shipped?:boolean;refunded?:boolean;closed?:boolean;marked?:boolean;
   reportOperation?:"sell"|"sell_refund"|"sell_full_payment"
 }={}){
   const sql:string[]=[];
   const db={withTenantTransaction:jest.fn(async(_ctx:unknown,callback:any)=>
     callback({query:jest.fn(async(q:string)=>{
       sql.push(q);
+      if(q.includes("FROM commerce_payment_intent i")&&q.includes("FOR UPDATE OF d"))
+        return {rows:[{
+          sales_order_id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          fulfillment_status:options.shipped===false?"RESERVED":"SHIPPED",
+          delivery_status:options.delivered?"DELIVERED":"AWAITING_FULFILLMENT",
+          mode:"PICKUP"
+        }],rowCount:1};
       if(q.includes("FROM commerce_payment_intent i")&&q.includes("FOR UPDATE OF i"))
         return {rows:options.eligible===false?[]:[{
           id:payment,amount_minor:options.amount??"15000",
@@ -60,7 +67,8 @@ function fixture(options:{
           amount_minor:"15000"
         }]:[],rowCount:options.refunded?1:0};
       if(q.includes("FROM retail_serial_unit"))
-        return {rows:[],rowCount:0};
+        return {rows:options.marked?[{id:"some-marking"}]:[],
+          rowCount:options.marked?1:0};
       if(q.includes("FROM sales_order_line l JOIN commerce_payment_intent"))
         return {rows:[{description:"Доставка: курьер",quantity_milli:"1000",
           line_total_minor:"15000"}],rowCount:1};
@@ -137,6 +145,26 @@ describe("ATOL confirmed-payment fiscalization",()=>{
     expect(t.sql.some(q=>q.includes("UPDATE commerce_payment_intent")))
       .toBe(false);
   });
+  it("requires actual warehouse shipment before confirming handover",async()=>{
+    const t=fixture({shipped:false});
+    await expect(t.svc.confirmHandover(ctx,site,payment,"акт выдачи 2026-10-12",true))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(t.sql.some(q=>q.includes("UPDATE commerce_order_delivery"))).toBe(false);
+  });
+  it("records audited delivery once inventory was shipped",async()=>{
+    const t=fixture();
+    const result=await t.svc.confirmHandover(
+      ctx,site,payment,"акт выдачи 2026-10-12",true);
+    expect(result.deliveryStatus).toBe("DELIVERED");
+    expect(t.sql.some(q=>q.includes("UPDATE commerce_order_delivery"))).toBe(true);
+    expect(t.sql.some(q=>q.includes("INSERT INTO audit_event"))).toBe(true);
+  });
+  it("rejects settled advance when marking may be applicable",async()=>{
+    const t=fixture({delivered:true,marked:true});
+    await expect(t.svc.issueClosing(ctx,site,payment,true))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(t.sql.some(q=>q.includes("INSERT INTO commerce_fiscal_document"))).toBe(false);
+  });
   it("does not close advance before actual DELIVERED",async()=>{
     const t=fixture();
     await expect(t.svc.issueClosing(ctx,site,payment,true))
@@ -158,6 +186,11 @@ describe("ATOL confirmed-payment fiscalization",()=>{
   });
   it("requires confirmed bank refund plus finance record for sell_refund",async()=>{
     const t=fixture();
+    await expect(t.svc.issueRefund(ctx,site,payment,true))
+      .rejects.toBeInstanceOf(ConflictException);
+  });
+  it("requires a confirmed closing receipt for returns after delivery",async()=>{
+    const t=fixture({delivered:true,refunded:true,closed:false});
     await expect(t.svc.issueRefund(ctx,site,payment,true))
       .rejects.toBeInstanceOf(ConflictException);
   });
