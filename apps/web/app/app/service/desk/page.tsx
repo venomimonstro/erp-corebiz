@@ -83,6 +83,9 @@ export default function ServiceDeskPage(){
   const [bookCustomer,setBookCustomer]=useState("");
   const [bookSlot,setBookSlot]=useState("");
   const [newService,setNewService]=useState({name:"",duration:"60",price:"1500"});
+  const [priceService,setPriceService]=useState("");
+  const [priceStaff,setPriceStaff]=useState("");
+  const [personalPrice,setPersonalPrice]=useState("");
   const [newResource,setNewResource]=useState("");
   const [scheduleResource,setScheduleResource]=useState("");
   const [newCustomer,setNewCustomer]=useState({name:"",phone:"",email:""});
@@ -180,6 +183,31 @@ export default function ServiceDeskPage(){
       })});
       setNewService({name:"",duration:"60",price:"1500"});
     },"Услуга сохранена. Теперь добавьте специалиста и его график.");
+  }
+  async function savePersonalPrice(e:FormEvent){
+    e.preventDefault();
+    const service=services.find(x=>x.id===priceService);
+    const employee=staff.find(x=>x.id===priceStaff);
+    const normalized=personalPrice.trim().replace(",",".");
+    if(!service||!employee||!/^\\d{1,9}(?:\\.\\d{1,2})?$/.test(normalized)){
+      setError("Выберите услугу, специалиста и цену в рублях.");return;
+    }
+    if(rules.some(rule=>rule.service_id===service.id&&
+      rule.employee_resource_id===employee.id)){
+      setError("Правило для этой услуги и специалиста уже существует. Измените его в расширенных настройках.");return;
+    }
+    const [integer,fraction=""]=normalized.split(".");
+    const minor=(BigInt(integer)*100n+BigInt(fraction.padEnd(2,"0"))).toString();
+    await mutate(async()=>{
+      await apiRequest("/service/delivery-rules",{
+        method:"POST",
+        body:JSON.stringify({
+          serviceId:service.id,employeeResourceId:employee.id,
+          deliveryFormat:"INDIVIDUAL",priceMinor:minor
+        })
+      });
+      setPersonalPrice("");setPriceService("");setPriceStaff("");
+    },"Персональная цена специалиста сохранена. Она применяется сервером при новых записях.");
   }
   async function createResource(e:FormEvent){
     e.preventDefault();
@@ -403,6 +431,28 @@ export default function ServiceDeskPage(){
               {!customerAccess?<p role="status" className="muted">У вашей роли нет доступа к списку клиентов.</p>:null}
             </form>
           </div>
+          <form className="service-desk-panel" onSubmit={e=>void savePersonalPrice(e)}>
+            <span className="service-desk-index">05</span>
+            <h3>Индивидуальная цена мастера</h3>
+            <p className="muted">Для каждого специалиста можно назначить свою стоимость услуги. Уже оформленные визиты сохраняют первоначальную цену.</p>
+            <div className="service-desk-two">
+              <label>Услуга<select required value={priceService} onChange={e=>setPriceService(e.target.value)}>
+                <option value="">Выберите услугу</option>
+                {services.filter(x=>x.delivery_format==="INDIVIDUAL").map(x=><option key={x.id} value={x.id}>{x.name}</option>)}
+              </select></label>
+              <label>Специалист<select required value={priceStaff} onChange={e=>setPriceStaff(e.target.value)}>
+                <option value="">Выберите мастера</option>
+                {staff.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}
+              </select></label>
+            </div>
+            <label>Цена, ₽<input required inputMode="decimal" value={personalPrice}
+              onChange={e=>setPersonalPrice(e.target.value)} placeholder="2000"/></label>
+            <button disabled={busy||!priceService||!priceStaff||!personalPrice.trim()}>
+              Сохранить персональную цену
+            </button>
+            <p className="muted">Правил сохранено: {rules.length}. Для редактирования существующих правил, периодов и приоритетов используйте расширенные настройки.</p>
+          </form>
+
           <section className="service-desk-panel">
             <h3>Дальнейшая настройка</h3>
             <div className="service-desk-links">
