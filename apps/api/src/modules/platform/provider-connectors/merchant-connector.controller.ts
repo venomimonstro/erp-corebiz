@@ -49,6 +49,34 @@ export class MerchantConnectorController{
     return {ok:true,data:await this.fiscal.pending(this.context(req),siteId)};
   }
 
+  @Get("sites/:siteId/atol/pending-followups")
+  @RequirePermission("sites.manage")
+  async pendingAtolFollowups(@Req() req:AuthenticatedRequest,
+    @Param("siteId") siteId:string):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.fiscal.pendingFollowups(
+      this.context(req),siteId)};
+  }
+
+  @Post("sites/:siteId/atol/payments/:paymentId/settlement")
+  @RequirePermission("sites.manage")
+  @ApiCost("EXPENSIVE")
+  async settleAtol(@Req() req:AuthenticatedRequest,
+    @Param("siteId") siteId:string,@Param("paymentId") paymentId:string,
+    @Body() body:{nonMarkedConfirmed:boolean}):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.fiscal.issueClosing(
+      this.context(req),siteId,paymentId,body?.nonMarkedConfirmed)};
+  }
+
+  @Post("sites/:siteId/atol/payments/:paymentId/refund-receipt")
+  @RequirePermission("sites.manage")
+  @ApiCost("EXPENSIVE")
+  async refundAtol(@Req() req:AuthenticatedRequest,
+    @Param("siteId") siteId:string,@Param("paymentId") paymentId:string,
+    @Body() body:{nonMarkedConfirmed:boolean}):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.fiscal.issueRefund(
+      this.context(req),siteId,paymentId,body?.nonMarkedConfirmed)};
+  }
+
   @Get("sites/:siteId/atol/receipts")
   @RequirePermission("sites.manage")
   async atolReceipts(@Req() req:AuthenticatedRequest,@Param("siteId") siteId:string)
