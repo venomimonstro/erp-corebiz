@@ -938,6 +938,16 @@ export class BookingService {
         ]
       );
 
+      // Use the same delivery rules as createBooking. Otherwise an
+      // employee-specific 90-minute service can appear as a free 60-minute
+      // slot and fail at checkout. Avoid rule evaluation per slot when the
+      // service has no rule definitions.
+      const hasDeliveryRules=await client.query(
+        `SELECT 1 FROM service_delivery_rule
+         WHERE tenant_id=$1 AND service_id=$2 AND status='ACTIVE'
+         LIMIT 1`,
+        [context.tenantId,input.serviceId]
+      );
       const result: Array<{
         resourceId: string;
         resourceName: string;
@@ -948,11 +958,28 @@ export class BookingService {
       for (const resource of resources.rows) {
         let cursor = new Date(from);
         while (cursor < to && result.length < 500) {
-          const endsAt = new Date(
-            cursor.getTime() + service.duration_minutes * 60000
-          );
-
-          if (endsAt > to) break;
+          let duration=service.duration_minutes;
+          if(hasDeliveryRules.rowCount){
+            try{
+              const rule=await this.resolveDeliveryRule(
+                client,context.tenantId,input.serviceId,
+                resource.type==="EMPLOYEE"?resource.id:null,
+                null,service.delivery_format,cursor,resource.timezone
+              );
+              duration=rule?.duration_minutes??duration;
+            }catch(error){
+              // A staff-specific restriction is expected for another
+              // employee. Hide that slot; never suppress database failures.
+              if(!(error instanceof ConflictException))throw error;
+              cursor=new Date(cursor.getTime()+step*60000);
+              continue;
+            }
+          }
+          const endsAt = new Date(cursor.getTime()+duration*60000);
+          if (endsAt > to) {
+            cursor=new Date(cursor.getTime()+step*60000);
+            continue;
+          }
 
           const ok = await this.resourceAvailable(
             client,
