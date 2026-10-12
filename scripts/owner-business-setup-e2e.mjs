@@ -30,7 +30,7 @@ const steps=[];
 let stage="preflight";
 let current="bootstrap";
 function step(name){stage=name;}
-async function api(who,method,path,data,expected=200){
+async function api(who,method,path,data,expected=method==="POST"?201:200){
   const started=performance.now();
   const response=await fetch(new URL("/api/v1"+path,base),{
     method,redirect:"error",signal:AbortSignal.timeout(25000),
