@@ -8,7 +8,7 @@ type Provider="CDEK"|"ATOL_ONLINE";
 type Connection={
   id:string;provider:Provider;state:string;
   environment:"SANDBOX"|"PRODUCTION";enabled:boolean;
-  public_config:{fromCityCode?:number;groupCode?:string};
+  public_config:{fromCityCode?:number;groupCode?:string;fiscalCompany?:FiscalCompany};
   verified_at:string|null;last_error_code:string|null
 };
 type Quote={
@@ -20,6 +20,12 @@ type Shipment={
   provider_order_uuid:string|null;provider_number:string|null;
   amount_minor:string;last_error_code:string|null;created_at:string
 };
+type FiscalCompany={inn:string;email:string;sno:string;paymentAddress:string;vatType:string};
+type FiscalPending={payment_intent_id:string;business_number:string;amount_minor:string};
+type FiscalDocument={id:string;payment_intent_id:string;state:string;provider_uuid:string|null;
+  fn_number:string|null;fiscal_document_number:number|null;
+  fiscal_document_attribute:string|null;receipt_url:string|null;last_error_code:string|null};
+
 
 const money=(minor:string)=>new Intl.NumberFormat("ru-RU",{
   currency:"RUB",style:"currency"
@@ -36,6 +42,14 @@ export default function MerchantConnectorsPage(){
   const [atolLogin,setAtolLogin]=useState("");
   const [atolPassword,setAtolPassword]=useState("");
   const [atolGroup,setAtolGroup]=useState("");
+  const [fiscalCompany,setFiscalCompany]=useState<FiscalCompany>({
+    inn:"",email:"",sno:"usn_income",paymentAddress:"",vatType:"none"
+  });
+  const [atolPending,setAtolPending]=useState<FiscalPending[]>([]);
+  const [atolDocs,setAtolDocs]=useState<FiscalDocument[]>([]);
+  const [nonMarkedConfirmed,setNonMarkedConfirmed]=useState(false);
+  const [fiscalUnknownUuid,setFiscalUnknownUuid]=useState("");
+
   const [toCity,setToCity]=useState("137");
   const [weight,setWeight]=useState("1000");
   const [length,setLength]=useState("20");
@@ -59,11 +73,19 @@ export default function MerchantConnectorsPage(){
   const load=useCallback(async()=>{
     if(!siteId)return;
     try{
-      const [connections,shipments]=await Promise.all([
+      const [connections,shipments,pending,receipts]=await Promise.all([
         apiRequest<Connection[]>("/provider-connectors/sites/"+siteId),
-        apiRequest<Shipment[]>("/provider-connectors/sites/"+siteId+"/shipments")
+        apiRequest<Shipment[]>("/provider-connectors/sites/"+siteId+"/shipments"),
+        apiRequest<FiscalPending[]>("/provider-connectors/sites/"+siteId+
+          "/atol/pending-payments").catch(()=>[]),
+        apiRequest<FiscalDocument[]>("/provider-connectors/sites/"+siteId+
+          "/atol/receipts").catch(()=>[])
       ]);
       setConnections(connections);setShipments(shipments);
+      setAtolPending(pending);setAtolDocs(receipts);
+      const cfg=connections.find(c=>c.provider==="ATOL_ONLINE");
+      if(cfg?.public_config?.fiscalCompany)
+        setFiscalCompany(cfg.public_config.fiscalCompany);
     }catch(e){setError(e instanceof Error?e.message:"Подключения не загружены");}
   },[siteId]);
   useEffect(()=>{void load();},[load]);
@@ -78,7 +100,8 @@ export default function MerchantConnectorsPage(){
       await apiRequest("/provider-connectors/sites/"+siteId+"/configure",{
         method:"POST",body:JSON.stringify({
           provider,environment,credentials,
-          ...(provider==="CDEK"?{fromCityCode:Number(city)}:{})
+          ...(provider==="CDEK"?{fromCityCode:Number(city)}
+            :{fiscalCompany})
         })
       });
       setClientSecret("");setAtolPassword("");
@@ -114,6 +137,48 @@ export default function MerchantConnectorsPage(){
     }catch(e){setError(e instanceof Error?e.message:"Расчёт доставки недоступен");}
     finally{setBusy(false);}
   }
+  async function issueFiscal(paymentId:string){
+    if(!nonMarkedConfirmed||busy)return;
+    if(!window.confirm(
+      "Отправить действительный чек предоплаты на ККТ АТОЛ? "+
+      "Операция юридически значима и не может быть повторена автоматически."
+    ))return;
+    setBusy(true);setError("");setNote("");
+    try{
+      const receipt=await apiRequest<{state:string;note?:string}>(
+        "/provider-connectors/sites/"+siteId+
+        "/atol/payments/"+paymentId+"/receipt",{
+          method:"POST",body:JSON.stringify({nonMarkedConfirmed:true})
+        });
+      setNote(receipt.note??("Состояние АТОЛ: "+receipt.state+
+        ". Для получения ФН/ФД/ФП нажмите «Сверить»"));
+      await load();
+    }catch(e){
+      setError(e instanceof Error?e.message:
+        "Чек не отправлен: проверьте журнал, не дублируйте фискальную операцию");
+    }finally{setBusy(false);}
+  }
+  async function verifyFiscal(document:FiscalDocument){
+    setBusy(true);setError("");setNote("");
+    try{
+      const result=await apiRequest<{
+        state:string;fnNumber?:string;documentNumber?:number;fiscalSign?:string
+      }>("/provider-connectors/sites/"+siteId+
+        "/atol/receipts/"+document.id+"/verify",{
+          method:"POST",body:JSON.stringify({
+            ...(document.provider_uuid?{}:{providerUuid:fiscalUnknownUuid.trim()})
+          })
+        });
+      setNote(result.state==="DONE"
+        ?("Чек подтверждён: ФН "+result.fnNumber+
+          ", ФД "+result.documentNumber+", ФП "+result.fiscalSign)
+        :("Состояние чека: "+result.state));
+      setFiscalUnknownUuid("");await load();
+    }catch(e){
+      setError(e instanceof Error?e.message:"АТОЛ не подтвердил фискальные реквизиты");
+    }finally{setBusy(false);}
+  }
+
   async function book(quoteId:string){
     if(!window.confirm(
       "Создать реальное отправление у СДЭК? Операция может привести к расходам по договору магазина. "
@@ -224,6 +289,40 @@ export default function MerchantConnectorsPage(){
             <label>Код группы ККТ
               <input value={atolGroup} onChange={e=>setAtolGroup(e.target.value)}/>
             </label>
+            {([
+              ["inn","ИНН юридического лица/ИП"],
+              ["email","Email для отправки чеков"],
+              ["paymentAddress","Место расчёта (адрес сайта)"]
+            ] as const).map(([key,label])=>(
+              <label key={key}>{label}
+                <input value={fiscalCompany[key]}
+                  onChange={e=>setFiscalCompany(old=>({
+                    ...old,[key]:e.target.value
+                  }))}/>
+              </label>
+            ))}
+            <label>Система налогообложения
+              <select value={fiscalCompany.sno}
+                onChange={e=>setFiscalCompany(old=>({...old,sno:e.target.value}))}>
+                <option value="osn">ОСНО</option>
+                <option value="usn_income">УСН доходы</option>
+                <option value="usn_income_outcome">УСН доходы − расходы</option>
+                <option value="esn">ЕСХН</option>
+                <option value="patent">ПСН</option>
+              </select>
+            </label>
+            <label>НДС для всех позиций пилотного чека
+              <select value={fiscalCompany.vatType}
+                onChange={e=>setFiscalCompany(old=>({...old,vatType:e.target.value}))}>
+                <option value="none">Без НДС</option>
+                <option value="vat0">0%</option>
+                <option value="vat5">5%</option>
+                <option value="vat7">7%</option>
+                <option value="vat10">10%</option>
+                <option value="vat20">20% (для старых операций)</option>
+                <option value="vat22">22% (2026)</option>
+              </select>
+            </label>
           </>}
         </div>
         <div className="studio-hero-actions">
@@ -238,6 +337,49 @@ export default function MerchantConnectorsPage(){
           ?"Авторизация по API v5 не фискализирует чек. Для отправки чеков потребуется отдельный жизненный цикл."
           :"Авторизация не создаёт доставку. Отправления включим после приёмки накладных, ярлыков и статусов."}</p>
       </section>
+      {provider==="ATOL_ONLINE"?<section className="studio-section">
+        <h2>Предоплата и фискальные документы</h2>
+        <p>Одна подтверждённая оплата YooKassa → один чек АТОЛ. Документы
+          создаются из строк заказа. Отправка возможна только при включённом
+          фискальном контуре сервера и проверенной кассе.</p>
+        <label>
+          <input type="checkbox" checked={nonMarkedConfirmed}
+            onChange={e=>setNonMarkedConfirmed(e.target.checked)}/>
+          Подтверждаю, что в этих заказах нет маркируемых или подакцизных
+          товаров и применима указанная ставка НДС.
+        </label>
+        <h3>Оплачены банком, ожидают чек АТОЛ</h3>
+        {atolPending.length?atolPending.map(payment=><div
+          key={payment.payment_intent_id} className="first-day-step">
+          <div><strong>{payment.business_number}</strong>
+            <p>{money(payment.amount_minor)}</p></div>
+          <button type="button" disabled={busy||!nonMarkedConfirmed}
+            onClick={()=>void issueFiscal(payment.payment_intent_id)}>
+            Отправить чек предоплаты</button>
+        </div>):<p>Нет доступных платежей для чеков АТОЛ.</p>}
+        <h3>Журнал фискализации</h3>
+        <div className="data-table-wrap"><table className="data-table">
+          <thead><tr><th>Документ</th><th>Состояние</th><th>ФН/ФД/ФП</th><th>Сверка</th></tr></thead>
+          <tbody>{atolDocs.map(doc=><tr key={doc.id}>
+            <td>{doc.id.slice(0,8)}</td>
+            <td>{doc.state}</td>
+            <td>{doc.fn_number??"—"} / {doc.fiscal_document_number??"—"} /
+              {doc.fiscal_document_attribute??"—"}</td>
+            <td>
+              {!doc.provider_uuid?<input value={fiscalUnknownUuid}
+                onChange={e=>setFiscalUnknownUuid(e.target.value)}
+                aria-label="UUID АТОЛ из кабинета" placeholder="UUID из кабинета АТОЛ"/>:null}
+              <button type="button"
+                disabled={busy||doc.state==="DONE"||
+                  (!doc.provider_uuid&&!fiscalUnknownUuid.trim())}
+                onClick={()=>void verifyFiscal(doc)}>Сверить в АТОЛ</button>
+            </td>
+          </tr>)}</tbody>
+        </table></div>
+        <p className="muted">Состояние WAIT не является чеком. Успех только
+          после подтверждения АТОЛ с ФН, ФД и ФП. Возврат прихода, зачёт
+          аванса при выдаче и маркируемые товары требуют отдельных операций.</p>
+      </section>:null}
       {provider==="CDEK"&&current?.state==="VERIFIED"?<section className="studio-section">
         <h2>Проверить расчёт доставки</h2>
         <div className="studio-form-grid">
