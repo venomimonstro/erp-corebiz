@@ -59,6 +59,19 @@ try{
   await schedulePanel.getByRole("button",{name:"Установить шаблон смен"}).click();
   await page.getByText("Установлен график:",{exact:false}).waitFor({timeout:20000});
 
+  const pricingPanel=page.locator(".service-desk-panel").filter({
+    has:page.getByRole("heading",{name:"Индивидуальная цена мастера"})
+  });
+  await pricingPanel.getByLabel("Услуга").selectOption({index:1});
+  await pricingPanel.getByLabel("Специалист").selectOption({index:1});
+  await pricingPanel.getByLabel("Цена, ₽").fill("1750");
+  await pricingPanel.getByRole("button",{
+    name:"Сохранить персональную цену"
+  }).click();
+  await page.getByText("Персональная цена специалиста сохранена.",{
+    exact:false
+  }).waitFor({timeout:20000});
+
   const customerPanel=page.locator(".service-desk-panel").filter({
     has:page.getByRole("heading",{name:"Первый клиент"})
   });
@@ -113,6 +126,6 @@ try{
   console.log(JSON.stringify({
     result:"PASS",scenario:"salon owner service desk",
     verified:["sign-up","service price","employee","shifts","customer",
-      "booking","customer history","economics","390px responsive"]
+      "personal pricing","booking","customer history","economics","390px responsive"]
   }));
 }finally{await browser.close();}
