@@ -269,7 +269,8 @@ export class AtolOnlineGateway{
       }catch{ /* An optional OFD link is untrusted; do not promote it. */ }
     }
     return {
-      uuid,state:"DONE",externalId:result.external_id,
+      uuid,state:"DONE",
+      ...(result.external_id?{externalId:result.external_id}:{}),
       fnNumber:p.fn_number,
       documentNumber:p.fiscal_document_number,
       fiscalSign:String(p.fiscal_document_attribute),
