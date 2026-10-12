@@ -15,6 +15,12 @@ type Quote={
   quoteId:string;tariffCode:number;amountMinor:string;
   periodMin:number|null;periodMax:number|null;expiresAt:string
 };
+type Shipment={
+  id:string;sales_order_id:string;business_number:string;state:string;
+  provider_order_uuid:string|null;provider_number:string|null;
+  amount_minor:string;last_error_code:string|null;created_at:string
+};
+
 const money=(minor:string)=>new Intl.NumberFormat("ru-RU",{
   currency:"RUB",style:"currency"
 }).format(Number(minor)/100);
@@ -36,6 +42,12 @@ export default function MerchantConnectorsPage(){
   const [width,setWidth]=useState("20");
   const [height,setHeight]=useState("20");
   const [quotes,setQuotes]=useState<Quote[]>([]);
+  const [shipments,setShipments]=useState<Shipment[]>([]);
+  const [shipOrderId,setShipOrderId]=useState("");
+  const [shipName,setShipName]=useState("");
+  const [shipPhone,setShipPhone]=useState("");
+  const [unknownUuid,setUnknownUuid]=useState("");
+
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [note,setNote]=useState("");
@@ -47,8 +59,11 @@ export default function MerchantConnectorsPage(){
   const load=useCallback(async()=>{
     if(!siteId)return;
     try{
-      setConnections(await apiRequest<Connection[]>(
-        "/provider-connectors/sites/"+siteId));
+      const [connections,shipments]=await Promise.all([
+        apiRequest<Connection[]>("/provider-connectors/sites/"+siteId),
+        apiRequest<Shipment[]>("/provider-connectors/sites/"+siteId+"/shipments")
+      ]);
+      setConnections(connections);setShipments(shipments);
     }catch(e){setError(e instanceof Error?e.message:"Подключения не загружены");}
   },[siteId]);
   useEffect(()=>{void load();},[load]);
@@ -99,6 +114,46 @@ export default function MerchantConnectorsPage(){
     }catch(e){setError(e instanceof Error?e.message:"Расчёт доставки недоступен");}
     finally{setBusy(false);}
   }
+  async function book(quoteId:string){
+    if(!window.confirm(
+      "Создать реальное отправление у СДЭК? Операция может привести к расходам по договору магазина. "
+      +"Заказ должен быть оплачен, зарезервирован и оформлен на курьерскую доставку."
+    ))return;
+    setBusy(true);setError("");setNote("");
+    try{
+      const result=await apiRequest<{shipmentId:string;state:string;note?:string}>(
+        "/provider-connectors/sites/"+siteId+"/cdek/shipments",{
+          method:"POST",body:JSON.stringify({
+            orderId:shipOrderId.trim(),quoteId,
+            recipientName:shipName.trim(),recipientPhone:shipPhone.trim(),
+            lengthCm:Number(length),widthCm:Number(width),heightCm:Number(height)
+          })
+        });
+      setNote(result.state==="UNKNOWN"
+        ?"СДЭК мог создать отправление. Не повторяйте! Сверьте UUID в кабинете и проверьте существующее."
+        :result.note??"Накладная отправлена в СДЭК. Проверьте статус.");
+      await load();setQuotes([]);
+    }catch(e){
+      setError(e instanceof Error?e.message:"Не удалось отправить накладную; перед повтором проверьте СДЭК.");
+    }finally{setBusy(false);}
+  }
+  async function verifyShipment(row:Shipment){
+    setBusy(true);setError("");setNote("");
+    try{
+      const checked=await apiRequest<{
+        state:string;trackingNumber:string|null
+      }>("/provider-connectors/sites/"+siteId+"/cdek/shipments/"+row.id+"/verify",{
+        method:"POST",body:JSON.stringify({
+          ...(row.provider_order_uuid?{}:{providerUuid:unknownUuid.trim()})
+        })
+      });
+      setNote("СДЭК подтвердил: "+checked.state+
+        (checked.trackingNumber?" · "+checked.trackingNumber:""));
+      setUnknownUuid("");await load();
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось сверить UUID СДЭК");}
+    finally{setBusy(false);}
+  }
+
   return <main className="app-shell">
     <AppSidebar active="settings"/>
     <section className="workspace workspace-wide studio-premium">
@@ -211,9 +266,58 @@ export default function MerchantConnectorsPage(){
             </tr>)}
           </tbody></table>
         </div>:null}
-        <p className="muted">Расчёты справочные, не используются для создания
-          накладной покупателя до внедрения проверенного checkout-адаптера.</p>
+        <p className="muted">Тариф рассчитан по API СДЭК. Цена не
+          изменяет автоматически сумму уже оплаченного заказа. Стоимость
+          перевозки оплачивается продавцом по его договору.</p>
+        <h3>Оформить накладную для уже оплаченного заказа</h3>
+        <p>Одна накладная на заказ. При неизвестном ответе СДЭК
+          система блокирует повтор до ручной сверки.</p>
+        <div className="studio-form-grid">
+          <label>ID оплаченного заказа CoreBiz
+            <input value={shipOrderId} onChange={e=>setShipOrderId(e.target.value)}
+              placeholder="UUID из списка заказов"/>
+          </label>
+          <label>Имя получателя
+            <input value={shipName} onChange={e=>setShipName(e.target.value)}/>
+          </label>
+          <label>Телефон
+            <input value={shipPhone} onChange={e=>setShipPhone(e.target.value)}
+              placeholder="+79991112233"/>
+          </label>
+        </div>
+        <div className="first-day-steps">
+          {quotes.map(q=><article className="first-day-step" key={q.quoteId}>
+            <span><icon name="package" /></span>
+            <div><strong>Тариф №{q.tariffCode} · {money(q.amountMinor)}</strong>
+              <p>Действует до {new Date(q.expiresAt).toLocaleString("ru-RU")}</p>
+            </div>
+            <button type="button" disabled={busy||!shipOrderId||!shipName||!shipPhone}
+              onClick={()=>void book(q.quoteId)}>Создать накладную</button>
+          </article>)}
+        </div>
       </section>:null}
+      <section className="studio-section">
+        <h2>Существующие отправления СДЭК</h2>
+        <p>Статус проверяется через GET СДЭК. Он не означает
+          поступление оплаты или фактическое списание товара со склада.</p>
+        <div className="data-table-wrap"><table className="data-table">
+          <thead><tr><th>Заказ</th><th>Номер СДЭК</th><th>Состояние</th><th>Действие</th></tr></thead>
+          <tbody>{shipments.map(sh=><tr key={sh.id}>
+            <td>{sh.business_number}</td>
+            <td>{sh.provider_number??"—"}</td>
+            <td>{sh.state}{sh.last_error_code?" · сверка требуется":""}</td>
+            <td>
+              {!sh.provider_order_uuid?<input
+                aria-label="UUID СДЭК для сверки" placeholder="UUID из кабинета СДЭК"
+                value={unknownUuid} onChange={e=>setUnknownUuid(e.target.value)}
+              />:null}
+              <button type="button" disabled={busy||
+                (!sh.provider_order_uuid&&!unknownUuid.trim())}
+                onClick={()=>void verifyShipment(sh)}>Сверить</button>
+            </td>
+          </tr>)}</tbody>
+        </table></div>
+      </section>
     </section>
   </main>;
 }
