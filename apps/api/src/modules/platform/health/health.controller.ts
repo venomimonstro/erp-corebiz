@@ -1,4 +1,5 @@
-import { Controller, Get, ServiceUnavailableException } from "@nestjs/common";
+import { Controller, Get, Req, ServiceUnavailableException } from "@nestjs/common";
+import type {AuthenticatedRequest} from "../auth/auth.types";
 import type { ApiSuccess, HealthStatus } from "@corebiz/contracts";
 import { Public } from "../auth/public.decorator";
 import { RequirePermission } from "../authorization/require-permission.decorator";
@@ -42,11 +43,17 @@ export class HealthController {
 
   @Get("diagnostics")
   @RequirePermission("dashboard.owner.read")
-  async diagnostics(): Promise<ApiSuccess<unknown>> {
+  async diagnostics(
+    @Req() request:AuthenticatedRequest
+  ): Promise<ApiSuccess<unknown>> {
+    const auth=request.auth!;
     return {
       ok: true,
       data: {
-        ...(await this.health.diagnostics()),
+        ...(await this.health.diagnostics({
+          tenantId:auth.tenantId,userId:auth.userId,
+          membershipId:auth.membershipId
+        })),
         api: this.metrics.snapshot()
       }
     };
