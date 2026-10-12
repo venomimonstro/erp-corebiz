@@ -783,9 +783,10 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
       client.query<{
         id:string;intent_id:string;status:string;site_id:string;amount_minor:string;
         sales_order_id:string;provider_payment_id:string;
+        fiscal_provider:"YOOKASSA"|"ATOL_ONLINE";
       }>(
         `SELECT r.id,r.intent_id,r.status,i.site_id,r.amount_minor::text,
-           r.sales_order_id,i.provider_payment_id
+           r.sales_order_id,i.provider_payment_id,i.fiscal_provider
          FROM commerce_refund r
          JOIN commerce_payment_intent i ON i.tenant_id=r.tenant_id AND i.id=r.intent_id
          WHERE r.tenant_id=$1 AND r.provider_refund_id=$2`,
@@ -811,16 +812,18 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
     if(refund.status==="SUCCEEDED"){
       // A successful bank refund must not produce a second ledger entry
       // when a late fiscal receipt finally becomes available.
-      await this.database.withTenantTransaction(context,async client=>
-        client.query(
-          `UPDATE commerce_refund SET
-            fiscal_status=CASE
-              WHEN $3='succeeded' THEN 'SUCCEEDED'
-              WHEN $3='failed' THEN 'FAILED'
-              ELSE fiscal_status END,
-            updated_at=now()
-           WHERE tenant_id=$1 AND id=$2 AND status='SUCCEEDED'`,
-          [tenantId,refund.id,verified.receipt_registration??""]));
+      if(refund.fiscal_provider!=="ATOL_ONLINE"){
+        await this.database.withTenantTransaction(context,async client=>
+          client.query(
+            `UPDATE commerce_refund SET
+              fiscal_status=CASE
+                WHEN $3='succeeded' THEN 'SUCCEEDED'
+                WHEN $3='failed' THEN 'FAILED'
+                ELSE fiscal_status END,
+              updated_at=now()
+             WHERE tenant_id=$1 AND id=$2 AND status='SUCCEEDED'`,
+            [tenantId,refund.id,verified.receipt_registration??""]));
+      }
       return;
     }
     const operator=await this.database.withTenantTransaction(context,async client=>{
@@ -845,6 +848,7 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
          SET status='SUCCEEDED',finance_payment_id=$3,fiscal_status=$4,updated_at=now()
          WHERE tenant_id=$1 AND id=$2 AND status IN ('NEW','PENDING','SUCCEEDED')`,
         [tenantId,refund.id,posted.paymentId,
+          refund.fiscal_provider==="ATOL_ONLINE"?"PENDING":
           verified.receipt_registration==="succeeded"?"SUCCEEDED":
           verified.receipt_registration==="failed"?"FAILED":"PENDING"]));
   }
