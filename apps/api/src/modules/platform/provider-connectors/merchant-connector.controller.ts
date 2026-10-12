@@ -29,7 +29,8 @@ export class MerchantConnectorController{
     @Body() body:{
       provider:"CDEK"|"ATOL_ONLINE";
       environment:"SANDBOX"|"PRODUCTION";
-      credentials:Record<string,unknown>;fromCityCode?:number
+      credentials:Record<string,unknown>;fromCityCode?:number;
+      fiscalCompany?:{inn:string;email:string;sno:string;paymentAddress:string;vatType:string}
     }):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.service.configure(this.context(req),id,body)};
   }
@@ -41,6 +42,13 @@ export class MerchantConnectorController{
   ):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.service.verify(this.context(req),id,provider)};
   }
+  @Get("sites/:siteId/atol/pending-payments")
+  @RequirePermission("sites.manage")
+  async atolPending(@Req() req:AuthenticatedRequest,@Param("siteId") siteId:string)
+  :Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.fiscal.pending(this.context(req),siteId)};
+  }
+
   @Get("sites/:siteId/atol/receipts")
   @RequirePermission("sites.manage")
   async atolReceipts(@Req() req:AuthenticatedRequest,@Param("siteId") siteId:string)
