@@ -71,6 +71,10 @@ async function main(){
   assert.equal(health.status,"ok");
 
   step("02 registration and session");
+  await api(owner,"GET","/auth/me",undefined,401);
+  await api(owner,"POST","/auth/register",{
+    email:"not-an-email",password:"short",companyName:"X"
+  },400);
   const registered=await post(owner,"/auth/register",{
     email:ownerEmail,password:"Owner-"+run,
     companyName:"Test owner electronics "+run.slice(0,8)
@@ -114,6 +118,7 @@ async function main(){
   assert.equal(joined.auth.isOwner,false);
   const employeeMe=await get(employee,"/auth/me");
   assert.equal(employeeMe.auth.tenantId,firstTenant);
+  assert.equal(employeeMe.auth.isOwner,false);
   await api(employee,"POST","/catalog/products",{
     name:"Unauthorized staff product",kind:"STOCKABLE"
   },403);
@@ -126,6 +131,28 @@ async function main(){
     x.email===employeeEmail),"Accepted invitation must remain in owner history");
   assert.ok(!JSON.stringify(invitations).includes(invite.oneTimeToken),
     "Invitation list must never leak bearer token");
+
+  step("04b organization, branch and team setup");
+  // A legal entity may exist as a test draft without a real INN.
+  // This never constitutes verified tax registration or fiscal readiness.
+  const legal=await post(owner,"/organization/legal-entities",{
+    name:"Disposable electronics legal entity"
+  });
+  const branch=await post(owner,"/organization/branches",{
+    name:"Test showroom branch",legalEntityId:legal.id
+  });
+  const operatingTeam=await post(owner,"/organization/teams",{
+    name:"Sales and pickup team",branchId:branch.id
+  });
+  const assigned=await post(owner,"/organization/teams/assign",{
+    teamId:operatingTeam.id,membershipId:joined.auth.membershipId
+  });
+  assert.equal(assigned.assigned,true);
+  const structure=await get(owner,"/organization");
+  assert.ok(structure.legalEntities.some(x=>x.id===legal.id));
+  assert.ok(structure.branches.some(x=>x.id===branch.id&&
+    x.legalEntityId===legal.id));
+  assert.ok(structure.teams.some(x=>x.id===operatingTeam.id&&x.members>=1));
 
   step("05 customer and CRM deal");
   const customer=await post(owner,"/crm/customers",{
@@ -276,7 +303,8 @@ async function main(){
     result:"PASS",mode:"disposable-api-e2e",
     runId:run,
     coverage:{
-      companies:2,invitedEmployees:1,crmCustomers:2,crmDeals:1,
+      companies:2,invitedEmployees:1,legalEntities:1,branches:1,
+      operatingTeams:1,crmCustomers:2,crmDeals:1,
       warehouses:1,products:2,openingStockRecords:2,
       publicStorefronts:1,deliveryMethods:1,
       services:1,resources:1,bookings:1
