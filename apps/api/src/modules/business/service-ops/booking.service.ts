@@ -2430,7 +2430,7 @@ export class BookingService {
             priorResources.rows.every((resource,index)=>{
               const expected=expectedAllocations[index];
               return resource.resource_id===expected?.resourceId &&
-                (!expected.zoneId||resource.zone_id===expected.zoneId) &&
+                resource.zone_id===expected.zoneId &&
                 (expected.capacityUnits===1||resource.capacity_units===expected.capacityUnits);
             });
           if(
