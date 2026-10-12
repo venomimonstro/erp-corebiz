@@ -147,6 +147,45 @@ describe("public commerce safeguards", () => {
     expect(sales.confirm).not.toHaveBeenCalled();
   });
 
+  it("does not create an unpayable order with no seller delivery method",async()=>{
+    const sqls:string[]=[];
+    const query=jest.fn(async(sql:string)=>{
+      sqls.push(sql);
+      if(sql.includes("SET status='PROCESSING'"))return {
+        rows:[{checkout_party_id:null,sales_order_id:null}],rowCount:1
+      };
+      if(sql.includes("FROM storefront_config c"))return {
+        rows:[{responsible_membership_id:context.membershipId,
+          currency:"RUB",user_id:context.userId}],rowCount:1
+      };
+      if(sql.includes("FROM storefront_cart_line l"))return {
+        rows:[{sku_id:"66666666-6666-4666-8666-666666666666",
+          quantity_milli:"1000",is_available:true}],rowCount:1
+      };
+      if(sql.includes("FROM commerce_delivery_method"))return {
+        rows:[],rowCount:0
+      };
+      if(sql.includes("SET status='OPEN'"))return {
+        rows:[],rowCount:1
+      };
+      throw new Error("Unexpected SQL: "+sql);
+    });
+    const database={withTenantTransaction:jest.fn(
+      async(_ctx:unknown,fn:any)=>fn({query}))};
+    const parties={create:jest.fn()};
+    const sales={create:jest.fn(),confirm:jest.fn()};
+    const service=new StorefrontService(
+      database as any,parties as any,sales as any,{} as any);
+    jest.spyOn(service as any,"resolveCart").mockResolvedValue(cart);
+    await expect(service.checkout("cart_key",{
+      idempotencyKey:"no-shipping",name:"Buyer",
+      phone:"+79990000000"
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(parties.create).not.toHaveBeenCalled();
+    expect(sales.create).not.toHaveBeenCalled();
+    expect(sqls.some(sql=>sql.includes("SET status='OPEN'"))).toBe(true);
+  });
+
   it("retains the checkout lease if Sales fails after Party was created", async () => {
     const query = jest.fn(async (sql: string) => {
       if (sql.includes("SET status='PROCESSING'")) {
