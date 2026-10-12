@@ -49,10 +49,12 @@ async function api(who,method,path,data,expected=200){
   try{payload=JSON.parse(rawText);}catch{
     throw new Error(stage+": API returned non-JSON HTTP "+response.status);
   }
-  assert.equal(response.status,expected,
+  const allowed=Array.isArray(expected)?expected:[expected];
+  assert.ok(allowed.includes(response.status),
     stage+": "+method+" "+path+" HTTP "+response.status+
-    " expected "+expected+" ("+(payload.error?.code??"unspecified")+")");
-  assert.equal(payload.ok,expected>=200&&expected<300,
+    " expected "+allowed.join("/")+" ("+
+    (payload.error?.code??"unspecified")+")");
+  assert.equal(payload.ok,response.status>=200&&response.status<300,
     stage+": unexpected API envelope on "+path);
   steps.push({stage,method,path:path.split("?")[0],
     status:response.status,elapsedMs:Math.round(performance.now()-started)});
@@ -278,13 +280,11 @@ async function main(){
   step("09 cross-company session isolation");
   const employeeAgain=await get(employee,"/auth/me");
   assert.equal(employeeAgain.auth.tenantId,firstTenant);
-  await api(employee,"GET","/service/bookings/"+appointment.id,undefined,403)
-    .catch(error=>{
-      // A cross-tenant resource can legitimately return 404 to avoid leaking
-      // whether an object exists. Other statuses or successful access fail.
-      if(!String(error).includes("expected 403"))throw error;
-      return api(employee,"GET","/service/bookings/"+appointment.id,undefined,404);
-    });
+  await api(employee,"GET","/service/bookings/"+appointment.id,
+    undefined,[403,404]);
+  const secondOrg=await get(owner,"/organization");
+  assert.ok(!secondOrg.legalEntities.some(x=>x.id===legal.id),
+    "Legal details must never cross company boundaries");
   const switchResult=await post(owner,"/auth/switch-tenant",{
     membershipId:firstMembership
   });
