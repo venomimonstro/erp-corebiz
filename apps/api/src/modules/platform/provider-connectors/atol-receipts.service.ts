@@ -257,6 +257,192 @@ export class AtolReceiptsService{
         note:"АТОЛ мог принять чек. Сверьте документ по external_id и UUID у АТОЛ прежде чем действовать"};
     }
   }
+
+  async issueClosing(ctx:TenantContext,siteId:string,paymentId:string,
+    nonMarkedConfirmed:boolean){
+    return this.issueFollowup(ctx,siteId,paymentId,"sell_full_payment",
+      nonMarkedConfirmed);
+  }
+
+  async issueRefund(ctx:TenantContext,siteId:string,paymentId:string,
+    nonMarkedConfirmed:boolean){
+    return this.issueFollowup(ctx,siteId,paymentId,"sell_refund",
+      nonMarkedConfirmed);
+  }
+
+  private async issueFollowup(
+    ctx:TenantContext,siteId:string,paymentId:string,
+    operation:"sell_full_payment"|"sell_refund",
+    nonMarkedConfirmed:boolean
+  ){
+    await this.permit(ctx);
+    if(!uuid(siteId)||!uuid(paymentId))
+      throw new BadRequestException("Неверный платёж или сайт");
+    if(nonMarkedConfirmed!==true)
+      throw new ConflictException(
+        "Для чеков в этом контуре нужны подтверждённо немаркируемые, неподакцизные товары"
+      );
+    const claim:Claim=await this.db.withTenantTransaction(ctx,async client=>{
+      const payment=await client.query<{
+        id:string;amount_minor:string;customer_email:string;
+        connection_id:string;encrypted_credentials:string;
+        environment:ProviderEnvironment;public_config:Record<string,unknown>;
+        delivery_status:string
+      }>(
+        "SELECT i.id,i.amount_minor::text,i.customer_email,"+
+        "cp.id AS connection_id,cp.encrypted_credentials,cp.environment,"+
+        "cp.public_config,d.delivery_status "+
+        "FROM commerce_payment_intent i "+
+        "JOIN commerce_order_delivery d ON d.tenant_id=i.tenant_id "+
+        "AND d.sales_order_id=i.sales_order_id AND d.site_id=i.site_id "+
+        "JOIN commerce_merchant_config mc ON mc.tenant_id=i.tenant_id "+
+        "AND mc.site_id=i.site_id AND mc.fiscal_provider='ATOL_ONLINE' "+
+        "JOIN commerce_provider_connection cp ON cp.tenant_id=i.tenant_id "+
+        "AND cp.site_id=i.site_id AND cp.provider='ATOL_ONLINE' "+
+        "AND cp.state='VERIFIED' AND cp.enabled "+
+        "WHERE i.tenant_id=$1 AND i.site_id=$2 AND i.id=$3 "+
+        "AND i.purpose='STOREFRONT' AND i.fiscal_provider='ATOL_ONLINE' "+
+        "AND i.status='SUCCEEDED' AND i.finance_payment_id IS NOT NULL "+
+        "AND i.fiscal_status='SUCCEEDED' FOR UPDATE OF i",
+        [ctx.tenantId,siteId,paymentId]
+      );
+      const paid=payment.rows[0];
+      if(!paid)throw new ConflictException(
+        "Сначала дождитесь подтверждённой оплаты и первого чека предоплаты"
+      );
+      this.enabled(paid.environment);
+      const company=(paid.public_config as {fiscalCompany?:Company}).fiscalCompany;
+      if(!company||!company.inn||!company.email||!company.paymentAddress)
+        throw new ConflictException("Не заполнены фискальные реквизиты продавца");
+      const first=await client.query<{state:string;connector_id:string;environment:string}>(
+        "SELECT state,connector_id,environment FROM commerce_fiscal_document "+
+        "WHERE tenant_id=$1 AND payment_intent_id=$2 AND operation='sell' "+
+        "FOR UPDATE",[ctx.tenantId,paymentId]);
+      if(first.rows[0]?.state!=="DONE"||
+         first.rows[0]?.connector_id!==paid.connection_id||
+         first.rows[0]?.environment!==paid.environment)
+        throw new ConflictException(
+          "Первый чек ещё не подтверждён или касса была заменена"
+        );
+      const previous=await client.query<{id:string;state:string}>(
+        "SELECT id,state FROM commerce_fiscal_document "+
+        "WHERE tenant_id=$1 AND payment_intent_id=$2 AND operation=$3 FOR UPDATE",
+        [ctx.tenantId,paymentId,operation]);
+      if(previous.rows[0])return {
+        documentId:previous.rows[0].id,state:previous.rows[0].state,
+        created:false,encrypted:"",environment:paid.environment
+      } satisfies Claim;
+      const closing=await client.query<{id:string;state:string}>(
+        "SELECT id,state FROM commerce_fiscal_document "+
+        "WHERE tenant_id=$1 AND payment_intent_id=$2 "+
+        "AND operation='sell_full_payment' FOR UPDATE",
+        [ctx.tenantId,paymentId]);
+      const refund=await client.query<{
+        id:string;status:string;finance_payment_id:string|null;
+        amount_minor:string
+      }>(
+        "SELECT id,status,finance_payment_id,amount_minor::text "+
+        "FROM commerce_refund WHERE tenant_id=$1 AND intent_id=$2 "+
+        "FOR UPDATE",[ctx.tenantId,paymentId]);
+      const refunded=refund.rows[0];
+      if(operation==="sell_full_payment"){
+        if(paid.delivery_status!=="DELIVERED")
+          throw new ConflictException(
+            "Чек полного расчёта возможен только после подтверждённой выдачи товара"
+          );
+        if(refunded&&["NEW","PENDING","SUCCEEDED"].includes(refunded.status))
+          throw new ConflictException("Нельзя закрывать аванс при открытом возврате денег");
+      }else{
+        if(!refunded||refunded.status!=="SUCCEEDED"||
+           !refunded.finance_payment_id||
+           refunded.amount_minor!==paid.amount_minor)
+          throw new ConflictException(
+            "Чек возврата возможен только после полного возврата денег банком и проводки Finance"
+          );
+        if(closing.rows[0]&&closing.rows[0].state!=="DONE")
+          throw new ConflictException(
+            "Ожидается результат закрывающего чека: возврат пока невозможен"
+          );
+        if(paid.delivery_status==="DELIVERED"&&closing.rows[0]?.state!=="DONE")
+          throw new ConflictException(
+            "После выдачи товара сперва подтвердите чек полного расчёта"
+          );
+      }
+      const marked=await client.query(
+        "SELECT 1 FROM retail_serial_unit u JOIN sales_order_line l "+
+        "ON l.tenant_id=u.tenant_id AND l.sku_id=u.sku_id "+
+        "JOIN commerce_payment_intent i ON i.tenant_id=l.tenant_id "+
+        "AND i.sales_order_id=l.order_id "+
+        "WHERE i.tenant_id=$1 AND i.id=$2 "+
+        "AND (u.marking_code_hash IS NOT NULL OR u.marking_product_group IS NOT NULL) "+
+        "LIMIT 1",[ctx.tenantId,paymentId]
+      );
+      if(marked.rowCount)throw new ConflictException(
+        "Для маркированных товаров нужен отдельный ФФД 1.2 с кодами идентификации"
+      );
+      const lines=await client.query<{
+        description:string;quantity_milli:string;line_total_minor:string
+      }>(
+        "SELECT l.description,l.quantity_milli::text,l.line_total_minor::text "+
+        "FROM sales_order_line l JOIN commerce_payment_intent i "+
+        "ON i.tenant_id=l.tenant_id AND i.sales_order_id=l.order_id "+
+        "WHERE i.tenant_id=$1 AND i.id=$2 ORDER BY l.id LIMIT 101",
+        [ctx.tenantId,paymentId]
+      );
+      const isReturn=operation==="sell_refund";
+      const mode=isReturn
+        ?(closing.rows[0]?.state==="DONE"?"refund_settlement":"refund_prepayment")
+        :"settlement";
+      const receipt=buildReceipt({
+        id:paid.id,refundId:refunded?.id,operation:mode,
+        amountMinor:paid.amount_minor,email:paid.customer_email,
+        company,lines:lines.rows
+      });
+      const digest=createHash("sha256").update(JSON.stringify(receipt)).digest("hex");
+      const external=String(receipt.external_id);
+      const stored=await client.query<{id:string}>(
+        "INSERT INTO commerce_fiscal_document("+
+        "tenant_id,site_id,payment_intent_id,connector_id,operation,"+
+        "environment,external_id,payload_digest,state,refund_id) "+
+        "VALUES($1,$2,$3,$4,$5,$6,$7,$8,'SENDING',$9) RETURNING id",
+        [ctx.tenantId,siteId,paymentId,paid.connection_id,
+          operation,paid.environment,external,digest,
+          isReturn?refunded?.id:null]
+      );
+      return {
+        documentId:stored.rows[0]!.id,state:"SENDING",created:true,
+        encrypted:paid.encrypted_credentials,environment:paid.environment,receipt
+      } satisfies Claim;
+    });
+    if(!claim.created)return {
+      documentId:claim.documentId,state:claim.state,
+      note:"Операция уже зафиксирована; повторная отправка запрещена"
+    };
+    try{
+      const credentials=JSON.parse(openMerchantSecret(claim.encrypted)) as AtolCredentials;
+      const provider=await this.atol.registerSell(
+        credentials,claim.environment,claim.receipt!,
+        operation==="sell_refund"?"sell_refund":"sell"
+      );
+      await this.db.withTenantTransaction(ctx,async client=>client.query(
+        "UPDATE commerce_fiscal_document SET state='WAIT',provider_uuid=$3,"+
+        "submitted_at=now(),updated_at=now(),last_error_code=NULL "+
+        "WHERE tenant_id=$1 AND id=$2 AND state='SENDING'",
+        [ctx.tenantId,claim.documentId,provider.uuid]
+      ));
+      return {documentId:claim.documentId,state:"WAIT",providerUuid:provider.uuid};
+    }catch{
+      await this.db.withTenantTransaction(ctx,async client=>client.query(
+        "UPDATE commerce_fiscal_document SET state='UNKNOWN',"+
+        "last_error_code='PROVIDER_RESPONSE_AMBIGUOUS',updated_at=now() "+
+        "WHERE tenant_id=$1 AND id=$2 AND state='SENDING'",
+        [ctx.tenantId,claim.documentId]
+      ));
+      return {documentId:claim.documentId,state:"UNKNOWN",
+        note:"АТОЛ мог принять чек. Повторная отправка запрещена; сверьте его UUID у АТОЛ."};
+    }
+  }
+
   async verify(ctx:TenantContext,siteId:string,documentId:string,reportedUuid?:string){
     await this.permit(ctx);
     if(!uuid(siteId)||!uuid(documentId)||
