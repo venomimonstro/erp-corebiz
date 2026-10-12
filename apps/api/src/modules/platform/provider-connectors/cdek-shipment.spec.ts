@@ -16,7 +16,7 @@ const input={
   recipientPhone:"+79998887766",lengthCm:20,widthCm:15,heightCm:12
 };
 
-function fixture(known=false,canShip=true){
+function fixture(known=false,canShip=true,postalExists=false){
   const statements:string[]=[];
   const client={
     query:jest.fn(async(sql:string)=>{
@@ -25,7 +25,7 @@ function fixture(known=false,canShip=true){
         return {rows:[{id:"88888888-8888-4888-8888-888888888888",
           environment:"SANDBOX",encrypted_credentials:"ciphertext",
           enabled:true,state:"VERIFIED"}],rowCount:1};
-      if(sql.includes("SELECT o.id FROM sales_order"))
+      if(sql.includes("FROM sales_order o")&&sql.includes("FOR UPDATE OF o"))
         return {rows:canShip?[{id:order,delivery_address:"Москва, ул. Ленина 1"}]:[],rowCount:canShip?1:0};
       if(sql.includes("FROM commerce_shipping_quote q"))
         return {rows:[{tariff_code:136,from_city_code:44,to_city_code:137,
@@ -33,6 +33,9 @@ function fixture(known=false,canShip=true){
       if(sql.includes("FROM sales_order_line l JOIN sku s"))
         return {rows:[{description:"Ноутбук",quantity_milli:"1000",
           line_total_minor:"4500000",sku_code:"NOTEBOOK-1"}],rowCount:1};
+      if(sql.includes("FROM commerce_post_shipment"))
+        return {rows:postalExists?[{id:shipment}]:[],
+          rowCount:postalExists?1:0};
       if(sql.includes("FROM commerce_shipment")&&sql.includes("FOR UPDATE"))
         return {rows:known?[{id:shipment,payload_digest:"different"}]:[],
           rowCount:known?1:0};
@@ -70,6 +73,15 @@ describe("carrier booking authorization and idempotency",()=>{
     await expect(t.service.bookShipment(context,site,input))
       .rejects.toBeInstanceOf(ConflictException);
     expect(t.statements.some(sql=>sql.includes("cp.encrypted_credentials=$5"))).toBe(true);
+  });
+  it("blocks CDEK booking if Russian Post has already claimed the order",async()=>{
+    const t=fixture(false,true,true);
+    await expect(t.service.bookShipment(context,site,input))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(t.statements.some(sql=>sql.includes(
+      "FROM commerce_post_shipment"))).toBe(true);
+    expect(t.statements.some(sql=>sql.includes(
+      "INSERT INTO commerce_shipment"))).toBe(false);
   });
   it("denies malformed order identifiers",async()=>{
     const t=fixture();
