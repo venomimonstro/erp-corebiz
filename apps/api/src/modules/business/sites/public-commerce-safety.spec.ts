@@ -176,7 +176,10 @@ describe("public commerce safeguards", () => {
         };
       }
       if (sql.includes("FROM commerce_delivery_method")) {
-        return { rows: [], rowCount: 0 };
+        return { rows: [{
+          id:"88888888-8888-4888-8888-888888888888",
+          mode:"PICKUP",title:"Самовывоз",fee_minor:"0"
+        }], rowCount:1 };
       }
       if (sql.includes("SET checkout_party_id=")) {
         return { rows: [], rowCount: 1 };
@@ -205,7 +208,8 @@ describe("public commerce safeguards", () => {
     await expect(service.checkout("cart_key", {
       idempotencyKey: "retry-1",
       name: "Клиент",
-      phone: "+79990000000"
+      phone: "+79990000000",
+      deliveryMethodId: "88888888-8888-4888-8888-888888888888"
     })).rejects.toThrow("SALES_TEMPORARY_ERROR");
 
     expect(parties.create).toHaveBeenCalledTimes(1);
