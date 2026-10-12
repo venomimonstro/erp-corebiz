@@ -92,6 +92,8 @@ export function PublicStorefront({
   const [search, setSearch] = useState("");
   const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [delivery, setDelivery] = useState<DeliveryMethod[]>([]);
+  const [deliveryLoading,setDeliveryLoading]=useState(true);
+  const [deliveryFailed,setDeliveryFailed]=useState(false);
   const [deliveryMethodId, setDeliveryMethodId] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [paymentCartKey, setPaymentCartKey] = useState("");
@@ -153,12 +155,23 @@ export function PublicStorefront({
   }, [ensureCart]);
 
   useEffect(() => {
+    let active=true;
+    setDeliveryLoading(true);
+    setDeliveryFailed(false);
+    setDelivery([]);
+    setDeliveryMethodId("");
     void request<DeliveryCatalog>(
       "/payments/storefront/" + encodeURIComponent(publicSlug) + "/delivery"
     ).then(result=>{
+      if(!active)return;
       setDelivery(result.methods);
       if(result.methods.length===1)setDeliveryMethodId(result.methods[0]!.id);
-    }).catch(()=>setDelivery([]));
+    }).catch(()=>{
+      if(active){setDelivery([]);setDeliveryFailed(true);}
+    }).finally(()=>{
+      if(active)setDeliveryLoading(false);
+    });
+    return ()=>{active=false;};
   },[publicSlug]);
 
   useEffect(()=>{
@@ -525,6 +538,13 @@ export function PublicStorefront({
             <input value={email} onChange={(e) => setEmail(e.target.value)} />
           </label>
 
+          {deliveryLoading?<p className="public-order-notice" role="status">
+            Загружаем способы получения заказа…
+          </p>:deliveryFailed?<p className="public-order-notice" role="alert">
+            Не удалось получить способы доставки. Обновите страницу перед оформлением.
+          </p>:delivery.length===0?<p className="public-order-notice" role="alert">
+            Магазин пока не настроил доставку или самовывоз. Оформление заказа временно недоступно.
+          </p>:null}
           <label>
             <span>Получение заказа</span>
             <select value={deliveryMethodId}
@@ -556,7 +576,8 @@ export function PublicStorefront({
             disabled={Boolean(busy) || cart.status !== "OPEN" || !name.trim() ||
               (!phone.trim() && !email.trim()) ||
               !cart.lines.length || cart.lines.some(line => !line.is_available) ||
-              (delivery.length>0 && !deliveryMethodId) ||
+              deliveryLoading || deliveryFailed ||
+              delivery.length===0 || !deliveryMethodId ||
               (delivery.find(d=>d.id===deliveryMethodId)?.mode==="LOCAL_COURIER" &&
                 deliveryAddress.trim().length<8)}
             onClick={() => void checkout()}
