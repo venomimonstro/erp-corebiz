@@ -31,7 +31,14 @@ const NAV:Array<{id:Tab;title:string}>=[
 ];
 function localDate(d:Date){const p=(n:number)=>String(n).padStart(2,"0");return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());}
 function weekStart(offset:number){const d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()-(d.getDay()+6)%7+offset*7);return d;}
-function toMoney(value:string|number|undefined|null){return new Intl.NumberFormat("ru-RU",{style:"currency",currency:"RUB",maximumFractionDigits:0}).format(Number(value??0)/100);}
+function toMoney(value:string|number|undefined|null){
+  if(value===null||value===undefined)return "—";
+  const numeric=Number(value);
+  if(!Number.isFinite(numeric))return "—";
+  return new Intl.NumberFormat("ru-RU",{
+    style:"currency",currency:"RUB",maximumFractionDigits:0
+  }).format(numeric/100);
+}
 function fmtTime(value:string){return new Date(value).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"});}
 function fmtDate(value:string){return new Date(value).toLocaleDateString("ru-RU",{day:"numeric",month:"short"});}
 function statusName(status:string){return ({DRAFT:"Черновик",CONFIRMED:"Записан",ARRIVED:"Пришёл",IN_SERVICE:"В работе",COMPLETED:"Завершён",NO_SHOW:"Не пришёл",CANCELLED:"Отменён"} as Record<string,string>)[status]??status;}
@@ -228,7 +235,7 @@ export default function ServiceDeskPage(){
         method:"POST",body:JSON.stringify({...payload,idempotencyKey:bookingKey.current!.key})
       });
       bookingKey.current=null;
-      setCreateOpen(false);setBookSlot("");
+      setCreateOpen(false);setBookSlot("");setBookStaff("");setBookService("");
     },"Запись сохранена. Сервер проверил расписание и доступность специалиста.");
   }
 
@@ -355,7 +362,7 @@ export default function ServiceDeskPage(){
               </section>;
             })}
           </div>
-          <p className="muted">Цены и статусы здесь информационные. Оплата подтверждается финансовым контуром, а не отметкой «Завершён».</p>
+          <p className="muted">Цены и статусы здесь информационные. Оплата подтверждается финансовым контуром, а не отметкой «Завершён». Для аренды залов и самостоятельной практики используйте <a href="/app/service/bookings">полный календарь ресурсов →</a></p>
         </>:null}
 
         {tab==="setup"?<>
@@ -434,7 +441,7 @@ export default function ServiceDeskPage(){
           <div className="service-desk-setup-grid">
             <section className="service-desk-panel"><h3>Услуги по марже</h3>{economics.services.slice(0,8).map(s=><div key={s.id} className="service-desk-history"><b>{s.name}</b><span>{s.completed} визитов</span><strong>{toMoney(s.margin_minor)}</strong></div>)}</section>
             <section className="service-desk-panel"><h3>Повторные визиты</h3>{economics.retentionAlerts.slice(0,8).map(x=><div key={x.party_id+"-"+x.service_name} className="service-desk-history"><b>{x.party_name}</b><span>{x.service_name}</span><small>{x.overdue_days} дн.</small></div>)}{!economics.retentionAlerts.length?<p className="muted">Просроченных повторных визитов не найдено.</p>:null}</section>
-          </div></>:<p className="muted">{economicsAccess?"Финансовые показатели пока недоступны.":"Просмотр финансов ограничен правами finance.read."}</p>}
+          </div></>:<p className="muted">{economicsAccess?"Финансовые показатели пока недоступны.":"Финансовые показатели недоступны. Проверьте права finance.read и подключение к API."}</p>}
           <p className="muted">Затраты на аренду, налоги и маркетинг учитываются отдельно в общих финансовых разделах ERP.</p>
         </>:null}
 
@@ -443,7 +450,8 @@ export default function ServiceDeskPage(){
             <div className="service-desk-bar"><div><small>Новая запись</small><h2>Записать клиента</h2></div><button type="button" className="secondary-button" onClick={()=>setCreateOpen(false)} disabled={busy}>Закрыть</button></div>
             <form onSubmit={e=>void createBooking(e)} className="service-desk-form">
               <label>Услуга<select required value={bookService} onChange={e=>{setBookService(e.target.value);setBookStaff("");}}>
-                <option value="">Выберите услугу</option>{services.map(s=><option key={s.id} value={s.id}>{s.name} · {toMoney(s.price_minor)}</option>)}
+                <option value="">Выберите услугу</option>{services.filter(s=>["INDIVIDUAL","GROUP"].includes(s.delivery_format)).map(s=>
+                  <option key={s.id} value={s.id}>{s.name} · {toMoney(s.price_minor)}</option>)}
               </select></label>
               <label>Дата<input type="date" required value={day} onChange={e=>setDay(e.target.value)}/></label>
               <label>Специалист<select required value={bookStaff} onChange={e=>{setBookStaff(e.target.value);setBookSlot("");}}>
@@ -498,7 +506,7 @@ export default function ServiceDeskPage(){
               <button type="submit" className="secondary-button" disabled={busy||!rescheduleAt}>Перенести</button>
             </form>:null}
             {selectedVisit.party_id?<button type="button" className="secondary-button" onClick={()=>{void viewHistory(selectedVisit.party_id!);setSelectedVisit(null);setTab("clients");}}>История клиента →</button>:null}
-            <p className="muted">Смена статуса не означает получение денег. Техкарты и зарплаты рассчитываются сервером при завершении визита.</p>
+            <p className="muted">Смена статуса не означает получение денег. Техкарты и зарплаты рассчитываются сервером при завершении визита. Если сумма скрыта, финансовых прав у вашей роли нет.</p>
           </section>
         </div>:null}
       </section>
