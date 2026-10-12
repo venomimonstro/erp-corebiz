@@ -212,14 +212,15 @@ export class AtolOnlineGateway{
   }
   async registerSell(
     cred:AtolCredentials,env:ProviderEnvironment,
-    payload:Record<string,unknown>
+    payload:Record<string,unknown>,
+    operation:"sell"|"sell_refund"="sell"
   ):Promise<AtolFiscalResult>{
     const token=await this.token(cred,env);
     // Fixed host, validated group; token in header, NEVER in URL or logs.
     const response=await providerRequest<{
       uuid?:string;status?:string;error?:unknown
     }>(safeUrl("ATOL_ONLINE",env)+"/possystem/v5/"+
-        encodeURIComponent(cred.groupCode)+"/sell","POST",
+        encodeURIComponent(cred.groupCode)+"/"+operation,"POST",
       {"Content-Type":"application/json;charset=utf-8",Token:token},
       JSON.stringify(payload));
     if(response.error||response.status!=="wait"||
