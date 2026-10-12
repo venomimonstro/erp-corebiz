@@ -2086,6 +2086,9 @@ export class BookingService {
     }
 
     const scopedMembershipIds = await this.serviceScope(context, "service.read");
+    const canViewFinance=Boolean(
+      await this.authorization.resolveScope(context,"finance.read")
+    );
 
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
@@ -2171,7 +2174,8 @@ export class BookingService {
         [context.tenantId, fromDate, toDate, scopedMembershipIds]
       );
 
-      return result.rows;
+      return canViewFinance?result.rows:
+        result.rows.map(row=>this.redactBookingFinancials(row));
     });
   }
 
@@ -2180,6 +2184,9 @@ export class BookingService {
     bookingId: string
   ): Promise<Record<string, unknown>> {
     const scopedMembershipIds = await this.serviceScope(context, "service.read");
+    const canViewFinance=Boolean(
+      await this.authorization.resolveScope(context,"finance.read")
+    );
     return this.database.withTenantTransaction(context, async (client) => {
       await this.assertBookingAccess(
         client,
@@ -2263,8 +2270,21 @@ export class BookingService {
         [context.tenantId, bookingId]
       );
       if (!result.rows[0]) throw new NotFoundException("Запись не найдена");
-      return result.rows[0] as Record<string, unknown>;
+      const booking=result.rows[0] as Record<string,unknown>;
+      return canViewFinance?booking:this.redactBookingFinancials(booking);
     });
+  }
+
+  private redactBookingFinancials(
+    row:Record<string,unknown>
+  ):Record<string,unknown>{
+    // Service calendar access does not grant finance.read. Keep visit
+    // logistics visible, but never leak invoicing, settlements or refunds.
+    return {
+      ...row,price_minor_snapshot:null,currency:null,
+      billing_status:null,obligation_status:null,invoice_status:null,
+      settled_minor:null,billing:null,refund:null
+    };
   }
 
   async createBooking(
