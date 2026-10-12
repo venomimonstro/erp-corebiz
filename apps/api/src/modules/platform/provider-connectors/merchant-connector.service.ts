@@ -129,13 +129,20 @@ export class MerchantConnectorService{
       if(!site.rowCount)throw new NotFoundException("Сайт не найден");
       if(provider==="ATOL_ONLINE"){
         const open=await client.query(
-          `SELECT 1 FROM commerce_payment_intent
-           WHERE tenant_id=$1 AND site_id=$2 AND fiscal_provider='ATOL_ONLINE'
-             AND (status IN ('NEW','PENDING') OR
-               (status='SUCCEEDED' AND fiscal_status<>'SUCCEEDED'))
+          `SELECT 1 FROM commerce_payment_intent i
+           WHERE i.tenant_id=$1 AND i.site_id=$2
+             AND i.fiscal_provider='ATOL_ONLINE'
+             AND (i.status IN ('NEW','PENDING') OR
+               (i.status='SUCCEEDED' AND NOT EXISTS (
+                 SELECT 1 FROM commerce_fiscal_document d
+                 WHERE d.tenant_id=i.tenant_id
+                   AND d.payment_intent_id=i.id
+                   AND d.operation IN ('sell_full_payment','sell_refund')
+                   AND d.state='DONE'
+               )))
            LIMIT 1`,[ctx.tenantId,siteId]);
         if(open.rowCount)throw new ConflictException(
-          "Нельзя менять реквизиты АТОЛ до завершения всех фискальных документов"
+          "Нельзя менять ККТ до закрытия предоплат и возвратов по всем операциям АТОЛ"
         );
       }
       const result=await client.query<{id:string}>(
