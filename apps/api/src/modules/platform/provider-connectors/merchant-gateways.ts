@@ -271,10 +271,10 @@ export class AtolOnlineGateway{
     return {
       uuid,state:"DONE",
       ...(result.external_id?{externalId:result.external_id}:{}),
-      fnNumber:p.fn_number,
-      documentNumber:p.fiscal_document_number,
-      fiscalSign:String(p.fiscal_document_attribute),
-      amountMinor:String(Math.round(p.total*100)),
+      fnNumber:p.fn_number!,
+      documentNumber:p.fiscal_document_number!,
+      fiscalSign:String(p.fiscal_document_attribute!),
+      amountMinor:String(Math.round(p.total!*100)),
       ...(trusted?{receiptUrl:trusted}:{})
     };
   }
