@@ -30,9 +30,9 @@ const startPage:Record<string,string>={
   WEB_STUDIO:"/app/agency",
   WEB_MARKETING_AGENCY:"/app/agency",
   MARKETING_AGENCY:"/app/agency",
-  BEAUTY_SALON:"/app/service/setup",
-  BARBERSHOP:"/app/service/setup",
-  NAIL_SALON:"/app/service/setup",
+  BEAUTY_SALON:"/app/service/desk",
+  BARBERSHOP:"/app/service/desk",
+  NAIL_SALON:"/app/service/desk",
   GENERAL:"/app"
 };
 const niches: Record<string,string> = {
