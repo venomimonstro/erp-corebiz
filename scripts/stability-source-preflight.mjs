@@ -203,6 +203,26 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"infrastructure/postgres/237_cdek_shipment_lifecycle.sql",
+      patterns:[/commerce_shipment/, /'UNKNOWN'/,
+        /UNIQUE\(tenant_id,sales_order_id\)/,
+        /ENABLE ROW LEVEL SECURITY/],
+      message:"One-time CDEK shipment booking and tenant isolation missing"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/merchant-connector.service.ts",
+      patterns:[/async bookShipment/, /async verifyShipment/,
+        /fiscal_status='SUCCEEDED'/, /state='UNKNOWN'/,
+        /commerce_shipping_quote/, /provider_order_uuid/],
+      message:"CDEK booking may lose bank+fiscal validation or ambiguous-response isolation"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/merchant-gateways.ts",
+      patterns:[/async createOrder/, /async orderStatus/,
+        /\/v2\/orders/, /clientOrderNumber/],
+      message:"CDEK actual shipment create and verified carrier lookup missing"
+    },
+    {
       path:"infrastructure/postgres/234_payment_reconciliation_queue.sql",
       patterns:[/commerce_reconcile_task/, /FOR UPDATE SKIP LOCKED/,
         /corebiz_claim_commerce_reconciliation/, /ENABLE ROW LEVEL SECURITY/],
