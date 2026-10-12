@@ -59,7 +59,7 @@ export class CdekGateway{
     input:{
       orderNumber:string;tariffCode:number;
       fromCityCode:number;toCityCode:number;
-      recipientName:string;recipientPhone:string;
+      recipientName:string;recipientPhone:string;deliveryAddress:string;
       weightGrams:number;lengthCm:number;widthCm:number;heightCm:number;
       items:Array<{name:string;wareKey:string;cost:string;amount:number}>;
     }
@@ -72,6 +72,10 @@ export class CdekGateway{
          Number.isSafeInteger(x.amount)&&x.amount>0&&x.amount<=10000&&
          /^\d{1,10}\.\d{2}$/.test(x.cost)))
       throw new BadGatewayException("СДЭК: отсутствуют действительные позиции товаров");
+    if(typeof input.deliveryAddress!=="string" ||
+       input.deliveryAddress.trim().length<5 ||
+       input.deliveryAddress.length>500)
+      throw new BadGatewayException("СДЭК: некорректный адрес получателя");
     const token=await this.token(cred,env);
     const data=await providerRequest<{
       entity?:{uuid?:string};
@@ -82,7 +86,7 @@ export class CdekGateway{
       type:1,number:input.orderNumber,
       tariff_code:input.tariffCode,
       from_location:{code:input.fromCityCode},
-      to_location:{code:input.toCityCode},
+      to_location:{code:input.toCityCode,address:input.deliveryAddress},
       recipient:{name:input.recipientName,
         phones:[{number:input.recipientPhone}]},
       packages:[{number:"1",weight:input.weightGrams,
@@ -124,7 +128,7 @@ export class CdekGateway{
     if(!data.entity || data.entity.uuid!==uuid)
       throw new BadGatewayException("СДЭК не подтвердил идентификатор накладной");
     const request=data.requests?.[0]?.state;
-    const state=data.entity.statuses?.[0]?.code??
+    const state=data.entity.statuses?.at(-1)?.code??
       (request==="INVALID"?"REJECTED":
        request==="ACCEPTED"?"ACCEPTED":"SUBMITTED");
     return {
