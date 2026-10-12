@@ -266,6 +266,16 @@ async function main(){
   });
   const schedule=await get(owner,"/service/resources/"+specialist.id+"/schedule");
   assert.ok(schedule,"Resource schedule must be retrievable");
+  // Personal prices are shared across service desk, booking, invoices and
+  // profitability. Reuse service_delivery_rule; no duplicate price model.
+  const personalRate=await post(owner,"/service/delivery-rules",{
+    serviceId:service.id,employeeResourceId:specialist.id,
+    deliveryFormat:"INDIVIDUAL",priceMinor:"270000"
+  });
+  assert.ok(personalRate.id);
+  const savedRates=await get(owner,"/service/delivery-rules?serviceId="+service.id);
+  assert.ok(savedRates.some(x=>x.id===personalRate.id&&
+    x.price_minor==="270000"),"Master-specific price was not persisted");
   const salonCustomer=await post(owner,"/crm/customers",{
     type:"PERSON",displayName:"Test salon client "+run.slice(0,8)
   });
@@ -279,7 +289,28 @@ async function main(){
   assert.ok(appointment.id);
   const appointmentDetail=await get(owner,"/service/bookings/"+appointment.id);
   assert.equal(appointmentDetail.party_id,salonCustomer.id);
-  assert.equal(appointmentDetail.billing?.amountMinor,"250000");
+  assert.equal(appointmentDetail.price_minor_snapshot,"270000",
+    "The personal staff price must be captured as immutable booking snapshot");
+  assert.equal(appointmentDetail.billing?.amountMinor,"270000",
+    "The invoice must use the staff price, not stale catalog price");
+  step("08b first client visit and server-side profitability");
+  const arrived=await api(owner,"PATCH","/service/bookings/"+appointment.id+"/status",{
+    status:"ARRIVED",version:appointment.version
+  });
+  const started=await api(owner,"PATCH","/service/bookings/"+appointment.id+"/status",{
+    status:"IN_SERVICE",version:arrived.version
+  });
+  const finished=await api(owner,"PATCH","/service/bookings/"+appointment.id+"/status",{
+    status:"COMPLETED",version:started.version
+  });
+  assert.equal(finished.status,"COMPLETED");
+  const completedDetail=await get(owner,"/service/bookings/"+appointment.id);
+  assert.equal(completedDetail.status,"COMPLETED");
+  // A COMPLETED service must never be displayed as paid without reconciliation.
+  assert.equal(completedDetail.billing?.settledMinor,"0");
+  const serviceEconomics=await get(owner,"/service/economics");
+  assert.ok(serviceEconomics.totals.completed>=1,
+    "Completion must feed the existing profitability ledger");
   await get(owner,"/dashboard/activation");
 
   step("09 cross-company session isolation");
@@ -328,7 +359,7 @@ async function main(){
       operatingTeams:1,crmCustomers:2,crmDeals:1,
       warehouses:1,products:2,openingStockRecords:2,
       publicStorefronts:1,deliveryMethods:1,
-      services:1,resources:1,bookings:1
+      services:1,resources:1,personalRates:1,bookings:1,completedVisits:1
     },
     checks:steps.length,
     note:"No external payment/fiscal/carrier operations performed",
