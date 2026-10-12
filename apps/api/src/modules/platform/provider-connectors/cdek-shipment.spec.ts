@@ -64,6 +64,12 @@ describe("carrier booking authorization and idempotency",()=>{
     expect(t.statements.some(s=>s.includes("INSERT INTO commerce_shipment")))
       .toBe(false);
   });
+  it("checks merchant secret continuity for booking quote",async()=>{
+    const t=fixture(true);
+    await expect(t.service.bookShipment(context,site,input))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(t.statements.some(sql=>sql.includes("cp.encrypted_credentials=$5"))).toBe(true);
+  });
   it("denies malformed order identifiers",async()=>{
     const t=fixture();
     await expect(t.service.bookShipment(context,site,{
