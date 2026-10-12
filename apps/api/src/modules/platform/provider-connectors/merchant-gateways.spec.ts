@@ -58,6 +58,54 @@ describe("seller CDEK and ATOL fixed-provider adapters",()=>{
     })).rejects.toBeInstanceOf(BadGatewayException);
   });
 
+  it("submits CDEK order only after accepted response with UUID",async()=>{
+    const fetchMock=jest.spyOn(global,"fetch")
+      .mockResolvedValueOnce(reply({access_token:"jwt"}))
+      .mockResolvedValueOnce(reply({
+        entity:{uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+        requests:[{state:"ACCEPTED"}]
+      }));
+    const result=await new CdekGateway().createOrder(cdek,"SANDBOX",{
+      orderNumber:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      tariffCode:136,fromCityCode:44,toCityCode:137,
+      recipientName:"Иван Иванов",recipientPhone:"+79998887766",
+      weightGrams:900,lengthCm:20,widthCm:15,heightCm:10
+    });
+    expect(result.uuid).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    const url=String(fetchMock.mock.calls[1]?.[0]);
+    expect(url).toBe("https://api.edu.cdek.ru/v2/orders");
+    const body=JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(body.number).toBe("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    expect(body.packages[0].weight).toBe(900);
+  });
+  it("fails closed on missing CDEK consignment UUID",async()=>{
+    jest.spyOn(global,"fetch")
+      .mockResolvedValueOnce(reply({access_token:"jwt"}))
+      .mockResolvedValueOnce(reply({requests:[{state:"INVALID"}]}));
+    await expect(new CdekGateway().createOrder(cdek,"SANDBOX",{
+      orderNumber:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      tariffCode:136,fromCityCode:44,toCityCode:137,
+      recipientName:"Иван Иванов",recipientPhone:"+79998887766",
+      weightGrams:900,lengthCm:20,widthCm:15,heightCm:10
+    })).rejects.toBeInstanceOf(BadGatewayException);
+  });
+  it("verifies CDEK order number against the returned carrier UUID",async()=>{
+    const fetchMock=jest.spyOn(global,"fetch")
+      .mockResolvedValueOnce(reply({access_token:"jwt"}))
+      .mockResolvedValueOnce(reply({
+        entity:{uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          number:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          cdek_number:"12345",statuses:[{code:"DELIVERED"}]}
+      }));
+    const state=await new CdekGateway().orderStatus(
+      cdek,"SANDBOX","aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    expect(state.clientOrderNumber).toBe(
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    expect(state.state).toBe("DELIVERED");
+    expect(String(fetchMock.mock.calls[1]?.[0]))
+      .toBe("https://api.edu.cdek.ru/v2/orders/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  });
+
   it("tests ATOL FFD 1.2 credentials without issuing a receipt",async()=>{
     const mock=jest.spyOn(global,"fetch")
       .mockResolvedValueOnce(reply({token:"some-auth-token",error:null}));
