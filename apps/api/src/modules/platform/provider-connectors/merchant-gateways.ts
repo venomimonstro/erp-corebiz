@@ -181,8 +181,17 @@ export class CdekGateway{
   }
 }
 
+export type AtolFiscalResult={
+  uuid:string;
+  state:"WAIT"|"DONE"|"FAIL";
+  fnNumber?:string;
+  documentNumber?:number;
+  fiscalSign?:string;
+  receiptUrl?:string;
+};
+
 export class AtolOnlineGateway{
-  async verify(cred:AtolCredentials,env:ProviderEnvironment):Promise<{authorized:true}>{
+  private async token(cred:AtolCredentials,env:ProviderEnvironment):Promise<string>{
     if(!cred.login||!cred.password||!cred.groupCode ||
        !/^[a-zA-Z0-9_-]{2,140}$/.test(cred.groupCode))
       throw new ServiceUnavailableException("Кассовые реквизиты АТОЛ не настроены");
@@ -192,10 +201,74 @@ export class AtolOnlineGateway{
       JSON.stringify({login:cred.login,pass:cred.password,source:"CoreBiz"})
     );
     if(result.error || !result.token || result.token.length>1000)
-      throw new BadGatewayException(
-        "АТОЛ не подтвердил доступ или ККТ не переведена на ФФД 1.2"
-      );
-    // Token is deliberately not persisted or sent to the browser.
+      throw new BadGatewayException("АТОЛ не подтвердил доступ к ФФД 1.2");
+    return result.token;
+  }
+  async verify(cred:AtolCredentials,env:ProviderEnvironment):Promise<{authorized:true}>{
+    await this.token(cred,env);
     return {authorized:true};
+  }
+  async registerSell(
+    cred:AtolCredentials,env:ProviderEnvironment,
+    payload:Record<string,unknown>
+  ):Promise<AtolFiscalResult>{
+    const token=await this.token(cred,env);
+    // Fixed host, validated group; token in header, NEVER in URL or logs.
+    const response=await providerRequest<{
+      uuid?:string;status?:string;error?:unknown
+    }>(safeUrl("ATOL_ONLINE",env)+"/possystem/v5/"+
+        encodeURIComponent(cred.groupCode)+"/sell","POST",
+      {"Content-Type":"application/json;charset=utf-8",Token:token},
+      JSON.stringify(payload));
+    if(response.error||response.status!=="wait"||
+       typeof response.uuid!=="string"||
+       !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(response.uuid))
+      throw new BadGatewayException(
+        "АТОЛ не подтвердил приём документа. Повторять чек без сверки запрещено"
+      );
+    return {uuid:response.uuid,state:"WAIT"};
+  }
+  async report(
+    cred:AtolCredentials,env:ProviderEnvironment,uuid:string
+  ):Promise<AtolFiscalResult>{
+    if(!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(uuid))
+      throw new BadGatewayException("Неверный UUID чека АТОЛ");
+    const token=await this.token(cred,env);
+    const result=await providerRequest<{
+      uuid?:string;status?:string;error?:unknown;
+      payload?:{
+        fn_number?:string;fiscal_document_number?:number;
+        fiscal_document_attribute?:number;ofd_receipt_url?:string;
+      }
+    }>(safeUrl("ATOL_ONLINE",env)+"/possystem/v5/"+
+      encodeURIComponent(cred.groupCode)+"/report/"+encodeURIComponent(uuid),
+      "GET",{Token:token});
+    if(result.uuid!==uuid)
+      throw new BadGatewayException("АТОЛ вернул результат чужого документа");
+    if(result.status==="wait")return {uuid,state:"WAIT"};
+    if(result.status==="fail")return {uuid,state:"FAIL"};
+    const p=result.payload;
+    if(result.status!=="done"||result.error||!p||
+       !/^\d{14,20}$/.test(p.fn_number??"")||
+       !Number.isSafeInteger(p.fiscal_document_number)||
+       (p.fiscal_document_number??0)<=0||
+       !Number.isSafeInteger(p.fiscal_document_attribute)||
+       (p.fiscal_document_attribute??0)<=0)
+      throw new BadGatewayException("АТОЛ не подтвердил ФН, номер ФД и ФП");
+    const url=p.ofd_receipt_url;
+    let trusted:string|undefined;
+    if(url){
+      try{
+        const parsed=new URL(url);
+        if(parsed.protocol==="https:"&&!parsed.username&&!parsed.password &&
+           url.length<=2048)trusted=url;
+      }catch{ /* An optional OFD link is untrusted; do not promote it. */ }
+    }
+    return {
+      uuid,state:"DONE",fnNumber:p.fn_number,
+      documentNumber:p.fiscal_document_number,
+      fiscalSign:String(p.fiscal_document_attribute),
+      ...(trusted?{receiptUrl:trusted}:{})
+    };
   }
 }
