@@ -184,6 +184,7 @@ export class CdekGateway{
 export type AtolFiscalResult={
   uuid:string;
   state:"WAIT"|"DONE"|"FAIL";
+  externalId?:string;
   fnNumber?:string;
   documentNumber?:number;
   fiscalSign?:string;
@@ -235,7 +236,7 @@ export class AtolOnlineGateway{
       throw new BadGatewayException("Неверный UUID чека АТОЛ");
     const token=await this.token(cred,env);
     const result=await providerRequest<{
-      uuid?:string;status?:string;error?:unknown;
+      uuid?:string;status?:string;error?:unknown;external_id?:string;
       payload?:{
         fn_number?:string;fiscal_document_number?:number;
         fiscal_document_attribute?:number;ofd_receipt_url?:string;
@@ -245,8 +246,8 @@ export class AtolOnlineGateway{
       "GET",{Token:token});
     if(result.uuid!==uuid)
       throw new BadGatewayException("АТОЛ вернул результат чужого документа");
-    if(result.status==="wait")return {uuid,state:"WAIT"};
-    if(result.status==="fail")return {uuid,state:"FAIL"};
+    if(result.status==="wait")return {uuid,state:"WAIT",...(result.external_id?{externalId:result.external_id}:{})};
+    if(result.status==="fail")return {uuid,state:"FAIL",...(result.external_id?{externalId:result.external_id}:{})};
     const p=result.payload;
     if(result.status!=="done"||result.error||!p||
        !/^\d{14,20}$/.test(p.fn_number??"")||
@@ -265,7 +266,8 @@ export class AtolOnlineGateway{
       }catch{ /* An optional OFD link is untrusted; do not promote it. */ }
     }
     return {
-      uuid,state:"DONE",fnNumber:p.fn_number,
+      uuid,state:"DONE",externalId:result.external_id,
+      fnNumber:p.fn_number,
       documentNumber:p.fiscal_document_number,
       fiscalSign:String(p.fiscal_document_attribute),
       ...(trusted?{receiptUrl:trusted}:{})
