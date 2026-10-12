@@ -100,8 +100,24 @@ try{
   await options.nth(1).waitFor({state:"attached",timeout:20000});
   await drawer.getByLabel("Свободное время").selectOption({index:1});
   await drawer.getByLabel("Клиент (необязательно)").selectOption({index:1});
+  const responsePromise=page.waitForResponse(response=>
+    response.url().includes("/api/v1/service/bookings")&&
+    response.request().method()==="POST"
+  );
   await drawer.getByRole("button",{name:"Сохранить запись"}).click();
+  const bookingResponse=await responsePromise;
+  assert.equal(bookingResponse.status(),201);
+  const bookingBody=await bookingResponse.json();
+  assert.ok(bookingBody.ok&&bookingBody.data?.id);
   await drawer.waitFor({state:"hidden",timeout:20000});
+  const detailResponse=await page.request.get(
+    new URL("/api/v1/service/bookings/"+
+      encodeURIComponent(bookingBody.data.id),url).href
+  );
+  assert.equal(detailResponse.status(),200);
+  const detailBody=await detailResponse.json();
+  assert.equal(detailBody.data.price_minor_snapshot,"175000",
+    "Individual master price must override catalog base price on booking");
 
   await page.getByRole("button",{name:"Клиенты",exact:true}).click();
   await page.locator(".service-desk-customer-list button")
