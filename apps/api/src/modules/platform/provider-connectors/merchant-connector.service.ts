@@ -5,6 +5,7 @@ import {
 import type {TenantContext} from "@corebiz/contracts";
 import {createHash} from "node:crypto";
 import {DatabaseService} from "../../../infrastructure/database/database.service";
+import {AuthorizationService} from "../authorization/authorization.service";
 import {openMerchantSecret,sealMerchantSecret} from "../payments/yookassa.gateway";
 import {
   AtolOnlineGateway,CdekGateway,type ProviderEnvironment,
@@ -24,7 +25,18 @@ const validUuid=(x:unknown):x is string=>
 export class MerchantConnectorService{
   private readonly cdek=new CdekGateway();
   private readonly atol=new AtolOnlineGateway();
-  constructor(private readonly db:DatabaseService){}
+  constructor(
+    private readonly db:DatabaseService,
+    private readonly auth:AuthorizationService
+  ){}
+
+  private async requireAll(ctx:TenantContext,permission:"sites.read"|"sites.manage"){
+    const scope=await this.auth.resolveScope(ctx,permission);
+    if(scope!=="all")
+      throw new BadRequestException(
+        "Для внешних договоров, ключей и отправлений требуется доступ ко всем сайтам компании"
+      );
+  }
 
   private validateProvider(input:unknown):Provider{
     if(input!=="CDEK"&&input!=="ATOL_ONLINE")
@@ -36,6 +48,7 @@ export class MerchantConnectorService{
     return id;
   }
   async list(ctx:TenantContext,siteId:string){
+    await this.requireAll(ctx,"sites.read");
     this.validateSite(siteId);
     return this.db.withTenantTransaction(ctx,async client=>{
       const s=await client.query(
@@ -54,6 +67,7 @@ export class MerchantConnectorService{
     provider:Provider;environment:ProviderEnvironment;
     credentials:Record<string,unknown>;fromCityCode?:number
   }){
+    await this.requireAll(ctx,"sites.manage");
     this.validateSite(siteId);
     const provider=this.validateProvider(body?.provider);
     if(!["SANDBOX","PRODUCTION"].includes(body?.environment))
@@ -117,6 +131,7 @@ export class MerchantConnectorService{
     });
   }
   async verify(ctx:TenantContext,siteId:string,providerInput:unknown){
+    await this.requireAll(ctx,"sites.manage");
     this.validateSite(siteId);const provider=this.validateProvider(providerInput);
     const conn=await this.connection(ctx,siteId,provider);
     if(!conn)throw new NotFoundException("Сначала сохраните реквизиты");
@@ -154,6 +169,7 @@ export class MerchantConnectorService{
     }
   }
   async shipments(ctx:TenantContext,siteId:string){
+    await this.requireAll(ctx,"sites.read");
     this.validateSite(siteId);
     return this.db.withTenantTransaction(ctx,async client=>{
       const r=await client.query(
@@ -173,6 +189,7 @@ export class MerchantConnectorService{
     recipientName:string;recipientPhone:string;
     lengthCm:number;widthCm:number;heightCm:number
   }){
+    await this.requireAll(ctx,"sites.manage");
     this.validateSite(siteId);
     if(!validUuid(body?.orderId)||!validUuid(body?.quoteId))
       throw new BadRequestException("Некорректный заказ или тариф");
@@ -333,6 +350,7 @@ export class MerchantConnectorService{
   }
   async verifyShipment(ctx:TenantContext,siteId:string,
     shipmentId:string,providerUuid?:string){
+    await this.requireAll(ctx,"sites.manage");
     this.validateSite(siteId);
     if(!validUuid(shipmentId)||
        (providerUuid!==undefined&&!validUuid(providerUuid)))
@@ -380,6 +398,7 @@ export class MerchantConnectorService{
     toCityCode:number;weightGrams:number;
     lengthCm:number;widthCm:number;heightCm:number
   }){
+    await this.requireAll(ctx,"sites.manage");
     this.validateSite(siteId);
     for(const key of ["toCityCode","weightGrams","lengthCm","widthCm","heightCm"] as const){
       const value=input?.[key];
