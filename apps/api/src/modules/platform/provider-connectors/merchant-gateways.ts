@@ -189,6 +189,7 @@ export type AtolFiscalResult={
   documentNumber?:number;
   fiscalSign?:string;
   receiptUrl?:string;
+  amountMinor?:string;
 };
 
 export class AtolOnlineGateway{
@@ -238,7 +239,7 @@ export class AtolOnlineGateway{
     const result=await providerRequest<{
       uuid?:string;status?:string;error?:unknown;external_id?:string;
       payload?:{
-        fn_number?:string;fiscal_document_number?:number;
+        total?:number;fn_number?:string;fiscal_document_number?:number;
         fiscal_document_attribute?:number;ofd_receipt_url?:string;
       }
     }>(safeUrl("ATOL_ONLINE",env)+"/possystem/v5/"+
@@ -250,6 +251,8 @@ export class AtolOnlineGateway{
     if(result.status==="fail")return {uuid,state:"FAIL",...(result.external_id?{externalId:result.external_id}:{})};
     const p=result.payload;
     if(result.status!=="done"||result.error||!p||
+       typeof p.total!=="number"||!Number.isFinite(p.total)||
+       p.total<=0||p.total>99999999||
        !/^\d{14,20}$/.test(p.fn_number??"")||
        !Number.isSafeInteger(p.fiscal_document_number)||
        (p.fiscal_document_number??0)<=0||
@@ -270,6 +273,7 @@ export class AtolOnlineGateway{
       fnNumber:p.fn_number,
       documentNumber:p.fiscal_document_number,
       fiscalSign:String(p.fiscal_document_attribute),
+      amountMinor:String(Math.round(p.total*100)),
       ...(trusted?{receiptUrl:trusted}:{})
     };
   }
