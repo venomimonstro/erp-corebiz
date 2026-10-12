@@ -42,6 +42,14 @@ export class MerchantConnectorController{
   ):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.service.verify(this.context(req),id,provider)};
   }
+  @Get("sites/:siteId/atol/report-health")
+  @RequirePermission("sites.manage")
+  async atolReportHealth(
+    @Req() req:AuthenticatedRequest,@Param("siteId") siteId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.fiscal.reportHealth(this.context(req),siteId)};
+  }
+
   @Get("sites/:siteId/atol/pending-payments")
   @RequirePermission("sites.manage")
   async atolPending(@Req() req:AuthenticatedRequest,@Param("siteId") siteId:string)
