@@ -1,5 +1,6 @@
 import {ConflictException} from "@nestjs/common";
 import {MerchantConnectorService} from "./merchant-connector.service";
+import {sealMerchantSecret} from "../payments/yookassa.gateway";
 
 const context={
   tenantId:"11111111-1111-4111-8111-111111111111",
@@ -76,5 +77,52 @@ describe("carrier booking authorization and idempotency",()=>{
       ...input,orderId:"invalid"
     })).rejects.toBeDefined();
     expect(t.statements).toEqual([]);
+  });
+});
+
+describe("carrier status evidence cannot regress shipment state",()=>{
+  it("preserves NOT_DELIVERED and reads committed status instead of optimistic input",async()=>{
+    const before=process.env.COREBIZ_PAYMENT_ENCRYPTION_KEY;
+    process.env.COREBIZ_PAYMENT_ENCRYPTION_KEY="a".repeat(64);
+    try{
+      const encrypted=sealMerchantSecret(JSON.stringify({
+        clientId:"test",clientSecret:"test-secret"
+      }));
+      const query=jest.fn(async(sql:string)=>{
+        if(sql.includes("FROM commerce_shipment WHERE"))
+          return {rows:[{
+            id:shipment,sales_order_id:order,
+            provider_order_uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            state:"IN_TRANSIT"
+          }],rowCount:1};
+        if(sql.includes("SELECT * FROM commerce_provider_connection"))
+          return {rows:[{id:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            encrypted_credentials:encrypted,environment:"SANDBOX",
+            state:"VERIFIED",enabled:true}],rowCount:1};
+        if(sql.includes("UPDATE commerce_shipment"))
+          return {rows:[{state:"NOT_DELIVERED",provider_number:"CDEK-123"}],
+            rowCount:1};
+        return {rows:[],rowCount:0};
+      });
+      const db={withTenantTransaction:jest.fn(async(_ctx:unknown,fn:any)=>
+        fn({query}))};
+      const auth={resolveScope:jest.fn().mockResolvedValue("all")};
+      const svc=new MerchantConnectorService(db as any,auth as any);
+      jest.spyOn((svc as any).cdek,"orderStatus").mockResolvedValue({
+        uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        clientOrderNumber:order,cdekNumber:"CDEK-123",state:"NOT_DELIVERED"
+      });
+      const verified=await svc.verifyShipment(context,site,shipment);
+      expect(verified.state).toBe("NOT_DELIVERED");
+      expect(verified.trackingNumber).toBe("CDEK-123");
+      const update=query.mock.calls.find(([sql])=>sql.includes(
+        "UPDATE commerce_shipment"));
+      expect(update?.[0]).toContain("WHEN state IN ('DELIVERED','NOT_DELIVERED'");
+      expect(update?.[1][5]).toBe("NOT_DELIVERED");
+    }finally{
+      if(before===undefined)delete process.env.COREBIZ_PAYMENT_ENCRYPTION_KEY;
+      else process.env.COREBIZ_PAYMENT_ENCRYPTION_KEY=before;
+      jest.restoreAllMocks();
+    }
   });
 });
