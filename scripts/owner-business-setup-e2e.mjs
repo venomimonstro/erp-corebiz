@@ -281,12 +281,20 @@ async function main(){
   });
   const visit=new Date(Date.now()+72*60*60*1000);
   visit.setUTCMinutes(0,0,0);
-  const appointment=await post(owner,"/service/bookings",{
+  const appointmentInput={
     serviceId:service.id,resourceIds:[specialist.id],
     startsAt:visit.toISOString(),partyId:salonCustomer.id,
     source:"API",idempotencyKey:"owner-salon-"+run
-  });
+  };
+  const appointment=await post(owner,"/service/bookings",appointmentInput);
   assert.ok(appointment.id);
+  const replay=await post(owner,"/service/bookings",appointmentInput);
+  assert.equal(replay.id,appointment.id,
+    "Network replay must reuse the SAME appointment");
+  const attemptedDifferentStart=new Date(visit.getTime()+60*60000);
+  await api(owner,"POST","/service/bookings",{
+    ...appointmentInput,startsAt:attemptedDifferentStart.toISOString()
+  },409);
   const appointmentDetail=await get(owner,"/service/bookings/"+appointment.id);
   assert.equal(appointmentDetail.party_id,salonCustomer.id);
   assert.equal(appointmentDetail.price_minor_snapshot,"270000",
