@@ -219,6 +219,16 @@ pass_step "CORE:RESTORE"
 echo "[production-gate] 12/13 noisy-neighbor / runtime pressure gate"
 pnpm --filter @corebiz/api exec tsx src/scripts/noisy-neighbor-gate.ts
 pass_step "CORE:NOISY_NEIGHBOR"
+
+# A semaphore test is NOT evidence of application response-time SLO.
+# Pre-seed 1000 independent disposable sessions; never use production cookies.
+if [[ -z "${COREBIZ_LOAD_SESSIONS_FILE:-}" ]]; then
+  echo "[production-gate] BLOCKED: COREBIZ_LOAD_SESSIONS_FILE is required for real performance evidence" >&2
+  exit 1
+fi
+echo "[production-gate] 1000 authenticated-session performance gate"
+COREBIZ_LOAD_BASE_URL="${COREBIZ_SMOKE_BASE_URL}" \
+  node scripts/load-1000-sessions.mjs
 pass_step "CORE:PERFORMANCE"
 
 echo "[production-gate] 13/13 release-readiness structural diagnostics"
