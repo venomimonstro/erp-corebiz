@@ -23,7 +23,7 @@ type Shipment={
 type FiscalCompany={inn:string;email:string;sno:string;paymentAddress:string;vatType:string};
 type FiscalPending={payment_intent_id:string;business_number:string;amount_minor:string};
 type FiscalFollowup={payment_intent_id:string;business_number:string;
-  amount_minor:string;kind:"REFUND"|"CLOSING";delivery_status:string};
+  amount_minor:string;kind:"REFUND"|"CLOSING"|"HANDOVER";delivery_status:string};
 type FiscalDocument={id:string;payment_intent_id:string;operation:string;state:string;provider_uuid:string|null;
   fn_number:string|null;fiscal_document_number:number|null;
   fiscal_document_attribute:string|null;receipt_url:string|null;last_error_code:string|null};
@@ -52,6 +52,7 @@ export default function MerchantConnectorsPage(){
   const [atolDocs,setAtolDocs]=useState<FiscalDocument[]>([]);
   const [nonMarkedConfirmed,setNonMarkedConfirmed]=useState(false);
   const [fiscalUnknownUuid,setFiscalUnknownUuid]=useState("");
+  const [handoverProof,setHandoverProof]=useState("");
 
   const [toCity,setToCity]=useState("137");
   const [weight,setWeight]=useState("1000");
@@ -163,6 +164,27 @@ export default function MerchantConnectorsPage(){
       setError(e instanceof Error?e.message:
         "Чек не отправлен: проверьте журнал, не дублируйте фискальную операцию");
     }finally{setBusy(false);}
+  }
+  async function confirmHandover(item:FiscalFollowup){
+    if(busy||handoverProof.trim().length<8)return;
+    if(!window.confirm(
+      "Подтвердите, что товар действительно передан покупателю и отгрузка "+
+      "уже проведена на складе. Это действие попадёт в журнал аудита."
+    ))return;
+    setBusy(true);setError("");setNote("");
+    try{
+      await apiRequest("/provider-connectors/sites/"+siteId+
+        "/atol/payments/"+item.payment_intent_id+"/confirm-handover",{
+          method:"POST",body:JSON.stringify({
+            proofReference:handoverProof.trim(),confirmed:true
+          })
+        });
+      setHandoverProof("");
+      setNote("Факт выдачи подтверждён. Теперь можно оформить чек зачёта аванса.");
+      await load();
+    }catch(e){setError(e instanceof Error?e.message:
+      "Выдача не подтверждена. Проверьте отгрузку и статус перевозчика.");}
+    finally{setBusy(false);}
   }
   async function fiscalFollowup(item:FiscalFollowup){
     if(!nonMarkedConfirmed||busy)return;
@@ -388,17 +410,29 @@ export default function MerchantConnectorsPage(){
             Отправить чек предоплаты</button>
         </div>):<p>Нет доступных платежей для чеков АТОЛ.</p>}
         <h3>Выдача товаров и возвраты</h3>
+        <label>Номер документа вручения / акта выдачи
+          <input value={handoverProof}
+            onChange={e=>setHandoverProof(e.target.value)}
+            placeholder="Например, акт выдачи № 12345"/>
+        </label>
         {atolFollowups.length?atolFollowups.map(item=><div
           className="first-day-step" key={item.payment_intent_id}>
           <div><strong>{item.business_number}</strong>
             <p>{money(item.amount_minor)} · {item.kind==="REFUND"
-              ?"Деньги возвращены банком":"Товар выдан, зачесть предоплату"}</p>
+              ?"Деньги возвращены банком":item.kind==="HANDOVER"
+                ?"Отгружено со склада; подтвердите фактическую выдачу"
+                :"Товар выдан, зачесть предоплату"}</p>
           </div>
-          <button type="button" disabled={busy||!nonMarkedConfirmed}
-            onClick={()=>void fiscalFollowup(item)}>
-            {item.kind==="REFUND"?"Чек возврата прихода":
-              "Чек полного расчёта"}
-          </button>
+          {item.kind==="HANDOVER"?
+            <button type="button" disabled={busy||handoverProof.trim().length<8}
+              onClick={()=>void confirmHandover(item)}>
+              Подтвердить выдачу
+            </button>:
+            <button type="button" disabled={busy||!nonMarkedConfirmed}
+              onClick={()=>void fiscalFollowup(item)}>
+              {item.kind==="REFUND"?"Чек возврата прихода":"Чек полного расчёта"}
+            </button>
+          }
         </div>):<p>Нет ожидающих закрывающих чеков и возвратов.</p>}
         <h3>Журнал фискализации</h3>
         <div className="data-table-wrap"><table className="data-table">
