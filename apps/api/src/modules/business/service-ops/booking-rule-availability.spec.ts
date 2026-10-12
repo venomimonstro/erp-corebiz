@@ -82,6 +82,15 @@ describe("availability and employee-specific service delivery rules",()=>{
     impl.resolveDeliveryRule.mockRejectedValueOnce(new Error("DB down"));
     await expect(service.availability(ctx,input)).rejects.toThrow("DB down");
   });
+  it("rejects pathological fully-booked 30-day scans instead of exhausting PostgreSQL",async()=>{
+    const {service,impl}=fixture(false);
+    impl.resourceAvailable.mockResolvedValue(false);
+    await expect(service.availability(ctx,{
+      ...input,from:"2026-10-01T00:00:00.000Z",
+      to:"2026-10-31T00:00:00.000Z"
+    })).rejects.toThrow("Слишком широкий поиск");
+    expect(impl.resourceAvailable.mock.calls.length).toBeLessThanOrEqual(600);
+  });
   it("rejects invalid employee identifiers before tenant SQL",async()=>{
     const {service,impl}=fixture(false);
     await expect(service.availability(ctx,{...input,resourceId:"not-a-uuid"}))
