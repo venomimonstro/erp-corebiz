@@ -203,6 +203,38 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"infrastructure/postgres/244_single_carrier_per_order.sql",
+      patterns:[/CREATE FUNCTION corebiz_one_carrier_per_sales_order/,
+        /FOR UPDATE/,/BEFORE INSERT OR UPDATE OF tenant_id,sales_order_id/,
+        /commerce_post_shipment/,/commerce_shipment/],
+      message:"Cross-provider shipment claims can issue two consignments"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/merchant-connector.service.ts",
+      patterns:[/FROM commerce_post_shipment/,/FOR UPDATE OF o/,
+        /Для заказа уже оформлена заявка Почты России/],
+      message:"CDEK must reject an existing Russian Post booking"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/russian-post.service.ts",
+      patterns:[/FROM commerce_shipment/,/FOR UPDATE OF o/,
+        /Для заказа уже оформлена накладная СДЭК/],
+      message:"Russian Post must reject an existing CDEK shipment"
+    },
+    {
+      path:"scripts/merchant-incident-gate.sql",
+      patterns:[/commerce_reconcile_task/,/commerce_fiscal_reconcile_task/,
+        /commerce_post_shipment/,/commerce_shipment/,
+        /COREBIZ_COMMERCE_INTEGRITY_BLOCKED/],
+      message:"Merchant reconciliation incidents must block release"
+    },
+    {
+      path:"scripts/owner-first-day-journey.mjs",
+      patterns:[/COREBIZ_CONFIRM_DISPOSABLE_DB/,/deliveryMethodId/,
+        /\/payments\/storefront\/carts\//,/\/tenants/],
+      message:"Real owner activation and checkout must be part of a disposable smoke"
+    },
+    {
       path:"infrastructure/postgres/241_russian_post_tariff_quotes.sql",
       patterns:[/commerce_post_tariff_quote/, /from_postcode/,
         /vat_minor/, /ENABLE ROW LEVEL SECURITY/,
