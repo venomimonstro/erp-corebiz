@@ -25,6 +25,12 @@ type LoginInput = {
 
 @Injectable()
 export class AuthService {
+  // Activity telemetry must not perform a PostgreSQL UPDATE on every
+  // authenticated API request. Session validation remains DB-backed.
+  private readonly sessionTouchAt = new Map<string,number>();
+  private static readonly SESSION_TOUCH_INTERVAL_MS = 5*60*1000;
+  private static readonly SESSION_TOUCH_CACHE_MAX = 20_000;
+
   constructor(private readonly database: DatabaseService) {}
 
   async register(input: RegisterInput): Promise<{
@@ -244,6 +250,7 @@ export class AuthService {
   }
 
   async logout(sessionId: string): Promise<void> {
+    this.sessionTouchAt.delete(sessionId);
     await this.database.query(
       "UPDATE user_session SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL",
       [sessionId]
@@ -264,16 +271,29 @@ export class AuthService {
     const row = result.rows[0];
     if (!row) return null;
 
-    // The activity timestamp is best-effort telemetry, not part of
-    // authentication. Handle its rejection to avoid an unhandled promise.
-    void this.database
-      .query(
-        "UPDATE user_session SET last_seen_at = now() WHERE id = $1",
+    // A busy authenticated client may issue hundreds of API calls per minute.
+    // Never write user_session on each request: this causes row contention,
+    // WAL pressure and potentially degrades PostgreSQL under 99.9% SLO load.
+    const now=Date.now();
+    const previous=this.sessionTouchAt.get(row.session_id)??0;
+    if(now-previous>=AuthService.SESSION_TOUCH_INTERVAL_MS) {
+      // Mark BEFORE launching the best-effort write: concurrent requests
+      // do not trigger an unbounded number of DB updates for one session.
+      this.sessionTouchAt.delete(row.session_id);
+      this.sessionTouchAt.set(row.session_id,now);
+      if(this.sessionTouchAt.size>AuthService.SESSION_TOUCH_CACHE_MAX) {
+        const oldest=this.sessionTouchAt.keys().next().value;
+        if(oldest!==undefined)this.sessionTouchAt.delete(oldest);
+      }
+      void this.database.query(
+        `UPDATE user_session SET last_seen_at=now()
+         WHERE id=$1 AND
+           (last_seen_at IS NULL OR last_seen_at<now()-interval '4 minutes')`,
         [row.session_id]
-      )
-      .catch(() => {
-        // A transient telemetry write failure must not crash the API process.
+      ).catch(()=>{
+        // Session authentication does not depend on activity telemetry.
       });
+    }
 
     return {
       sessionId: row.session_id,
