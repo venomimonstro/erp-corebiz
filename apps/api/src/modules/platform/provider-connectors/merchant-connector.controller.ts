@@ -37,6 +37,35 @@ export class MerchantConnectorController{
   ):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.service.verify(this.context(req),id,provider)};
   }
+  @Get("sites/:siteId/shipments")
+  @RequirePermission("sites.read")
+  async shipments(@Req() req:AuthenticatedRequest,@Param("siteId") id:string)
+  :Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.service.shipments(this.context(req),id)};
+  }
+
+  @Post("sites/:siteId/cdek/shipments")
+  @RequirePermission("sites.manage")
+  @ApiCost("EXPENSIVE")
+  async bookShipment(@Req() req:AuthenticatedRequest,@Param("siteId") id:string,
+    @Body() body:{
+      orderId:string;quoteId:string;
+      recipientName:string;recipientPhone:string;
+      lengthCm:number;widthCm:number;heightCm:number
+    }):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.service.bookShipment(this.context(req),id,body)};
+  }
+
+  @Post("sites/:siteId/cdek/shipments/:shipmentId/verify")
+  @RequirePermission("sites.manage")
+  @ApiCost("EXPENSIVE")
+  async verifyShipment(@Req() req:AuthenticatedRequest,
+    @Param("siteId") siteId:string,@Param("shipmentId") shipmentId:string,
+    @Body() body:{providerUuid?:string}):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.service.verifyShipment(
+      this.context(req),siteId,shipmentId,body?.providerUuid)};
+  }
+  
   @Post("sites/:siteId/cdek/quotes")
   @RequirePermission("sites.manage")
   @ApiCost("EXPENSIVE")
