@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import type {TenantContext} from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { RedisService } from "../../../infrastructure/cache/redis.service";
 import { getEnv } from "../../../infrastructure/config/env";
@@ -95,7 +96,7 @@ export class HealthService {
     };
   }
 
-  async diagnostics(): Promise<{
+  async diagnostics(context:TenantContext): Promise<{
     outbox: {
       pending: number;
       failed: number;
@@ -106,16 +107,22 @@ export class HealthService {
       idleConnections: number;
     };
   }> {
-    const outbox = await this.database.query<{
-      pending: string;
-      failed: string;
-      oldest_pending_at: Date | null;
-    }>(
-      `SELECT
-         count(*) FILTER (WHERE status = 'PENDING')::text AS pending,
-         count(*) FILTER (WHERE status = 'FAILED')::text AS failed,
-         min(created_at) FILTER (WHERE status = 'PENDING') AS oldest_pending_at
-       FROM domain_event_outbox`
+    // Outbox has tenant RLS. Owner diagnostics must observe only their own
+    // company's backlog, not return an empty result with no tenant context.
+    const outbox = await this.database.withTenantTransaction(context,client=>
+      client.query<{
+        pending: string;
+        failed: string;
+        oldest_pending_at: Date | null;
+      }>(
+        `SELECT
+           count(*) FILTER (WHERE status = 'PENDING')::text AS pending,
+           count(*) FILTER (WHERE status = 'FAILED')::text AS failed,
+           min(created_at) FILTER (WHERE status = 'PENDING') AS oldest_pending_at
+         FROM domain_event_outbox
+         WHERE tenant_id=$1`,
+        [context.tenantId]
+      )
     );
 
     const db = await this.database.query<{
