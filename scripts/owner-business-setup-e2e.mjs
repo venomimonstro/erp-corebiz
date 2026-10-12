@@ -304,6 +304,22 @@ async function main(){
   step("10 dashboards after setup");
   await get(owner,"/dashboard/owner");
   await get(owner,"/dashboard/activation");
+
+  step("11 logout and returning owner login");
+  const logout=await post(owner,"/auth/logout");
+  assert.equal(logout.loggedOut,true);
+  await api(owner,"GET","/auth/me",undefined,401);
+  await api(owner,"POST","/auth/login",{
+    email:ownerEmail,password:"Incorrect-"+run
+  },401);
+  const returned=await post(owner,"/auth/login",{
+    email:ownerEmail,password:"Owner-"+run
+  });
+  assert.equal(returned.auth.userId,registered.auth.userId);
+  assert.equal(returned.auth.isOwner,true);
+  const restored=await get(owner,"/auth/me");
+  assert.ok(restored.memberships.some(x=>x.tenantId===firstTenant));
+  assert.ok(restored.memberships.some(x=>x.tenantId===second.tenantId));
   const summary={
     result:"PASS",mode:"disposable-api-e2e",
     runId:run,
