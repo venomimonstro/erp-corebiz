@@ -20,6 +20,11 @@ type Shipment={
   provider_order_uuid:string|null;provider_number:string|null;
   amount_minor:string;last_error_code:string|null;created_at:string
 };
+type FiscalReportHealth={
+  pollingEnabled:boolean;
+  queue:Array<{state:string;count:number;oldestDue:string|null}>;
+  manualAttentionWithoutUuid:number;
+};
 type FiscalCompany={inn:string;email:string;sno:string;paymentAddress:string;vatType:string};
 type FiscalPending={payment_intent_id:string;business_number:string;amount_minor:string};
 type FiscalFollowup={payment_intent_id:string;business_number:string;
@@ -50,6 +55,7 @@ export default function MerchantConnectorsPage(){
   const [atolPending,setAtolPending]=useState<FiscalPending[]>([]);
   const [atolFollowups,setAtolFollowups]=useState<FiscalFollowup[]>([]);
   const [atolDocs,setAtolDocs]=useState<FiscalDocument[]>([]);
+  const [reportHealth,setReportHealth]=useState<FiscalReportHealth|null>(null);
   const [nonMarkedConfirmed,setNonMarkedConfirmed]=useState(false);
   const [fiscalUnknownUuid,setFiscalUnknownUuid]=useState("");
   const [handoverProof,setHandoverProof]=useState("");
@@ -77,7 +83,7 @@ export default function MerchantConnectorsPage(){
   const load=useCallback(async()=>{
     if(!siteId)return;
     try{
-      const [connections,shipments,pending,receipts,followups]=await Promise.all([
+      const [connections,shipments,pending,receipts,followups,health]=await Promise.all([
         apiRequest<Connection[]>("/provider-connectors/sites/"+siteId),
         apiRequest<Shipment[]>("/provider-connectors/sites/"+siteId+"/shipments"),
         apiRequest<FiscalPending[]>("/provider-connectors/sites/"+siteId+
@@ -85,11 +91,14 @@ export default function MerchantConnectorsPage(){
         apiRequest<FiscalDocument[]>("/provider-connectors/sites/"+siteId+
           "/atol/receipts").catch(()=>[]),
         apiRequest<FiscalFollowup[]>("/provider-connectors/sites/"+siteId+
-          "/atol/pending-followups").catch(()=>[])
+          "/atol/pending-followups").catch(()=>[]),
+        apiRequest<FiscalReportHealth>("/provider-connectors/sites/"+siteId+
+          "/atol/report-health").catch(()=>null)
       ]);
       setConnections(connections);setShipments(shipments);
       setAtolPending(pending);setAtolDocs(receipts);
       setAtolFollowups(followups);
+      setReportHealth(health);
       const cfg=connections.find(c=>c.provider==="ATOL_ONLINE");
       if(cfg?.public_config?.fiscalCompany)
         setFiscalCompany(cfg.public_config.fiscalCompany);
@@ -434,6 +443,22 @@ export default function MerchantConnectorsPage(){
             </button>
           }
         </div>):<p>Нет ожидающих закрывающих чеков и возвратов.</p>}
+        <h3>Контроль автоматической сверки чеков</h3>
+        <p><strong>Проверка отчётов:</strong> {
+          reportHealth?.pollingEnabled?"Включена (только запросы статуса)"
+          :"Выключена"
+        }. Отправка новых чеков автоматической проверкой не производится.</p>
+        {reportHealth?<div className="first-day-summary">
+          <p>Ручная сверка без UUID АТОЛ: <strong>{
+            reportHealth.manualAttentionWithoutUuid
+          }</strong></p>
+          <p>{reportHealth.queue.map(q=>
+            q.state+": "+q.count).join(" · ")||"В очереди нет задач"}</p>
+          {reportHealth.queue.some(q=>q.state==="EXHAUSTED")?
+            <p role="alert">Есть исчерпанные попытки сверки. Проверьте
+              документы и договор с АТОЛ вручную, не создавайте повторный чек.</p>
+            :null}
+        </div>:null}
         <h3>Журнал фискализации</h3>
         <div className="data-table-wrap"><table className="data-table">
           <thead><tr><th>Документ</th><th>Состояние</th><th>ФН/ФД/ФП</th><th>Сверка</th></tr></thead>
@@ -457,6 +482,10 @@ export default function MerchantConnectorsPage(){
             </td>
           </tr>)}</tbody>
         </table></div>
+        <p className="muted">Если автоопрос включён администратором,
+          известные UUID сверяются в фоне. Отправление чека никогда не
+          повторяется автоматически. UNKNOWN без UUID всегда требует
+          сверки через кабинет АТОЛ.</p>
         <p className="muted">WAIT/UNKNOWN не являются чеком.
           Факт фискализации подтверждает только отчёт АТОЛ с ФН/ФД/ФП.
           Пилот поддерживает закрытие полной предоплаты и полный банковский
