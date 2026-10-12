@@ -5,7 +5,7 @@ import {AppSidebar} from "../../../../components/app-sidebar";
 import {apiRequest} from "../../../../lib/api";
 
 type Service={id:string;name:string;duration_minutes:number;price_minor:string;currency:string;delivery_format:string};
-type Resource={id:string;name:string;type:string;capacity:number};
+type Resource={id:string;name:string;type:string;capacity:number;timezone?:string|null};
 type Customer={id:string;displayName:string;phone:string|null};
 type Rule={id:string;service_id:string;employee_resource_id:string|null;price_minor:string|null;duration_minutes:number|null};
 type Slot={resourceId:string;resourceName:string;startsAt:string;endsAt:string};
@@ -39,7 +39,24 @@ function toMoney(value:string|number|undefined|null){
     style:"currency",currency:"RUB",maximumFractionDigits:0
   }).format(numeric/100);
 }
-function fmtTime(value:string){return new Date(value).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"});}
+function fmtTime(value:string,timeZone="Europe/Moscow"){
+  try{return new Date(value).toLocaleTimeString("ru-RU",{
+    hour:"2-digit",minute:"2-digit",timeZone
+  });}catch{return new Date(value).toLocaleTimeString("ru-RU",{
+    hour:"2-digit",minute:"2-digit",timeZone:"Europe/Moscow"
+  });}
+}
+function venueDay(value:string,timeZone="Europe/Moscow"){
+  let parts:Intl.DateTimeFormatPart[];
+  try{parts=new Intl.DateTimeFormat("en-GB",{
+    day:"2-digit",month:"2-digit",year:"numeric",timeZone
+  }).formatToParts(new Date(value));}
+  catch{parts=new Intl.DateTimeFormat("en-GB",{
+    day:"2-digit",month:"2-digit",year:"numeric",timeZone:"Europe/Moscow"
+  }).formatToParts(new Date(value));}
+  const byType=(key:string)=>parts.find(p=>p.type===key)?.value??"";
+  return byType("year")+"-"+byType("month")+"-"+byType("day");
+}
 function fmtDate(value:string){return new Date(value).toLocaleDateString("ru-RU",{day:"numeric",month:"short"});}
 function statusName(status:string){return ({DRAFT:"Черновик",CONFIRMED:"Записан",ARRIVED:"Пришёл",IN_SERVICE:"В работе",COMPLETED:"Завершён",NO_SHOW:"Не пришёл",CANCELLED:"Отменён"} as Record<string,string>)[status]??status;}
 function readableError(error:unknown){return error instanceof Error?error.message:"Операция не выполнена";}
@@ -96,15 +113,24 @@ export default function ServiceDeskPage(){
   const end=useMemo(()=>{const d=new Date(from);d.setDate(d.getDate()+7);return d;},[from]);
   const staff=useMemo(()=>resources.filter(isStaff),[resources]);
   const filtered=useMemo(()=>visits.filter(v=>!staffFilter||v.resources.some(r=>r.resourceId===staffFilter)),[visits,staffFilter]);
+  const zoneForVisit=(visit:Visit)=>{
+    const resourceId=visit.resources.find(x=>x.type==="EMPLOYEE")?.resourceId
+      ??visit.resources[0]?.resourceId;
+    return resources.find(x=>x.id===resourceId)?.timezone||"Europe/Moscow";
+  };
 
   const refresh=useCallback(async()=>{
     setLoading(true);
     const start=weekStart(weekOffset);
     const finish=new Date(start);finish.setDate(finish.getDate()+7);
+    // Some companies use a different timezone than the owner's browser.
+    // Widen the SQL range; client week grouping uses the resource timezone.
+    const fetchFrom=new Date(start);fetchFrom.setDate(fetchFrom.getDate()-1);
+    const fetchUntil=new Date(finish);fetchUntil.setDate(fetchUntil.getDate()+1);
     const results=await Promise.allSettled([
       apiRequest<Service[]>("/service/catalog"),
       apiRequest<Resource[]>("/service/resources"),
-      apiRequest<Visit[]>("/service/bookings?from="+encodeURIComponent(start.toISOString())+"&to="+encodeURIComponent(finish.toISOString())),
+      apiRequest<Visit[]>("/service/bookings?from="+encodeURIComponent(fetchFrom.toISOString())+"&to="+encodeURIComponent(fetchUntil.toISOString())),
       apiRequest<Customer[]>("/crm/customers"),
       apiRequest<Rule[]>("/service/delivery-rules"),
       apiRequest<Economy>("/service/economics")
@@ -378,11 +404,11 @@ export default function ServiceDeskPage(){
           </div>
           <div className="service-desk-week">
             {weekDays.map(d=>{
-              const items=filtered.filter(v=>localDate(new Date(v.starts_at))===localDate(d));
+              const items=filtered.filter(v=>venueDay(v.starts_at,zoneForVisit(v))===localDate(d));
               return <section className="service-desk-day" key={localDate(d)}>
                 <h3>{d.toLocaleDateString("ru-RU",{weekday:"short",day:"numeric",month:"short"})}</h3>
                 {items.map(v=><button type="button" className="service-desk-visit" key={v.id} onClick={()=>void viewVisit(v.id)}>
-                  <strong>{fmtTime(v.starts_at)}</strong>
+                  <strong>{fmtTime(v.starts_at,zoneForVisit(v))}</strong>
                   <span><b>{v.service_name}</b><small>{v.party_name??"Без клиента"} · {v.resources.map(x=>x.resourceName).join(", ")}</small></span>
                   <em>{statusName(v.status)}</em>
                 </button>)}
@@ -509,7 +535,10 @@ export default function ServiceDeskPage(){
               </select></label>
               <label>Свободное время<select required value={bookSlot} onChange={e=>setBookSlot(e.target.value)} disabled={!bookStaff||slotsBusy}>
                 <option value="">{slotsBusy?"Ищем доступные интервалы…":"Выберите интервал"}</option>
-                {visibleSlots.map(s=><option key={s.resourceId+"-"+s.startsAt} value={s.startsAt}>{fmtTime(s.startsAt)}–{fmtTime(s.endsAt)}</option>)}
+                {visibleSlots.map(s=><option key={s.resourceId+"-"+s.startsAt} value={s.startsAt}>
+                  {fmtTime(s.startsAt,staff.find(r=>r.id===s.resourceId)?.timezone||"Europe/Moscow")}
+                  –{fmtTime(s.endsAt,staff.find(r=>r.id===s.resourceId)?.timezone||"Europe/Moscow")}
+                </option>)}
               </select></label>
               {bookStaff&&!slotsBusy&&!visibleSlots.length?<p className="muted" role="status">У этого специалиста на выбранную дату нет доступных интервалов.</p>:null}
               <label>Клиент (необязательно)<select value={bookCustomer} onChange={e=>setBookCustomer(e.target.value)}>
@@ -527,7 +556,10 @@ export default function ServiceDeskPage(){
             <div className="service-desk-bar"><div><small>Визит №{selectedVisit.business_number}</small><h2>{selectedVisit.service_name}</h2></div><button className="secondary-button" type="button" onClick={()=>{setSelectedVisit(null);setPendingTransition(null);}} disabled={busy}>Закрыть</button></div>
             <div className="service-desk-visit-info">
               <p><b>Клиент:</b> {selectedVisit.party_name??"Не указан"}</p>
-              <p><b>Время:</b> {fmtDate(selectedVisit.starts_at)}, {fmtTime(selectedVisit.starts_at)}–{fmtTime(selectedVisit.ends_at)}</p>
+              <p><b>Время:</b> {venueDay(selectedVisit.starts_at,zoneForVisit(selectedVisit))},
+                {" "}{fmtTime(selectedVisit.starts_at,zoneForVisit(selectedVisit))}
+                –{fmtTime(selectedVisit.ends_at,zoneForVisit(selectedVisit))}
+                {" "}({zoneForVisit(selectedVisit)})</p>
               <p><b>Специалисты:</b> {selectedVisit.resources.map(x=>x.resourceName).join(", ")}</p>
               <p><b>Статус:</b> {statusName(selectedVisit.status)}</p>
               <p><b>Стоимость услуги:</b> {toMoney(selectedVisit.price_minor_snapshot)}</p>
