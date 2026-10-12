@@ -277,6 +277,9 @@ export class AtolReceiptsService{
       throw new ConflictException("UUID фискального документа неизменяем");
     const creds=JSON.parse(openMerchantSecret(row.encrypted_credentials)) as AtolCredentials;
     const status=await this.atol.report(creds,row.environment,receiptUuid);
+    if(status.state==="WAIT"&&!status.externalId)
+      return {documentId,state:"WAIT",
+        note:"АТОЛ ещё обрабатывает чек. Реквизиты ФН/ФД/ФП не получены"};
     if(status.externalId!==row.external_id)
       throw new ConflictException("Отчёт АТОЛ относится к другому документу");
     if(status.state==="DONE"&&status.amountMinor!==row.amount_minor)
