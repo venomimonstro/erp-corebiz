@@ -287,7 +287,7 @@ export default function MerchantConnectorsPage(){
         </div>
         <div className="first-day-steps">
           {quotes.map(q=><article className="first-day-step" key={q.quoteId}>
-            <span><icon name="package" /></span>
+            <span>📦</span>
             <div><strong>Тариф №{q.tariffCode} · {money(q.amountMinor)}</strong>
               <p>Действует до {new Date(q.expiresAt).toLocaleString("ru-RU")}</p>
             </div>
