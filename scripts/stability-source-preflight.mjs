@@ -213,8 +213,11 @@ async function inspectRequiredHardening(root) {
     {
       path:"apps/api/src/modules/business/service-ops/booking.service.ts",
       patterns:[/redactBookingFinancials/,/finance\.read/,
-        /billing_status:null/,/settled_minor:null/,/refund:null/],
-      message:"Service-only employees must not receive booking finance data"
+        /billing_status:null/,/settled_minor:null/,/refund:null/,
+        /MAX_CANDIDATES=600/,/pg_advisory_xact_lock/,
+        /Ключ идемпотентности уже использован для другой записи/,
+        /hasDeliveryRules\.rowCount/],
+      message:"Booking must enforce finance scope, bounded availability and safe idempotency"
     },
     {
       path:"scripts/service-desk-browser-journey.mjs",
