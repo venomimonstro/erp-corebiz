@@ -232,6 +232,36 @@ export class MerchantConnectorService{
       const q=quote.rows[0];if(!q)throw new ConflictException(
         "Тариф истёк или относится к другому магазину"
       );
+      const lines=await client.query<{
+        description:string;quantity_milli:string;line_total_minor:string;
+        sku_code:string;
+      }>(
+        `SELECT l.description,l.quantity_milli::text,l.line_total_minor::text,
+           s.code AS sku_code
+         FROM sales_order_line l JOIN sku s
+           ON s.tenant_id=l.tenant_id AND s.id=l.sku_id
+         WHERE l.tenant_id=$1 AND l.order_id=$2
+         ORDER BY l.id`,
+        [ctx.tenantId,body.orderId]);
+      if(!lines.rows.length||lines.rows.length>126)
+        throw new ConflictException("Для отправления СДЭК нужны 1–126 товарных SKU");
+      const items=lines.rows.map(x=>{
+        const qty=BigInt(x.quantity_milli);
+        const total=BigInt(x.line_total_minor);
+        if(qty<=0n||qty%1000n!==0n||
+           qty/1000n>10000n||
+           total%(qty/1000n)!==0n)
+          throw new ConflictException(
+            "СДЭК требует целое количество товаров и точную цену за единицу"
+          );
+        const unitMinor=total/(qty/1000n);
+        const cost=(unitMinor/100n).toString()+"."+
+          (unitMinor%100n).toString().padStart(2,"0");
+        if(cost.length>13)
+          throw new ConflictException("Стоимость позиции СДЭК слишком большая");
+        return {name:x.description.slice(0,255),
+          wareKey:x.sku_code.slice(0,80),cost,amount:Number(qty/1000n)};
+      });
       const old=await client.query<{id:string;payload_digest:string;state:string}>(
         `SELECT id,payload_digest,state FROM commerce_shipment
          WHERE tenant_id=$1 AND sales_order_id=$2 FOR UPDATE`,
@@ -239,7 +269,7 @@ export class MerchantConnectorService{
       if(old.rows[0]){
         if(old.rows[0].payload_digest!==fingerprint)
           throw new ConflictException("Для заказа уже есть другая накладная");
-        return {id:old.rows[0].id,retry:false,quote:q};
+        return {id:old.rows[0].id,retry:false,quote:q,items};
       }
       const r=await client.query<{id:string}>(
         `INSERT INTO commerce_shipment(
@@ -250,7 +280,7 @@ export class MerchantConnectorService{
          RETURNING id`,
         [ctx.tenantId,siteId,body.orderId,connection.id,body.quoteId,
           fingerprint,recipientName,recipientPhone,q.tariff_code,q.amount_minor]);
-      return {id:r.rows[0]!.id,retry:true,quote:q};
+      return {id:r.rows[0]!.id,retry:true,quote:q,items};
     });
     if(!prepared.retry)return {
       shipmentId:prepared.id,state:"ALREADY_EXISTS",
@@ -268,7 +298,8 @@ export class MerchantConnectorService{
         toCityCode:prepared.quote.to_city_code,
         recipientName,recipientPhone,
         weightGrams:prepared.quote.package_weight_grams,
-        lengthCm:body.lengthCm,widthCm:body.widthCm,heightCm:body.heightCm
+        lengthCm:body.lengthCm,widthCm:body.widthCm,heightCm:body.heightCm,
+        items:prepared.items
       });
       await this.db.withTenantTransaction(ctx,async client=>client.query(
         `UPDATE commerce_shipment
