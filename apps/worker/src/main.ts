@@ -16,6 +16,7 @@ type OutboxEvent = {
   payload: Record<string, unknown>;
   depth: number;
   attempts: number;
+  locked_at: Date;
 };
 
 type MarketingJob = {
@@ -72,7 +73,16 @@ if (!databaseUrl) {
   throw new Error("DATABASE_URL is required");
 }
 
-const pool = new Pool({ connectionString: databaseUrl });
+const pool = new Pool({
+  connectionString: databaseUrl,max:10,connectionTimeoutMillis:3000,
+  idleTimeoutMillis:15000,statement_timeout:30000,
+  application_name:"corebiz-worker"
+});
+// pg Pool emits errors for disconnected idle clients. Without a listener,
+// Node terminates the background worker process.
+pool.on("error",()=>{
+  process.stderr.write("[worker] postgres idle connection lost; reconnecting\n");
+});
 let stopping = false;
 
 function readPath(source: unknown, path: string): unknown {
@@ -120,31 +130,13 @@ function matches(
 }
 
 async function claimEvent(client: PoolClient): Promise<OutboxEvent | null> {
+  // The SECURITY DEFINER function performs a single atomic claim across
+  // tenants. Worker cannot bypass outbox RLS with a direct global SELECT.
+  // Expired claims are reclaimed after a crash (migration 245).
   const result = await client.query<OutboxEvent>(
-    `SELECT id, tenant_id, event_name, entity_type, entity_id,
-            actor_user_id, actor_membership_id, payload, depth, attempts
-     FROM domain_event_outbox
-     WHERE status IN ('PENDING','FAILED')
-       AND next_attempt_at <= now()
-       AND attempts < 5
-     ORDER BY created_at
-     FOR UPDATE SKIP LOCKED
-     LIMIT 1`
+    "SELECT * FROM public.corebiz_claim_domain_event()"
   );
-
-  const event = result.rows[0];
-  if (!event) return null;
-
-  await client.query(
-    `UPDATE domain_event_outbox
-     SET status = 'PROCESSING',
-         locked_at = now(),
-         attempts = attempts + 1
-     WHERE id = $1`,
-    [event.id]
-  );
-
-  return event;
+  return result.rows[0] ?? null;
 }
 
 async function executeAction(
@@ -258,6 +250,7 @@ async function executeAction(
 
 async function processEvent(event: OutboxEvent): Promise<void> {
   const client = await pool.connect();
+  let clientReleased=false;
 
   try {
     await client.query("BEGIN");
@@ -265,6 +258,19 @@ async function processEvent(event: OutboxEvent): Promise<void> {
       "SELECT set_config('app.tenant_id', $1, true)",
       [event.tenant_id]
     );
+    // Fence a stale worker before executing ANY business side effects.
+    // Keep this row lock until all workflow actions commit atomically:
+    // another process cannot reclaim the event mid-execution.
+    const claim=await client.query(
+      `SELECT 1 FROM domain_event_outbox
+       WHERE tenant_id=$1 AND id=$2 AND status='PROCESSING'
+         AND locked_at=$3 FOR UPDATE`,
+      [event.tenant_id,event.id,event.locked_at]
+    );
+    if(!claim.rowCount) {
+      await client.query("ROLLBACK");
+      return;
+    }
 
     const workflows = await client.query<{
       workflow_id: string;
@@ -358,59 +364,47 @@ async function processEvent(event: OutboxEvent): Promise<void> {
           [execution.rows[0]!.id, JSON.stringify({ actions: outputs })]
         );
       } catch (error) {
-        await client.query(
-          `UPDATE workflow_execution
-           SET status = 'FAILED',
-               error_message = $2,
-               finished_at = now()
-           WHERE id = $1`,
-          [
-            execution.rows[0]!.id,
-            error instanceof Error ? error.message : String(error)
-          ]
-        );
-        throw error;
-      }
+    // Rollback is mandatory because failed workflow actions are atomic.
+    // If the connection is dead, preserving the original error and letting
+    // the 15-minute claim expiry recover is safer than a blind replay.
+    let broken=false;
+    try{
+      await client.query("ROLLBACK");
+    }catch{
+      broken=true;
     }
-
-    await client.query(
-      `UPDATE domain_event_outbox
-       SET status = 'PROCESSED',
-           processed_at = now(),
-           locked_at = NULL,
-           last_error = NULL
-       WHERE id = $1`,
-      [event.id]
-    );
-
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-
-    const delaySeconds = Math.min(
-      300,
-      2 ** Math.min(event.attempts + 1, 8)
-    );
-
-    await pool.query(
-      `UPDATE domain_event_outbox
-       SET status = 'FAILED',
-           locked_at = NULL,
-           last_error = $2,
-           next_attempt_at = now() + ($3::text || ' seconds')::interval
-       WHERE id = $1`,
-      [
-        event.id,
-        error instanceof Error ? error.message.slice(0, 2000) : String(error).slice(0, 2000),
-        String(delaySeconds)
-      ]
-    );
-
+    if(broken) {
+      client.release(true);
+      clientReleased=true;
+      throw error;
+    }
+    const delaySeconds=Math.min(300,2**Math.min(event.attempts,8));
+    try{
+      await client.query("BEGIN");
+      await client.query(
+        "SELECT set_config('app.tenant_id',$1,true)",[event.tenant_id]
+      );
+      await client.query(
+        `UPDATE domain_event_outbox
+         SET status='FAILED',locked_at=NULL,
+             last_error='WORKFLOW_ACTION_FAILED',
+             next_attempt_at=now()+($3::text||' seconds')::interval
+         WHERE tenant_id=$1 AND id=$2 AND status='PROCESSING'
+           AND locked_at=$4`,
+        [event.tenant_id,event.id,String(delaySeconds),event.locked_at]
+      );
+      await client.query("COMMIT");
+    }catch{
+      try{await client.query("ROLLBACK");}catch{}
+      client.release(true);
+      clientReleased=true;
+      throw error;
+    }
     process.stderr.write(
-      `[worker] outbox ${event.id} failed: ${error instanceof Error ? error.message : String(error)}\n`
+      `[worker] outbox ${event.id} action failed; retry scheduled\n`
     );
   } finally {
-    client.release();
+    if(!clientReleased)client.release();
   }
 }
 
