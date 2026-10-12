@@ -26,6 +26,7 @@ DECLARE
     'corebiz_resolve_payment_tenant',
     'corebiz_resolve_refund_tenant',
     'corebiz_claim_commerce_reconciliation',
+    'corebiz_claim_domain_event',
     'corebiz_resolve_site_form_binding',
     'corebiz_resolve_tracker_site',
     'corebiz_tracker_summary',
