@@ -4,10 +4,14 @@ import type {AuthenticatedRequest} from "../auth/auth.types";
 import {RequirePermission} from "../authorization/require-permission.decorator";
 import {ApiCost} from "../../../infrastructure/http/api-cost.decorator";
 import {MerchantConnectorService} from "./merchant-connector.service";
+import {AtolReceiptsService} from "./atol-receipts.service";
 
 @Controller("provider-connectors")
 export class MerchantConnectorController{
-  constructor(private readonly service:MerchantConnectorService){}
+  constructor(
+    private readonly service:MerchantConnectorService,
+    private readonly fiscal:AtolReceiptsService
+  ){}
   private context(req:AuthenticatedRequest):TenantContext{
     const {tenantId,userId,membershipId}=req.auth!;
     return {tenantId,userId,membershipId};
@@ -37,6 +41,33 @@ export class MerchantConnectorController{
   ):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.service.verify(this.context(req),id,provider)};
   }
+  @Get("sites/:siteId/atol/receipts")
+  @RequirePermission("sites.manage")
+  async atolReceipts(@Req() req:AuthenticatedRequest,@Param("siteId") siteId:string)
+  :Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.fiscal.list(this.context(req),siteId)};
+  }
+
+  @Post("sites/:siteId/atol/payments/:paymentId/receipt")
+  @RequirePermission("sites.manage")
+  @ApiCost("EXPENSIVE")
+  async issueAtolReceipt(@Req() req:AuthenticatedRequest,
+    @Param("siteId") siteId:string,@Param("paymentId") paymentId:string,
+    @Body() body:{nonMarkedConfirmed:boolean}):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.fiscal.issue(this.context(req),siteId,
+      paymentId,body?.nonMarkedConfirmed)};
+  }
+
+  @Post("sites/:siteId/atol/receipts/:documentId/verify")
+  @RequirePermission("sites.manage")
+  @ApiCost("EXPENSIVE")
+  async verifyAtolReceipt(@Req() req:AuthenticatedRequest,
+    @Param("siteId") siteId:string,@Param("documentId") documentId:string,
+    @Body() body:{providerUuid?:string}):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.fiscal.verify(this.context(req),
+      siteId,documentId,body?.providerUuid)};
+  }
+
   @Get("sites/:siteId/shipments")
   @RequirePermission("sites.read")
   async shipments(@Req() req:AuthenticatedRequest,@Param("siteId") id:string)
