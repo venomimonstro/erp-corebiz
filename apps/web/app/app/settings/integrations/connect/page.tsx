@@ -22,7 +22,9 @@ type Shipment={
 };
 type FiscalCompany={inn:string;email:string;sno:string;paymentAddress:string;vatType:string};
 type FiscalPending={payment_intent_id:string;business_number:string;amount_minor:string};
-type FiscalDocument={id:string;payment_intent_id:string;state:string;provider_uuid:string|null;
+type FiscalFollowup={payment_intent_id:string;business_number:string;
+  amount_minor:string;kind:"REFUND"|"CLOSING";delivery_status:string};
+type FiscalDocument={id:string;payment_intent_id:string;operation:string;state:string;provider_uuid:string|null;
   fn_number:string|null;fiscal_document_number:number|null;
   fiscal_document_attribute:string|null;receipt_url:string|null;last_error_code:string|null};
 
@@ -46,6 +48,7 @@ export default function MerchantConnectorsPage(){
     inn:"",email:"",sno:"usn_income",paymentAddress:"",vatType:"none"
   });
   const [atolPending,setAtolPending]=useState<FiscalPending[]>([]);
+  const [atolFollowups,setAtolFollowups]=useState<FiscalFollowup[]>([]);
   const [atolDocs,setAtolDocs]=useState<FiscalDocument[]>([]);
   const [nonMarkedConfirmed,setNonMarkedConfirmed]=useState(false);
   const [fiscalUnknownUuid,setFiscalUnknownUuid]=useState("");
@@ -73,16 +76,19 @@ export default function MerchantConnectorsPage(){
   const load=useCallback(async()=>{
     if(!siteId)return;
     try{
-      const [connections,shipments,pending,receipts]=await Promise.all([
+      const [connections,shipments,pending,receipts,followups]=await Promise.all([
         apiRequest<Connection[]>("/provider-connectors/sites/"+siteId),
         apiRequest<Shipment[]>("/provider-connectors/sites/"+siteId+"/shipments"),
         apiRequest<FiscalPending[]>("/provider-connectors/sites/"+siteId+
           "/atol/pending-payments").catch(()=>[]),
         apiRequest<FiscalDocument[]>("/provider-connectors/sites/"+siteId+
-          "/atol/receipts").catch(()=>[])
+          "/atol/receipts").catch(()=>[]),
+        apiRequest<FiscalFollowup[]>("/provider-connectors/sites/"+siteId+
+          "/atol/pending-followups").catch(()=>[])
       ]);
       setConnections(connections);setShipments(shipments);
       setAtolPending(pending);setAtolDocs(receipts);
+      setAtolFollowups(followups);
       const cfg=connections.find(c=>c.provider==="ATOL_ONLINE");
       if(cfg?.public_config?.fiscalCompany)
         setFiscalCompany(cfg.public_config.fiscalCompany);
@@ -158,6 +164,30 @@ export default function MerchantConnectorsPage(){
         "Чек не отправлен: проверьте журнал, не дублируйте фискальную операцию");
     }finally{setBusy(false);}
   }
+  async function fiscalFollowup(item:FiscalFollowup){
+    if(!nonMarkedConfirmed||busy)return;
+    const returning=item.kind==="REFUND";
+    if(!window.confirm(returning
+      ?"Отправить чек возврата прихода? Банк уже должен вернуть деньги. "
+        +"ККТ сформирует отдельный фискальный документ."
+      :"Сформировать чек полного расчёта с зачётом аванса? "
+        +"Товар должен быть фактически выдан, второго списания с карты не будет."))return;
+    setBusy(true);setError("");setNote("");
+    try{
+      const result=await apiRequest<{state:string;note?:string}>(
+        "/provider-connectors/sites/"+siteId+"/atol/payments/"+
+          item.payment_intent_id+
+          (returning?"/refund-receipt":"/settlement"),{
+            method:"POST",body:JSON.stringify({nonMarkedConfirmed:true})
+          });
+      setNote(result.note??("АТОЛ: "+result.state+". Дождитесь ФН/ФД/ФП."));
+      await load();
+    }catch(e){
+      setError(e instanceof Error?e.message:
+        "АТОЛ не подтвердил операцию. Не дублируйте запрос без сверки.");
+    }finally{setBusy(false);}
+  }
+
   async function verifyFiscal(document:FiscalDocument){
     setBusy(true);setError("");setNote("");
     try{
@@ -357,11 +387,28 @@ export default function MerchantConnectorsPage(){
             onClick={()=>void issueFiscal(payment.payment_intent_id)}>
             Отправить чек предоплаты</button>
         </div>):<p>Нет доступных платежей для чеков АТОЛ.</p>}
+        <h3>Выдача товаров и возвраты</h3>
+        {atolFollowups.length?atolFollowups.map(item=><div
+          className="first-day-step" key={item.payment_intent_id}>
+          <div><strong>{item.business_number}</strong>
+            <p>{money(item.amount_minor)} · {item.kind==="REFUND"
+              ?"Деньги возвращены банком":"Товар выдан, зачесть предоплату"}</p>
+          </div>
+          <button type="button" disabled={busy||!nonMarkedConfirmed}
+            onClick={()=>void fiscalFollowup(item)}>
+            {item.kind==="REFUND"?"Чек возврата прихода":
+              "Чек полного расчёта"}
+          </button>
+        </div>):<p>Нет ожидающих закрывающих чеков и возвратов.</p>}
         <h3>Журнал фискализации</h3>
         <div className="data-table-wrap"><table className="data-table">
           <thead><tr><th>Документ</th><th>Состояние</th><th>ФН/ФД/ФП</th><th>Сверка</th></tr></thead>
           <tbody>{atolDocs.map(doc=><tr key={doc.id}>
-            <td>{doc.id.slice(0,8)}</td>
+            <td>{doc.id.slice(0,8)} · {
+              doc.operation==="sell"?"Предоплата":
+              doc.operation==="sell_full_payment"?"Зачёт аванса":
+              doc.operation==="sell_refund"?"Возврат прихода":doc.operation
+            }</td>
             <td>{doc.state}</td>
             <td>{doc.fn_number??"—"} / {doc.fiscal_document_number??"—"} /
               {doc.fiscal_document_attribute??"—"}</td>
@@ -376,9 +423,11 @@ export default function MerchantConnectorsPage(){
             </td>
           </tr>)}</tbody>
         </table></div>
-        <p className="muted">Состояние WAIT не является чеком. Успех только
-          после подтверждения АТОЛ с ФН, ФД и ФП. Возврат прихода, зачёт
-          аванса при выдаче и маркируемые товары требуют отдельных операций.</p>
+        <p className="muted">WAIT/UNKNOWN не являются чеком.
+          Факт фискализации подтверждает только отчёт АТОЛ с ФН/ФД/ФП.
+          Пилот поддерживает закрытие полной предоплаты и полный банковский
+          возврат. Частичные возвраты, корректировки, маркируемые товары и
+          реальная кассовая приёмка требуют отдельного этапа.</p>
       </section>:null}
       {provider==="CDEK"&&current?.state==="VERIFIED"?<section className="studio-section">
         <h2>Проверить расчёт доставки</h2>
