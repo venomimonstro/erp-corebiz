@@ -95,6 +95,7 @@ function fixture(options:{
   return {svc,sql};
 }
 describe("ATOL confirmed-payment fiscalization",()=>{
+  afterEach(()=>jest.restoreAllMocks());
   const savedKey=process.env.COREBIZ_PAYMENT_ENCRYPTION_KEY;
   const savedEnabled=process.env.COREBIZ_ATOL_RECEIPTS_ENABLED;
   beforeAll(()=>{
