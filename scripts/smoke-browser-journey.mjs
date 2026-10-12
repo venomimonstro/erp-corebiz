@@ -66,7 +66,23 @@ try {
   await page.waitForURL("**/app", { timeout: 20000 });
   await page.getByRole("heading", { name: "Сегодня" }).waitFor();
 
-  console.log("PASS: signup → first dashboard → profile setting → responsive menu → login");
+  // Exercise resilience: onboarding temporarily returns 503, but the owner
+  // must retain operational KPIs instead of receiving a blank dashboard.
+  await page.route("**/api/v1/dashboard/activation",async route=>{
+    await route.fulfill({
+      status:503,contentType:"application/json",
+      body:JSON.stringify({ok:false,error:{message:"DISPOSABLE_ONBOARDING_DOWN"}})
+    });
+  });
+  await page.reload({waitUntil:"domcontentloaded"});
+  await page.locator(".owner-kpi").first().waitFor({timeout:20000});
+  await page.getByText(
+    "Подсказки первого запуска временно недоступны.",
+    {exact:false}
+  ).waitFor({timeout:20000});
+  await page.unroute("**/api/v1/dashboard/activation");
+
+  console.log("PASS: signup → owner dashboard → profile → mobile navigation → login → onboarding outage resilience");
   console.log("Local disposable environment only. This is not a production sign-off.");
 } finally {
   await browser?.close();
