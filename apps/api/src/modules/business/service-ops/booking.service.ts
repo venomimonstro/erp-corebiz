@@ -865,6 +865,7 @@ export class BookingService {
       from: string;
       to: string;
       resourceType?: string;
+      resourceId?: string;
       slotStepMinutes?: number;
     }
   ): Promise<Array<{
@@ -884,6 +885,9 @@ export class BookingService {
       throw new BadRequestException("Некорректный период availability");
     }
 
+    if(input.resourceId && !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(input.resourceId)){
+      throw new BadRequestException("Некорректный идентификатор специалиста");
+    }
     const step = Math.max(5, Math.min(120, Math.floor(input.slotStepMinutes ?? 30)));
     const scopedMembershipIds = await this.serviceScope(context, "service.read");
 
@@ -902,6 +906,7 @@ export class BookingService {
          WHERE r.tenant_id = $1
            AND r.status = 'ACTIVE'
            AND ($2::text IS NULL OR r.type = $2)
+           AND ($5::uuid IS NULL OR r.id = $5)
            AND (
              $4::uuid[] IS NULL
              OR r.membership_id IS NULL
@@ -928,7 +933,8 @@ export class BookingService {
           context.tenantId,
           input.resourceType?.trim().toUpperCase() || null,
           input.serviceId,
-          scopedMembershipIds
+          scopedMembershipIds,
+          input.resourceId??null
         ]
       );
 
