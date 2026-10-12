@@ -301,6 +301,82 @@ export class AtolReceiptsService{
     }
   }
 
+  async confirmHandover(ctx:TenantContext,siteId:string,paymentId:string,
+    proofReference:string,confirmed:boolean){
+    await this.permit(ctx);
+    if(await this.authorization.resolveScope(ctx,"sales.write")!=="all")
+      throw new BadRequestException("Для подтверждения выдачи нужны права на продажи всей компании");
+    if(!uuid(siteId)||!uuid(paymentId)||
+       typeof proofReference!=="string" ||
+       proofReference.trim().length<8||proofReference.length>128||
+       confirmed!==true)
+      throw new BadRequestException("Подтвердите фактическую выдачу и укажите ссылку на акт или номер документа");
+    const proof=proofReference.trim();
+    return this.db.withTenantTransaction(ctx,async client=>{
+      const rows=await client.query<{
+        sales_order_id:string;fulfillment_status:string;
+        delivery_status:string;mode:string
+      }>(
+        "SELECT i.sales_order_id,o.fulfillment_status,d.delivery_status,d.mode "+
+        "FROM commerce_payment_intent i "+
+        "JOIN sales_order o ON o.tenant_id=i.tenant_id AND o.id=i.sales_order_id "+
+        "JOIN commerce_order_delivery d ON d.tenant_id=i.tenant_id "+
+        "AND d.sales_order_id=i.sales_order_id AND d.site_id=i.site_id "+
+        "WHERE i.tenant_id=$1 AND i.site_id=$2 AND i.id=$3 "+
+        "AND i.purpose='STOREFRONT' AND i.fiscal_provider='ATOL_ONLINE' "+
+        "AND i.status='SUCCEEDED' AND i.fiscal_status='SUCCEEDED' "+
+        "AND i.finance_payment_id IS NOT NULL AND o.payment_status='PAID' "+
+        "FOR UPDATE OF d",
+        [ctx.tenantId,siteId,paymentId]);
+      const row=rows.rows[0];
+      if(!row)throw new ConflictException(
+        "Подтверждение выдачи возможно только после оплаты и чека предоплаты"
+      );
+      if(row.delivery_status==="DELIVERED")
+        return {deliveryStatus:"DELIVERED",alreadyConfirmed:true};
+      if(row.fulfillment_status!=="SHIPPED")
+        throw new ConflictException(
+          "Сначала проведите складскую отгрузку; одного резерва недостаточно"
+        );
+      const initial=await client.query(
+        "SELECT 1 FROM commerce_fiscal_document "+
+        "WHERE tenant_id=$1 AND payment_intent_id=$2 "+
+        "AND operation='sell' AND state='DONE'",
+        [ctx.tenantId,paymentId]);
+      if(!initial.rowCount)throw new ConflictException(
+        "Чек предоплаты АТОЛ не подтверждён"
+      );
+      const openRefund=await client.query(
+        "SELECT 1 FROM commerce_refund WHERE tenant_id=$1 AND intent_id=$2 "+
+        "AND status IN ('NEW','PENDING','SUCCEEDED') LIMIT 1",
+        [ctx.tenantId,paymentId]);
+      if(openRefund.rowCount)throw new ConflictException(
+        "При незавершённом или выполненном возврате выдачу подтверждать нельзя"
+      );
+      const carrier=await client.query<{state:string}>(
+        "SELECT state FROM commerce_shipment WHERE tenant_id=$1 "+
+        "AND sales_order_id=$2 LIMIT 1",
+        [ctx.tenantId,row.sales_order_id]);
+      if(carrier.rows[0]&&carrier.rows[0].state!=="DELIVERED")
+        throw new ConflictException(
+          "Подтвердите вручение в СДЭК и проверьте его внешний статус"
+        );
+      await client.query(
+        "UPDATE commerce_order_delivery SET delivery_status='DELIVERED',"+
+        "updated_at=now() WHERE tenant_id=$1 AND sales_order_id=$2 "+
+        "AND site_id=$3 AND delivery_status<>'DELIVERED'",
+        [ctx.tenantId,row.sales_order_id,siteId]);
+      await client.query(
+        "INSERT INTO audit_event(tenant_id,actor_user_id,actor_membership_id,"+
+        "action,resource_type,resource_id,after_data) "+
+        "VALUES($1,$2,$3,'commerce.handover_confirmed',"+
+        "'sales_order',$4,$5::jsonb)",
+        [ctx.tenantId,ctx.userId,ctx.membershipId,row.sales_order_id,
+          JSON.stringify({mode:row.mode,proofReference:proof})]);
+      return {deliveryStatus:"DELIVERED",alreadyConfirmed:false};
+    });
+  }
+
   async issueClosing(ctx:TenantContext,siteId:string,paymentId:string,
     nonMarkedConfirmed:boolean){
     return this.issueFollowup(ctx,siteId,paymentId,"sell_full_payment",
