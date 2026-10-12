@@ -436,6 +436,7 @@ export class MerchantConnectorService{
                           'REMOVED','REJECTED') THEN state
            WHEN state='IN_TRANSIT' AND $6 IN ('SUBMITTED','ACCEPTED')
              THEN state
+           WHEN state='ACCEPTED' AND $6='SUBMITTED' THEN state
            ELSE $6 END,
          verified_at=now(),updated_at=now(),last_error_code=NULL
        WHERE tenant_id=$1 AND site_id=$2 AND id=$3
