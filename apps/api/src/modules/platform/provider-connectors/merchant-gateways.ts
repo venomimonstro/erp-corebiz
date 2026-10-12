@@ -95,13 +95,13 @@ export class CdekGateway{
 
   async orderStatus(
     cred:CdekCredentials,env:ProviderEnvironment,uuid:string
-  ):Promise<{uuid:string;cdekNumber:string|null;state:string}>{
+  ):Promise<{uuid:string;cdekNumber:string|null;clientOrderNumber:string|null;state:string}>{
     if(!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(uuid))
       throw new BadGatewayException("Неверный UUID отправления");
     const token=await this.token(cred,env);
     const data=await providerRequest<{
       entity?:{
-        uuid?:string;cdek_number?:string|number|null;
+        uuid?:string;cdek_number?:string|number|null;number?:string|null;
         statuses?:Array<{code?:string}>;
       };
       requests?:Array<{state?:string}>;
@@ -115,8 +115,9 @@ export class CdekGateway{
       (request==="INVALID"?"REJECTED":
        request==="ACCEPTED"?"ACCEPTED":"SUBMITTED");
     return {
-      uuid,cdekNumber:data.entity.cdek_number===undefined?
-        null:String(data.entity.cdek_number),state
+      uuid,cdekNumber:data.entity.cdek_number==null?
+        null:String(data.entity.cdek_number),
+      clientOrderNumber:data.entity.number??null,state
     };
   }
 
