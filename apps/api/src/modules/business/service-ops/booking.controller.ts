@@ -185,7 +185,8 @@ export class BookingController {
     @Query("serviceId") serviceId: string,
     @Query("from") from: string,
     @Query("to") to: string,
-    @Query("resourceType") resourceType?: string
+    @Query("resourceType") resourceType?: string,
+    @Query("resourceId") resourceId?: string
   ): Promise<ApiSuccess<unknown>> {
     return {
       ok: true,
@@ -193,7 +194,8 @@ export class BookingController {
         serviceId,
         from,
         to,
-        resourceType
+        resourceType,
+        resourceId
       })
     };
   }
