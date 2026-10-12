@@ -203,6 +203,34 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"infrastructure/postgres/238_atol_fiscal_document_routing.sql",
+      patterns:[/fiscal_provider/, /commerce_fiscal_document/,
+        /UNIQUE\(tenant_id,payment_intent_id,operation\)/,
+        /ENABLE ROW LEVEL SECURITY/],
+      message:"ATOL unique fiscal document and provider routing must be tenant-safe"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/atol-receipts.service.ts",
+      patterns:[/nonMarkedConfirmed/, /commerce_fiscal_document/,
+        /finance_payment_id IS NOT NULL/, /fiscal_provider='ATOL_ONLINE'/,
+        /state='UNKNOWN'/, /fiscal_status='SUCCEEDED'/],
+      message:"ATOL receipt may be duplicated, mark an unpaid order or fail silently"
+    },
+    {
+      path:"apps/api/src/modules/platform/payments/commerce-payments.service.ts",
+      patterns:[/fiscalProvider/, /fiscal_provider/,
+        /intent.fiscal_provider==="ATOL_ONLINE"\?undefined:receipt/,
+        /COREBIZ_ATOL_RECEIPTS_ENABLED/],
+      message:"YooKassa may double-fiscalize when ATOL is the selected provider"
+    },
+    {
+      path:"apps/api/src/modules/platform/provider-connectors/merchant-gateways.ts",
+      patterns:[/registerSell/, /async report/,
+        /fiscal_document_number/, /fiscal_document_attribute/,
+        /external_id/, /amountMinor/],
+      message:"ATOL fiscal result no longer checks authenticated FN FD FP and payment amount"
+    },
+    {
       path:"infrastructure/postgres/237_cdek_shipment_lifecycle.sql",
       patterns:[/commerce_shipment/, /'UNKNOWN'/,
         /UNIQUE\(tenant_id,sales_order_id\)/,
