@@ -109,6 +109,7 @@ export default function ServiceDeskPage(){
   // An uncertain network response may mean the booking was committed.
   // Replays must use the same key only for the exact same payload.
   const bookingKey=useRef<{key:string;fingerprint:string}|null>(null);
+  const refreshGeneration=useRef(0);
   const from=useMemo(()=>weekStart(weekOffset),[weekOffset]);
   const end=useMemo(()=>{const d=new Date(from);d.setDate(d.getDate()+7);return d;},[from]);
   const staff=useMemo(()=>resources.filter(isStaff),[resources]);
@@ -127,6 +128,7 @@ export default function ServiceDeskPage(){
   }),[visits,resources,staffFilter,from,end]);
 
   const refresh=useCallback(async()=>{
+    const generation=++refreshGeneration.current;
     setLoading(true);
     const start=weekStart(weekOffset);
     const finish=new Date(start);finish.setDate(finish.getDate()+7);
@@ -142,6 +144,9 @@ export default function ServiceDeskPage(){
       apiRequest<Rule[]>("/service/delivery-rules"),
       apiRequest<Economy>("/service/economics")
     ]);
+    // Reject stale responses when the operator changes week or another
+    // save starts a newer refresh while the old one is still running.
+    if(generation!==refreshGeneration.current)return;
     const read=<T,>(index:number):T|null=>{
       const result=results[index];return result.status==="fulfilled"?result.value as T:null;
     };
@@ -169,9 +174,10 @@ export default function ServiceDeskPage(){
       scheduleChecks.forEach((result,i)=>{
         if(result.status==="fulfilled")coverage[employees[i]!.id]=result.value.length;
       });
+      if(generation!==refreshGeneration.current)return;
       setSchedules(coverage);
     }
-    setLoading(false);
+    if(generation===refreshGeneration.current)setLoading(false);
   },[weekOffset]);
 
   useEffect(()=>{void refresh();},[refresh]);
@@ -304,6 +310,15 @@ export default function ServiceDeskPage(){
         method:"POST",body:JSON.stringify({...payload,idempotencyKey:bookingKey.current!.key})
       });
       bookingKey.current=null;
+      // After booking, show the week containing the actual local date of
+      // the selected salon resource, not the browser owner's timezone.
+      const bookedDay=venueDay(slot.startsAt,
+        staff.find(r=>r.id===bookStaff)?.timezone||"Europe/Moscow");
+      const [y,m,d]=bookedDay.split("-").map(Number);
+      const monday=weekStart(0);
+      const originMonday=Date.UTC(monday.getFullYear(),monday.getMonth(),monday.getDate());
+      const targetDay=Date.UTC(y,m-1,d);
+      setWeekOffset(Math.floor((targetDay-originMonday)/(7*86400000)));
       setCreateOpen(false);setBookSlot("");setBookStaff("");setBookService("");
     },"Запись сохранена. Сервер проверил расписание и доступность специалиста.");
   }
