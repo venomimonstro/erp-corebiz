@@ -11,6 +11,18 @@ export class AuthRateLimitService {
   constructor(private readonly redis: RedisService) {}
 
   async assertLoginAllowed(ip: string, email: string): Promise<void> {
+    // The IP+email budget alone is bypassed by rotating email addresses.
+    // A second aggregate IP budget bounds expensive Argon2 work without
+    // storing raw IP/email in Redis keys.
+    const ipCount = await this.redis.incrementWindow(
+      this.key("login-ip", ip, ""), 15 * 60
+    );
+    if (ipCount > 100) {
+      throw new HttpException(
+        "Слишком много попыток входа с этого адреса. Повторите позже.",
+        HttpStatus.TOO_MANY_REQUESTS
+      );
+    }
     const key = this.key("login", ip, email.toLowerCase().trim());
     const count = await this.redis.incrementWindow(key, 15 * 60);
 
