@@ -4219,3 +4219,84 @@ button, .primary, .secondary { font: inherit; }
 .crm-funnel-metrics small{font-size:12px;color:var(--muted,#777)}
 .crm-funnel-metrics strong{font-size:19px;font-variant-numeric:tabular-nums;line-height:1.2}
 @media(max-width:600px){.crm-funnel-metrics{grid-template-columns:1fr}}
+
+
+/* Unified service desk: separate presentation only; finance and booking logic
+   remain on server-controlled, tenant-scoped CoreBiz endpoints. */
+.unified-service{--desk-line:#e6e8eb;--desk-soft:#f7f8fa;--desk-ink:#20242b;min-width:0}
+.service-desk-tabs{display:flex;gap:6px;overflow-x:auto;max-width:100%;padding:5px;margin:10px 0 24px;background:var(--desk-soft);border:1px solid var(--desk-line);border-radius:14px}
+.service-desk-tabs button{flex:1;white-space:nowrap;border:0;background:transparent;color:#656c77;font-size:14px;font-weight:600;padding:11px 14px;border-radius:10px;min-width:95px}
+.service-desk-tabs button:hover,.service-desk-tabs button:focus-visible{background:#e9edf2;color:var(--desk-ink)}
+.service-desk-tabs button.active{background:white;color:var(--desk-ink);box-shadow:0 1px 5px #19233315}
+.service-desk-onboarding{display:flex;align-items:center;gap:18px;padding:18px 20px;border:1px solid #d5dee8;border-radius:17px;background:#f8fafc;margin:14px 0 24px;flex-wrap:wrap}
+.service-desk-onboarding>div:first-child{flex:1 1 240px}
+.service-desk-onboarding strong{font-size:15px}
+.service-desk-onboarding p{font-size:13px;color:#626b77;margin:5px 0 0}
+.service-desk-steps{display:flex;flex-wrap:wrap;gap:7px;flex:2 1 340px}
+.service-desk-steps span{font-size:12px;border-radius:100px;padding:7px 10px;background:#fff;border:1px solid #dce3ec;color:#4c5867}
+.service-desk-steps span.done{background:#e9f5ed;border-color:#cee7d6;color:#1d6439}
+.service-desk-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin:14px 0}
+.service-desk-bar h2{font-size:23px;letter-spacing:-.035em;margin:0}
+.service-desk-bar h3{margin:0}
+.service-desk-bar p{margin:5px 0 0}
+.service-desk-actions{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.service-desk-actions button{padding:9px 12px;font-size:13px}
+.service-desk-actions select,.service-desk-form select{min-height:41px}
+.service-desk-actions select,.unified-service input,.unified-service select{max-width:100%;border:1px solid #d3d8e0;background:white;border-radius:10px;color:var(--desk-ink);padding:10px 11px}
+.unified-service input:focus-visible,.unified-service select:focus-visible,.unified-service button:focus-visible,.unified-service a:focus-visible{outline:3px solid #9bbcf0;outline-offset:2px}
+.service-desk-week{display:grid;grid-template-columns:repeat(7,minmax(145px,1fr));gap:9px;overflow-x:auto;padding:1px 0 12px;align-items:stretch}
+.service-desk-day{border:1px solid var(--desk-line);background:#fff;border-radius:14px;padding:9px;min-height:200px}
+.service-desk-day h3{font-size:13px;font-weight:700;color:#414955;white-space:nowrap;margin:4px 3px 13px}
+.service-desk-day>.muted{font-size:12px;text-align:center;margin-top:25px}
+.service-desk-visit{width:100%;display:flex;flex-direction:column;align-items:stretch;text-align:left;gap:6px;background:#f1f5fb;border:1px solid #dbe6f3;color:#243349;border-radius:10px;padding:10px;margin-bottom:7px;overflow-wrap:anywhere}
+.service-desk-visit:hover{background:#e6effb}
+.service-desk-visit>strong{font-size:13px}
+.service-desk-visit span{display:flex;flex-direction:column;gap:3px}
+.service-desk-visit span b{font-size:13px;font-weight:650}
+.service-desk-visit small{font-size:11px;color:#515e70}
+.service-desk-visit em{font-size:11px;font-style:normal;color:#69717d}
+.service-desk-setup-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:12px 0 20px}
+.service-desk-panel{border:1px solid var(--desk-line);border-radius:16px;background:#fff;padding:20px;min-width:0}
+.service-desk-panel h3{font-size:17px;letter-spacing:-.025em;margin:5px 0 8px}
+.service-desk-panel>.muted{font-size:13px;line-height:1.45}
+.service-desk-panel label,.service-desk-form label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;color:#363c44;margin:13px 0}
+.service-desk-panel button,.service-desk-form button{min-height:40px}
+.service-desk-index{font-size:11px;font-weight:800;letter-spacing:.1em;color:#657b91}
+.service-desk-two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.service-desk-links{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.service-desk-links a{padding:10px 12px;border-radius:10px;background:#f2f5f9;font-size:13px}
+.service-desk-links a:hover{text-decoration:underline}
+.service-desk-customer-list{border:1px solid var(--desk-line);border-radius:15px;overflow:hidden;background:white}
+.service-desk-customer-list button{width:100%;display:grid;grid-template-columns:2fr 1fr auto;align-items:center;gap:12px;border:0;border-bottom:1px solid var(--desk-line);border-radius:0;background:white;color:var(--desk-ink);text-align:left}
+.service-desk-customer-list button:hover{background:var(--desk-soft)}
+.service-desk-customer-list button:last-child{border-bottom:0}
+.service-desk-history{display:grid;grid-template-columns:1fr auto auto;gap:14px;align-items:center;border-bottom:1px solid var(--desk-line);padding:12px 0;font-size:13px}
+.service-desk-history:last-child{border-bottom:0}
+.service-desk-history b{font-weight:600}
+.service-desk-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:17px 0}
+.service-desk-metrics article{background:white;border:1px solid var(--desk-line);border-radius:15px;padding:19px;display:flex;flex-direction:column;gap:10px}
+.service-desk-metrics small{color:#626b77}
+.service-desk-metrics strong{font-size:24px;letter-spacing:-.035em}
+.service-desk-backdrop{position:fixed;inset:0;background:#1219208a;z-index:2000;display:flex;justify-content:flex-end;overflow-y:auto}
+.service-desk-drawer{width:min(540px,100%);background:white;min-height:100%;height:max-content;padding:24px;box-shadow:-15px 0 65px #0b192740;color:var(--desk-ink)}
+.service-desk-drawer .service-desk-bar{margin:0 0 16px}
+.service-desk-drawer .service-desk-bar h2{font-size:23px}
+.service-desk-form{display:flex;flex-direction:column;gap:3px}
+.service-desk-form>.muted{font-size:13px}
+.service-desk-visit-info{background:#f7f9fb;border-radius:14px;padding:12px 17px;margin:12px 0 18px}
+.service-desk-visit-info p{margin:9px 0;font-size:14px;line-height:1.45}
+.unified-service button:disabled{opacity:.55;cursor:not-allowed}
+@media(max-width:1050px){.service-desk-week{grid-template-columns:repeat(7,minmax(170px,1fr))}.service-desk-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:660px){
+  .service-desk-setup-grid{grid-template-columns:1fr}
+  .service-desk-tabs button{min-width:85px;padding:9px}
+  .service-desk-onboarding{align-items:flex-start}
+  .service-desk-week{grid-template-columns:repeat(7,minmax(210px,1fr))}
+  .service-desk-customer-list button{grid-template-columns:1fr auto}
+  .service-desk-customer-list button span:nth-child(2){display:none}
+  .service-desk-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .service-desk-metrics article{padding:13px}
+  .service-desk-metrics strong{font-size:20px}
+  .service-desk-drawer{padding:18px}
+}
+@media(prefers-reduced-motion:reduce){.service-desk-visit{transition:none}}
