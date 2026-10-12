@@ -225,7 +225,7 @@ async function inspectRequiredHardening(root) {
     },
     {
       path:"apps/api/src/modules/platform/provider-connectors/russian-post.gateway.spec.ts",
-      patterns:[/accurate VAT tariffs/, /invalid credentials before network/],
+      patterns:[/amountMinor:"36790"/, /invalid credentials before network/],
       message:"Russian Post provider validation tests missing"
     },
     {
