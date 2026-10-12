@@ -36,10 +36,17 @@ try {
   await page.getByLabel("Компания").fill("Test Browser Company");
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Пароль").fill(password);
+  // Signup now requires a business vertical, and routes to /app/start.
+  await page.getByLabel("Основной вид бизнеса").selectOption("ECOMMERCE_STORE");
   await page.getByRole("button", { name: "Начать бесплатно" }).click();
+  await page.waitForURL("**/app/start", { timeout: 20000 });
+  await page.getByRole("heading", {
+    name:"Настройте бизнес, а не программу"
+  }).waitFor();
+  await page.getByRole("link",{name:"Мой кабинет →"}).click();
   await page.waitForURL("**/app", { timeout: 20000 });
   await page.getByRole("heading", { name: "Сегодня" }).waitFor();
-  await page.getByRole("heading", { name: "Начните с одной операции" }).waitFor();
+  await page.getByText("Ваше рабочее место").waitFor();
 
   const profile = page.getByLabel("Показывать разделы для");
   await profile.selectOption("service");
@@ -55,6 +62,22 @@ try {
   await navigation.waitFor({ state: "visible" });
   await page.getByRole("link", { name: "Сегодня", exact: true }).first().click();
   await page.getByRole("heading", { name: "Сегодня" }).waitFor();
+
+  // Owner navigates the concrete setup screens after registration.
+  // Validate client routes render with the selected niche/tenant.
+  for(const [route,heading] of [
+    ["/app/start","Настройте бизнес, а не программу"],
+    ["/app/settings/team","Сотрудники и приглашения"],
+    ["/app/catalog/products","Товары"],
+    ["/app/inventory/stock","Остатки"],
+    ["/app/sites","Сайты"]
+  ]) {
+    await page.goto(new URL(route,url).href,{waitUntil:"domcontentloaded"});
+    await page.getByRole("heading",{name:heading,exact:true})
+      .waitFor({timeout:20000});
+  }
+  await page.goto(new URL("/app",url).href,{waitUntil:"domcontentloaded"});
+  await page.getByRole("heading",{name:"Сегодня"}).waitFor();
 
   // A fresh browser session is required to validate actual re-login.
   // Reopening /login with an authenticated cookie may auto-redirect.
