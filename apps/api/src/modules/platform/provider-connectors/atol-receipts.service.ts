@@ -1,6 +1,6 @@
 import {
-  BadRequestException, ConflictException, Injectable, NotFoundException,
-  ServiceUnavailableException
+  BadRequestException, ConflictException, Injectable, OnModuleInit,
+  OnModuleDestroy, NotFoundException, ServiceUnavailableException
 } from "@nestjs/common";
 import {createHash} from "node:crypto";
 import type {TenantContext} from "@corebiz/contracts";
@@ -95,8 +95,104 @@ function buildReceipt(input:{
 }
 
 @Injectable()
-export class AtolReceiptsService{
+export class AtolReceiptsService implements OnModuleInit,OnModuleDestroy{
   private readonly atol=new AtolOnlineGateway();
+  private reportTimer?:ReturnType<typeof setInterval>;
+  private reportBusy=false;
+
+  onModuleInit():void{
+    if(process.env.COREBIZ_ATOL_REPORT_POLL_ENABLED!=="true")return;
+    const frequency=Number(process.env.COREBIZ_ATOL_REPORT_POLL_INTERVAL_MS??"60000");
+    if(!Number.isSafeInteger(frequency)||frequency<30000||frequency>300000)
+      throw new Error("INVALID_ATOL_REPORT_POLL_INTERVAL");
+    this.reportTimer=setInterval(()=>{
+      void this.pollReports().catch(()=>{
+        // No provider responses or PII in logs; failures retry with backoff.
+        console.error("[ATOL] Fiscal report polling cycle failed");
+      });
+    },frequency);
+    this.reportTimer.unref();
+    void this.pollReports().catch(()=>{
+      console.error("[ATOL] Initial fiscal report polling cycle failed");
+    });
+  }
+  onModuleDestroy():void{
+    if(this.reportTimer)clearInterval(this.reportTimer);
+  }
+  private context(tenantId:string):TenantContext{
+    const systemId="00000000-0000-4000-8000-000000000001";
+    return {tenantId,userId:systemId,membershipId:systemId};
+  }
+  async pollReports():Promise<number>{
+    if(this.reportBusy)return 0;
+    this.reportBusy=true;
+    try{
+      const claimed=await this.db.query<{
+        tenant_id:string;task_id:string;document_id:string;
+        site_id:string;lease_id:string;
+      }>("SELECT * FROM corebiz_claim_atol_fiscal_reconciliation($1)",[5]);
+      for(const row of claimed.rows){
+        const ctx=this.context(row.tenant_id);
+        try{
+          const outcome=await this.verifyDocument(ctx,row.site_id,row.document_id);
+          const completed=outcome.state==="DONE"||outcome.state==="FAIL";
+          await this.db.withTenantTransaction(ctx,async client=>{
+            await client.query(
+              "UPDATE commerce_fiscal_reconcile_task SET "+
+              "state=$4,lease_id=NULL,lease_until=NULL,last_error_code=NULL,"+
+              "next_attempt_at=CASE WHEN $4='DONE' THEN now() "+
+              "ELSE now()+interval '90 seconds' END,updated_at=now() "+
+              "WHERE tenant_id=$1 AND id=$2 AND lease_id=$3",
+              [row.tenant_id,row.task_id,row.lease_id,completed?"DONE":"DUE"]);
+          });
+        }catch{
+          // A GET/report error is safe to retry. A fiscal POST is never retried.
+          await this.db.withTenantTransaction(ctx,async client=>{
+            await client.query(
+              "UPDATE commerce_fiscal_reconcile_task SET "+
+              "state=CASE WHEN attempts>=80 THEN 'EXHAUSTED' ELSE 'DUE' END,"+
+              "lease_id=NULL,lease_until=NULL,"+
+              "next_attempt_at=now()+("+
+              "LEAST(21600,30*power(2,LEAST(attempts,10)))::text"+
+              "||' seconds')::interval,"+
+              "last_error_code='REPORT_OR_IDENTITY_MISMATCH',updated_at=now() "+
+              "WHERE tenant_id=$1 AND id=$2 AND lease_id=$3",
+              [row.tenant_id,row.task_id,row.lease_id]);
+          });
+        }
+      }
+      return claimed.rowCount??claimed.rows.length;
+    }finally{this.reportBusy=false;}
+  }
+  async reportHealth(ctx:TenantContext,siteId:string){
+    await this.permit(ctx);
+    if(!uuid(siteId))throw new BadRequestException("Неверный сайт");
+    return this.db.withTenantTransaction(ctx,async client=>{
+      const result=await client.query<{
+        state:string;count:string;oldest_due:Date|null
+      }>(
+        "SELECT q.state,count(*)::text AS count,"+
+        "min(q.next_attempt_at) AS oldest_due "+
+        "FROM commerce_fiscal_reconcile_task q "+
+        "JOIN commerce_fiscal_document d ON d.tenant_id=q.tenant_id "+
+        "AND d.id=q.document_id "+
+        "WHERE q.tenant_id=$1 AND d.site_id=$2 "+
+        "GROUP BY q.state ORDER BY q.state",
+        [ctx.tenantId,siteId]);
+      const ambiguous=await client.query<{count:string}>(
+        "SELECT count(*)::text AS count FROM commerce_fiscal_document "+
+        "WHERE tenant_id=$1 AND site_id=$2 AND provider_uuid IS NULL "+
+        "AND state IN ('UNKNOWN','SENDING')",[ctx.tenantId,siteId]);
+      return {
+        pollingEnabled:process.env.COREBIZ_ATOL_REPORT_POLL_ENABLED==="true",
+        queue:result.rows.map(x=>({
+          state:x.state,count:Number(x.count),
+          oldestDue:x.oldest_due?.toISOString()??null
+        })),
+        manualAttentionWithoutUuid:Number(ambiguous.rows[0]?.count??"0")
+      };
+    });
+  }
   constructor(
     private readonly db:DatabaseService,
     private readonly authorization:AuthorizationService
@@ -573,6 +669,11 @@ export class AtolReceiptsService{
 
   async verify(ctx:TenantContext,siteId:string,documentId:string,reportedUuid?:string){
     await this.permit(ctx);
+    return this.verifyDocument(ctx,siteId,documentId,reportedUuid);
+  }
+
+  private async verifyDocument(ctx:TenantContext,siteId:string,
+    documentId:string,reportedUuid?:string){
     if(!uuid(siteId)||!uuid(documentId)||
        (reportedUuid!==undefined&&!uuid(reportedUuid)))
       throw new BadRequestException("Некорректный идентификатор чека");
