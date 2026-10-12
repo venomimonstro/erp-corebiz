@@ -69,7 +69,8 @@ describe("seller CDEK and ATOL fixed-provider adapters",()=>{
       orderNumber:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       tariffCode:136,fromCityCode:44,toCityCode:137,
       recipientName:"Иван Иванов",recipientPhone:"+79998887766",
-      weightGrams:900,lengthCm:20,widthCm:15,heightCm:10
+      weightGrams:900,lengthCm:20,widthCm:15,heightCm:10,
+      items:[{name:"Ноутбук",wareKey:"NOTEBOOK-1",cost:"45000.00",amount:1}]
     });
     expect(result.uuid).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     const url=String(fetchMock.mock.calls[1]?.[0]);
@@ -77,6 +78,10 @@ describe("seller CDEK and ATOL fixed-provider adapters",()=>{
     const body=JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
     expect(body.number).toBe("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
     expect(body.packages[0].weight).toBe(900);
+    expect(body.packages[0].items[0]).toEqual({
+      name:"Ноутбук",ware_key:"NOTEBOOK-1",cost:45000,
+      amount:1,payment:{value:0}
+    });
   });
   it("fails closed on missing CDEK consignment UUID",async()=>{
     jest.spyOn(global,"fetch")
@@ -86,7 +91,8 @@ describe("seller CDEK and ATOL fixed-provider adapters",()=>{
       orderNumber:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       tariffCode:136,fromCityCode:44,toCityCode:137,
       recipientName:"Иван Иванов",recipientPhone:"+79998887766",
-      weightGrams:900,lengthCm:20,widthCm:15,heightCm:10
+      weightGrams:900,lengthCm:20,widthCm:15,heightCm:10,
+      items:[{name:"Ноутбук",wareKey:"NOTEBOOK-1",cost:"45000.00",amount:1}]
     })).rejects.toBeInstanceOf(BadGatewayException);
   });
   it("verifies CDEK order number against the returned carrier UUID",async()=>{
