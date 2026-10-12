@@ -135,10 +135,14 @@ async function main(){
     "Invitation list must never leak bearer token");
 
   step("04b organization, branch and team setup");
-  // A legal entity may exist as a test draft without a real INN.
-  // This never constitutes verified tax registration or fiscal readiness.
+  // This synthetic checksum-valid INN is ONLY for the disposable database:
+  // checksum validity is not FNS registration, PSP or fiscal readiness.
+  await api(owner,"POST","/organization/legal-entities",{
+    name:"Bad identifier",inn:"1234567890"
+  },400);
   const legal=await post(owner,"/organization/legal-entities",{
-    name:"Disposable electronics legal entity"
+    name:"Disposable electronics legal entity",
+    inn:"1234567894",kpp:"770701001"
   });
   const branch=await post(owner,"/organization/branches",{
     name:"Test showroom branch",legalEntityId:legal.id
@@ -151,7 +155,8 @@ async function main(){
   });
   assert.equal(assigned.assigned,true);
   const structure=await get(owner,"/organization");
-  assert.ok(structure.legalEntities.some(x=>x.id===legal.id));
+  assert.ok(structure.legalEntities.some(x=>x.id===legal.id&&
+    x.inn==="1234567894"&&x.kpp==="770701001"));
   assert.ok(structure.branches.some(x=>x.id===branch.id&&
     x.legalEntityId===legal.id));
   assert.ok(structure.teams.some(x=>x.id===operatingTeam.id&&x.members>=1));
