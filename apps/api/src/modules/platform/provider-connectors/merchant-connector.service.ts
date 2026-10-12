@@ -422,18 +422,32 @@ export class MerchantConnectorService{
     const states:Record<string,string>={
       CREATED:"ACCEPTED",ACCEPTED:"ACCEPTED",RECEIVED_AT_SHIPMENT_WAREHOUSE:"IN_TRANSIT",
       SENT_TO_TRANSIT_CITY:"IN_TRANSIT",DELIVERED:"DELIVERED",
-      NOT_DELIVERED:"IN_TRANSIT",CANCELLED:"CANCELLED",REJECTED:"REJECTED"
+      NOT_DELIVERED:"NOT_DELIVERED",CANCELLED:"CANCELLED",
+      REMOVED:"REMOVED",REJECTED:"REJECTED"
     };
     const next=states[status.state]??"SUBMITTED";
-    await this.db.withTenantTransaction(ctx,async client=>client.query(
+    const updated=await this.db.withTenantTransaction(ctx,async client=>client.query<{
+      state:string;provider_number:string|null
+    }>(
       `UPDATE commerce_shipment
-       SET provider_order_uuid=$4,provider_number=$5,state=$6,
+       SET provider_order_uuid=$4,provider_number=COALESCE($5,provider_number),
+         state=CASE
+           WHEN state IN ('DELIVERED','NOT_DELIVERED','CANCELLED',
+                          'REMOVED','REJECTED') THEN state
+           WHEN state='IN_TRANSIT' AND $6 IN ('SUBMITTED','ACCEPTED')
+             THEN state
+           ELSE $6 END,
          verified_at=now(),updated_at=now(),last_error_code=NULL
        WHERE tenant_id=$1 AND site_id=$2 AND id=$3
-         AND (provider_order_uuid IS NULL OR provider_order_uuid=$4)`,
+         AND (provider_order_uuid IS NULL OR provider_order_uuid=$4)
+       RETURNING state,provider_number`,
       [ctx.tenantId,siteId,shipmentId,uuid,status.cdekNumber,next]));
+    if(!updated.rows[0])throw new ConflictException(
+      "СДЭК не подтвердил соответствие текущей накладной"
+    );
     // Carrier proof never makes payment PAID and does not post stock.
-    return {shipmentId,state:next,trackingNumber:status.cdekNumber,
+    return {shipmentId,state:updated.rows[0].state,
+      trackingNumber:updated.rows[0].provider_number,
       providerOrderUuid:uuid};
   }
 
