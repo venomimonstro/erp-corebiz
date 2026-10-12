@@ -28,6 +28,13 @@ pnpm stability:check
 echo "[release] standalone migration gate regression tests"
 node --test scripts/migration-preflight.test.mjs scripts/env-boundary.test.mjs scripts/security-runtime-grants.test.mjs
 
+echo "[release] validate operator scripts and 99.9% SLO evaluator"
+node --check scripts/owner-first-day-journey.mjs
+node --check scripts/simulate-100-users.mjs
+node --check scripts/golden-business-journeys.mjs
+node --check scripts/slo-availability.mjs
+node --test scripts/slo-availability.test.mjs
+
 echo "[release] static typecheck"
 pnpm typecheck
 
