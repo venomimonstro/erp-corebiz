@@ -27,10 +27,9 @@ export class MerchantConnectorController{
   @ApiCost("EXPENSIVE")
   async configure(@Req() req:AuthenticatedRequest,@Param("siteId") id:string,
     @Body() body:{
-      provider:"CDEK"|"ATOL_ONLINE"|"POCHTA_RUSSIA";
+      provider:"CDEK"|"ATOL_ONLINE";
       environment:"SANDBOX"|"PRODUCTION";
       credentials:Record<string,unknown>;fromCityCode?:number;
-      fromPostcode?:string;
       fiscalCompany?:{inn:string;email:string;sno:string;paymentAddress:string;vatType:string}
     }):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.service.configure(this.context(req),id,body)};
@@ -39,12 +38,9 @@ export class MerchantConnectorController{
   @RequirePermission("sites.manage")
   @ApiCost("EXPENSIVE")
   async verify(@Req() req:AuthenticatedRequest,
-    @Param("siteId") id:string,@Param("provider") provider:string,
-    @Body() body:{toPostcode?:string;massGrams?:number}
+    @Param("siteId") id:string,@Param("provider") provider:string
   ):Promise<ApiSuccess<unknown>>{
-    return {ok:true,data:await this.service.verify(this.context(req),id,provider,
-      body && body.toPostcode!==undefined && body.massGrams!==undefined
-      ?{toPostcode:body.toPostcode,massGrams:body.massGrams}:undefined)};
+    return {ok:true,data:await this.service.verify(this.context(req),id,provider)};
   }
   @Get("sites/:siteId/atol/report-health")
   @RequirePermission("sites.manage")
@@ -157,17 +153,6 @@ export class MerchantConnectorController{
       this.context(req),siteId,shipmentId,body?.providerUuid)};
   }
   
-  @Post("sites/:siteId/russian-post/quotes")
-  @RequirePermission("sites.manage")
-  @ApiCost("EXPENSIVE")
-  async postQuote(
-    @Req() req:AuthenticatedRequest,@Param("siteId") siteId:string,
-    @Body() body:{toPostcode:string;massGrams:number}
-  ):Promise<ApiSuccess<unknown>>{
-    return {ok:true,data:await this.service.postalQuote(
-      this.context(req),siteId,body)};
-  }
-
   @Post("sites/:siteId/cdek/quotes")
   @RequirePermission("sites.manage")
   @ApiCost("EXPENSIVE")
