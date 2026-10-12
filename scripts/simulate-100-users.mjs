@@ -155,6 +155,17 @@ async function ecommerce40() {
     currency: "RUB"
   });
 
+  const pickup=await request("POST",
+    "/payments/stores/"+site.id+"/delivery",{
+      code:"SIM100_PICKUP",title:"Самовывоз",mode:"PICKUP",
+      feeMinor:"0",active:true
+    });
+  assert.ok(pickup.id,"Pickup method must exist before checkout");
+  const methods=await request("GET",
+    "/payments/storefront/"+site.publicSlug+"/delivery",undefined,
+    {authenticated:false});
+  assert.ok(methods.methods.some(m=>m.id===pickup.id));
+
   const actors = Array.from({ length: 40 }, (_, index) => ({
     index,
     ip: actorIp(index),
@@ -187,7 +198,9 @@ async function ecommerce40() {
         {
           idempotencyKey: "sim100-checkout-" + actor.index + "-" + runId,
           name: "Покупатель " + actor.index,
-          phone: actor.phone
+          phone: actor.phone,
+          email:"buyer-"+actor.index+"-"+runId+"@example.invalid",
+          deliveryMethodId:pickup.id
         },
         {
           authenticated: false,
