@@ -6,6 +6,7 @@ import {
 import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import {validRussianInn,validRussianKpp} from "./russian-legal-details";
 
 @Injectable()
 export class OrganizationService {
@@ -72,15 +73,28 @@ export class OrganizationService {
     context: TenantContext,
     input: { name: string; inn?: string; kpp?: string }
   ): Promise<{ id: string; name: string }> {
-    const name = input.name.trim();
-    if (name.length < 2 || name.length > 200) {
+    if(!input||typeof input.name!=="string")
+      throw new BadRequestException("Укажите название организации");
+    const name=input.name.trim();
+    if(name.length<2||name.length>200)
       throw new BadRequestException("Некорректное название юрлица");
-    }
+    if(input.inn!==undefined&&typeof input.inn!=="string")
+      throw new BadRequestException("ИНН должен быть строкой");
+    if(input.kpp!==undefined&&typeof input.kpp!=="string")
+      throw new BadRequestException("КПП должен быть строкой");
+    const inn=input.inn?.trim()??"";
+    const kpp=input.kpp?.trim().toUpperCase()??"";
+    if(inn&&!validRussianInn(inn))
+      throw new BadRequestException("Некорректный ИНН (контрольные цифры)");
+    if(kpp&&!validRussianKpp(kpp))
+      throw new BadRequestException("Некорректный КПП");
+    if(kpp&&inn.length===12)
+      throw new BadRequestException("Для ИП или физлица КПП не применяется");
 
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query<{ id: string; name: string }>(
         "INSERT INTO legal_entity(tenant_id, name, inn, kpp) VALUES ($1,$2,$3,$4) RETURNING id, name",
-        [context.tenantId, name, input.inn?.trim() || null, input.kpp?.trim() || null]
+        [context.tenantId,name,inn||null,kpp||null]
       );
 
       const entity = result.rows[0];
