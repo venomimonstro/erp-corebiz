@@ -19,7 +19,10 @@
     "release:gate": "bash scripts/production-gate.sh",
     "stability:check": "node scripts/stability-source-preflight.mjs",
     "golden:journeys": "node scripts/golden-business-journeys.mjs",
-    "simulate:100-users": "node scripts/simulate-100-users.mjs"
+    "simulate:100-users": "node scripts/simulate-100-users.mjs",
+    "slo:probe": "node scripts/slo-availability.mjs probe",
+    "slo:report": "node scripts/slo-availability.mjs report",
+    "slo:test": "node --test scripts/slo-availability.test.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
