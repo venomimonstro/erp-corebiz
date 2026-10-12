@@ -955,9 +955,20 @@ export class BookingService {
         endsAt: string;
       }> = [];
 
+      // Worst case with 31 days, 100 staff and no free slots previously
+      // performed over 140k candidate scans (and hundreds of thousands of
+      // PostgreSQL queries) in one HTTP request. Bound DB work explicitly.
+      // The client can narrow to one staff member and a shorter period.
+      let candidatesScanned=0;
+      const MAX_CANDIDATES=600;
       for (const resource of resources.rows) {
         let cursor = new Date(from);
         while (cursor < to && result.length < 500) {
+          if(++candidatesScanned>MAX_CANDIDATES){
+            throw new BadRequestException(
+              "Слишком широкий поиск свободного времени. Выберите сотрудника и период до одного дня"
+            );
+          }
           let duration=service.duration_minutes;
           if(hasDeliveryRules.rowCount){
             try{
