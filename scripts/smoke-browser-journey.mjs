@@ -56,6 +56,9 @@ try {
   await page.getByRole("link", { name: "Сегодня", exact: true }).first().click();
   await page.getByRole("heading", { name: "Сегодня" }).waitFor();
 
+  // A fresh browser session is required to validate actual re-login.
+  // Reopening /login with an authenticated cookie may auto-redirect.
+  await page.context().clearCookies();
   await page.goto(new URL("/login", url).href, { waitUntil: "domcontentloaded" });
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Пароль").fill(password);
