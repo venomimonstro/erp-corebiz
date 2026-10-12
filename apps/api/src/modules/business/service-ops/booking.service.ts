@@ -2390,10 +2390,22 @@ export class BookingService {
       }
     }
     const resourceIds = [...seen].sort();
+    const idempotencyKey=input.idempotencyKey?.trim()||null;
+    if(input.idempotencyKey!==undefined &&
+      (!idempotencyKey||idempotencyKey.length>180)){
+      throw new BadRequestException("Некорректный ключ повторной записи");
+    }
     const scopedMembershipIds = await this.serviceScope(context, "service.write");
 
     return this.database.withTenantTransaction(context, async (client) => {
-      if (input.idempotencyKey) {
+      if(idempotencyKey){
+        // Serialize concurrent retries BEFORE checking whether the row
+        // exists. Otherwise both workers can see no booking and one fails
+        // late on UNIQUE(tenant_id,idempotency_key) after doing extra work.
+        await client.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+          [context.tenantId+"|service-booking|"+idempotencyKey]
+        );
         const existing = await client.query<{
           id:string;business_number:string;version:number;
           service_id:string;starts_at:Date;party_id:string|null;
@@ -2405,7 +2417,7 @@ export class BookingService {
                   source,notes
            FROM service_booking
            WHERE tenant_id=$1 AND idempotency_key=$2`,
-          [context.tenantId, input.idempotencyKey.trim()]
+          [context.tenantId, idempotencyKey]
         );
         const prior=existing.rows[0];
         if(prior){
@@ -2662,7 +2674,7 @@ export class BookingService {
           input.serviceId,input.branchId ?? null,input.source ?? "MANUAL",
           startsAt,endsAt,priceMinor,service.currency,duration,
           service.buffer_before_minutes,service.buffer_after_minutes,
-          input.notes?.trim() || null,input.idempotencyKey?.trim() || null,
+          input.notes?.trim() || null,idempotencyKey,
           context.membershipId,rule?.id ?? null,rule?.technology_card_id ?? null,
           deliveryFormat
         ]
