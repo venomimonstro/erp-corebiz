@@ -192,6 +192,7 @@ pass_step "WMS:RECONCILIATION"
 
 echo "[production-gate] 10/13 browser journey"
 node scripts/smoke-browser-journey.mjs
+node scripts/service-desk-browser-journey.mjs
 pass_step "API:BROWSER_SMOKE"
 
 echo "[production-gate] 11/13 backup -> restore drill"
