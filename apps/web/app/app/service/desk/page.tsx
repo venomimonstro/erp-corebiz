@@ -66,7 +66,7 @@ export default function ServiceDeskPage(){
   const [selectedHistory,setSelectedHistory]=useState<History|null>(null);
   const [historyLoading,setHistoryLoading]=useState(false);
   const [createOpen,setCreateOpen]=useState(false);
-  const [cancelPending,setCancelPending]=useState(false);
+  const [pendingTransition,setPendingTransition]=useState<"CANCELLED"|"COMPLETED"|"NO_SHOW"|null>(null);
   const [rescheduleAt,setRescheduleAt]=useState("");
   const [day,setDay]=useState(localDate(new Date()));
   const [slots,setSlots]=useState<Slot[]>([]);
@@ -79,7 +79,9 @@ export default function ServiceDeskPage(){
   const [newResource,setNewResource]=useState("");
   const [scheduleResource,setScheduleResource]=useState("");
   const [newCustomer,setNewCustomer]=useState({name:"",phone:"",email:""});
-  const bookingKey=useRef<string|null>(null);
+  // An uncertain network response may mean the booking was committed.
+  // Replays must use the same key only for the exact same payload.
+  const bookingKey=useRef<{key:string;fingerprint:string}|null>(null);
   const from=useMemo(()=>weekStart(weekOffset),[weekOffset]);
   const end=useMemo(()=>{const d=new Date(from);d.setDate(d.getDate()+7);return d;},[from]);
   const staff=useMemo(()=>resources.filter(isStaff),[resources]);
@@ -210,17 +212,23 @@ export default function ServiceDeskPage(){
     e.preventDefault();
     const slot=slots.find(s=>s.startsAt===bookSlot&&s.resourceId===bookStaff);
     if(!slot||!bookService){setError("Выберите доступное время и специалиста.");return;}
-    if(!bookingKey.current)bookingKey.current=crypto.randomUUID();
+    const payload={
+      serviceId:bookService,resourceIds:[bookStaff],partyId:bookCustomer||undefined,
+      startsAt:slot.startsAt,source:"MANUAL"
+    };
+    const fingerprint=JSON.stringify(payload);
+    if(bookingKey.current && bookingKey.current.fingerprint!==fingerprint){
+      setError("Предыдущая запись могла сохраниться, несмотря на ошибку сети. Обновите журнал перед изменением данных или повторите прежнюю запись.");
+      return;
+    }
+    if(!bookingKey.current)
+      bookingKey.current={key:crypto.randomUUID(),fingerprint};
     await mutate(async()=>{
-      const created=await apiRequest<{id:string}>("/service/bookings",{
-        method:"POST",body:JSON.stringify({
-          serviceId:bookService,resourceIds:[bookStaff],partyId:bookCustomer||undefined,
-          startsAt:slot.startsAt,source:"MANUAL",idempotencyKey:bookingKey.current
-        })
+      await apiRequest<{id:string}>("/service/bookings",{
+        method:"POST",body:JSON.stringify({...payload,idempotencyKey:bookingKey.current!.key})
       });
       bookingKey.current=null;
       setCreateOpen(false);setBookSlot("");
-      setNotice("Запись №"+created.id+" создана.");
     },"Запись сохранена. Сервер проверил расписание и доступность специалиста.");
   }
 
@@ -237,16 +245,31 @@ export default function ServiceDeskPage(){
     }catch(cause){setError(readableError(cause));}
   }
   async function status(visit:Visit,to:"ARRIVED"|"IN_SERVICE"|"COMPLETED"|"CANCELLED"|"NO_SHOW"){
-    if(to==="CANCELLED"){setCancelPending(true);return;}
+    if(["CANCELLED","COMPLETED","NO_SHOW"].includes(to)){
+      setPendingTransition(to as "CANCELLED"|"COMPLETED"|"NO_SHOW");
+      return;
+    }
     await commitStatus(visit,to);
   }
   async function commitStatus(visit:Visit,to:"ARRIVED"|"IN_SERVICE"|"COMPLETED"|"CANCELLED"|"NO_SHOW"){
-    await mutate(async()=>{
+    if(busy)return;
+    setBusy(true);setError("");setNotice("");
+    try{
       await apiRequest("/service/bookings/"+encodeURIComponent(visit.id)+"/status",{
         method:"PATCH",body:JSON.stringify({status:to,version:visit.version})
       });
-      setSelectedVisit(null);setCancelPending(false);
-    },"Статус визита изменён. Все начисления и остатки рассчитывает сервер.");
+      setSelectedVisit(null);setPendingTransition(null);
+      setNotice("Статус подтверждён сервером. Начисления и остатки пересчитаны по правилам.");
+    }catch(cause){
+      setError(readableError(cause)+". Проверьте текущий статус перед повторным действием.");
+      try{
+        setSelectedVisit(await apiRequest<Visit>("/service/bookings/"+encodeURIComponent(visit.id)));
+      }catch{setSelectedVisit(null);}
+      setPendingTransition(null);
+    }finally{
+      setBusy(false);
+      await refresh();
+    }
   }
   async function reschedule(e:FormEvent){
     e.preventDefault();
@@ -443,7 +466,7 @@ export default function ServiceDeskPage(){
 
         {selectedVisit?<div className="service-desk-backdrop" role="presentation" onMouseDown={()=>{if(!busy)setSelectedVisit(null);}}>
           <section className="service-desk-drawer" role="dialog" aria-modal="true" aria-label="Карточка визита" onMouseDown={e=>e.stopPropagation()}>
-            <div className="service-desk-bar"><div><small>Визит №{selectedVisit.business_number}</small><h2>{selectedVisit.service_name}</h2></div><button className="secondary-button" type="button" onClick={()=>{setSelectedVisit(null);setCancelPending(false);}} disabled={busy}>Закрыть</button></div>
+            <div className="service-desk-bar"><div><small>Визит №{selectedVisit.business_number}</small><h2>{selectedVisit.service_name}</h2></div><button className="secondary-button" type="button" onClick={()=>{setSelectedVisit(null);setPendingTransition(null);}} disabled={busy}>Закрыть</button></div>
             <div className="service-desk-visit-info">
               <p><b>Клиент:</b> {selectedVisit.party_name??"Не указан"}</p>
               <p><b>Время:</b> {fmtDate(selectedVisit.starts_at)}, {fmtTime(selectedVisit.starts_at)}–{fmtTime(selectedVisit.ends_at)}</p>
@@ -459,9 +482,17 @@ export default function ServiceDeskPage(){
               {nextStages(selectedVisit.status).map(x=><button type="button" key={x.status} disabled={busy}
                 className={x.status==="CANCELLED"?"secondary-button":""} onClick={()=>void status(selectedVisit,x.status)}>{x.title}</button>)}
             </div>
-            {cancelPending?<div className="service-desk-panel"><strong>Отменить визит?</strong><p className="muted">Система обработает обязательства, возвраты и абонементы по действующим правилам.</p>
-              <button type="button" disabled={busy} onClick={()=>void commitStatus(selectedVisit,"CANCELLED")}>Подтвердить отмену</button>{" "}
-              <button type="button" className="secondary-button" onClick={()=>setCancelPending(false)}>Назад</button></div>:null}
+            {pendingTransition?<div className="service-desk-panel" role="alertdialog" aria-label="Подтверждение изменения визита">
+              <strong>{pendingTransition==="CANCELLED"?"Отменить визит?":pendingTransition==="COMPLETED"?"Подтвердить выполнение услуги?":"Отметить неявку?"}</strong>
+              <p className="muted">{pendingTransition==="COMPLETED"
+                ?"Завершение запускает расчёт расходников и начислений сотруднику. Поступление оплаты подтверждается отдельно."
+                :pendingTransition==="CANCELLED"
+                  ?"Система обработает обязательства, возвраты и абонементы по действующим правилам."
+                  :"Неявка изменит статус записи и расчёт использования абонемента."}</p>
+              <button type="button" disabled={busy}
+                onClick={()=>void commitStatus(selectedVisit,pendingTransition)}>Подтвердить действие</button>{" "}
+              <button type="button" className="secondary-button" onClick={()=>setPendingTransition(null)}>Назад</button>
+            </div>:null}
             {["DRAFT","CONFIRMED"].includes(selectedVisit.status)?<form className="service-desk-form" onSubmit={e=>void reschedule(e)}>
               <label>Перенести визит<input type="datetime-local" required value={rescheduleAt} onChange={e=>setRescheduleAt(e.target.value)}/></label>
               <button type="submit" className="secondary-button" disabled={busy||!rescheduleAt}>Перенести</button>
