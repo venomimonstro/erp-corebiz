@@ -233,6 +233,18 @@ async function ecommerceJourney() {
     }
   );
 
+  // A real seller has to configure how buyers receive purchased goods.
+  const pickup = await request("POST",
+    "/payments/stores/" + site.id + "/delivery",{
+      code:"GOLDEN_PICKUP",title:"Самовывоз",mode:"PICKUP",
+      feeMinor:"0",active:true
+    });
+  assert.ok(pickup.id,"merchant pickup option must exist");
+  const deliveryMethods = await request("GET",
+    "/payments/storefront/" + site.publicSlug + "/delivery",undefined,
+    {authenticated:false});
+  assert.ok(deliveryMethods.methods.some(m=>m.id===pickup.id));
+
   const catalog = await request(
     "GET",
     "/storefront/" + site.publicSlug + "/catalog",
@@ -272,7 +284,9 @@ async function ecommerceJourney() {
     {
       idempotencyKey: checkoutKey,
       name: "Golden Buyer",
-      phone: "+79990000000"
+      phone: "+79990000000",
+      email:"buyer-"+runId+"@example.invalid",
+      deliveryMethodId:pickup.id
     },
     { authenticated: false }
   );
@@ -285,7 +299,9 @@ async function ecommerceJourney() {
     {
       idempotencyKey: checkoutKey,
       name: "Golden Buyer",
-      phone: "+79990000000"
+      phone: "+79990000000",
+      email:"buyer-"+runId+"@example.invalid",
+      deliveryMethodId:pickup.id
     },
     { authenticated: false }
   );
