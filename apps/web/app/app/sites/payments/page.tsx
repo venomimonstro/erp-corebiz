@@ -5,7 +5,8 @@ import {apiRequest} from "../../../../lib/api";
 
 type Site={id:string;name:string;public_slug:string};
 type Merchant={configured:boolean;shop_id?:string;enabled?:boolean;
-  fiscal_enabled?:boolean;vat_code?:number;tax_system_code?:number|null};
+  fiscal_enabled?:boolean;vat_code?:number;tax_system_code?:number|null;
+  fiscal_provider?:"YOOKASSA"|"ATOL_ONLINE"};
 type Method={id:string;code:string;title:string;mode:string;fee_minor:string;
   description:string|null};
 type DeliveryResponse={methods:Method[];currency:string};
@@ -20,6 +21,7 @@ export default function StorePaymentsPage(){
   const [vatCode,setVatCode]=useState(1);
   const [taxCode,setTaxCode]=useState("0");
   const [fiscalEnabled,setFiscalEnabled]=useState(false);
+  const [fiscalProvider,setFiscalProvider]=useState<"YOOKASSA"|"ATOL_ONLINE">("YOOKASSA");
   const [enabled,setEnabled]=useState(false);
   const [deliveryCode,setDeliveryCode]=useState("PICKUP");
   const [deliveryTitle,setDeliveryTitle]=useState("Самовывоз");
@@ -48,6 +50,7 @@ export default function StorePaymentsPage(){
       setVatCode(merchant.vat_code??1);
       setTaxCode(String(merchant.tax_system_code??0));
       setFiscalEnabled(merchant.fiscal_enabled??false);
+      setFiscalProvider(merchant.fiscal_provider??"YOOKASSA");
       setEnabled(merchant.enabled??false);
       setError("");
     }catch(cause){
@@ -63,7 +66,7 @@ export default function StorePaymentsPage(){
         body:JSON.stringify({
           shopId, ...(secret?{secret}:{}),
           vatCode,taxSystemCode:Number(taxCode)||null,
-          enabled,fiscalEnabled
+          enabled,fiscalEnabled,fiscalProvider
         })
       });
       setSecret("");
@@ -147,9 +150,26 @@ export default function StorePaymentsPage(){
               </select>
             </label>
           </div>
+          <label>Кто формирует чек предоплаты
+            <select value={fiscalProvider}
+              onChange={e=>setFiscalProvider(e.target.value as typeof fiscalProvider)}>
+              <option value="YOOKASSA">YooKassa (стандартный вариант)</option>
+              <option value="ATOL_ONLINE">АТОЛ Онлайн (отдельная фискализация)</option>
+            </select>
+          </label>
           <label><input type="checkbox" checked={fiscalEnabled}
             onChange={e=>setFiscalEnabled(e.target.checked)}/>
-            Подтверждаю: подключена онлайн-касса и передача чеков в YooKassa</label>
+            Подтверждаю: {fiscalProvider==="YOOKASSA"
+              ?"подключена касса и передача чеков через YooKassa"
+              :"АТОЛ настроен в разделе интеграций, чек будет оформлен через АТОЛ отдельно"}
+          </label>
+          {fiscalProvider==="ATOL_ONLINE"?<p className="inline-error">
+            Внимание: включение АТОЛ возможно только после проверки кассы
+            и включения администратором фискального контура на сервере.
+            Чек предоплаты необходимо отправить из панели АТОЛ и затем
+            подтвердить ФН/ФД/ФП. Для товаров с маркировкой этот путь пока закрыт.
+            <a href="/app/settings/integrations/connect"> Перейти к настройке АТОЛ →</a>
+          </p>:null}
           <label><input type="checkbox" checked={enabled}
             onChange={e=>setEnabled(e.target.checked)}/>
             Разрешить онлайн-оплату покупателям</label>
