@@ -115,6 +115,57 @@ describe("seller CDEK and ATOL fixed-provider adapters",()=>{
       .toBe("https://api.edu.cdek.ru/v2/orders/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
   });
 
+  it("submits an ATOL sell exactly once with a confirmed processing UUID",async()=>{
+    const mock=jest.spyOn(global,"fetch")
+      .mockResolvedValueOnce(reply({token:"valid-token"}))
+      .mockResolvedValueOnce(reply({
+        uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        status:"wait",error:null
+      }));
+    const receipt={external_id:"corebiz_test",timestamp:"12.10.2026 10:00:00",
+      receipt:{company:{inn:"7700000000"},items:[],payments:[],total:50}};
+    const result=await new AtolOnlineGateway().registerSell(atol,"SANDBOX",receipt);
+    expect(result).toEqual({uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",state:"WAIT"});
+    expect(String(mock.mock.calls[1]?.[0]))
+      .toBe("https://testonline.atol.ru/possystem/v5/GROUP_01/sell");
+    expect(mock.mock.calls[1]?.[1]?.headers).toEqual(
+      expect.objectContaining({Token:"valid-token"}));
+    expect(String(mock.mock.calls[1]?.[1]?.body)).toContain("corebiz_test");
+  });
+  it("requires ATOL FN, FD, fiscal sign, external identity and receipt amount",async()=>{
+    jest.spyOn(global,"fetch")
+      .mockResolvedValueOnce(reply({token:"valid-token"}))
+      .mockResolvedValueOnce(reply({
+        uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        external_id:"corebiz_payment_prepayment",
+        status:"done",error:null,payload:{
+          total:120.25,fn_number:"1234567890123456",
+          fiscal_document_number:13,fiscal_document_attribute:45678912
+        }
+      }));
+    const result=await new AtolOnlineGateway().report(
+      atol,"SANDBOX","aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    expect(result).toMatchObject({
+      uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      state:"DONE",fnNumber:"1234567890123456",
+      documentNumber:13,fiscalSign:"45678912",amountMinor:"12025",
+      externalId:"corebiz_payment_prepayment"
+    });
+  });
+  it("rejects provider done without real fiscal requisites",async()=>{
+    jest.spyOn(global,"fetch")
+      .mockResolvedValueOnce(reply({token:"valid-token"}))
+      .mockResolvedValueOnce(reply({
+        uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        external_id:"corebiz_test",status:"done",error:null,
+        payload:{total:120.25,fn_number:"1234567890123456",
+          fiscal_document_number:13}
+      }));
+    await expect(new AtolOnlineGateway().report(
+      atol,"SANDBOX","aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+      .rejects.toBeInstanceOf(BadGatewayException);
+  });
+
   it("tests ATOL FFD 1.2 credentials without issuing a receipt",async()=>{
     const mock=jest.spyOn(global,"fetch")
       .mockResolvedValueOnce(reply({token:"some-auth-token",error:null}));
