@@ -455,8 +455,9 @@ export class StorefrontService {
           const any=await client.query(
             "SELECT 1 FROM commerce_delivery_method WHERE tenant_id=$1 AND site_id=$2 AND active LIMIT 1",
             [cart.tenant_id,cart.site_id]);
-          if(any.rowCount)throw new BadRequestException("Выберите способ доставки");
-          return null;
+          throw new BadRequestException(any.rowCount
+            ? "Выберите способ доставки или самовывоза"
+            : "Продавец ещё не настроил доставку или самовывоз");
         }
         const method=await client.query<{
           id:string;mode:string;title:string;fee_minor:string;
