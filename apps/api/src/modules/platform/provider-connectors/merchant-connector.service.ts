@@ -65,7 +65,11 @@ export class MerchantConnectorService{
   }
   async configure(ctx:TenantContext,siteId:string,body:{
     provider:Provider;environment:ProviderEnvironment;
-    credentials:Record<string,unknown>;fromCityCode?:number
+    credentials:Record<string,unknown>;fromCityCode?:number;
+    fiscalCompany?:{
+      inn:string;email:string;sno:string;paymentAddress:string;
+      vatType:string
+    }
   }){
     await this.requireAll(ctx,"sites.manage");
     this.validateSite(siteId);
@@ -96,7 +100,26 @@ export class MerchantConnectorService{
          !/^[A-Za-z0-9_-]{2,140}$/.test(groupCode))
         throw new BadRequestException("Некорректные реквизиты группы АТОЛ");
       credentials={login,password,groupCode};
-      config={groupCode};
+      const fiscal=body.fiscalCompany;
+      const choices=["none","vat0","vat5","vat7","vat10","vat20","vat22"];
+      if(fiscal!==undefined){
+        if(!fiscal||typeof fiscal!=="object"||
+          typeof fiscal.inn!=="string"||
+          !/^\d{10}(\d{2})?$/.test(fiscal.inn)||
+          typeof fiscal.email!=="string"||
+          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fiscal.email)||
+          fiscal.email.length>64||
+          typeof fiscal.sno!=="string"||
+          !["osn","usn_income","usn_income_outcome","esn","patent"].includes(fiscal.sno)||
+          typeof fiscal.paymentAddress!=="string"||
+          fiscal.paymentAddress.trim().length<5||
+          fiscal.paymentAddress.length>256||
+          !choices.includes(fiscal.vatType))
+          throw new BadRequestException(
+            "Для выдачи чеков нужны корректные ИНН, email, СНО, место расчёта и ставка НДС"
+          );
+      }
+      config={groupCode,...(fiscal?{fiscalCompany:fiscal}:{})};
     }
     const encrypted=sealMerchantSecret(JSON.stringify(credentials));
     return this.db.withTenantTransaction(ctx,async client=>{
