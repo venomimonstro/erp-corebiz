@@ -88,7 +88,7 @@ describe("carrier status evidence cannot regress shipment state",()=>{
       const encrypted=sealMerchantSecret(JSON.stringify({
         clientId:"test",clientSecret:"test-secret"
       }));
-      const query=jest.fn(async(sql:string)=>{
+      const query=jest.fn(async(sql:string,_params?:unknown[])=>{
         if(sql.includes("FROM commerce_shipment WHERE"))
           return {rows:[{
             id:shipment,sales_order_id:order,
@@ -118,7 +118,7 @@ describe("carrier status evidence cannot regress shipment state",()=>{
       const update=query.mock.calls.find(([sql])=>sql.includes(
         "UPDATE commerce_shipment"));
       expect(update?.[0]).toContain("WHEN state IN ('DELIVERED','NOT_DELIVERED'");
-      expect(update?.[1][5]).toBe("NOT_DELIVERED");
+      expect(update?.[1]?.[5]).toBe("NOT_DELIVERED");
     }finally{
       if(before===undefined)delete process.env.COREBIZ_PAYMENT_ENCRYPTION_KEY;
       else process.env.COREBIZ_PAYMENT_ENCRYPTION_KEY=before;
