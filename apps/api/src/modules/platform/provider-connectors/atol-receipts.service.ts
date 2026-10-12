@@ -149,7 +149,8 @@ export class AtolReceiptsService{
         "SELECT i.id AS payment_intent_id,o.business_number,"+
         "i.amount_minor::text,CASE "+
         " WHEN r.status='SUCCEEDED' AND r.finance_payment_id IS NOT NULL "+
-        "AND r.amount_minor=i.amount_minor THEN 'REFUND' ELSE 'CLOSING' END AS kind,"+
+        "AND r.amount_minor=i.amount_minor THEN 'REFUND' "+
+        "WHEN d.delivery_status='DELIVERED' THEN 'CLOSING' ELSE 'HANDOVER' END AS kind,"+
         "d.delivery_status "+
         "FROM commerce_payment_intent i "+
         "JOIN sales_order o ON o.tenant_id=i.tenant_id AND o.id=i.sales_order_id "+
@@ -161,6 +162,8 @@ export class AtolReceiptsService{
         "LEFT JOIN commerce_refund r ON r.tenant_id=i.tenant_id AND r.intent_id=i.id "+
         "LEFT JOIN commerce_fiscal_document closing ON closing.tenant_id=i.tenant_id "+
         "AND closing.payment_intent_id=i.id AND closing.operation='sell_full_payment' "+
+        "LEFT JOIN commerce_shipment ship ON ship.tenant_id=i.tenant_id "+
+        "AND ship.sales_order_id=i.sales_order_id "+
         "LEFT JOIN commerce_fiscal_document refunded ON refunded.tenant_id=i.tenant_id "+
         "AND refunded.payment_intent_id=i.id AND refunded.operation='sell_refund' "+
         "WHERE i.tenant_id=$1 AND i.site_id=$2 "+
@@ -174,6 +177,12 @@ export class AtolReceiptsService{
         "   AND r.amount_minor=i.amount_minor AND refunded.id IS NULL "+
         "   AND (closing.id IS NULL OR closing.state='DONE') "+
         "   AND (d.delivery_status<>'DELIVERED' OR closing.state='DONE')) "+
+        " OR "+
+        " (o.fulfillment_status='SHIPPED' "+
+        "   AND d.delivery_status IN ('AWAITING_FULFILLMENT','READY','SHIPPED') "+
+        "   AND (r.id IS NULL OR r.status='CANCELED') "+
+        "   AND closing.id IS NULL "+
+        "   AND (ship.id IS NULL OR ship.state='DELIVERED')) "+
         ") ORDER BY i.updated_at LIMIT 100",
         [ctx.tenantId,siteId]
       );
