@@ -138,6 +138,49 @@ export class AtolReceiptsService{
       return r.rows;
     });
   }
+  async pendingFollowups(ctx:TenantContext,siteId:string){
+    await this.permit(ctx);
+    if(!uuid(siteId))throw new BadRequestException("Неверный сайт");
+    return this.db.withTenantTransaction(ctx,async client=>{
+      const rows=await client.query<{
+        payment_intent_id:string;business_number:string;
+        amount_minor:string;kind:string;delivery_status:string
+      }>(
+        "SELECT i.id AS payment_intent_id,o.business_number,"+
+        "i.amount_minor::text,CASE "+
+        " WHEN r.status='SUCCEEDED' AND r.finance_payment_id IS NOT NULL "+
+        "AND r.amount_minor=i.amount_minor THEN 'REFUND' ELSE 'CLOSING' END AS kind,"+
+        "d.delivery_status "+
+        "FROM commerce_payment_intent i "+
+        "JOIN sales_order o ON o.tenant_id=i.tenant_id AND o.id=i.sales_order_id "+
+        "JOIN commerce_order_delivery d ON d.tenant_id=i.tenant_id "+
+        "AND d.sales_order_id=i.sales_order_id "+
+        "JOIN commerce_fiscal_document first ON first.tenant_id=i.tenant_id "+
+        "AND first.payment_intent_id=i.id AND first.operation='sell' "+
+        "AND first.state='DONE' "+
+        "LEFT JOIN commerce_refund r ON r.tenant_id=i.tenant_id AND r.intent_id=i.id "+
+        "LEFT JOIN commerce_fiscal_document closing ON closing.tenant_id=i.tenant_id "+
+        "AND closing.payment_intent_id=i.id AND closing.operation='sell_full_payment' "+
+        "LEFT JOIN commerce_fiscal_document refunded ON refunded.tenant_id=i.tenant_id "+
+        "AND refunded.payment_intent_id=i.id AND refunded.operation='sell_refund' "+
+        "WHERE i.tenant_id=$1 AND i.site_id=$2 "+
+        "AND i.purpose='STOREFRONT' AND i.status='SUCCEEDED' "+
+        "AND i.finance_payment_id IS NOT NULL AND i.fiscal_provider='ATOL_ONLINE' "+
+        "AND ( "+
+        " (d.delivery_status='DELIVERED' AND closing.id IS NULL "+
+        "   AND (r.id IS NULL OR r.status='CANCELED')) "+
+        " OR "+
+        " (r.status='SUCCEEDED' AND r.finance_payment_id IS NOT NULL "+
+        "   AND r.amount_minor=i.amount_minor AND refunded.id IS NULL "+
+        "   AND (closing.id IS NULL OR closing.state='DONE') "+
+        "   AND (d.delivery_status<>'DELIVERED' OR closing.state='DONE')) "+
+        ") ORDER BY i.updated_at LIMIT 100",
+        [ctx.tenantId,siteId]
+      );
+      return rows.rows;
+    });
+  }
+
   async list(ctx:TenantContext,siteId:string){
     await this.permit(ctx);
     if(!uuid(siteId))throw new BadRequestException("Неверный сайт");
@@ -394,7 +437,7 @@ export class AtolReceiptsService{
         ?(closing.rows[0]?.state==="DONE"?"refund_settlement":"refund_prepayment")
         :"settlement";
       const receipt=buildReceipt({
-        id:paid.id,refundId:refunded?.id,operation:mode,
+        id:paid.id,...(refunded?.id?{refundId:refunded.id}:{}),operation:mode,
         amountMinor:paid.amount_minor,email:paid.customer_email,
         company,lines:lines.rows
       });
