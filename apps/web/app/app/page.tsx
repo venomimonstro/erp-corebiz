@@ -193,13 +193,19 @@ export default function AppHomePage() {
       setContext(workspace);
 
       if (workspace.workspace === "OWNER" || workspace.workspace === "ADMIN") {
-        const [dashboardData, activationData] = await Promise.all([
+        // Activation is an auxiliary onboarding service. A transient error
+        // there must never blank the owner's operational dashboard.
+        const [dashboardResult, activationResult] = await Promise.allSettled([
           apiRequest<Dashboard>("/dashboard/owner"),
           apiRequest<Activation>("/dashboard/activation")
         ]);
-        setDashboard(dashboardData);
-        setActivation(activationData);
+        if(dashboardResult.status==="rejected")throw dashboardResult.reason;
+        setDashboard(dashboardResult.value);
+        setActivation(activationResult.status==="fulfilled"
+          ?activationResult.value:null);
         setMember(null);
+        if(activationResult.status==="rejected")
+          setError("Подсказки первого запуска временно недоступны. Основные показатели бизнеса продолжают работать.");
       } else {
         setMember(
           await apiRequest<MemberWorkspace>("/dashboard/workspace")
