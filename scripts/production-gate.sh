@@ -170,6 +170,10 @@ echo "[production-gate] workflow worker lease recovery blocker"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/worker-outbox-release-gate.sql
 
+echo "[production-gate] rollback-only workflow crash/recovery drill"
+psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
+  -f scripts/workflow-lease-recovery-drill.sql
+
 echo "[production-gate] 8/13 Finance / bank / Accounting reconciliation"
 psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/finance_bank_reconciliation_diagnostic.sql
