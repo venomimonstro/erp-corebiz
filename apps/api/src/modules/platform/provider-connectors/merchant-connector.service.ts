@@ -197,8 +197,8 @@ export class MerchantConnectorService{
     const prepared=await this.db.withTenantTransaction(ctx,async client=>{
       // Lock the actual order; failed transactions cannot leave a
       // booking claim while a second concurrent request proceeds.
-      const order=await client.query<{id:string}>(
-        `SELECT o.id FROM sales_order o
+      const order=await client.query<{id:string;delivery_address:string|null}>(
+        `SELECT o.id,d.address AS delivery_address FROM sales_order o
          JOIN storefront_cart c ON c.tenant_id=o.tenant_id
            AND c.sales_order_id=o.id AND c.site_id=$3
          JOIN commerce_order_delivery d ON d.tenant_id=o.tenant_id
@@ -220,14 +220,24 @@ export class MerchantConnectorService{
       if(!order.rowCount)throw new ConflictException(
         "Для накладной необходимы подтверждённая оплата YooKassa, чек, резерв и курьерская доставка"
       );
+      const deliveryAddress=order.rows[0]?.delivery_address?.trim()??"";
+      if(deliveryAddress.length<5||deliveryAddress.length>500)
+        throw new ConflictException(
+          "Нельзя оформить курьера без адреса из подтверждённого заказа"
+        );
       const quote=await client.query<{
         tariff_code:number;from_city_code:number;to_city_code:number;
         package_weight_grams:number;amount_minor:string;
       }>(
-        `SELECT tariff_code,from_city_code,to_city_code,
-           package_weight_grams,amount_minor::text
-         FROM commerce_shipping_quote WHERE tenant_id=$1 AND id=$2
-           AND site_id=$3 AND connection_id=$4 AND expires_at>now()`,
+        `SELECT q.tariff_code,q.from_city_code,q.to_city_code,
+           q.package_weight_grams,q.amount_minor::text
+         FROM commerce_shipping_quote q
+         JOIN commerce_provider_connection cp
+           ON cp.tenant_id=q.tenant_id AND cp.id=q.connection_id
+         WHERE q.tenant_id=$1 AND q.id=$2
+           AND q.site_id=$3 AND q.connection_id=$4 AND q.expires_at>now()
+           AND q.created_at>=cp.verified_at
+           AND cp.state='VERIFIED' AND cp.enabled`,
         [ctx.tenantId,body.quoteId,siteId,connection.id]);
       const q=quote.rows[0];if(!q)throw new ConflictException(
         "Тариф истёк или относится к другому магазину"
@@ -269,7 +279,7 @@ export class MerchantConnectorService{
       if(old.rows[0]){
         if(old.rows[0].payload_digest!==fingerprint)
           throw new ConflictException("Для заказа уже есть другая накладная");
-        return {id:old.rows[0].id,retry:false,quote:q,items};
+        return {id:old.rows[0].id,retry:false,quote:q,items,deliveryAddress};
       }
       const r=await client.query<{id:string}>(
         `INSERT INTO commerce_shipment(
@@ -280,7 +290,7 @@ export class MerchantConnectorService{
          RETURNING id`,
         [ctx.tenantId,siteId,body.orderId,connection.id,body.quoteId,
           fingerprint,recipientName,recipientPhone,q.tariff_code,q.amount_minor]);
-      return {id:r.rows[0]!.id,retry:true,quote:q,items};
+      return {id:r.rows[0]!.id,retry:true,quote:q,items,deliveryAddress};
     });
     if(!prepared.retry)return {
       shipmentId:prepared.id,state:"ALREADY_EXISTS",
@@ -297,6 +307,7 @@ export class MerchantConnectorService{
         fromCityCode:prepared.quote.from_city_code,
         toCityCode:prepared.quote.to_city_code,
         recipientName,recipientPhone,
+        deliveryAddress:prepared.deliveryAddress,
         weightGrams:prepared.quote.package_weight_grams,
         lengthCm:body.lengthCm,widthCm:body.widthCm,heightCm:body.heightCm,
         items:prepared.items
