@@ -69,6 +69,7 @@ describe("seller CDEK and ATOL fixed-provider adapters",()=>{
       orderNumber:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       tariffCode:136,fromCityCode:44,toCityCode:137,
       recipientName:"Иван Иванов",recipientPhone:"+79998887766",
+      deliveryAddress:"Москва, Ленина, 1",
       weightGrams:900,lengthCm:20,widthCm:15,heightCm:10,
       items:[{name:"Ноутбук",wareKey:"NOTEBOOK-1",cost:"45000.00",amount:1}]
     });
@@ -77,6 +78,7 @@ describe("seller CDEK and ATOL fixed-provider adapters",()=>{
     expect(url).toBe("https://api.edu.cdek.ru/v2/orders");
     const body=JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
     expect(body.number).toBe("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    expect(body.to_location.address).toBe("Москва, Ленина, 1");
     expect(body.packages[0].weight).toBe(900);
     expect(body.packages[0].items[0]).toEqual({
       name:"Ноутбук",ware_key:"NOTEBOOK-1",cost:45000,
@@ -91,6 +93,7 @@ describe("seller CDEK and ATOL fixed-provider adapters",()=>{
       orderNumber:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       tariffCode:136,fromCityCode:44,toCityCode:137,
       recipientName:"Иван Иванов",recipientPhone:"+79998887766",
+      deliveryAddress:"Москва, Ленина, 1",
       weightGrams:900,lengthCm:20,widthCm:15,heightCm:10,
       items:[{name:"Ноутбук",wareKey:"NOTEBOOK-1",cost:"45000.00",amount:1}]
     })).rejects.toBeInstanceOf(BadGatewayException);
