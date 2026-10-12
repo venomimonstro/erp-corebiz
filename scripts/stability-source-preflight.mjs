@@ -203,6 +203,23 @@ function inspectBusinessBoundaries(file, source) {
 async function inspectRequiredHardening(root) {
   const required = [
     {
+      path:"scripts/owner-business-setup-e2e.mjs",
+      patterns:[
+        /COREBIZ_CONFIRM_DISPOSABLE_DB/,
+        /auth\/register-invited/,
+        /organization\/legal-entities/,
+        /organization\/teams\/assign/,
+        /crm\/deals/,
+        /inventory\/adjustments/,
+        /customization\/business-vertical/,
+        /service\/bookings/,
+        /auth\/switch-tenant/,
+        /never leak bearer token/i
+      ],
+      message:"Real owner setup must exercise roles, legal structure, product and service onboarding"
+    },
+
+    {
       path:"apps/api/src/infrastructure/database/database.service.ts",
       patterns:[/pool\.on\("error"/,/client\.release\(discardConnection\)/,
         /SET LOCAL lock_timeout/],
