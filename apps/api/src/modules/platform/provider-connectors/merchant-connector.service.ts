@@ -3,6 +3,7 @@ import {
   NotFoundException
 } from "@nestjs/common";
 import type {TenantContext} from "@corebiz/contracts";
+import {createHash} from "node:crypto";
 import {DatabaseService} from "../../../infrastructure/database/database.service";
 import {openMerchantSecret,sealMerchantSecret} from "../payments/yookassa.gateway";
 import {
@@ -152,6 +153,178 @@ export class MerchantConnectorService{
       );
     }
   }
+  async shipments(ctx:TenantContext,siteId:string){
+    this.validateSite(siteId);
+    return this.db.withTenantTransaction(ctx,async client=>{
+      const r=await client.query(
+        `SELECT s.id,s.sales_order_id,o.business_number,s.state,
+           s.provider_order_uuid,s.provider_number,s.tariff_code,
+           s.snapshot_amount_minor::text AS amount_minor,s.last_error_code,
+           s.created_at,s.updated_at
+         FROM commerce_shipment s
+         JOIN sales_order o ON o.tenant_id=s.tenant_id AND o.id=s.sales_order_id
+         WHERE s.tenant_id=$1 AND s.site_id=$2
+         ORDER BY s.created_at DESC LIMIT 100`,[ctx.tenantId,siteId]);
+      return r.rows;
+    });
+  }
+  async bookShipment(ctx:TenantContext,siteId:string,body:{
+    orderId:string;quoteId:string;
+    recipientName:string;recipientPhone:string;
+    lengthCm:number;widthCm:number;heightCm:number
+  }){
+    this.validateSite(siteId);
+    if(!validUuid(body?.orderId)||!validUuid(body?.quoteId))
+      throw new BadRequestException("Некорректный заказ или тариф");
+    const recipientName=body.recipientName?.trim();
+    const recipientPhone=body.recipientPhone?.replace(/[()\s-]/g,"");
+    if(!recipientName||recipientName.length<2||recipientName.length>160||
+       !recipientPhone||!/^\+?[0-9]{10,15}$/.test(recipientPhone)||
+       ![body.lengthCm,body.widthCm,body.heightCm].every(x=>
+         Number.isInteger(x)&&x>=1&&x<=300)){
+      throw new BadRequestException("Проверьте получателя и габариты посылки");
+    }
+    const connection=await this.connection(ctx,siteId,"CDEK");
+    if(!connection||connection.state!=="VERIFIED"||!connection.enabled)
+      throw new ConflictException("Доступ СДЭК не подтверждён");
+    const fingerprint=createHash("sha256").update(JSON.stringify({
+      siteId,orderId:body.orderId,quoteId:body.quoteId,
+      recipientName,recipientPhone,
+      dims:[body.lengthCm,body.widthCm,body.heightCm]
+    })).digest("hex");
+    const prepared=await this.db.withTenantTransaction(ctx,async client=>{
+      // Lock the actual order; failed transactions cannot leave a
+      // booking claim while a second concurrent request proceeds.
+      const order=await client.query<{id:string}>(
+        `SELECT o.id FROM sales_order o
+         JOIN storefront_cart c ON c.tenant_id=o.tenant_id
+           AND c.sales_order_id=o.id AND c.site_id=$3
+         JOIN commerce_order_delivery d ON d.tenant_id=o.tenant_id
+           AND d.sales_order_id=o.id AND d.site_id=$3
+           AND d.mode='LOCAL_COURIER'
+         WHERE o.tenant_id=$1 AND o.id=$2
+           AND o.payment_status='PAID'
+           AND o.order_status IN ('CONFIRMED','COMPLETED')
+           AND o.fulfillment_status IN ('RESERVED','READY')
+         FOR UPDATE OF o`,
+        [ctx.tenantId,body.orderId,siteId]);
+      if(!order.rowCount)throw new ConflictException(
+        "Сначала подтвердите оплату, резерв и курьерскую доставку заказа"
+      );
+      const quote=await client.query<{
+        tariff_code:number;from_city_code:number;to_city_code:number;
+        package_weight_grams:number;amount_minor:string;
+      }>(
+        `SELECT tariff_code,from_city_code,to_city_code,
+           package_weight_grams,amount_minor::text
+         FROM commerce_shipping_quote WHERE tenant_id=$1 AND id=$2
+           AND site_id=$3 AND connection_id=$4 AND expires_at>now()`,
+        [ctx.tenantId,body.quoteId,siteId,connection.id]);
+      const q=quote.rows[0];if(!q)throw new ConflictException(
+        "Тариф истёк или относится к другому магазину"
+      );
+      const old=await client.query<{id:string;payload_digest:string;state:string}>(
+        `SELECT id,payload_digest,state FROM commerce_shipment
+         WHERE tenant_id=$1 AND sales_order_id=$2 FOR UPDATE`,
+        [ctx.tenantId,body.orderId]);
+      if(old.rows[0]){
+        if(old.rows[0].payload_digest!==fingerprint)
+          throw new ConflictException("Для заказа уже есть другая накладная");
+        return {id:old.rows[0].id,retry:false,quote:q};
+      }
+      const r=await client.query<{id:string}>(
+        `INSERT INTO commerce_shipment(
+          tenant_id,site_id,sales_order_id,connection_id,quote_id,
+          payload_digest,state,recipient_name,recipient_phone,
+          tariff_code,snapshot_amount_minor
+         ) VALUES($1,$2,$3,$4,$5,$6,'SENDING',$7,$8,$9,$10)
+         RETURNING id`,
+        [ctx.tenantId,siteId,body.orderId,connection.id,body.quoteId,
+          fingerprint,recipientName,recipientPhone,q.tariff_code,q.amount_minor]);
+      return {id:r.rows[0]!.id,retry:true,quote:q};
+    });
+    if(!prepared.retry)return {
+      shipmentId:prepared.id,state:"ALREADY_EXISTS",
+      note:"Новая накладная не создавалась. Сверьте существующий заказ СДЭК."
+    };
+    // Network side effect is deliberately ONCE, after the claim was committed.
+    // On a timeout the provider may have created a consignment:
+    // marking UNKNOWN is safer than an unsafe automatic retry.
+    try{
+      const secret=JSON.parse(openMerchantSecret(connection.encrypted_credentials)) as CdekCredentials;
+      const response=await this.cdek.createOrder(secret,connection.environment,{
+        orderNumber:body.orderId,
+        tariffCode:prepared.quote.tariff_code,
+        fromCityCode:prepared.quote.from_city_code,
+        toCityCode:prepared.quote.to_city_code,
+        recipientName,recipientPhone,
+        weightGrams:prepared.quote.package_weight_grams,
+        lengthCm:body.lengthCm,widthCm:body.widthCm,heightCm:body.heightCm
+      });
+      await this.db.withTenantTransaction(ctx,async client=>client.query(
+        `UPDATE commerce_shipment
+         SET state='SUBMITTED',provider_order_uuid=$3,
+           submitted_at=now(),updated_at=now(),last_error_code=NULL
+         WHERE tenant_id=$1 AND id=$2 AND state='SENDING'`,
+        [ctx.tenantId,prepared.id,response.uuid]));
+      return {shipmentId:prepared.id,state:"SUBMITTED",
+        providerOrderUuid:response.uuid};
+    }catch{
+      await this.db.withTenantTransaction(ctx,async client=>client.query(
+        `UPDATE commerce_shipment
+         SET state='UNKNOWN',last_error_code='PROVIDER_RESPONSE_AMBIGUOUS',
+           updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND state='SENDING'`,
+        [ctx.tenantId,prepared.id]));
+      return {shipmentId:prepared.id,state:"UNKNOWN",
+        note:"СДЭК мог создать накладную. Повтор запрещён до ручной сверки."};
+    }
+  }
+  async verifyShipment(ctx:TenantContext,siteId:string,
+    shipmentId:string,providerUuid?:string){
+    this.validateSite(siteId);
+    if(!validUuid(shipmentId)||
+       (providerUuid!==undefined&&!validUuid(providerUuid)))
+      throw new BadRequestException("Некорректный UUID отправления");
+    const r=await this.db.withTenantTransaction(ctx,async client=>
+      client.query<{
+        id:string;sales_order_id:string;provider_order_uuid:string|null;
+        state:string
+      }>(
+        `SELECT id,sales_order_id,provider_order_uuid,state
+         FROM commerce_shipment WHERE tenant_id=$1 AND site_id=$2 AND id=$3`,
+        [ctx.tenantId,siteId,shipmentId]));
+    const row=r.rows[0];if(!row)throw new NotFoundException("Отправление не найдено");
+    const uuid=row.provider_order_uuid??providerUuid;
+    if(!uuid)throw new ConflictException(
+      "После неизвестного результата укажите UUID из кабинета СДЭК"
+    );
+    if(row.provider_order_uuid&&row.provider_order_uuid!==uuid)
+      throw new ConflictException("UUID отправления нельзя менять");
+    const connection=await this.connection(ctx,siteId,"CDEK");
+    if(!connection)throw new NotFoundException("Подключение СДЭК недоступно");
+    const secret=JSON.parse(openMerchantSecret(connection.encrypted_credentials)) as CdekCredentials;
+    const status=await this.cdek.orderStatus(secret,connection.environment,uuid);
+    if(status.clientOrderNumber!==row.sales_order_id)
+      throw new ConflictException("СДЭК вернул накладную другого заказа");
+    const states:Record<string,string>={
+      CREATED:"ACCEPTED",ACCEPTED:"ACCEPTED",RECEIVED_AT_SHIPMENT_WAREHOUSE:"IN_TRANSIT",
+      SENT_TO_TRANSIT_CITY:"IN_TRANSIT",DELIVERED:"DELIVERED",
+      NOT_DELIVERED:"IN_TRANSIT",CANCELLED:"CANCELLED",REJECTED:"REJECTED"
+    };
+    const next=states[status.state]??"SUBMITTED";
+    await this.db.withTenantTransaction(ctx,async client=>client.query(
+      `UPDATE commerce_shipment
+       SET provider_order_uuid=$4,provider_number=$5,state=$6,
+         verified_at=now(),updated_at=now(),last_error_code=NULL
+       WHERE tenant_id=$1 AND site_id=$2 AND id=$3
+         AND (provider_order_uuid IS NULL OR provider_order_uuid=$4)`,
+      [ctx.tenantId,siteId,shipmentId,uuid,status.cdekNumber,next]));
+    // Carrier proof never makes payment PAID and does not post stock.
+    return {shipmentId,state:next,trackingNumber:status.cdekNumber,
+      providerOrderUuid:uuid};
+  }
+
   async quote(ctx:TenantContext,siteId:string,input:{
     toCityCode:number;weightGrams:number;
     lengthCm:number;widthCm:number;heightCm:number
