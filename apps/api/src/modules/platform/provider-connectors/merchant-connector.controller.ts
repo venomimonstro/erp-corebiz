@@ -57,6 +57,18 @@ export class MerchantConnectorController{
       this.context(req),siteId)};
   }
 
+  @Post("sites/:siteId/atol/payments/:paymentId/confirm-handover")
+  @RequirePermission("sales.write")
+  @ApiCost("EXPENSIVE")
+  async confirmAtolHandover(@Req() req:AuthenticatedRequest,
+    @Param("siteId") siteId:string,@Param("paymentId") paymentId:string,
+    @Body() body:{proofReference:string;confirmed:boolean})
+  :Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.fiscal.confirmHandover(
+      this.context(req),siteId,paymentId,
+      body?.proofReference,body?.confirmed)};
+  }
+
   @Post("sites/:siteId/atol/payments/:paymentId/settlement")
   @RequirePermission("sites.manage")
   @ApiCost("EXPENSIVE")
