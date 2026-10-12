@@ -41,7 +41,8 @@ function fixture(known=false,canShip=true){
     })
   };
   const db={withTenantTransaction:jest.fn(async(_ctx:unknown,fn:any)=>fn(client))};
-  const service=new MerchantConnectorService(db as any);
+  const auth={resolveScope:jest.fn().mockResolvedValue("all")};
+  const service=new MerchantConnectorService(db as any,auth as any);
   return {service,statements};
 }
 describe("carrier booking authorization and idempotency",()=>{
