@@ -4,11 +4,11 @@ import {AppSidebar} from "../../../../../components/app-sidebar";
 import {apiRequest} from "../../../../../lib/api";
 
 type Site={id:string;name:string};
-type Provider="CDEK"|"ATOL_ONLINE";
+type Provider="CDEK"|"ATOL_ONLINE"|"POCHTA_RUSSIA";
 type Connection={
   id:string;provider:Provider;state:string;
   environment:"SANDBOX"|"PRODUCTION";enabled:boolean;
-  public_config:{fromCityCode?:number;groupCode?:string;fiscalCompany?:FiscalCompany};
+  public_config:{fromCityCode?:number;fromPostcode?:string;groupCode?:string;fiscalCompany?:FiscalCompany};
   verified_at:string|null;last_error_code:string|null
 };
 type Quote={
@@ -49,6 +49,15 @@ export default function MerchantConnectorsPage(){
   const [atolLogin,setAtolLogin]=useState("");
   const [atolPassword,setAtolPassword]=useState("");
   const [atolGroup,setAtolGroup]=useState("");
+  const [postToken,setPostToken]=useState("");
+  const [postAuthKey,setPostAuthKey]=useState("");
+  const [postFrom,setPostFrom]=useState("101000");
+  const [postTo,setPostTo]=useState("190000");
+  const [postWeight,setPostWeight]=useState("1000");
+  const [postQuote,setPostQuote]=useState<{
+    quoteId:string;amountMinor:string;rateMinor:string;vatMinor:string;
+    periodMin:number|null;periodMax:number|null;expiresAt:string
+  }|null>(null);
   const [fiscalCompany,setFiscalCompany]=useState<FiscalCompany>({
     inn:"",email:"",sno:"usn_income",paymentAddress:"",vatType:"none"
   });
@@ -102,6 +111,9 @@ export default function MerchantConnectorsPage(){
       const cfg=connections.find(c=>c.provider==="ATOL_ONLINE");
       if(cfg?.public_config?.fiscalCompany)
         setFiscalCompany(cfg.public_config.fiscalCompany);
+      const post=connections.find(c=>c.provider==="POCHTA_RUSSIA");
+      if(post?.public_config?.fromPostcode)
+        setPostFrom(post.public_config.fromPostcode);
     }catch(e){setError(e instanceof Error?e.message:"Подключения не загружены");}
   },[siteId]);
   useEffect(()=>{void load();},[load]);
@@ -111,16 +123,20 @@ export default function MerchantConnectorsPage(){
     setBusy(true);setError("");setNote("");
     try{
       const credentials=provider==="CDEK"
-        ?{clientId,clientSecret}:{login:atolLogin,password:atolPassword,
-          groupCode:atolGroup};
+        ?{clientId,clientSecret}
+        :provider==="POCHTA_RUSSIA"
+          ?{accessToken:postToken,userAuthorizationKey:postAuthKey}
+          :{login:atolLogin,password:atolPassword,groupCode:atolGroup};
       await apiRequest("/provider-connectors/sites/"+siteId+"/configure",{
         method:"POST",body:JSON.stringify({
-          provider,environment,credentials,
+          provider,environment:provider==="POCHTA_RUSSIA"?"PRODUCTION":environment,
+          credentials,
           ...(provider==="CDEK"?{fromCityCode:Number(city)}
-            :{fiscalCompany})
+            :provider==="POCHTA_RUSSIA"?{fromPostcode:postFrom}:{fiscalCompany})
         })
       });
       setClientSecret("");setAtolPassword("");
+      setPostToken("");setPostAuthKey("");
       setNote("Реквизиты сохранены зашифрованными. Теперь проверьте авторизацию.");
       await load();setQuotes([]);
     }catch(e){setError(e instanceof Error?e.message:"Не удалось сохранить ключи");}
@@ -132,7 +148,8 @@ export default function MerchantConnectorsPage(){
     try{
       const row=await apiRequest<{state:string;note:string}>(
         "/provider-connectors/sites/"+siteId+"/"+provider+"/verify",{
-          method:"POST"
+          method:"POST",body:JSON.stringify(provider==="POCHTA_RUSSIA"
+            ?{toPostcode:postTo,massGrams:Number(postWeight)}:{})
         });
       setNote(row.note);await load();
     }catch(e){setError(e instanceof Error?e.message:"Провайдер отклонил проверку");}
@@ -153,6 +170,24 @@ export default function MerchantConnectorsPage(){
     }catch(e){setError(e instanceof Error?e.message:"Расчёт доставки недоступен");}
     finally{setBusy(false);}
   }
+  async function quotePost(){
+    if(!siteId||busy)return;
+    setBusy(true);setError("");setNote("");setPostQuote(null);
+    try{
+      const row=await apiRequest<{
+        quoteId:string;amountMinor:string;rateMinor:string;vatMinor:string;
+        periodMin:number|null;periodMax:number|null;expiresAt:string
+      }>("/provider-connectors/sites/"+siteId+"/russian-post/quotes",{
+        method:"POST",body:JSON.stringify({
+          toPostcode:postTo,massGrams:Number(postWeight)
+        })
+      });
+      setPostQuote(row);
+      setNote("Расчёт получен от Почты России, посылка не создавалась.");
+    }catch(e){setError(e instanceof Error?e.message:"Тариф Почты России недоступен");}
+    finally{setBusy(false);}
+  }
+
   async function issueFiscal(paymentId:string){
     if(!nonMarkedConfirmed||busy)return;
     if(!window.confirm(
@@ -303,6 +338,7 @@ export default function MerchantConnectorsPage(){
             <select value={provider} onChange={e=>{setProvider(e.target.value as Provider);setQuotes([]);}}>
               <option value="CDEK">СДЭК API v2</option>
               <option value="ATOL_ONLINE">АТОЛ Онлайн v5 · ФФД 1.2</option>
+              <option value="POCHTA_RUSSIA">Почта России · расчёт доставки</option>
             </select>
           </label>
           <label>Контур
@@ -321,7 +357,9 @@ export default function MerchantConnectorsPage(){
           подключение до повторной авторизации.</p>
       </section>
       <section className="studio-section">
-        <h2>{provider==="CDEK"?"Учётные данные СДЭК":"Кассовые реквизиты АТОЛ"}</h2>
+        <h2>{provider==="CDEK"?"Учётные данные СДЭК":
+          provider==="POCHTA_RUSSIA"?"Договор и API Почты России":
+          "Кассовые реквизиты АТОЛ"}</h2>
         <div className="studio-form-grid">
           {provider==="CDEK"?<>
             <label>Client ID
@@ -336,6 +374,21 @@ export default function MerchantConnectorsPage(){
             <label>Код города отправления (СДЭК)
               <input type="number" min="1" step="1" value={city}
                 onChange={e=>setCity(e.target.value)}/>
+            </label>
+          </>:provider==="POCHTA_RUSSIA"?<>
+            <label>Токен приложения Почты России
+              <input type="password" value={postToken}
+                onChange={e=>setPostToken(e.target.value)}
+                autoComplete="new-password"/>
+            </label>
+            <label>Ключ авторизации пользователя (без Basic)
+              <input type="password" value={postAuthKey}
+                onChange={e=>setPostAuthKey(e.target.value)}
+                autoComplete="new-password"/>
+            </label>
+            <label>Индекс пункта отправления
+              <input value={postFrom} inputMode="numeric" maxLength={6}
+                onChange={e=>setPostFrom(e.target.value)}/>
             </label>
           </>:<>
             <label>Login АТОЛ
@@ -491,6 +544,36 @@ export default function MerchantConnectorsPage(){
           Пилот поддерживает закрытие полной предоплаты и полный банковский
           возврат. Частичные возвраты, корректировки, маркируемые товары и
           реальная кассовая приёмка требуют отдельного этапа.</p>
+      </section>:null}
+      {provider==="POCHTA_RUSSIA"?<section className="studio-section">
+        <h2>Расчёт посылки Почты России</h2>
+        <p>Для подтверждения API нужны настоящий договор и рабочие ключи.
+          Тарификатор не создаёт отправление, ярлык или трек-номер.</p>
+        <div className="studio-form-grid">
+          <label>Индекс получателя
+            <input inputMode="numeric" maxLength={6} value={postTo}
+              onChange={e=>setPostTo(e.target.value)}/>
+          </label>
+          <label>Вес посылки, г (до 20 кг)
+            <input type="number" min={1} max={20000} value={postWeight}
+              onChange={e=>setPostWeight(e.target.value)}/>
+          </label>
+        </div>
+        <p>Проверка подключения выше выполняет настоящий расчёт,
+          не фиктивный ping.</p>
+        <button type="button"
+          disabled={busy||current?.state!=="VERIFIED"}
+          onClick={()=>void quotePost()}>Рассчитать стоимость</button>
+        {postQuote?<div className="first-day-summary">
+          <strong>Тариф {money(postQuote.amountMinor)}</strong>
+          <p>База {money(postQuote.rateMinor)} + НДС {money(postQuote.vatMinor)}</p>
+          <p>Ориентировочный срок: {postQuote.periodMin??"?"}–
+            {postQuote.periodMax??"?"} дней</p>
+          <p>Предложение действует до {
+            new Date(postQuote.expiresAt).toLocaleString("ru-RU")}</p>
+          <p>Это не подтверждение отправления и не стоимость,
+            автоматически начисленная покупателю.</p>
+        </div>:null}
       </section>:null}
       {provider==="CDEK"&&current?.state==="VERIFIED"?<section className="studio-section">
         <h2>Проверить расчёт доставки</h2>
