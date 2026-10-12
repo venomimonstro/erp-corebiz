@@ -97,6 +97,10 @@ export class AtolReceiptsService{
       throw new BadRequestException("Проводить фискальные документы может только управляющий компанией");
   }
   private enabled(environment:ProviderEnvironment){
+    if(process.env.NODE_ENV==="production"&&environment!=="PRODUCTION")
+      throw new ServiceUnavailableException(
+        "Боевой платёж нельзя фискализировать тестовой кассой АТОЛ"
+      );
     if(process.env.COREBIZ_ATOL_RECEIPTS_ENABLED!=="true")
       throw new ServiceUnavailableException("Отправка фискальных чеков АТОЛ ещё не разрешена");
     if(environment==="PRODUCTION"&&
