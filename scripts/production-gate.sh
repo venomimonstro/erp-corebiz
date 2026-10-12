@@ -163,7 +163,7 @@ psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/public_commerce_booking_diagnostics.sql
 
 echo "[production-gate] commerce carrier/checkout/payment incident blocker"
-psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \\
+psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/merchant-incident-gate.sql
 
 echo "[production-gate] 8/13 Finance / bank / Accounting reconciliation"
