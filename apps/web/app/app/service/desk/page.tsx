@@ -189,7 +189,7 @@ export default function ServiceDeskPage(){
     const service=services.find(x=>x.id===priceService);
     const employee=staff.find(x=>x.id===priceStaff);
     const normalized=personalPrice.trim().replace(",",".");
-    if(!service||!employee||!/^\\d{1,9}(?:\\.\\d{1,2})?$/.test(normalized)){
+    if(!service||!employee||!/^\d{1,9}(?:\.\d{1,2})?$/.test(normalized)){
       setError("Выберите услугу, специалиста и цену в рублях.");return;
     }
     if(rules.some(rule=>rule.service_id===service.id&&
