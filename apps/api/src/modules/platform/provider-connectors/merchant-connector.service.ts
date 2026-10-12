@@ -127,6 +127,17 @@ export class MerchantConnectorService{
         "SELECT 1 FROM site WHERE id=$1 AND tenant_id=$2 AND status='ACTIVE'",
         [siteId,ctx.tenantId]);
       if(!site.rowCount)throw new NotFoundException("Сайт не найден");
+      if(provider==="ATOL_ONLINE"){
+        const open=await client.query(
+          `SELECT 1 FROM commerce_payment_intent
+           WHERE tenant_id=$1 AND site_id=$2 AND fiscal_provider='ATOL_ONLINE'
+             AND (status IN ('NEW','PENDING') OR
+               (status='SUCCEEDED' AND fiscal_status<>'SUCCEEDED'))
+           LIMIT 1`,[ctx.tenantId,siteId]);
+        if(open.rowCount)throw new ConflictException(
+          "Нельзя менять реквизиты АТОЛ до завершения всех фискальных документов"
+        );
+      }
       const result=await client.query<{id:string}>(
         `INSERT INTO commerce_provider_connection(
           tenant_id,site_id,provider,environment,encrypted_credentials,
