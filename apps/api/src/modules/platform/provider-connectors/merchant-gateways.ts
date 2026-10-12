@@ -54,6 +54,72 @@ export class CdekGateway{
     return result.access_token;
   }
 
+  async createOrder(
+    cred:CdekCredentials,env:ProviderEnvironment,
+    input:{
+      orderNumber:string;tariffCode:number;
+      fromCityCode:number;toCityCode:number;
+      recipientName:string;recipientPhone:string;
+      weightGrams:number;lengthCm:number;widthCm:number;heightCm:number;
+    }
+  ):Promise<{uuid:string;requestState:string}>{
+    const token=await this.token(cred,env);
+    const data=await providerRequest<{
+      entity?:{uuid?:string};
+      requests?:Array<{state?:string;errors?:unknown[]}>;
+    }>(safeUrl("CDEK",env)+"/v2/orders","POST",{
+      "Authorization":"Bearer "+token,"Content-Type":"application/json"
+    },JSON.stringify({
+      type:1,number:input.orderNumber,
+      tariff_code:input.tariffCode,
+      from_location:{code:input.fromCityCode},
+      to_location:{code:input.toCityCode},
+      recipient:{name:input.recipientName,
+        phones:[{number:input.recipientPhone}]},
+      packages:[{number:"1",weight:input.weightGrams,
+        length:input.lengthCm,width:input.widthCm,height:input.heightCm}]
+    }));
+    const uuid=data.entity?.uuid;
+    const request=data.requests?.[0]?.state;
+    if(typeof uuid!=="string"||
+       !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(uuid) ||
+       !["ACCEPTED","SUCCESSFUL"].includes(String(request))){
+      // A missing or rejected receipt is ambiguous until a provider GET
+      // verifies it. Never automatically replay this POST.
+      throw new BadGatewayException(
+        "СДЭК не подтвердил создание: нужна ручная сверка по номеру заказа"
+      );
+    }
+    return {uuid,requestState:String(request)};
+  }
+
+  async orderStatus(
+    cred:CdekCredentials,env:ProviderEnvironment,uuid:string
+  ):Promise<{uuid:string;cdekNumber:string|null;state:string}>{
+    if(!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(uuid))
+      throw new BadGatewayException("Неверный UUID отправления");
+    const token=await this.token(cred,env);
+    const data=await providerRequest<{
+      entity?:{
+        uuid?:string;cdek_number?:string|number|null;
+        statuses?:Array<{code?:string}>;
+      };
+      requests?:Array<{state?:string}>;
+    }>(safeUrl("CDEK",env)+"/v2/orders/"+encodeURIComponent(uuid),"GET",{
+      "Authorization":"Bearer "+token
+    });
+    if(!data.entity || data.entity.uuid!==uuid)
+      throw new BadGatewayException("СДЭК не подтвердил идентификатор накладной");
+    const request=data.requests?.[0]?.state;
+    const state=data.entity.statuses?.[0]?.code??
+      (request==="INVALID"?"REJECTED":
+       request==="ACCEPTED"?"ACCEPTED":"SUBMITTED");
+    return {
+      uuid,cdekNumber:data.entity.cdek_number===undefined?
+        null:String(data.entity.cdek_number),state
+    };
+  }
+
   async rates(
     cred:CdekCredentials,env:ProviderEnvironment,
     input:{
