@@ -20,18 +20,25 @@ describe("commerce owner insights remain read-only",()=>{
           sku_id:"44444444-4444-4444-8444-444444444444",
           sku:"SKU-1",product_name:"Товар",
           ordered_milli_30d:"30000",sellable_milli:"3000",inbound_milli:"2000",
-          target_milli_14d:"14000",suggested_milli:"9000",
+          target_milli_14d:"14000",target_days_sku:14,lead_days:null,
+          review_days:null,minimum_batch_milli:"0",suggested_milli:"9000",
           stock_cover_days:"3.0",urgency:"CRITICAL"
         }]};
       throw new Error("Unexpected SQL: "+sql);
     })};
     const db={withTenantTransaction:jest.fn(async(_context:unknown,handler:any)=>handler(client))};
-    const snapshot=await new CommerceDecisionsService(db as any).snapshot(context);
+    const snapshot=await new CommerceDecisionsService(db as any,{resolveScope:jest.fn().mockResolvedValue("all")} as any).snapshot(context);
     expect(snapshot.pendingFulfillment).toBe(6);
     expect(snapshot.paymentReview).toBe(3);
     expect(snapshot.openSupplierOrders).toBe(2);
     expect(snapshot.replenishment[0]?.suggestedMilli).toBe("9000");
     expect(snapshot.targetDays).toBe(14);
+    expect(snapshot.replenishment[0]?.targetDaysSku).toBe(14);
+    const recSql=calls[2]?.sql??"";
+    expect(recSql).toContain("procurement_reorder_rule");
+    expect(recSql).toContain("pol.target_days");
+    expect(recSql).toContain("pol.batch_milli");
+    expect(recSql).toContain("COALESCE(i.inbound_milli,0)");
     expect(db.withTenantTransaction).toHaveBeenCalledWith(context,expect.any(Function));
     expect(calls).toHaveLength(3);
     for(const call of calls){
@@ -54,7 +61,7 @@ describe("commerce owner insights remain read-only",()=>{
         return {rows:[]};
       })});
     })};
-    const snapshot=await new CommerceDecisionsService(db as any).snapshot(context);
+    const snapshot=await new CommerceDecisionsService(db as any,{resolveScope:jest.fn().mockResolvedValue("all")} as any).snapshot(context);
     expect(snapshot.replenishment).toEqual([]);
     expect(snapshot.method).toContain("не прогноз");
     expect(snapshot.method).toContain("Ничего не закупается автоматически");
