@@ -107,7 +107,7 @@ export default function DanceClientAccessPage(){
             <p>Скопируйте и передайте конкретному клиенту. После
               закрытия страницы ссылка здесь не сохраняется.</p>
             <input readOnly aria-label="Ссылка приглашения" value={
-              typeof window==="undefined"?"":window.location.origin+"/invite?token="+
+              typeof window==="undefined"?"":window.location.origin+"/invite#token="+
               encodeURIComponent(token)
             } onFocus={e=>e.currentTarget.select()}/>
             <button type="button" onClick={()=>setToken("")}>Скрыть ссылку</button>
