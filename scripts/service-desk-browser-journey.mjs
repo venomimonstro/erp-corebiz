@@ -73,7 +73,7 @@ try{
   await pricingPanel.getByRole("button",{
     name:"Сохранить правило мастера"
   }).click();
-  await page.getByText("Персональная цена специалиста сохранена.",{
+  await page.getByText("Правило мастера сохранено.",{
     exact:false
   }).waitFor({timeout:20000});
 
