@@ -112,6 +112,15 @@ async function main(){
   await get(actors.parent,"/dance/students",403);
   await get(actors.parent,"/dance/portal/me",403); // no verified CRM link yet
 
+  stage="03a negative check: no fake successful launch";
+  const emptyDoctor=await get(owner,
+    "/dance/setup-doctor?scenario=two_branch_52");
+  assert.equal(emptyDoctor.commercialReady,false);
+  assert.ok(emptyDoctor.blockers.length>=8);
+  assert.ok(emptyDoctor.blockers.some(x=>x.id==="branches"));
+  await get(owner,"/dance/setup-doctor?scenario=unknown",400);
+  await get(actors.parent,"/dance/setup-doctor?scenario=two_branch_52",403);
+
   stage="04 organization and two Moscow branches";
   const legal=await post(owner,"/organization/legal-entities",{
     name:"Одноразовый учебный субъект",inn:"1234567894",kpp:"770701001"
@@ -505,9 +514,27 @@ async function main(){
   await get(actors.m2,"/dance/charges",403);
   await get(actors.m2,"/finance/summary",403);
   await get(actors.m2,"/tenants/team",403);
+  stage="08a verify setup doctor is actionable, never commercial approval";
+  const doctor=await get(owner,"/dance/setup-doctor?scenario=two_branch_52");
+  assert.equal(doctor.commercialReady,false);
+  for(const id of ["branches","trainers","directions","rooms",
+    "group","delivery_rules","plans","managers","portal"]){
+    const item=doctor.checks.find(x=>x.id===id);
+    assert.ok(item&&item.ok,"Diagnostic incorrectly failed: "+id);
+  }
+  assert.ok(doctor.checks.every(x=>x.href&&x.fix),
+    "Every problem needs an actionable link and recovery instructions");
+  assert.ok(doctor.warnings.some(x=>x.id==="payroll"),
+    "Do not claim profitability without every trainer wage rule");
+
   stage="09 negative archival: reassignment required";
   await post(owner,"/service/resources/"+trainers[0].id+"/archive",
     {},409);
+  await post(actors.m1,"/service/resources/"+trainers[2].id+"/archive",
+    {},403);
+  await post(owner,"/service/catalog/"+groupServices[0].id+"/archive",
+    {},409);
+  await get(actors.parent,"/finance/summary",403);
   stage="09b revoke and recover parent portal access";
   const listedAccounts=await get(owner,"/dance/portal/accounts");
   assert.ok(listedAccounts.some(x=>x.membership_id===parent&&
