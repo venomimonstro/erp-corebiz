@@ -53,20 +53,29 @@ export class WmsOperationsService{
              po.status IN ('CONFIRMED','PARTIALLY_RECEIVED')
            GROUP BY l.sku_id,ub.warehouse_id
          )
-         SELECT b.sku_id,s.code AS sku_code,p.name AS product_name,
-           b.physical_milli::text,b.reserved_milli::text,
+         ,all_skus AS (
+           SELECT sku_id FROM inventory_balance
+           WHERE tenant_id=$1 AND warehouse_id=$2
+           UNION
+           SELECT sku_id FROM expected WHERE warehouse_id=$2
+         )
+         SELECT sku_set.sku_id,s.code AS sku_code,p.name AS product_name,
+           coalesce(b.physical_milli,0)::text AS physical_milli,
+           coalesce(b.reserved_milli,0)::text AS reserved_milli,
            coalesce(e.inbound_milli,0)::text AS expected_milli,
            coalesce(ip.safety_stock_milli,0)::text AS safety_milli,
            coalesce(ip.enabled,true) AS sourcing_enabled
-         FROM inventory_balance b
-         JOIN sku s ON s.id=b.sku_id AND s.tenant_id=b.tenant_id
+         FROM all_skus sku_set
+         JOIN sku s ON s.id=sku_set.sku_id AND s.tenant_id=$1
          JOIN product_variant v ON v.id=s.variant_id AND v.tenant_id=s.tenant_id
          JOIN product p ON p.id=v.product_id AND p.tenant_id=v.tenant_id
-         LEFT JOIN inventory_policy ip ON ip.tenant_id=b.tenant_id
-           AND ip.warehouse_id=b.warehouse_id AND ip.sku_id=b.sku_id
-         LEFT JOIN expected e ON e.warehouse_id=b.warehouse_id
-           AND e.sku_id=b.sku_id
-         WHERE b.tenant_id=$1 AND b.warehouse_id=$2
+         LEFT JOIN inventory_balance b ON b.tenant_id=$1
+           AND b.warehouse_id=$2 AND b.sku_id=sku_set.sku_id
+         LEFT JOIN inventory_policy ip ON ip.tenant_id=$1
+           AND ip.warehouse_id=$2 AND ip.sku_id=sku_set.sku_id
+         LEFT JOIN expected e ON e.warehouse_id=$2
+           AND e.sku_id=sku_set.sku_id
+         WHERE 1=1
          ORDER BY p.name,s.code LIMIT 501`,
         [context.tenantId,warehouseId]
       );
