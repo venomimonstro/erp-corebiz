@@ -245,3 +245,20 @@ test("Customer portal is revocable and never invents settled balances",()=>{
   assert.match(unit,/restricts the account directory/);
   assert.match(unit,/revokes portal access transactionally/);
 });
+
+test("A second founder controls company finances but never becomes platform OWNER",()=>{
+  const partner=src("infrastructure/postgres/250_dance_operational_partner_role.sql");
+  const roles=src("apps/api/src/modules/platform/authorization/roles.service.ts");
+  assert.match(partner,/DANCE_PARTNER/);
+  assert.match(partner,/finance.read/);
+  assert.match(partner,/finance.write/);
+  assert.match(partner,/dance.trainer.read','own'/);
+  assert.match(partner,/roles.manage/);
+  assert.doesNotMatch(partner,/UPDATE tenant_membership SET is_owner/);
+  assert.match(roles,/roleRow.code==="OWNER"/);
+  assert.match(roles,/!actor.rows\[0\]\.is_owner/);
+  assert.match(workflow,/role\("DANCE_PARTNER"\)/);
+  assert.match(workflow,/get\(actors\.woman,"\/finance\/summary"\)/);
+  assert.match(workflow,/partnerDashboard.canViewFinancials,true/);
+  assert.match(workflow,/membershipId:woman,roleId:role\("OWNER"\)/);
+});
