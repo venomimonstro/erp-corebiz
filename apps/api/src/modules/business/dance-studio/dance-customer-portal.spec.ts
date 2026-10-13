@@ -84,4 +84,50 @@ describe("Dance family customer portal, no insecure client supplied IDs",()=>{
       membershipId:"abc",partyId:payer
     })).rejects.toThrow("Укажите пользователя");
   });
+  it("restricts the account directory to authorized owner and tenant",async()=>{
+    const f=fixture();
+    f.client.query.mockImplementation(async(sql:string,args:unknown[])=>{
+      f.calls.push({sql,args});
+      if(sql.includes("FROM dance_customer_account a")){
+        return {rows:[{membership_id:ctx.membershipId,
+          display_name:"Parent",status:"ACTIVE"}],rowCount:1};
+      }
+      throw new Error("Unexpected SQL");
+    });
+    const result=await f.instance.accounts(ctx);
+    expect(result).toHaveLength(1);
+    expect(f.calls[0]!.args).toEqual([ctx.tenantId]);
+    expect(f.calls[0]!.sql).toContain("a.tenant_id=$1");
+    f.authorization.resolveScope=jest.fn().mockResolvedValue("own");
+    await expect(f.instance.accounts(ctx)).rejects
+      .toBeInstanceOf(ForbiddenException);
+  });
+  it("revokes portal access transactionally without deleting attendance",async()=>{
+    const f=fixture();
+    f.client.query.mockImplementation(async(sql:string,args:unknown[])=>{
+      f.calls.push({sql,args});
+      if(sql.includes("UPDATE dance_customer_account"))
+        return {rows:[{id:"revoked-binding"}],rowCount:1};
+      if(sql.includes("INSERT INTO audit_event"))
+        return {rows:[],rowCount:1};
+      throw new Error("Unexpected SQL");
+    });
+    const result=await f.instance.revoke(ctx,ctx.membershipId);
+    expect(result).toEqual({revoked:true});
+    const revoke=f.calls.find(x=>x.sql.includes("UPDATE dance_customer_account"));
+    expect(revoke?.args).toEqual([ctx.tenantId,ctx.membershipId]);
+    expect(revoke?.sql).toContain("status='REVOKED'");
+    expect(f.calls.some(x=>x.sql.includes("DELETE FROM dance_student"))).toBe(false);
+    expect(f.calls.some(x=>x.sql.includes("dance.portal_revoked"))).toBe(true);
+  });
+  it("rejects malformed or unauthorized revocation",async()=>{
+    const f=fixture();
+    await expect(f.instance.revoke(ctx,"invalid-uuid")).rejects.toThrow();
+    expect(f.database.withTenantTransaction).not.toHaveBeenCalled();
+    f.authorization.resolveScope=jest.fn().mockResolvedValue("own");
+    await expect(f.instance.revoke(ctx,ctx.membershipId))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(f.database.withTenantTransaction).not.toHaveBeenCalled();
+  });
+
 });
