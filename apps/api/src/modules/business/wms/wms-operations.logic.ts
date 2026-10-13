@@ -53,3 +53,36 @@ export function orderPickRoute(items:PickRouteTask[]):PickRouteTask[]{
     a.taskId.localeCompare(b.taskId)
   );
 }
+
+/** Opaque keyset for one warehouse and one filter selection. It grants no
+ * authorization and cannot change tenant scoping; every request is checked.
+ */
+export type StockPageCursor={
+  warehouseId:string;name:string;sku:string;skuId:string;
+  query:string;onlyProblems:boolean;
+};
+const uuidPattern=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+export function encodeStockCursor(position:StockPageCursor):string{
+  return Buffer.from(JSON.stringify(position),"utf8").toString("base64url");
+}
+export function decodeStockCursor(cursor:string):StockPageCursor{
+  if(cursor.length>2048||!/^[A-Za-z0-9_-]+$/.test(cursor))
+    throw new Error("INVALID_STOCK_CURSOR");
+  try{
+    const value=JSON.parse(Buffer.from(cursor,"base64url").toString("utf8"));
+    if(!value||typeof value!=="object"||Array.isArray(value)||
+      !uuidPattern.test(value.warehouseId)||
+      !uuidPattern.test(value.skuId)||
+      typeof value.name!=="string"||value.name.length>400||
+      typeof value.sku!=="string"||value.sku.length>120||
+      typeof value.query!=="string"||value.query.length>80||
+      typeof value.onlyProblems!=="boolean")
+      throw new Error("INVALID_STOCK_CURSOR");
+    return {
+      warehouseId:value.warehouseId,name:value.name,sku:value.sku,
+      skuId:value.skuId,query:value.query,onlyProblems:value.onlyProblems
+    };
+  }catch{
+    throw new Error("INVALID_STOCK_CURSOR");
+  }
+}
