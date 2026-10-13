@@ -180,10 +180,11 @@ export default function FirstDayPage(){
             <div className="studio-section-head">
               <div>
                 <span>02 · Первая польза</span>
-                <h2>{activation.completed?"Основной сценарий настроен":
-                  "Пройдите первые рабочие шаги"}</h2>
+                <h2>{activation.completed?"Первая полезная операция выполнена":
+                  "Подготовьте первую рабочую операцию"}</h2>
                 <p>{activation.doneCount} из {activation.total} ·
-                  {activation.progressPercent}% выполнено по реальным данным вашей компании</p>
+                  {activation.progressPercent}% первых шагов выполнено.
+                  Это не процент коммерческой готовности к продаже.</p>
               </div>
               <a href={startPage[chosen]??"/app"} className="secondary-button">
                 Открыть рабочее место →
