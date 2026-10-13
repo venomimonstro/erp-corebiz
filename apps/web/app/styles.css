@@ -4395,3 +4395,17 @@ button, .primary, .secondary { font: inherit; }
 .dance-budget-fields label{display:flex;flex-direction:column;gap:8px;font-size:13px;font-weight:650}
 .dance-budget-fields input{min-width:0;padding:11px;border-radius:10px;border:1px solid #ced7e1}
 @media(max-width:720px){.dance-budget-fields{grid-template-columns:1fr}}
+
+
+/* Personnel directory for 50+ trainers, responsive and keyboard friendly. */
+.dance-staff-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;max-height:560px;overflow:auto;margin-top:18px}
+.dance-staff-list button{display:flex;flex-direction:column;align-items:flex-start;min-width:0;padding:13px;border-radius:11px;border:1px solid #e3e9f0;background:#fff;text-align:left;cursor:pointer;gap:5px}
+.dance-staff-list button.active{border-color:#6890c1;background:#f1f6fe}
+.dance-staff-list strong{font-size:13px}.dance-staff-list span,.dance-staff-list small{font-size:11px;color:#667789}
+.dance-staff-actions{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin:14px 0}
+.dance-staff-actions form{display:flex;gap:9px;align-items:end;flex-wrap:wrap}
+.dance-staff-actions form label{display:grid;gap:6px;font-size:13px}
+.dance-staff-actions input{padding:8px;border:1px solid #d3dce6;border-radius:8px}
+.dance-staff-actions>label{display:flex;align-items:start;gap:8px;font-size:12px}
+@media(max-width:950px){.dance-staff-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.dance-staff-list{grid-template-columns:1fr}}
