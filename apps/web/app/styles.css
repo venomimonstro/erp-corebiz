@@ -4409,3 +4409,37 @@ button, .primary, .secondary { font: inherit; }
 .dance-staff-actions>label{display:flex;align-items:start;gap:8px;font-size:12px}
 @media(max-width:950px){.dance-staff-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:560px){.dance-staff-list{grid-template-columns:1fr}}
+
+
+/* Dance studio onboarding diagnostics and recovery without false green GO. */
+.dance-setup-troubleshooting{border:1px solid #d1dce9;background:#f7f9fc;border-radius:17px;padding:18px;margin:14px 0 20px;display:flex;gap:9px;flex-direction:column;align-items:flex-start}
+.dance-setup-troubleshooting p{font-size:13px;color:#566476;line-height:1.5;margin:0}
+.dance-setup-troubleshooting strong{font-size:15px}
+.dance-doctor-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:16px 0}
+.dance-doctor-summary>div{display:grid;gap:8px;background:#f1f4f8;border-radius:13px;padding:14px}
+.dance-doctor-summary small{font-size:12px;color:#667489}
+.dance-doctor-summary strong{font-size:24px;letter-spacing:-.03em}
+.dance-doctor-next{border:1px solid #d4dfea;background:#f5f8fc;border-radius:14px;padding:17px;margin:13px 0}
+.dance-doctor-next p{font-size:13px;color:#58697d;line-height:1.5}
+.dance-doctor-next h2{font-size:18px;margin:6px 0}
+.dance-doctor-next a{display:inline-flex;margin-top:6px}
+.dance-doctor-toggle{display:flex;align-items:center;gap:10px;font-size:13px;margin:12px 0 17px}
+.dance-doctor-steps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+.dance-doctor-step{border:1px solid #e0e6ee;border-radius:13px;padding:15px;min-width:0}
+.dance-doctor-header{display:flex;align-items:start;justify-content:space-between;gap:11px;flex-wrap:wrap}
+.dance-doctor-header strong{font-size:13px}
+.dance-doctor-header span{font-size:11px;color:#5d6977}
+.dance-doctor-step p{font-size:12px;line-height:1.5;color:#667489}
+.dance-doctor-step a{font-size:12px;text-decoration:underline;color:#255a9b}
+.dance-doctor-external{margin-top:20px;border-top:1px solid #dee4eb;padding-top:17px}
+.dance-doctor-external p{font-size:13px}
+.dance-doctor-search{display:flex;flex-direction:column;gap:8px;font-size:13px;font-weight:650;margin:12px 0}
+.dance-doctor-search input{min-height:43px;border:1px solid #c6d3e0;padding:10px 12px;border-radius:11px;width:100%}
+.dance-doctor-recovery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;max-height:640px;overflow-y:auto}
+.dance-doctor-recovery article{border:1px solid #e0e6ee;border-radius:13px;background:#fff;min-width:0}
+.dance-doctor-recovery article>button{display:flex;justify-content:space-between;align-items:center;gap:14px;background:transparent;border:0;text-align:left;padding:14px;width:100%;min-height:52px;font-size:13px;cursor:pointer}
+.dance-doctor-recovery article>div{padding:0 14px 15px}
+.dance-doctor-recovery article p,.dance-doctor-recovery article a{font-size:12px;line-height:1.55}
+.dance-doctor-recovery article a{text-decoration:underline;color:#265b9d}
+.dance-doctor-recovery article button:focus-visible,.dance-doctor-step a:focus-visible{outline:3px solid #9abdee;outline-offset:2px}
+@media(max-width:690px){.dance-doctor-steps,.dance-doctor-recovery{grid-template-columns:1fr}.dance-doctor-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.dance-doctor-summary strong{font-size:19px}}
