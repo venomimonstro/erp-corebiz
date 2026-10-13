@@ -42,6 +42,8 @@ export default function GoLivePage() {
   const load = useCallback(async () => {
     // Never preserve an old GO snapshot when the current check fails.
     setData(null);
+    setPendingDecision(null);
+    setAcknowledged(false);
     setLoading(true);
     setError("");
     try {
