@@ -226,47 +226,62 @@ export class InventoryService {
    * goods_receipt is POSTED; unknown destination is never assigned by guess.
    */
   async replenishment(context:TenantContext){
+    // The ledger determines physical and reserved stock. A CONFIRMED
+    // purchase order is expected stock, NOT physical stock.
     const balances=await this.balances(context);
-    const inbound=await this.database.withTenantTransaction(context,async client=>{
+    const incoming=await this.database.withTenantTransaction(context,async client=>{
+      // Purchase orders reference a branch, not a particular warehouse.
+      // We may allocate inbound to a warehouse only when that branch has
+      // exactly ONE active warehouse. Otherwise return the ambiguity as
+      // unallocated; silently crediting every warehouse would underbuy.
       const result=await client.query<{
-        warehouse_id:string;sku_id:string;inbound_milli:string;
+        sku_id:string;warehouse_id:string|null;inbound_milli:string;
       }>(
-        `SELECT w.id AS warehouse_id,pol.sku_id,
-                sum(pol.ordered_quantity_milli-pol.received_quantity_milli)::text
-                  AS inbound_milli
-         FROM purchase_order po
-         JOIN purchase_order_line pol
-           ON pol.tenant_id=po.tenant_id AND pol.purchase_order_id=po.id
-         JOIN warehouse w
-           ON w.tenant_id=po.tenant_id
-           AND w.branch_id=po.destination_branch_id
-           AND w.status='ACTIVE'
-         WHERE po.tenant_id=$1
+        `WITH branch_target AS (
+           SELECT branch_id, MIN(id) AS warehouse_id
+           FROM warehouse
+           WHERE tenant_id=$1 AND status='ACTIVE'
+             AND branch_id IS NOT NULL
+           GROUP BY branch_id
+           HAVING count(*)=1
+         )
+         SELECT pl.sku_id,t.warehouse_id,
+           SUM(GREATEST(pl.ordered_quantity_milli-
+             pl.received_quantity_milli,0))::text AS inbound_milli
+         FROM purchase_order_line pl
+         JOIN purchase_order po
+           ON po.tenant_id=pl.tenant_id AND po.id=pl.purchase_order_id
+         LEFT JOIN branch_target t ON t.branch_id=po.destination_branch_id
+         WHERE pl.tenant_id=$1
            AND po.status IN ('CONFIRMED','PARTIALLY_RECEIVED')
-           AND po.destination_branch_id IS NOT NULL
-           AND pol.ordered_quantity_milli>pol.received_quantity_milli
-           AND (
-             SELECT count(*) FROM warehouse other
-             WHERE other.tenant_id=w.tenant_id
-               AND other.branch_id=w.branch_id AND other.status='ACTIVE'
-           )=1
-         GROUP BY w.id,pol.sku_id`,
+         GROUP BY pl.sku_id,t.warehouse_id`,
         [context.tenantId]
       );
-      return new Map(result.rows.map(r=>[
-        r.warehouse_id+":"+r.sku_id,r.inbound_milli
-      ]));
+      return result.rows;
     });
+    const located=new Map<string,bigint>();
+    const unallocated=new Map<string,bigint>();
+    for(const row of incoming){
+      const amount=BigInt(row.inbound_milli);
+      if(amount<=0n)continue;
+      if(row.warehouse_id){
+        const key=row.warehouse_id+":"+row.sku_id;
+        located.set(key,(located.get(key)??0n)+amount);
+      }else{
+        unallocated.set(row.sku_id,
+          (unallocated.get(row.sku_id)??0n)+amount);
+      }
+    }
     return balances.flatMap(item=>{
       if(!item.sourcingEnabled)return [];
-      const plan=planReplenishment({
-        physicalMilli:item.physicalMilli,
-        reservedMilli:item.reservedMilli,
-        safetyStockMilli:item.safetyStockMilli,
-        confirmedInboundMilli:inbound.get(
-          item.warehouseId+":"+item.skuId)??"0"
-      });
-      if(!plan.requiresAttention)return [];
+      const physical=BigInt(item.physicalMilli);
+      const reserved=BigInt(item.reservedMilli);
+      const safety=BigInt(item.safetyStockMilli);
+      const available=physical-reserved;
+      const needed=reserved+safety-physical;
+      if(needed<=0n)return [];
+      const confirmedInbound=located.get(item.warehouseId+":"+item.skuId)??0n;
+      const recommended=needed>confirmedInbound?needed-confirmedInbound:0n;
       return [{
         warehouseId:item.warehouseId,
         warehouseName:item.warehouseName,
@@ -276,20 +291,20 @@ export class InventoryService {
         physicalMilli:item.physicalMilli,
         reservedMilli:item.reservedMilli,
         safetyStockMilli:item.safetyStockMilli,
-        availableMilli:plan.availableMilli,
-        confirmedInboundMilli:plan.confirmedInboundMilli,
-        shortageBeforeInboundMilli:plan.shortageBeforeInboundMilli,
-        recommendedPurchaseMilli:plan.recommendedPurchaseMilli,
-        urgency:plan.urgency,
-        // Confirmed but undelivered stock is NOT inventory. When supplier
-        // destination is missing or multiple warehouses share a branch,
-        // inbound is intentionally excluded; confirm routing manually.
-        inboundScope:"UNIQUE_BRANCH_WAREHOUSE" as const,
+        availableMilli:available.toString(),
+        confirmedInboundMilli:confirmedInbound.toString(),
+        unallocatedInboundMilli:(unallocated.get(item.skuId)??0n).toString(),
+        grossShortageMilli:needed.toString(),
+        recommendedPurchaseMilli:recommended.toString(),
+        urgency:recommended===0n?"COVERED_BY_CONFIRMED_INBOUND" as const:
+          available<0n?"RESERVATION_SHORTAGE" as const:
+          "BELOW_SAFETY_STOCK" as const,
         purchaseOrderCreated:false
       }];
     }).sort((a,b)=>{
-      const rank={RESERVATION_SHORTAGE:0,BELOW_SAFETY_STOCK:1,AWAITING_RECEIPT:2};
-      return rank[a.urgency]-rank[b.urgency]||
+      const priority=(status:string)=>status==="RESERVATION_SHORTAGE"?0:
+        status==="BELOW_SAFETY_STOCK"?1:2;
+      return priority(a.urgency)-priority(b.urgency)||
         a.warehouseName.localeCompare(b.warehouseName,"ru")||
         a.productName.localeCompare(b.productName,"ru");
     });
