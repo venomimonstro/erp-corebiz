@@ -4300,3 +4300,24 @@ button, .primary, .secondary { font: inherit; }
   .service-desk-drawer{padding:18px}
 }
 @media(prefers-reduced-motion:reduce){.service-desk-visit{transition:none}}
+
+
+/* Owner industry journey: explicit manual validation, never a fake GO badge. */
+.owner-playbook-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:20px 0 6px}
+.owner-playbook-group{min-width:0}
+.owner-playbook-group>h3{font-size:16px;letter-spacing:-.02em;margin:0 0 11px}
+.owner-playbook-list{display:flex;flex-direction:column;gap:8px}
+.owner-playbook-item{border:1px solid #e3e7ed;background:#fff;border-radius:13px;overflow:hidden}
+.owner-playbook-item[open]{border-color:#bfcbd9}
+.owner-playbook-item summary{display:flex;align-items:center;gap:11px;padding:14px;cursor:pointer}
+.owner-playbook-item summary::marker{font-size:0}
+.owner-playbook-item summary:hover{background:#f8fafc}
+.owner-playbook-item summary strong{flex:1;font-size:13px;line-height:1.45}
+.owner-playbook-index{font-size:11px;font-weight:800;color:#6c7888}
+.owner-playbook-pending{font-size:11px;background:#f1f3f6;border-radius:30px;color:#526173;padding:5px 8px;white-space:nowrap}
+.owner-playbook-body{padding:0 16px 18px 39px;font-size:13px;color:#475367}
+.owner-playbook-body p{line-height:1.55;margin:9px 0}
+.owner-playbook-body strong{color:#273548}
+.owner-playbook-body .secondary-button{display:inline-flex;margin-top:8px;font-size:12px}
+@media(max-width:850px){.owner-playbook-groups{grid-template-columns:1fr}}
+@media(max-width:480px){.owner-playbook-item summary{gap:7px;padding:11px}.owner-playbook-pending{font-size:10px}.owner-playbook-body{padding:0 11px 15px}.owner-playbook-item summary strong{font-size:12px}}
