@@ -166,33 +166,40 @@ export class InventoryService {
         safety_stock_milli:string;
         sourcing_enabled:boolean;
       }>(
-        `SELECT
-           b.warehouse_id,
+        `WITH positions AS (
+           SELECT warehouse_id,sku_id FROM inventory_balance WHERE tenant_id=$1
+           UNION
+           SELECT warehouse_id,sku_id FROM inventory_policy
+           WHERE tenant_id=$1 AND enabled=true
+         )
+         SELECT
+           positions.warehouse_id,
            w.name AS warehouse_name,
-           b.sku_id,
+           positions.sku_id,
            s.code AS sku_code,
            p.name AS product_name,
-           b.physical_milli::text,
-           b.reserved_milli::text,
-           (b.physical_milli - b.reserved_milli)::text AS available_milli,
+           coalesce(b.physical_milli,0)::text AS physical_milli,
+           coalesce(b.reserved_milli,0)::text AS reserved_milli,
+           (coalesce(b.physical_milli,0)-
+              coalesce(b.reserved_milli,0))::text AS available_milli,
            coalesce(ip.safety_stock_milli,0)::text AS safety_stock_milli,
            coalesce(ip.enabled,true) AS sourcing_enabled,
            CASE WHEN coalesce(ip.enabled,true)=false THEN '0'
-             ELSE greatest(b.physical_milli-b.reserved_milli-
+             ELSE greatest(coalesce(b.physical_milli,0)-
+                 coalesce(b.reserved_milli,0)-
                  coalesce(ip.safety_stock_milli,0),0)::text END AS sellable_milli
-         FROM inventory_balance b
-         LEFT JOIN inventory_policy ip ON ip.tenant_id=b.tenant_id
-           AND ip.warehouse_id=b.warehouse_id AND ip.sku_id=b.sku_id
-         JOIN warehouse w
-           ON w.tenant_id = b.tenant_id AND w.id = b.warehouse_id
-         JOIN sku s
-           ON s.tenant_id = b.tenant_id AND s.id = b.sku_id
-         JOIN product_variant v
-           ON v.tenant_id = s.tenant_id AND v.id = s.variant_id
-         JOIN product p
-           ON p.tenant_id = v.tenant_id AND p.id = v.product_id
-         WHERE b.tenant_id = $1
-         ORDER BY w.is_default DESC, w.name, p.name, s.code`,
+         FROM positions
+         LEFT JOIN inventory_balance b ON b.tenant_id=$1
+           AND b.warehouse_id=positions.warehouse_id
+           AND b.sku_id=positions.sku_id
+         LEFT JOIN inventory_policy ip ON ip.tenant_id=$1
+           AND ip.warehouse_id=positions.warehouse_id
+           AND ip.sku_id=positions.sku_id
+         JOIN warehouse w ON w.tenant_id=$1 AND w.id=positions.warehouse_id
+         JOIN sku s ON s.tenant_id=$1 AND s.id=positions.sku_id
+         JOIN product_variant v ON v.tenant_id=$1 AND v.id=s.variant_id
+         JOIN product p ON p.tenant_id=$1 AND p.id=v.product_id
+         ORDER BY w.is_default DESC,w.name,p.name,s.code`,
         [context.tenantId]
       );
 
