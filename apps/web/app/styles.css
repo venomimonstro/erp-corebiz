@@ -4351,3 +4351,40 @@ button, .primary, .secondary { font: inherit; }
 .go-live-decision-consent input{width:17px;height:17px;flex:none;margin-top:2px}
 .go-live-decision-actions{display:flex;flex-wrap:wrap;gap:10px}
 .go-live-decision :is(input,textarea,button):focus-visible{outline:3px solid #91b4ee;outline-offset:2px}
+
+
+/* Dance customer and parent portal - independent from ERP staff navigation. */
+.dance-customer-portal{min-height:100vh;padding:28px max(22px,calc((100vw - 1120px)/2));background:#f6f8fb;color:#172231;font-family:inherit}
+.dance-customer-head,.dance-customer-intro,.dance-customer-panel{background:#fff;border:1px solid #e2e8ee;border-radius:18px;padding:24px}
+.dance-customer-head{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:16px}
+.dance-customer-head p{font-size:11px;letter-spacing:.11em;font-weight:700;color:#677d90;margin:0}
+.dance-customer-head h1{margin:7px 0;font-size:32px;letter-spacing:-.045em}
+.dance-customer-head span,.dance-customer-intro>p{color:#6b7787;font-size:14px}
+.dance-customer-head nav{font-size:13px;display:flex;gap:14px}
+.dance-customer-head a,.dance-customer-portal a{color:#285d9f}
+.dance-customer-intro{margin-bottom:18px}
+.dance-customer-intro h2{margin:0 0 5px;font-size:21px}
+.dance-customer-selection{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:20px}
+.dance-customer-selection label{font-weight:600;font-size:13px}
+.dance-customer-selection select,.dance-client-admin-grid select,.dance-client-admin-grid input{max-width:100%;min-height:40px;border:1px solid #cfd9e4;border-radius:10px;padding:8px 11px;background:#fff}
+.dance-customer-selection button,.dance-customer-alert button,.dance-client-admin-grid button{border:1px solid #bcc8d6;border-radius:10px;padding:10px 16px;background:#fff;cursor:pointer}
+.dance-customer-main{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.dance-customer-metrics{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.dance-customer-metrics div{background:#eaf1f9;padding:18px;border-radius:14px}
+.dance-customer-metrics small{display:block;font-size:12px;color:#66798c}
+.dance-customer-metrics strong{display:block;font-size:25px;margin-top:8px}
+.dance-customer-panel h2{font-size:18px;margin:0 0 16px}
+.dance-customer-panel p,.dance-customer-panel label{font-size:13px;color:#657184;line-height:1.55}
+.dance-customer-list{display:grid;gap:7px;max-height:480px;overflow-y:auto}
+.dance-customer-list article{display:flex;flex-direction:column;gap:4px;border:1px solid #e8edf3;border-radius:12px;padding:12px}
+.dance-customer-list strong{font-size:13px}
+.dance-customer-list span,.dance-customer-list small{font-size:12px;color:#657184}
+.dance-customer-alert{padding:20px;background:#fff;border:1px solid #d9dfe7;border-radius:15px}
+.dance-customer-footer{font-size:12px;color:#6b7787;margin-top:22px}
+.dance-client-admin-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:20px}
+.dance-client-admin-grid form{display:flex;flex-direction:column;gap:12px}
+.dance-client-admin-grid label{display:flex;flex-direction:column;gap:6px}
+.dance-customer-secret{padding:12px;border-radius:12px;background:#edf4ff}
+.dance-customer-secret input{width:100%}
+@media(max-width:800px){.dance-customer-main,.dance-client-admin-grid{grid-template-columns:1fr}}
+@media(max-width:560px){.dance-customer-portal{padding:14px}.dance-customer-head{flex-direction:column;align-items:flex-start}.dance-customer-metrics{grid-template-columns:1fr}.dance-customer-head h1{font-size:26px}}
