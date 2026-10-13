@@ -65,7 +65,9 @@ describe("purchase replenishment: physical/reserved/inbound are distinct",()=>{
     ]);
     const [row]=await service.replenishment(ctx);
     expect(row.recommendedPurchaseMilli).toBe("0");
-    expect(row.urgency).toBe("AWAITING_RECEIPT");
+    // A confirmed delivery prevents duplicate buying, but reservations
+    // still exceed physical stock until goods are actually received.
+    expect(row.urgency).toBe("RESERVATION_SHORTAGE");
     expect(row.purchaseOrderCreated).toBe(false);
   });
   it("does not offer purchases for discontinued/sourcing disabled stock",async()=>{
