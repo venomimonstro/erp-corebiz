@@ -60,6 +60,9 @@ export class WmsOperationsService{
            WHERE tenant_id=$1 AND warehouse_id=$2
            UNION
            SELECT sku_id FROM expected WHERE warehouse_id=$2
+           UNION
+           SELECT sku_id FROM inventory_policy
+           WHERE tenant_id=$1 AND warehouse_id=$2 AND enabled=true
          )
          SELECT sku_set.sku_id,s.code AS sku_code,p.name AS product_name,
            coalesce(b.physical_milli,0)::text AS physical_milli,
@@ -163,6 +166,9 @@ export class WmsOperationsService{
            WHERE tenant_id=$1 AND warehouse_id=$2
            UNION
            SELECT sku_id FROM expected WHERE warehouse_id=$2
+           UNION
+           SELECT sku_id FROM inventory_policy
+           WHERE tenant_id=$1 AND warehouse_id=$2 AND enabled=true
          )
          SELECT sku_set.sku_id,s.code AS sku_code,p.name AS product_name,
            coalesce(b.physical_milli,0)::text AS physical_milli,
