@@ -37,17 +37,13 @@ export class DanceTrainerPortalService{
       const result=await client.query<{id:string}>(
         `UPDATE service_resource s SET membership_id=$3,updated_at=now()
          WHERE s.tenant_id=$1 AND s.id=$2 AND s.type='EMPLOYEE'
-           AND s.status='ACTIVE' AND (s.membership_id IS NULL OR s.membership_id=$3)
-           AND NOT EXISTS(
-             SELECT 1 FROM service_resource other
-             WHERE other.tenant_id=s.tenant_id AND other.id<>s.id
-               AND other.status='ACTIVE' AND other.membership_id=$3
-           )
+           AND s.status='ACTIVE'
+           AND (s.membership_id IS NULL OR s.membership_id=$3)
          RETURNING s.id`,
         [context.tenantId,input.resourceId,input.membershipId]
       );
       if(!result.rows[0])throw new ConflictException(
-        "Ресурс уже связан с другим логином или тренер привязан к другому ресурсу"
+        "Этот ресурс уже привязан к другому тренеру или недоступен"
       );
       await client.query(
         `INSERT INTO audit_event(tenant_id,actor_user_id,actor_membership_id,
