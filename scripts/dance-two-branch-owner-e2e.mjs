@@ -428,9 +428,9 @@ async function main(){
   const listedAccounts=await get(owner,"/dance/portal/accounts");
   assert.ok(listedAccounts.some(x=>x.membership_id===parent&&
     x.status==="ACTIVE"));
-  const revoked=await post(owner,
+  const secondRevocation=await post(owner,
     "/dance/portal/accounts/"+parent+"/revoke",{});
-  assert.equal(revoked.revoked,true);
+  assert.equal(secondRevocation.revoked,true);
   await get(actors.parent,"/dance/portal/me",403);
   await get(actors.parent,"/crm/board",403);
   const restored=await post(owner,"/dance/portal/link",{
