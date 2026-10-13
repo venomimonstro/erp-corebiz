@@ -378,3 +378,16 @@ test("Family-purchased passes remain visible to payer, but never count as child 
   assert.match(page,/p\.beneficiary_party_ids\?\.includes\(student\.party_id\)/);
   assert.match(page,/Доступно занятий: /);
 });
+
+
+test("Family portal prioritizes upcoming visits and preserves historical attendance",()=>{
+  const portalSource=src("apps/api/src/modules/business/dance-studio/dance-customer-portal.service.ts");
+  const portalPage=src("apps/web/app/portal/dance/page.tsx");
+  assert.match(portalSource,/CASE WHEN l\.starts_at>=now\(\) THEN 0 ELSE 1 END/);
+  assert.match(portalPage,/const upcoming=useMemo/);
+  assert.match(portalPage,/const history=useMemo/);
+  assert.match(portalPage,/Ближайшие занятия/);
+  assert.match(portalPage,/История посещений/);
+  assert.match(portalPage,/finance_verified/);
+  assert.match(portalPage,/unassignedFamilyPasses/);
+});
