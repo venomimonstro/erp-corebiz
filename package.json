@@ -30,7 +30,8 @@
     "test:roles:e2e": "node scripts/multirole-api-e2e.mjs",
     "test:dance:owner": "node --test scripts/dance-owner-contract.test.mjs scripts/dance-shift-pattern.test.mjs",
     "test:dance:owner:e2e": "node scripts/dance-two-branch-owner-e2e.mjs",
-    "test:dance:recovery": "node --test scripts/dance-negative-onboarding.test.mjs"
+    "test:dance:recovery": "node --test scripts/dance-negative-onboarding.test.mjs",
+    "test:benchmark": "node --test scripts/competitor-benchmark-contract.test.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
