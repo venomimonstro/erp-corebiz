@@ -8,6 +8,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import {assertReservableStock} from "./reservation-policy";
+import {planReplenishment} from "./replenishment-planner";
 import { DomainEventService } from "../../platform/events/domain-event.service";
 
 export type InventoryReceiptLine = {
@@ -218,16 +219,54 @@ export class InventoryService {
    * No unconfirmed supplier order, forecast or expected stock is counted as
    * received inventory. Quantities remain exact thousandths as strings.
    */
+  /**
+   * Operational shortage: physical - reservations. Purchasing advice:
+   * physical + unreceived, confirmed supplier orders - reservations -
+   * safety stock. Incoming goods never raise physical stock until a
+   * goods_receipt is POSTED; unknown destination is never assigned by guess.
+   */
   async replenishment(context:TenantContext){
     const balances=await this.balances(context);
+    const inbound=await this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{
+        warehouse_id:string;sku_id:string;inbound_milli:string;
+      }>(
+        `SELECT w.id AS warehouse_id,pol.sku_id,
+                sum(pol.ordered_quantity_milli-pol.received_quantity_milli)::text
+                  AS inbound_milli
+         FROM purchase_order po
+         JOIN purchase_order_line pol
+           ON pol.tenant_id=po.tenant_id AND pol.purchase_order_id=po.id
+         JOIN warehouse w
+           ON w.tenant_id=po.tenant_id
+           AND w.branch_id=po.destination_branch_id
+           AND w.status='ACTIVE'
+         WHERE po.tenant_id=$1
+           AND po.status IN ('CONFIRMED','PARTIALLY_RECEIVED')
+           AND po.destination_branch_id IS NOT NULL
+           AND pol.ordered_quantity_milli>pol.received_quantity_milli
+           AND (
+             SELECT count(*) FROM warehouse other
+             WHERE other.tenant_id=w.tenant_id
+               AND other.branch_id=w.branch_id AND other.status='ACTIVE'
+           )=1
+         GROUP BY w.id,pol.sku_id`,
+        [context.tenantId]
+      );
+      return new Map(result.rows.map(r=>[
+        r.warehouse_id+":"+r.sku_id,r.inbound_milli
+      ]));
+    });
     return balances.flatMap(item=>{
       if(!item.sourcingEnabled)return [];
-      const physical=BigInt(item.physicalMilli);
-      const reserved=BigInt(item.reservedMilli);
-      const safety=BigInt(item.safetyStockMilli);
-      const available=physical-reserved;
-      const needed=reserved+safety-physical;
-      if(needed<=0n)return [];
+      const plan=planReplenishment({
+        physicalMilli:item.physicalMilli,
+        reservedMilli:item.reservedMilli,
+        safetyStockMilli:item.safetyStockMilli,
+        confirmedInboundMilli:inbound.get(
+          item.warehouseId+":"+item.skuId)??"0"
+      });
+      if(!plan.requiresAttention)return [];
       return [{
         warehouseId:item.warehouseId,
         warehouseName:item.warehouseName,
@@ -237,17 +276,21 @@ export class InventoryService {
         physicalMilli:item.physicalMilli,
         reservedMilli:item.reservedMilli,
         safetyStockMilli:item.safetyStockMilli,
-        availableMilli:available.toString(),
-        recommendedPurchaseMilli:needed.toString(),
-        urgency:available<0n?"RESERVATION_SHORTAGE" as const:
-          "BELOW_SAFETY_STOCK" as const,
-        // Forecasts and supplier orders must be checked separately.
+        availableMilli:plan.availableMilli,
+        confirmedInboundMilli:plan.confirmedInboundMilli,
+        shortageBeforeInboundMilli:plan.shortageBeforeInboundMilli,
+        recommendedPurchaseMilli:plan.recommendedPurchaseMilli,
+        urgency:plan.urgency,
+        // Confirmed but undelivered stock is NOT inventory. When supplier
+        // destination is missing or multiple warehouses share a branch,
+        // inbound is intentionally excluded; confirm routing manually.
+        inboundScope:"UNIQUE_BRANCH_WAREHOUSE" as const,
         purchaseOrderCreated:false
       }];
     }).sort((a,b)=>{
-      if(a.urgency!==b.urgency)
-        return a.urgency==="RESERVATION_SHORTAGE"?-1:1;
-      return a.warehouseName.localeCompare(b.warehouseName,"ru")||
+      const rank={RESERVATION_SHORTAGE:0,BELOW_SAFETY_STOCK:1,AWAITING_RECEIPT:2};
+      return rank[a.urgency]-rank[b.urgency]||
+        a.warehouseName.localeCompare(b.warehouseName,"ru")||
         a.productName.localeCompare(b.productName,"ru");
     });
   }
