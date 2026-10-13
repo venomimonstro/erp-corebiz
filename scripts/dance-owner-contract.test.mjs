@@ -177,3 +177,31 @@ test("Shift rosters have negative tests for management authorization and manual 
   assert.match(suite,/vacation blocks untouched/);
   assert.match(suite,/does not let a manager assign/);
 });
+
+
+test("A trainer gets private own-only calendar, never the company's clients or cashflow",()=>{
+  const trainerRole=src("infrastructure/postgres/248_dance_trainer_portal.sql");
+  const service=src("apps/api/src/modules/business/dance-studio/dance-trainer-portal.service.ts");
+  const screen=src("apps/web/app/portal/trainer/page.tsx");
+  const staff=src("apps/web/app/app/dance/staff/page.tsx");
+  const login=src("apps/web/app/login/page.tsx");
+  const invite=src("apps/web/app/invite/page.tsx");
+  const api=src("apps/api/src/modules/business/dance-studio/dance-studio.controller.ts");
+  assert.match(trainerRole,/DANCE_TRAINER/);
+  assert.match(trainerRole,/dance\.trainer\.read','own'/);
+  assert.doesNotMatch(trainerRole,/finance\.read/);
+  assert.match(service,/l\.trainer_resource_id=\$2/);
+  assert.match(service,/r\.membership_id=\$2/);
+  assert.match(service,/m\.user_id=\$3/);
+  assert.match(service,/Период|Интервал календаря/);
+  assert.match(service,/other\.id<>s\.id/);
+  assert.match(api,/@Get\("trainer\/me"\)/);
+  assert.match(api,/@RequirePermission\("dance\.trainer\.read"\)/);
+  assert.match(screen,/Моё расписание/);
+  assert.match(screen,/Часов нагрузки/);
+  assert.match(staff,/\/dance\/trainer\/link/);
+  assert.match(login,/\/portal\/trainer/);
+  assert.match(invite,/\/portal\/trainer/);
+  assert.match(workflow,/get\(actors\.m2,"\/dance\/trainer\/me\?from="/);
+  assert.match(workflow,/get\(actors\.m2,"\/dance\/charges",403\)/);
+});
