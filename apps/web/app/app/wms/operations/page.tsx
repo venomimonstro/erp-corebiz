@@ -93,10 +93,10 @@ export default function WarehouseOperationsPage(){
     });
     return()=>{cancelled=true;};
   },[]);
-  const stockUrl=(cursor?:string)=>"/wms/operations/warehouses/"+
+  const stockUrl=useCallback((cursor?:string)=>"/wms/operations/warehouses/"+
     encodeURIComponent(warehouseId)+"/stock-page?limit=100&onlyProblems="+
     String(onlyProblems)+"&query="+encodeURIComponent(appliedFilter)+
-    (cursor?"&cursor="+encodeURIComponent(cursor):"");
+    (cursor?"&cursor="+encodeURIComponent(cursor):""),[warehouseId,onlyProblems,appliedFilter]);
   const load=useCallback(async()=>{
     if(!warehouseId)return;
     const current=++requestVersion.current;
@@ -127,7 +127,7 @@ export default function WarehouseOperationsPage(){
     }finally{
       if(current===requestVersion.current)setLoading(false);
     }
-  },[warehouseId,waveId,refreshNo,appliedFilter,onlyProblems]);
+  },[warehouseId,waveId,refreshNo,stockUrl]);
   useEffect(()=>{void load();},[load]);
   const shown=stock?.items??[];
   const selectedItem=shown.find(item=>item.skuId===selectedSku);
@@ -167,7 +167,8 @@ export default function WarehouseOperationsPage(){
     }finally{setMoreBusy(false);}
   }
   async function createPurchase(){
-    if(!canProcure||!supplierId||!selectedItem||purchaseBusy||purchaseAttempted)return;
+    if(!canProcure||!supplierId||!selectedItem||purchaseBusy||purchaseAttempted||
+      stock?.warehouseId!==warehouseId||loading)return;
     if(BigInt(selectedItem.recommendedPurchaseMilli)<=0n)return;
     setPurchaseBusy(true);setPurchaseAttempted(true);
     setPurchaseNotice("");setError("");
@@ -202,7 +203,8 @@ export default function WarehouseOperationsPage(){
       </header>
       <div className="wms-ops-toolbar">
         <label>Склад
-          <select value={warehouseId} onChange={e=>{setWarehouseId(e.target.value);setWaveId("");}}>
+          <select value={warehouseId} onChange={e=>{setWarehouseId(e.target.value);setWaveId("");
+            setSelectedSku("");setPurchaseAttempted(false);}}>
             {warehouses.map(w=><option value={w.id} key={w.id}>
               {w.name} ({w.code})</option>)}
           </select>
@@ -240,14 +242,16 @@ export default function WarehouseOperationsPage(){
         <p className="muted">Поиск выполняется по всему каталогу на сервере.
           Показаны только загруженные страницы; это не сводный остаток всех SKU.</p>
         <div className="wms-ops-controls">
-          <form onSubmit={e=>{e.preventDefault();setAppliedFilter(filter.trim());}}>
+          <form onSubmit={e=>{e.preventDefault();setAppliedFilter(filter.trim());
+              setSelectedSku("");setPurchaseAttempted(false);}}>
             <input value={filter} placeholder="Поиск по всем товарам или SKU"
               aria-label="Поиск SKU" maxLength={80}
               onChange={e=>setFilter(e.target.value)}/>
             <button type="submit">Найти</button>
           </form>
           <label><input type="checkbox" checked={onlyProblems}
-            onChange={e=>setOnlyProblems(e.target.checked)}/> Только дефицит</label>
+            onChange={e=>{setOnlyProblems(e.target.checked);setSelectedSku("");
+              setPurchaseAttempted(false);}}/> Только дефицит</label>
         </div>
         <div className="wms-ops-table-wrap"><table className="wms-ops-table">
           <thead><tr><th>Товар / SKU</th><th>Физически</th><th>Резерв</th>
