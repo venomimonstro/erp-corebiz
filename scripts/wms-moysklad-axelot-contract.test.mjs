@@ -64,3 +64,40 @@ test("WMS operation endpoints are tenant scoped and RBAC protected",()=>{
   assert.match(screen,/role="alert"/);
   assert.match(screen,/AppSidebar/);
 });
+
+
+test("Warehouse owner searches ALL SKUs using SQL keyset pagination",()=>{
+  assert.match(ops,/async stockPage\(/);
+  assert.match(ops,/decodeStockCursor\(input\.cursor\)/);
+  assert.match(ops,/decoded\.warehouseId!==warehouseId/);
+  assert.match(ops,/decoded\.query!==query/);
+  assert.match(ops,/decoded\.onlyProblems!==onlyProblems/);
+  assert.match(ops,/ORDER BY p\.name,s\.code,sku_set\.sku_id LIMIT \$8/);
+  assert.match(ops,/rows\.rows\.slice\(0,limit\)/);
+  assert.match(ops,/hasMore/);
+  assert.match(ops,/stockIsPhysicalOnly:true|warehouseStockIndicators/);
+  assert.match(controller,/@Get\("warehouses\/:warehouseId\/stock-page"\)/);
+  assert.match(controller,/@RequirePermission\("wms\.read"\)/);
+  assert.match(screen,/Показать следующие 100 SKU/);
+  assert.match(screen,/stock-page\?limit=100/);
+  assert.doesNotMatch(screen,/Показаны первые 500 позиций/);
+});
+test("Explicit destination warehouse prevents misallocated expected procurement",()=>{
+  assert.match(ops,/coalesce\(po\.destination_warehouse_id,ub\.warehouse_id\)/);
+  assert.match(inventory,/COALESCE\(po\.destination_warehouse_id,t\.warehouse_id\)/);
+  assert.match(inventory,/HAVING count\(\*\)=1/);
+  assert.match(logic,/const available=physical-reserved/);
+  assert.match(logic,/const projected=available\+expected/);
+});
+test("Stock shortage generates DRAFT purchase document, not phantom receipt",()=>{
+  assert.match(screen,/\/procurement\/suppliers/);
+  assert.match(screen,/\/procurement\/orders/);
+  assert.match(screen,/supplierPartyId:supplierId/);
+  assert.match(screen,/destinationWarehouseId:warehouseId/);
+  assert.match(screen,/quantityMilli:selectedItem\.recommendedPurchaseMilli/);
+  assert.match(screen,/purchaseAttempted/);
+  assert.match(screen,/Проверьте закупки перед новой попыткой/);
+  assert.doesNotMatch(screen,/\/procurement\/orders\/.*\/confirm/);
+  const code=ops.slice(ops.indexOf("async stockPage("),ops.indexOf("async pickRoute("));
+  assert.doesNotMatch(code,/\bINSERT INTO\b|\bUPDATE (?:inventory_balance|purchase_order)\b/i);
+});
