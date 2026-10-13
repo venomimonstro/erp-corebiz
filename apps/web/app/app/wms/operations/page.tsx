@@ -1,5 +1,5 @@
 "use client";
-import {useCallback,useEffect,useMemo,useState} from "react";
+import {useCallback,useEffect,useMemo,useRef,useState} from "react";
 import {AppSidebar} from "../../../../components/app-sidebar";
 import {apiRequest} from "../../../../lib/api";
 
@@ -46,6 +46,7 @@ export default function WarehouseOperationsPage(){
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
   const [refreshNo,setRefreshNo]=useState(0);
+  const requestVersion=useRef(0);
   useEffect(()=>{
     let cancelled=false;
     void apiRequest<Warehouse[]>("/wms/warehouses")
@@ -57,6 +58,7 @@ export default function WarehouseOperationsPage(){
   },[]);
   const load=useCallback(async()=>{
     if(!warehouseId)return;
+    const current=++requestVersion.current;
     setLoading(true);setError("");
     setStock(null);setRoute(null);
     try{
@@ -66,9 +68,13 @@ export default function WarehouseOperationsPage(){
         apiRequest<Route>("/wms/operations/warehouses/"+
           encodeURIComponent(warehouseId)+"/pick-route")
       ]);
-      setStock(s);setRoute(r);
-    }catch(e){setError(e instanceof Error?e.message:"Не удалось получить складскую сводку");}
-    finally{setLoading(false);}
+      if(current===requestVersion.current){setStock(s);setRoute(r);}
+    }catch(e){
+      if(current===requestVersion.current)
+        setError(e instanceof Error?e.message:"Не удалось получить складскую сводку");
+    }finally{
+      if(current===requestVersion.current)setLoading(false);
+    }
   },[warehouseId,refreshNo]);
   useEffect(()=>{void load();},[load]);
   const shown=useMemo(()=>(stock?.items??[]).filter(item=>
