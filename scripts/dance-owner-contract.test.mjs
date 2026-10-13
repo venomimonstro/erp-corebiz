@@ -291,3 +291,21 @@ test("Retried studio lesson cannot silently become another booking",()=>{
   assert.match(spec,/changed rental room/);
   assert.match(spec,/ConflictException/);
 });
+
+
+test("Trainer teaching in two branches keeps login until the last active assignment ends",()=>{
+  const resources=src("apps/api/src/modules/business/service-ops/resources.service.ts");
+  const regression=src("apps/api/src/modules/business/service-ops/resources-offboarding.spec.ts");
+  assert.match(resources,/const otherActive=await client\.query/);
+  assert.match(resources,/membership_id=\$2 AND id<>\$3/);
+  assert.match(resources,/if\(otherActive\.rowCount\)/);
+  assert.match(resources,/last active linked trainer resource archived/);
+  assert.match(regression,/keeps a dedicated coach login when their other branch resource remains active/);
+  assert.match(regression,/suspends a dedicated coach only when the LAST active assignment is archived/);
+});
+test("Dance client must revoke session server-side and never navigate to staff ERP by default",()=>{
+  const portalPage=src("apps/web/app/portal/dance/page.tsx");
+  assert.match(portalPage,/apiRequest\("\/auth\/logout"/);
+  assert.match(portalPage,/window\.location\.assign\("\/login\?next=%2Fportal%2Fdance"\)/);
+  assert.doesNotMatch(portalPage,/<a href="\/app">Рабочий кабинет<\/a>/);
+});
