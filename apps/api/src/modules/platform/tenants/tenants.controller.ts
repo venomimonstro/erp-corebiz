@@ -72,6 +72,26 @@ export class TenantsController {
     })};
   }
 
+  @Post("team/:membershipId/suspend")
+  @RequirePermission("users.manage")
+  async suspendStaff(@Req() request:AuthenticatedRequest,
+    @Param("membershipId") id:string):Promise<ApiSuccess<unknown>>{
+    const a=request.auth!;
+    return {ok:true,data:await this.tenants.setStaffStatus({
+      tenantId:a.tenantId,userId:a.userId,membershipId:a.membershipId
+    },id,"SUSPENDED")};
+  }
+
+  @Post("team/:membershipId/reactivate")
+  @RequirePermission("users.manage")
+  async reactivateStaff(@Req() request:AuthenticatedRequest,
+    @Param("membershipId") id:string):Promise<ApiSuccess<unknown>>{
+    const a=request.auth!;
+    return {ok:true,data:await this.tenants.setStaffStatus({
+      tenantId:a.tenantId,userId:a.userId,membershipId:a.membershipId
+    },id,"ACTIVE")};
+  }
+
   @Post("invitations/:id/revoke")
   @RequirePermission("users.manage")
   async revoke(@Req() request:AuthenticatedRequest,@Param("id") id:string)
