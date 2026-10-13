@@ -14,6 +14,7 @@ type StockItem={
 type Stock={warehouseId:string;warehouseName:string;
   planningExpectedIsNotPhysical:boolean;requiresPagination:boolean;
   totalShown:number;shortages:number;items:StockItem[]};
+type Wave={id:string;strategy:string;status:string};
 type Route={warehouseId:string;waveId:string|null;globallyOptimal:boolean;
   ordering:string;truncated:boolean;tasks:Array<{
     taskId:string;zonePriority:number;pickSequence:number;
@@ -41,6 +42,8 @@ export default function WarehouseOperationsPage(){
   const [warehouseId,setWarehouseId]=useState("");
   const [stock,setStock]=useState<Stock|null>(null);
   const [route,setRoute]=useState<Route|null>(null);
+  const [waveId,setWaveId]=useState("");
+  const [waves,setWaves]=useState<Wave[]>([]);
   const [filter,setFilter]=useState("");
   const [onlyProblems,setOnlyProblems]=useState(false);
   const [loading,setLoading]=useState(false);
@@ -62,20 +65,25 @@ export default function WarehouseOperationsPage(){
     setLoading(true);setError("");
     setStock(null);setRoute(null);
     try{
-      const [s,r]=await Promise.all([
+      const [s,r,w]=await Promise.all([
         apiRequest<Stock>("/wms/operations/warehouses/"+
           encodeURIComponent(warehouseId)+"/stock"),
         apiRequest<Route>("/wms/operations/warehouses/"+
-          encodeURIComponent(warehouseId)+"/pick-route")
+          encodeURIComponent(warehouseId)+"/pick-route"+
+          (waveId?"?waveId="+encodeURIComponent(waveId):"")),
+        apiRequest<{waves:Wave[]}>("/wms/warehouses/"+
+          encodeURIComponent(warehouseId)+"/dispatcher").catch(()=>null)
       ]);
-      if(current===requestVersion.current){setStock(s);setRoute(r);}
+      if(current===requestVersion.current){
+        setStock(s);setRoute(r);setWaves(w?.waves??[]);
+      }
     }catch(e){
       if(current===requestVersion.current)
         setError(e instanceof Error?e.message:"Не удалось получить складскую сводку");
     }finally{
       if(current===requestVersion.current)setLoading(false);
     }
-  },[warehouseId,refreshNo]);
+  },[warehouseId,waveId,refreshNo]);
   useEffect(()=>{void load();},[load]);
   const shown=useMemo(()=>(stock?.items??[]).filter(item=>
     (!onlyProblems||["RESERVATION_SHORTAGE","BELOW_SAFETY"].includes(item.state))
@@ -93,9 +101,18 @@ export default function WarehouseOperationsPage(){
       </header>
       <div className="wms-ops-toolbar">
         <label>Склад
-          <select value={warehouseId} onChange={e=>setWarehouseId(e.target.value)}>
+          <select value={warehouseId} onChange={e=>{setWarehouseId(e.target.value);setWaveId("");}}>
             {warehouses.map(w=><option value={w.id} key={w.id}>
               {w.name} ({w.code})</option>)}
+          </select>
+        </label>
+        <label>Волна комплектации
+          <select value={waveId} onChange={e=>setWaveId(e.target.value)}>
+            <option value="">Все открытые задания</option>
+            {waves.filter(w=>["RELEASED","IN_PROGRESS"].includes(w.status))
+              .map(w=><option key={w.id} value={w.id}>
+                {w.strategy} · {w.id.slice(0,8)}
+              </option>)}
           </select>
         </label>
         <button disabled={loading||!warehouseId}
