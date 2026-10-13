@@ -186,7 +186,7 @@ export default function DanceStaffPage(){
             const assigned=groups.filter(g=>g.trainer_resource_id===x.id&&
               ["ACTIVE","PAUSED"].includes(g.status));
             return <button type="button" key={x.id} onClick={()=>{
-              setSelected(x.id);setEditedName(x.name);setArchive(false);
+              setSelected(x.id);setEditedName(x.name);setArchive(false);setTrainerLogin("");
               setConfirmAccess(false);
             }} className={selected===x.id?"active":""}>
               <strong>{x.name}</strong><span>{x.branch_name??"Без филиала"}</span>
