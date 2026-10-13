@@ -245,7 +245,7 @@ export class WmsController{
   }
 
   @Get("warehouses/:warehouseId/count-variances")
-  @RequirePermission("wms.manage")
+  @RequirePermission("wms.count.approve")
   async pendingCountVariances(
     @Req() req:AuthenticatedRequest,
     @Param("warehouseId") warehouseId:string
@@ -254,7 +254,7 @@ export class WmsController{
   }
 
   @Post("count-lines/:lineId/review")
-  @RequirePermission("wms.manage")
+  @RequirePermission("wms.count.approve")
   async reviewCountVariance(
     @Req() req:AuthenticatedRequest,
     @Param("lineId") lineId:string,
