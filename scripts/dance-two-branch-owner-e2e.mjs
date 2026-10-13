@@ -92,11 +92,20 @@ async function main(){
   stage="03 managers, second founder and parent";
   const manager1=await inviteRole(actors.m1,"manager1",role("DANCE_MANAGER"));
   const manager2=await inviteRole(actors.m2,"manager2",role("DANCE_MANAGER"));
-  const woman=await inviteRole(actors.woman,"woman-founder",role("ADMIN"));
+  const woman=await inviteRole(actors.woman,"woman-founder",role("DANCE_PARTNER"));
   const parent=await inviteRole(actors.parent,"parent",role("DANCE_CUSTOMER"));
   assert.ok(manager1&&manager2&&woman&&parent);
   assert.equal((await get(actors.m1,"/workspace/context")).roles[0],"DANCE_MANAGER");
   assert.equal((await get(actors.parent,"/workspace/context")).roles[0],"DANCE_CUSTOMER");
+  const partnerContext=await get(actors.woman,"/workspace/context");
+  assert.deepEqual(partnerContext.roles,["DANCE_PARTNER"]);
+  assert.equal(partnerContext.permissions.find(p=>p.code==="finance.read")?.scope,"all");
+  assert.equal(partnerContext.permissions.find(p=>p.code==="dance.trainer.read")?.scope,"own");
+  // Operational co-founder can manage studio money but cannot grant
+  // herself immutable platform OWNER status.
+  await put(actors.woman,"/roles/assign",{
+    membershipId:woman,roleId:role("OWNER")
+  },403);
   await get(actors.m1,"/finance/summary",403);
   await get(actors.parent,"/crm/board",403);
   await get(actors.parent,"/dance/students",403);
@@ -366,10 +375,16 @@ async function main(){
     "/dance/trainer/me?from="+firstDate.toISOString().slice(0,10)+
     "&to="+lastDate.toISOString().slice(0,10));
   assert.equal(cofounderCalendar.trainer.id,trainers[1].id,
-    "Partner ADMIN is a teacher in the same Moscow branch");
+    "Operational partner is a teacher in the same Moscow branch");
   assert.ok(cofounderCalendar.lessons.every(x=>
     !Object.prototype.hasOwnProperty.call(x,"amount_minor")),
     "Cofounder personal calendar must not expose financial ledger");
+  const partnerAccess=await get(actors.woman,"/dance/access");
+  assert.equal(partnerAccess.canViewFinance,true);
+  const partnerDashboard=await get(actors.woman,"/dance/dashboard");
+  assert.equal(partnerDashboard.canViewFinancials,true);
+  await get(actors.woman,"/finance/summary");
+  await get(actors.woman,"/dance/budget?month=2026-10");
   const access=await get(owner,"/dance/access");
   assert.equal(access.canViewFinance,true);
   const finance=await get(owner,"/dance/dashboard");
@@ -461,7 +476,7 @@ async function main(){
       "1,200 RUB/h rental bookings are disposable test assumptions, not signed prices",
       "Rental sale price and signed sublease terms for small halls unknown",
       "Full-payment package cannot be treated as paid without PSP reconciliation",
-      "Partner has ADMIN role but formal second OWNER cannot yet be granted",
+      "Second partner has operational finance and management access but not immutable platform OWNER subscription identity",
       "49+ trainers are staff resources without their own invited login",
       "No external PSP/KKT/FNS or production load tests run"
     ]
