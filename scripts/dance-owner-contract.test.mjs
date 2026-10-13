@@ -198,7 +198,10 @@ test("A trainer gets private own-only calendar, never the company's clients or c
   assert.match(service,/r\.membership_id=\$2/);
   assert.match(service,/m\.user_id=\$3/);
   assert.match(service,/Период|Интервал календаря/);
-  assert.match(service,/other\.id<>s\.id/);
+  // One login can teach at several branches, but a resource may not be
+  // taken from an existing different member.
+  assert.match(service,/s\.membership_id IS NULL OR s\.membership_id=\$3/);
+  assert.doesNotMatch(service,/other\.id<>s\.id/);
   assert.match(api,/@Get\("trainer\/me"\)/);
   assert.match(api,/@RequirePermission\("dance\.trainer\.read"\)/);
   assert.match(screen,/Моё расписание/);
@@ -338,4 +341,21 @@ test("Reception sees student charges but not bank accounts or fictitious balance
   assert.match(economics,/CASE WHEN o\.id IS NULL THEN NULL/);
   assert.doesNotMatch(roles,/'finance\.read'/);
   assert.doesNotMatch(roles,/'finance\.write'/);
+});
+
+test("Trainer resource linking and own-only calendar cover multiple studio branches",()=>{
+  const trainer=src("apps/api/src/modules/business/dance-studio/dance-trainer-portal.service.ts");
+  const trainerSpec=src("apps/api/src/modules/business/dance-studio/dance-trainer-multi-branch.spec.ts");
+  const employeeSpec=src("apps/api/src/modules/business/service-ops/resources-offboarding.spec.ts");
+  const portalPage=src("apps/web/app/portal/trainer/page.tsx");
+  const staffPage=src("apps/web/app/app/dance/staff/page.tsx");
+  assert.match(trainer,/l\.trainer_resource_id=ANY\(\$5::uuid\[\]\)/);
+  assert.match(trainer,/coach\.membership_id=\$2/);
+  assert.match(trainer,/ORDER BY b\.name NULLS LAST,r\.name,r\.id LIMIT 50/);
+  assert.match(trainer,/coalesce\(coach\.timezone,'Europe\/Moscow'\)/);
+  assert.match(trainerSpec,/both resources of the same authenticated trainer/);
+  assert.match(employeeSpec,/other branch resource remains active/);
+  assert.match(staffPage,/already-linked login must remain selectable/);
+  assert.match(portalPage,/Нагрузка по филиалам/);
+  assert.match(portalPage,/apiRequest\("\/auth\/logout"/);
 });
