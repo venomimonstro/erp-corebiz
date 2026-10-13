@@ -33,7 +33,8 @@
     "test:dance:recovery": "node --test scripts/dance-negative-onboarding.test.mjs",
     "test:benchmark": "node --test scripts/competitor-benchmark-contract.test.mjs",
     "test:wms:benchmark": "node --test scripts/wms-moysklad-axelot-contract.test.mjs",
-    "test:wms:variance": "node --test scripts/wms-variance-approval-contract.test.mjs"
+    "test:wms:variance": "node --test scripts/wms-variance-approval-contract.test.mjs",
+    "test:service-integrity": "node --test scripts/service-data-integrity-contract.test.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
