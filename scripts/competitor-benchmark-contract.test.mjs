@@ -37,6 +37,10 @@ test("Online specialist toggle stays independent of manual diary",()=>{
   assert.match(booking,/startsAt.getTime\(\)<Date.now\(\)\+minLead/);
   assert.match(publicForms,/eligible=allowed.filter\(id=>online.has\(id\)\)/);
   assert.match(publicForms,/online.get\(slot.resourceId\)/);
+  assert.match(publicForms,/tr.online_booking_enabled=true/);
+  assert.match(publicForms,/l.starts_at>=now\(\)\+/);
+  assert.match(publicForms,/this.bookings.availability\(context,\{/);
+  assert.match(publicForms,/offset\+=2/);
   assert.match(publicUi,/Доступен клиентам онлайн/);
   assert.match(publicUi,/Сохранить настройки записи/);
 });
