@@ -4443,3 +4443,11 @@ button, .primary, .secondary { font: inherit; }
 .dance-doctor-recovery article a{text-decoration:underline;color:#265b9d}
 .dance-doctor-recovery article button:focus-visible,.dance-doctor-step a:focus-visible{outline:3px solid #9abdee;outline-offset:2px}
 @media(max-width:690px){.dance-doctor-steps,.dance-doctor-recovery{grid-template-columns:1fr}.dance-doctor-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.dance-doctor-summary strong{font-size:19px}}
+
+
+/* Supplier review rules sit beside read-only inventory risk, not checkout. */
+.commerce-rule-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:15px 0}
+.commerce-rule-fields label{display:flex;flex-direction:column;gap:7px;font-size:13px;font-weight:650;min-width:0}
+.commerce-rule-fields input{width:100%;min-width:0;border:1px solid #cdd7e2;background:#fff;padding:10px 11px;border-radius:10px;color:inherit}
+.commerce-rule-fields input:focus-visible{outline:3px solid #95b8e6;outline-offset:2px}
+@media(max-width:700px){.commerce-rule-fields{grid-template-columns:1fr}}
