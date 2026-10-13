@@ -34,17 +34,27 @@ export default function GoLivePage() {
   const [data, setData] = useState<Readiness | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loading,setLoading]=useState(true);
+  const [pendingDecision,setPendingDecision]=useState<"GO"|"NO_GO"|"LIVE"|null>(null);
+  const [reviewNote,setReviewNote]=useState("");
+  const [acknowledged,setAcknowledged]=useState(false);
 
   const load = useCallback(async () => {
+    // Never preserve an old GO snapshot when the current check fails.
+    setData(null);
+    setLoading(true);
     setError("");
     try {
       setData(await apiRequest<Readiness>("/go-live/readiness"));
     } catch (cause) {
       setError(
-        cause instanceof Error
+        (cause instanceof Error
           ? cause.message
-          : "Не удалось проверить готовность"
+          : "Не удалось проверить готовность")+
+        ". Решения о запуске заблокированы до успешной перепроверки."
       );
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -52,73 +62,55 @@ export default function GoLivePage() {
     void load();
   }, [load]);
 
-  async function review(decision: "GO" | "NO_GO") {
-    if (!data) return;
-
-    const note =
-      window.prompt(
-        decision === "GO"
-          ? "Комментарий к запуску"
-          : "Почему NO-GO?",
-        decision === "GO"
-          ? "Проверки пройдены, запускаем tenant."
-          : "Зафиксировать блокеры перед повторной проверкой."
-      ) ?? "";
-
-    if (
-      !window.confirm(
-        decision === "GO"
-          ? "Зафиксировать решение GO? Это не выполняет deploy, только переводит tenant в HYPERCARE."
-          : "Зафиксировать NO-GO?"
-      )
-    ) {
-      return;
-    }
-
-    setBusy(true);
-    try {
-      await apiRequest("/go-live/review", {
-        method: "POST",
-        body: JSON.stringify({
-          decision,
-          note,
-          hypercareDays: 14
-        })
-      });
-      await load();
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Не удалось сохранить решение"
-      );
-    } finally {
-      setBusy(false);
-    }
+  function requestDecision(decision:"GO"|"NO_GO"|"LIVE"){
+    if(!data || busy || loading)return;
+    if((decision==="GO"||decision==="LIVE")&&!data.ready)return;
+    if(decision==="LIVE"&&data.stage!=="HYPERCARE")return;
+    setPendingDecision(decision);
+    setReviewNote("");
+    setAcknowledged(false);
+    setError("");
   }
 
-  async function finishHypercare() {
-    if (
-      !window.confirm(
-        "Завершить HYPERCARE и перевести tenant в LIVE? Текущие blockers будут перепроверены сервером."
-      )
-    ) {
+  async function submitDecision(event:React.FormEvent<HTMLFormElement>){
+    event.preventDefault();
+    if(!pendingDecision||!data||busy||loading)return;
+    if(!acknowledged)return;
+    if(pendingDecision!=="LIVE"&&reviewNote.trim().length<12){
+      setError("Укажите причину или основание решения (не менее 12 символов).");
       return;
     }
-
+    if((pendingDecision==="GO"||pendingDecision==="LIVE")&&!data.ready){
+      setError("Обязательная перепроверка не пройдена. Запуск заблокирован.");
+      return;
+    }
     setBusy(true);
-    try {
-      await apiRequest("/go-live/finish-hypercare", {
-        method: "POST"
-      });
+    setError("");
+    try{
+      if(pendingDecision==="LIVE"){
+        await apiRequest("/go-live/finish-hypercare",{method:"POST"});
+      }else{
+        await apiRequest("/go-live/review",{
+          method:"POST",
+          body:JSON.stringify({
+            decision:pendingDecision,
+            note:reviewNote.trim(),
+            hypercareDays:14
+          })
+        });
+      }
+      setPendingDecision(null);
+      setAcknowledged(false);
+      setReviewNote("");
       await load();
-    } catch (cause) {
+    }catch(cause){
       setError(
-        cause instanceof Error
-          ? cause.message
-          : "Не удалось завершить hypercare"
+        (cause instanceof Error?cause.message:"Не удалось сохранить решение")+
+        ". Проверьте текущее состояние до повторного подтверждения."
       );
-    } finally {
+      // An uncertain response must not leave stale GO displayed.
+      setData(null);
+    }finally{
       setBusy(false);
     }
   }
@@ -131,7 +123,7 @@ export default function GoLivePage() {
         <header className="workspace-header">
           <div>
             <p className="muted">Управление / Запуск</p>
-            <h1>Go-Live Center</h1>
+            <h1>Готовность к запуску</h1>
             <p className="workspace-summary">
               Проверка запуска отдельной компании: бизнес-сценарии, релиз и,
               для торговых ниш, подтверждённые платежи, чеки и отгрузка.
@@ -144,22 +136,23 @@ export default function GoLivePage() {
             <button
               className="secondary-button"
               type="button"
+              disabled={busy||loading}
               onClick={() => void load()}
             >
-              Перепроверить
+              {loading?"Проверяем…":"Перепроверить"}
             </button>
             <button
               className="secondary-button"
-              disabled={busy}
+              disabled={busy||loading||!data}
               type="button"
-              onClick={() => void review("NO_GO")}
+              onClick={() => requestDecision("NO_GO")}
             >
               NO-GO
             </button>
             <button
-              disabled={busy || !data?.ready}
+              disabled={busy||loading||!data?.ready}
               type="button"
-              onClick={() => void review("GO")}
+              onClick={() => requestDecision("GO")}
             >
               GO
             </button>
@@ -172,6 +165,50 @@ export default function GoLivePage() {
             <span>{error}</span>
           </div>
         ) : null}
+
+        {loading?<p role="status" className="muted">Проверяем готовность вашей компании…</p>:null}
+
+        {pendingDecision&&data?(
+          <section className="section-block go-live-decision" aria-label="Подтверждение решения">
+            <h2>{pendingDecision==="GO"?"Начать контролируемый запуск":
+              pendingDecision==="NO_GO"?"Зафиксировать проблемы запуска":
+                "Подтвердить переход в рабочий режим"}</h2>
+            <p className="muted">
+              {pendingDecision==="GO"
+                ?"Это переведёт компанию в период усиленного контроля HYPERCARE. "
+                 +"Никакой deploy или фискальный запуск автоматически не выполняется."
+                :pendingDecision==="NO_GO"
+                  ?"Решение сохранит причины и список блокеров. Данные бизнеса не удаляются."
+                  :"Переход в LIVE допустим только после завершения периода наблюдения "
+                   +"и успешной повторной проверки на сервере."}
+            </p>
+            <form onSubmit={event=>void submitDecision(event)} className="go-live-decision-form">
+              {pendingDecision!=="LIVE"?(
+                <label>Основание решения
+                  <textarea rows={3} minLength={12} maxLength={2000} required
+                    placeholder="Что проверено и почему принято решение"
+                    value={reviewNote}
+                    onChange={event=>setReviewNote(event.target.value)}/>
+                </label>
+              ):null}
+              <label className="go-live-decision-consent">
+                <input type="checkbox" checked={acknowledged}
+                  onChange={event=>setAcknowledged(event.target.checked)}/>
+                <span>Понимаю последствия решения и подтверждаю, что проверил(а)
+                  актуальный статус своей компании.</span>
+              </label>
+              <div className="go-live-decision-actions">
+                <button type="submit" disabled={busy||!acknowledged||
+                  ((pendingDecision==="GO"||pendingDecision==="LIVE")&&!data.ready)||
+                  (pendingDecision!=="LIVE"&&reviewNote.trim().length<12)}>
+                  {busy?"Сохраняем…":"Подтвердить решение"}
+                </button>
+                <button type="button" className="secondary-button"
+                  disabled={busy} onClick={()=>setPendingDecision(null)}>Отмена</button>
+              </div>
+            </form>
+          </section>
+        ):null}
 
         {data ? (
           <>
@@ -212,8 +249,8 @@ export default function GoLivePage() {
               <section className="section-block">
                 <div className="section-heading">
                   <div>
-                    <p className="muted">Release blockers</p>
-                    <h2>Что запрещает GO</h2>
+                    <p className="muted">Что нужно исправить</p>
+                    <h2>Что мешает запуску</h2>
                   </div>
                 </div>
 
@@ -305,8 +342,8 @@ export default function GoLivePage() {
                 </span>
                 <button
                   type="button"
-                  disabled={busy || !data.ready}
-                  onClick={() => void finishHypercare()}
+                  disabled={busy||loading||!data.ready}
+                  onClick={() => requestDecision("LIVE")}
                 >
                   Перевести в LIVE
                 </button>
