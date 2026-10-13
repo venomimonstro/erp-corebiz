@@ -244,6 +244,26 @@ export class WmsController{
     };
   }
 
+  @Get("warehouses/:warehouseId/count-variances")
+  @RequirePermission("wms.manage")
+  async pendingCountVariances(
+    @Req() req:AuthenticatedRequest,
+    @Param("warehouseId") warehouseId:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.wms.countVariances(this.ctx(req),warehouseId)};
+  }
+
+  @Post("count-lines/:lineId/review")
+  @RequirePermission("wms.manage")
+  async reviewCountVariance(
+    @Req() req:AuthenticatedRequest,
+    @Param("lineId") lineId:string,
+    @Body() body:{decision:"APPROVE"|"RECOUNT";note:string}
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,
+      data:await this.wms.reviewCountVariance(this.ctx(req),lineId,body)};
+  }
+
   @Post("warehouses/:warehouseId/replenishment/plan")
   @RequirePermission("wms.manage")
   async planReplenishment(
