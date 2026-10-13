@@ -8,7 +8,9 @@ type Alert={
   productName:string;physicalMilli:string;reservedMilli:string;
   safetyStockMilli:string;availableMilli:string;
   recommendedPurchaseMilli:string;
-  urgency:"RESERVATION_SHORTAGE"|"BELOW_SAFETY_STOCK";
+  urgency:"RESERVATION_SHORTAGE"|"BELOW_SAFETY_STOCK"|"AWAITING_RECEIPT";
+  confirmedInboundMilli:string;shortageBeforeInboundMilli:string;
+  inboundScope:"UNIQUE_BRANCH_WAREHOUSE";
   purchaseOrderCreated:false;
 };
 function quantity(raw:string){
@@ -76,21 +78,29 @@ export default function ReplenishmentPage(){
               <strong>{item.productName}</strong>
               <span>{item.sku} · {item.warehouseName}</span>
               <small>{item.urgency==="RESERVATION_SHORTAGE"
-                ?"Резерв превышает фактический остаток"
-                :"Запас ниже установленного минимума"}</small>
+                ?"Срочно: резервы превышают фактический остаток"
+                :item.urgency==="AWAITING_RECEIPT"
+                  ?"Поступление подтверждено заказом поставщику — ожидаем приёмку"
+                  :"Запас ниже установленного минимума"}</small>
             </div>
             <div className="inventory-replenishment-amounts">
               <small>На складе: {quantity(item.physicalMilli)}</small>
               <small>В резерве: {quantity(item.reservedMilli)}</small>
               <small>Страховой запас: {quantity(item.safetyStockMilli)}</small>
-              <strong>Предлагается: {quantity(item.recommendedPurchaseMilli)}</strong>
+              <small>Дефицит до поставки: {quantity(item.shortageBeforeInboundMilli)}</small>
+              <small>Подтверждено к поступлению: {quantity(item.confirmedInboundMilli)}</small>
+              <strong>Дополнительно заказать: {quantity(item.recommendedPurchaseMilli)}</strong>
             </div>
           </article>)}
         </div>:null}
-        <p className="muted">Формула: резерв + страховой запас −
-          фактический остаток. Уже заказанные, но не полученные товары
-          здесь не вычитаются — перед закупкой сверяйте ожидаемые поставки,
-          сроки и потребление. Предложение не является заказом поставщику.</p>
+        <p className="muted">Формула: дополнительная закупка =
+          max(0, резерв + страховой запас − фактический остаток −
+          подтверждённые неполученные поставки). Поставки учитываются
+          автоматически только если заказ поставщика однозначно связан
+          с единственным активным складом филиала. Неуказанный филиал или
+          несколько складов требуют ручной проверки закупщиком.
+          Ожидание поставки не увеличивает фактические остатки; заказ
+          поставщику не создаётся автоматически.</p>
         <div className="service-desk-links">
           <a href="/app/purchases">Открыть закупки →</a>
           <a href="/app/inventory/stock">Проверить остатки →</a>
