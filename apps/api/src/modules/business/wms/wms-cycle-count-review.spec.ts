@@ -18,13 +18,15 @@ const line={
   expected_milli:"1000",counted_milli:"800",variance_milli:"-200",
   counted_by_membership_id:tenant.membershipId
 };
-function setup(overrides:Partial<typeof line>={}){
+function setup(overrides:Partial<typeof line>={},ownerLedger=false){
   const queries:Array<{sql:string;args:unknown[]}>= [];
   const client={query:jest.fn(async(sql:string,args:unknown[]=[])=>{
     queries.push({sql,args});
     if(sql.includes("FROM wms_cycle_count_line l")&&
       sql.includes("JOIN wms_cycle_count c"))
       return {rows:[{...line,...overrides}],rowCount:1};
+    if(sql.includes("SELECT owner_tracking_state FROM warehouse_wms_profile"))
+      return {rows:[{owner_tracking_state:ownerLedger?"OWNER_LEDGER":"TOTAL_ONLY"}],rowCount:1};
     if(sql.includes("FROM warehouse_location_balance")&&sql.includes("FOR UPDATE"))
       return {rows:[{physical_milli:"1000"}],rowCount:1};
     if(sql.includes("SELECT EXISTS(")&&sql.includes("wms_cycle_count_line"))
@@ -93,6 +95,15 @@ describe("AXELOT two-person WMS cycle count approval",()=>{
       .toBe(true);
     expect(f.queries.some(q=>q.sql.includes("SET status='POSTED',posted_at=now()")))
       .toBe(true);
+  });
+  it("refuses a discrepancy adjustment that would desynchronise 3PL owner ledgers",async()=>{
+    const f=setup({},true);
+    await expect(f.svc.reviewCountVariance(reviewer,id,{
+      decision:"APPROVE",note:"Проверка по 3PL заказу"
+    })).rejects.toThrow("3PL");
+    expect(f.inventory.applyWmsCountAdjustment).not.toHaveBeenCalled();
+    expect(f.queries.some(q=>q.sql.includes("UPDATE warehouse_location_balance")))
+      .toBe(false);
   });
   it("recount reopens the same task, leaving stock untouched",async()=>{
     const f=setup();
