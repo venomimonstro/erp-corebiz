@@ -7,10 +7,14 @@ import {apiRequest} from "../../../../lib/api";
 type Customer={id:string;displayName:string;phone?:string|null};
 type TeamMember={membership_id:string;email:string;status:string;roles:Array<{code:string}>};
 type Role={id:string;code:string;name:string};
+type ClientAccount={membership_id:string;email:string;party_id:string;
+  display_name:string;status:"ACTIVE"|"REVOKED"};
 export default function DanceClientAccessPage(){
   const [members,setMembers]=useState<TeamMember[]>([]);
   const [parties,setParties]=useState<Customer[]>([]);
   const [role,setRole]=useState<Role|null>(null);
+  const [accounts,setAccounts]=useState<ClientAccount[]>([]);
+  const [revokeId,setRevokeId]=useState("");
   const [email,setEmail]=useState("");
   const [member,setMember]=useState("");
   const [party,setParty]=useState("");
@@ -22,12 +26,13 @@ export default function DanceClientAccessPage(){
   const refresh=useCallback(async()=>{
     setLoading(true);setError("");
     try{
-      const [team,customers,roles]=await Promise.all([
+      const [team,customers,roles,linked]=await Promise.all([
         apiRequest<TeamMember[]>("/tenants/team"),
         apiRequest<Customer[]>("/crm/customers"),
-        apiRequest<Role[]>("/roles")
+        apiRequest<Role[]>("/roles"),
+        apiRequest<ClientAccount[]>("/dance/portal/accounts")
       ]);
-      setMembers(team);setParties(customers);
+      setMembers(team);setParties(customers);setAccounts(linked);
       setRole(roles.find(x=>x.code==="DANCE_CUSTOMER")??null);
     }catch(e){setError(e instanceof Error?e.message:"Не удалось загрузить клиентов");}
     finally{setLoading(false);}
@@ -59,6 +64,18 @@ export default function DanceClientAccessPage(){
       setNotice("Аккаунт связан с CRM-карточкой. Клиент увидит свои данные.");
       setMember("");setParty("");
     }catch(e){setError(e instanceof Error?e.message:"Привязка не удалась");}
+    finally{setBusy(false);}
+  }
+  async function revoke(){
+    if(!revokeId||busy)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/dance/portal/accounts/"+encodeURIComponent(revokeId)+"/revoke",{
+        method:"POST"
+      });
+      setNotice("Доступ клиента отозван. История посещений и оплат сохранена.");
+      setRevokeId("");await refresh();
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось отозвать доступ");}
     finally{setBusy(false);}
   }
   return <main className="app-shell">
@@ -118,6 +135,28 @@ export default function DanceClientAccessPage(){
           <p><a href="/portal/dance">Открыть клиентский кабинет →</a></p>
         </form>
       </div>
+      <section className="dance-customer-panel">
+        <h2>Привязанные клиентские аккаунты</h2>
+        {accounts.length===0?<p>Пока нет активированных клиентских кабинетов.</p>:
+          <div className="dance-customer-list">
+            {accounts.map(a=><article key={a.membership_id}>
+              <strong>{a.display_name}</strong>
+              <span>{a.email} · {a.status==="ACTIVE"?"Доступен":"Отозван"}</span>
+              {a.status==="ACTIVE"?(revokeId===a.membership_id?
+                <div className="dance-client-revoke">
+                  <p>Клиент потеряет доступ к своему кабинету сразу после
+                    подтверждения. История занятий сохранится.</p>
+                  <button type="button" disabled={busy}
+                    onClick={()=>void revoke()}>Подтвердить отзыв доступа</button>
+                  <button type="button" disabled={busy}
+                    onClick={()=>setRevokeId("")}>Отмена</button>
+                </div>:
+                <button type="button" disabled={busy}
+                  onClick={()=>setRevokeId(a.membership_id)}>
+                  Отозвать доступ</button>):null}
+            </article>)}
+          </div>}
+      </section>
       <p className="muted">При увольнении сотрудника снимайте его внутренние
         полномочия отдельно. Клиентские аккаунты не должны получать роли
         сотрудников студии.</p>
