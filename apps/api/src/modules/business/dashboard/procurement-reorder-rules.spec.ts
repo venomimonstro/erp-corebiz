@@ -18,6 +18,8 @@ function setup(permission:string|null="all",found=true){
     if(sql.includes("INSERT INTO procurement_reorder_rule"))
       return {rows:[{sku_id:sku,lead_days:21,review_days:7,
         minimum_batch_milli:"5000",enabled:true}],rowCount:1};
+    if(sql.includes("INSERT INTO audit_event"))
+      return {rows:[],rowCount:1};
     if(sql.includes("FROM procurement_reorder_rule r"))
       return {rows:[{sku_id:sku,lead_days:21,review_days:7,
         minimum_batch_milli:"5000",enabled:true}],rowCount:1};
@@ -67,6 +69,10 @@ describe("MoySklad-inspired purchasing review rules (no automatic POs)",()=>{
     ]);
     expect(f.calls.every(x=>!/(?:INSERT|UPDATE)\s+(?:purchase_order|inventory_balance)/i
       .test(x.sql))).toBe(true);
+    const audit=f.calls.find(x=>x.sql.includes("INSERT INTO audit_event"));
+    expect(audit?.args).toEqual([
+      context.tenantId,context.userId,context.membershipId,sku,21,7,"5000",true
+    ]);
   });
   it("read policies require procurement read rights",async()=>{
     const f=setup(null);
