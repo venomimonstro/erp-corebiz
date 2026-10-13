@@ -71,6 +71,54 @@ export class DanceCustomerPortalService{
     });
   }
 
+  private async requirePortalAdmin(context:TenantContext){
+    const [users,dance]=await Promise.all([
+      this.authorization.resolveScope(context,"users.manage"),
+      this.authorization.resolveScope(context,"dance.write")
+    ]);
+    if(users!=="all"||dance!=="all")
+      throw new ForbiddenException("Управление аккаунтами доступно руководителю");
+  }
+
+  async accounts(context:TenantContext){
+    await this.requirePortalAdmin(context);
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT a.membership_id,u.email,a.party_id,p.display_name,a.status
+         FROM dance_customer_account a
+         JOIN tenant_membership tm ON tm.tenant_id=a.tenant_id
+           AND tm.id=a.membership_id
+         JOIN app_user u ON u.id=tm.user_id
+         JOIN party p ON p.tenant_id=a.tenant_id AND p.id=a.party_id
+         WHERE a.tenant_id=$1 ORDER BY a.created_at DESC LIMIT 500`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async revoke(context:TenantContext,membershipId:string){
+    if(!uuid.test(membershipId))
+      throw new BadRequestException("Неверный идентификатор аккаунта");
+    await this.requirePortalAdmin(context);
+    return this.database.withTenantTransaction(context,async client=>{
+      const updated=await client.query(
+        `UPDATE dance_customer_account SET status='REVOKED',
+           updated_at=now()
+         WHERE tenant_id=$1 AND membership_id=$2 AND status='ACTIVE'
+         RETURNING id`,[context.tenantId,membershipId]
+      );
+      if(!updated.rowCount)throw new NotFoundException("Аккаунт не привязан");
+      await client.query(
+        `INSERT INTO audit_event(tenant_id,actor_user_id,actor_membership_id,
+           action,resource_type,resource_id)
+         VALUES($1,$2,$3,'dance.portal_revoked','tenant_membership',$4)`,
+        [context.tenantId,context.userId,context.membershipId,membershipId]
+      );
+      return {revoked:true};
+    });
+  }
+
   async self(context:TenantContext){
     const scope=await this.authorization.resolveScope(context,"dance.portal.read");
     if(scope!=="own")throw new ForbiddenException("Нет доступа к кабинету");
