@@ -60,3 +60,23 @@ test("Offline form still does not see a disabled public specialist",()=>{
   // Internal calendar does not carry PUBLIC_SITE flags or visibility filters.
   assert.doesNotMatch(internal,/online_booking_enabled/);
 });
+
+
+test("Staff-specific services use a single delivery rule and technology card, not duplicate ledgers",()=>{
+  const desk=repoFile("apps/web/app/app/service/desk/page.tsx");
+  const journey=repoFile("scripts/service-desk-browser-journey.mjs");
+  assert.match(desk,/\/service\/technology-cards/);
+  assert.match(desk,/\/service\/delivery-rules/);
+  assert.match(desk,/technologyCardId:personalTechCard\|\|undefined/);
+  assert.match(desk,/durationMinutes:personalDuration\?Number\(personalDuration\):undefined/);
+  assert.match(desk,/Выбранная технологическая карта больше недоступна/);
+  assert.match(journey,/Длительность для мастера/);
+  assert.match(journey,/Правила услуги конкретного мастера/);
+  const rules=booking.slice(
+    booking.indexOf("async createDeliveryRule("),
+    booking.indexOf("async technologyCards(")
+  );
+  assert.match(rules,/technologyCardId/);
+  assert.match(rules,/employeeResourceId/);
+  assert.match(rules,/durationMinutes/);
+});
