@@ -147,3 +147,33 @@ test("Trainer exit suspends tenant membership while preserving history",()=>{
   assert.match(team,/Приостановить вход/);
   assert.match(team,/Восстановить вход/);
 });
+
+
+test("Moscow 2-on/2-off manager rota uses one shared resource calendar",()=>{
+  const source=src("apps/api/src/modules/business/service-ops/resources.service.ts");
+  const controller=src("apps/api/src/modules/business/service-ops/resources.controller.ts");
+  const screen=src("apps/web/app/app/dance/shifts/page.tsx");
+  const nav=src("apps/web/components/dance-workspace-nav.tsx");
+  assert.match(source,/async twoByTwo\(/);
+  assert.match(source,/COREBIZ_2X2_MANAGER_OFF/);
+  assert.match(source,/AT TIME ZONE \$5/);
+  assert.match(source,/reason='COREBIZ_2X2_MANAGER_OFF' AND starts_at>=/);
+  assert.match(source,/input\.replaceWeeklySchedule/);
+  assert.match(source,/users\.manage/);
+  assert.match(source,/input\.days>90/);
+  assert.match(controller,/@Post\(":id\/two-by-two"\)/);
+  assert.match(screen,/График первого менеджера сохранён, второго — нет/);
+  assert.match(screen,/onClick=\{\(\)=>void apply\(\)\}/);
+  assert.match(screen,/Дней вперёд \(4–90\)/);
+  assert.match(nav,/\/app\/dance\/shifts/);
+  assert.match(workflow,/\/two-by-two/);
+  assert.match(workflow,/calendar\.blockedDays,30/);
+  assert.match(workflow,/calendar\.days,60/);
+});
+test("Shift rosters have negative tests for management authorization and manual overrides",()=>{
+  const suite=src("apps/api/src/modules/business/service-ops/resources-two-by-two.spec.ts");
+  assert.match(suite,/refuses to silently destroy/);
+  assert.match(suite,/requires both schedule rights/);
+  assert.match(suite,/vacation blocks untouched/);
+  assert.match(suite,/does not let a manager assign/);
+});
