@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AppSidebar } from "../../../components/app-sidebar";
 import { apiRequest } from "../../../lib/api";
+import industryPlaybooks from "../../../lib/owner-industry-playbooks.json";
 
 type Vertical = {
   code: string; title: string; summary: string; profileCode: string;
@@ -201,6 +202,54 @@ export default function FirstDayPage(){
             <p className="muted">Готовность этих шагов не означает
               подтверждённый приём онлайн-платежей, сдачу отчётности или
               успешный тест всех операций на вашем сервере.</p>
+          </section>
+        ):null}
+        {selected&&Array.isArray(industryPlaybooks.verticals[chosen as keyof typeof industryPlaybooks.verticals])?(
+          <section className="studio-section" aria-label="Полный маршрут владельца">
+            <div className="studio-section-head">
+              <div>
+                <span>03 · Настройка и самопроверка</span>
+                <h2>Все экраны для «{selected.title}»</h2>
+                <p>После первых рабочих шагов проверьте бизнес целиком:
+                  что вводить на экране, какой результат получить и как действовать при ошибке.</p>
+              </div>
+            </div>
+            <p className="muted">
+              Это подробный план действий владельца, а не автоматический сертификат готовности.
+              Зелёные отметки выше относятся только к тем операциям, которые проверил сервер.
+              Платежи, фискализация, интеграции и сквозные процессы требуют отдельных испытаний.
+            </p>
+            <div className="owner-playbook-groups">
+              {([
+                {label:"Общие настройки компании",entries:industryPlaybooks.common},
+                {label:"Процессы вашей ниши",
+                  entries:industryPlaybooks.verticals[chosen as keyof typeof industryPlaybooks.verticals]}
+              ]).map(group=>(
+                <div className="owner-playbook-group" key={group.label}>
+                  <h3>{group.label}</h3>
+                  <div className="owner-playbook-list">
+                    {group.entries.map((entry,index)=>(
+                      <details key={entry.route+"-"+index} className="owner-playbook-item">
+                        <summary>
+                          <span className="owner-playbook-index">{String(index+1).padStart(2,"0")}</span>
+                          <strong>{entry.title}</strong>
+                          <span className="owner-playbook-pending">Проверить вручную</span>
+                        </summary>
+                        <div className="owner-playbook-body">
+                          <p><strong>Что указать:</strong> {entry.fields.join(", ")}.</p>
+                          <p><strong>Ожидаемый результат:</strong> {entry.expected}.</p>
+                          <p><strong>Если не получилось:</strong> {entry.blocked}.</p>
+                          <p><strong>Как восстановить:</strong> {entry.fix}.</p>
+                          <a className="secondary-button" href={entry.route}>
+                            Открыть экран настройки →
+                          </a>
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </section>
         ):null}
         {selected?.attentionSignals?.length?(
