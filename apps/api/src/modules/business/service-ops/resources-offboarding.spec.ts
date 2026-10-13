@@ -15,6 +15,8 @@ function fixture(opts:{
   manage?:boolean;active?:boolean;otherActiveResource?:boolean;
 }={}){
   const query=jest.fn(async(sql:string)=>{
+    if(sql.includes("pg_advisory_xact_lock"))
+      return {rows:[{}],rowCount:1};
     if(sql.includes("SELECT id,type,membership_id FROM service_resource"))
       return {rows:[{id:resourceId,type:opts.resourceType??"EMPLOYEE",
         membership_id:opts.hasMembership===false?null:coachMembership}],rowCount:1};
@@ -63,6 +65,9 @@ describe("Dance coach offboarding with shared partner membership",()=>{
     const suspended=sql.findIndex(x=>x.includes("UPDATE tenant_membership"));
     expect(archive).toBeGreaterThan(-1);
     expect(suspended).toBeGreaterThan(archive);
+    const lock=sql.findIndex(x=>x.includes("pg_advisory_xact_lock"));
+    expect(lock).toBeGreaterThanOrEqual(0);
+    expect(lock).toBeLessThan(archive);
   });
   it("keeps a dedicated coach login when their other branch resource remains active",async()=>{
     const t=fixture({otherActiveResource:true});
