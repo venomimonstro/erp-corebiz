@@ -210,6 +210,12 @@ export class DanceCustomerPortalService{
              sp.visit_limit_snapshot,sp.reserved_visits,sp.used_visits,
              (sp.visit_limit_snapshot-sp.reserved_visits-sp.used_visits)
                AS available_visits
+           ,ARRAY(
+             SELECT b.party_id
+             FROM service_package_beneficiary b
+             WHERE b.tenant_id=sp.tenant_id AND b.package_id=sp.id
+               AND b.status='ACTIVE'
+           ) AS beneficiary_party_ids
            FROM service_package sp
            JOIN service_package_plan plan
              ON plan.tenant_id=sp.tenant_id AND plan.id=sp.plan_id
