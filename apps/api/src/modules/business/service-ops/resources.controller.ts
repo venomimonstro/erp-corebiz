@@ -36,6 +36,18 @@ export class ResourcesController {
     };
   }
 
+  @Put(":id/online-policy")
+  @RequirePermission("service.write")
+  async onlinePolicy(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:{enabled:boolean;minimumNoticeMinutes:number}
+  ):Promise<ApiSuccess<{enabled:boolean;minimumNoticeMinutes:number}>>{
+    return {ok:true,data:await this.resources.updateOnlinePolicy(
+      this.context(request),id,body
+    )};
+  }
+
   @Patch(":id")
   @RequirePermission("service.write")
   async rename(@Req() request:AuthenticatedRequest,@Param("id") id:string,
