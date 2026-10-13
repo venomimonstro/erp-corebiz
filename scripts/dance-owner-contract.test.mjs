@@ -184,7 +184,7 @@ test("Shift rosters have negative tests for management authorization and manual 
 
 
 test("A trainer gets private own-only calendar, never the company's clients or cashflow",()=>{
-  const trainerRole=src("infrastructure/postgres/248_dance_trainer_portal.sql");
+  const trainerRole=src("infrastructure/postgres/250_dance_trainer_portal.sql");
   const service=src("apps/api/src/modules/business/dance-studio/dance-trainer-portal.service.ts");
   const screen=src("apps/web/app/portal/trainer/page.tsx");
   const staff=src("apps/web/app/app/dance/staff/page.tsx");
