@@ -94,6 +94,17 @@ export class CommerceDecisionsService {
         [context.tenantId,skuId,input.leadDays,input.reviewDays,
           input.minimumBatchMilli,input.enabled,context.membershipId]
       );
+      await client.query(
+        `INSERT INTO audit_event(tenant_id,actor_user_id,actor_membership_id,
+           action,resource_type,resource_id,after_data)
+         VALUES($1,$2,$3,'procurement.reorder_rule_updated',
+           'sku',$4,jsonb_build_object(
+             'leadDays',$5::integer,'reviewDays',$6::integer,
+             'minimumBatchMilli',$7::text,'enabled',$8::boolean
+           ))`,
+        [context.tenantId,context.userId,context.membershipId,skuId,
+          input.leadDays,input.reviewDays,input.minimumBatchMilli,input.enabled]
+      );
       return result.rows[0];
     });
   }
