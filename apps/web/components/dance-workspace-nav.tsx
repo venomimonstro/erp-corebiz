@@ -8,6 +8,7 @@ const items = [
   { key: "budget", href: "/app/dance/budget", label: "Бюджет", hint: "План и сезонность" },
   { key: "services", href: "/app/dance/services", label: "Услуги", hint: "Цены и категории" },
   { key: "staff", href: "/app/dance/staff", label: "Тренеры", hint: "Нагрузка и кадры" },
+  { key: "shifts", href: "/app/dance/shifts", label: "Смены 2/2", hint: "Менеджеры и график" },
   { key: "team", href: "/app/dance/team", label: "Команда и залы", hint: "Тренеры, аренда, ресурсы" },
   { key: "setup", href: "/app/dance/setup", label: "Настройка", hint: "Цены, услуги, зоны" }
 ] as const;
@@ -15,7 +16,7 @@ const items = [
 export function DanceWorkspaceNav({
   active
 }: {
-  active: "overview" | "groups" | "students" | "clients" | "budget" | "services" | "staff" | "team" | "setup";
+  active: "overview" | "groups" | "students" | "clients" | "budget" | "services" | "staff" | "shifts" | "team" | "setup";
 }) {
   return (
     <nav className="studio-nav" aria-label="Разделы студии">
