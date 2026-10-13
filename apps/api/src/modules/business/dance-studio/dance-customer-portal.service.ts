@@ -259,7 +259,7 @@ export class DanceCustomerPortalService{
         )
       ]);
       return {
-        person:{name:person.display_name},
+        person:{name:person.display_name,partyId:person.party_id},
         students:students.rows,
         groups:groups.rows,
         visits:visits.rows,
