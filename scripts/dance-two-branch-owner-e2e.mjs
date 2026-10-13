@@ -395,6 +395,25 @@ async function main(){
   stage="09 negative archival: reassignment required";
   await post(owner,"/service/resources/"+trainers[0].id+"/archive",
     {},409);
+  stage="09b revoke and recover parent portal access";
+  const listedAccounts=await get(owner,"/dance/portal/accounts");
+  assert.ok(listedAccounts.some(x=>x.membership_id===parent&&
+    x.status==="ACTIVE"));
+  const revoked=await post(owner,
+    "/dance/portal/accounts/"+parent+"/revoke",{});
+  assert.equal(revoked.revoked,true);
+  await get(actors.parent,"/dance/portal/me",403);
+  await get(actors.parent,"/crm/board",403);
+  const restored=await post(owner,"/dance/portal/link",{
+    membershipId:parent,partyId:mother.id
+  });
+  assert.equal(restored.linked,true);
+  const recovered=await get(actors.parent,"/dance/portal/me");
+  assert.ok(recovered.students.some(x=>x.id===student.id));
+  assert.ok(recovered.packages.every(p=>
+    p.party_id===null||p.party_id===child.id));
+  // One login must never acquire company finance access through relinking.
+  await get(actors.parent,"/finance/summary",403);
   stage="10 validation of known financial uncertainties";
   const result={
     mode:"DISPOSABLE_DANCE_OWNER_SIMULATION",
