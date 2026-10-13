@@ -216,7 +216,7 @@ export default function DanceStudentsPage() {
           item.payer_party_id === selected.payer_party_id &&
           item.finance_verified && item.obligation_id &&
           item.remaining_minor!==null &&
-          BigInt(item.remaining_minor)>0n
+          BigInt(item.remaining_minor??"0")>0n
       )
       .sort((a, b) =>
         String(a.due_at ?? "9999").localeCompare(String(b.due_at ?? "9999"))
@@ -346,7 +346,7 @@ export default function DanceStudentsPage() {
   function openFamilyPayModal() {
     if(!selected?.payer_party_id||!payerOpenCharges.length)return;
     const totalOpen=payerOpenCharges.reduce(
-      (sum,item)=>sum+BigInt(item.remaining_minor),0n
+      (sum,item)=>sum+BigInt(item.remaining_minor??"0"),0n
     );
     setFamilyPayRub(String(Number(totalOpen)/100));
     setFamilyPayModal(true);
