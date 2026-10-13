@@ -22,7 +22,10 @@
     "simulate:100-users": "node scripts/simulate-100-users.mjs",
     "slo:probe": "node scripts/slo-availability.mjs probe",
     "slo:report": "node scripts/slo-availability.mjs report",
-    "slo:test": "node --test scripts/slo-availability.test.mjs"
+    "slo:test": "node --test scripts/slo-availability.test.mjs",
+    "owner:industry:test": "node --test scripts/owner-industry-journeys.test.mjs",
+    "owner:industry:api": "node scripts/owner-17-vertical-api-e2e.mjs",
+    "owner:business:e2e": "node scripts/owner-business-setup-e2e.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
