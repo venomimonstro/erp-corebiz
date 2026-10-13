@@ -97,7 +97,10 @@ export class DanceBudgetService{
              SELECT
                coalesce(sum(c.amount_minor),0) AS amount_minor,
                coalesce(sum(coalesce(o.settled_minor,0)),0) AS settled_minor,
-               count(*) FILTER (WHERE o.id IS NULL)::int AS unverified
+               (CASE WHEN count(c.id)=0 AND b.price_minor_snapshot>0
+                 THEN 1
+                 ELSE count(*) FILTER (WHERE o.id IS NULL)
+               END)::int AS unverified
              FROM service_booking_charge c
              LEFT JOIN financial_obligation o ON
                o.tenant_id=c.tenant_id AND o.id=c.obligation_id
