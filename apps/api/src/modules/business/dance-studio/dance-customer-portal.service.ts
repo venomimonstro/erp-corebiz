@@ -230,9 +230,17 @@ export class DanceCustomerPortalService{
                WHERE b.tenant_id=sp.tenant_id AND b.package_id=sp.id
                  AND b.status='ACTIVE' AND b.party_id=ANY($2::uuid[])
              )
+             OR (
+               sp.party_id=$3
+               AND EXISTS(
+                 SELECT 1 FROM service_package_beneficiary b
+                 WHERE b.tenant_id=sp.tenant_id AND b.package_id=sp.id
+                   AND b.status='ACTIVE' AND b.party_id=ANY($2::uuid[])
+               )
+             )
            )
            ORDER BY sp.expires_at DESC LIMIT 250`,
-          [context.tenantId,studentParties]
+          [context.tenantId,studentParties,person.party_id]
         ),
         client.query(
           `SELECT c.student_id,c.id,c.amount_minor::text,
