@@ -50,6 +50,15 @@ export class BookingController {
     };
   }
 
+  @Post("catalog/:id/archive")
+  @RequirePermission("service.write")
+  async archiveService(
+    @Req() request:AuthenticatedRequest,
+    @Param("id") id:string
+  ):Promise<ApiSuccess<{archived:true}>>{
+    return {ok:true,data:await this.booking.archiveService(this.context(request),id)};
+  }
+
   @Post("technology-cards/:cardId/archive")
   @RequirePermission("service.write")
   async archiveTechnologyCard(
