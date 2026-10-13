@@ -205,7 +205,10 @@ export class DanceCustomerPortalService{
           [context.tenantId,studentIds]
         ),
         client.query(
-          `SELECT DISTINCT sp.id,sp.party_id,plan.name AS plan_name,
+          `SELECT DISTINCT sp.id,
+             CASE WHEN sp.party_id=ANY($2::uuid[]) THEN sp.party_id
+                  ELSE NULL END AS party_id,
+             plan.name AS plan_name,
              sp.status,sp.starts_at,sp.expires_at,
              sp.visit_limit_snapshot,sp.reserved_visits,sp.used_visits,
              (sp.visit_limit_snapshot-sp.reserved_visits-sp.used_visits)
@@ -214,7 +217,7 @@ export class DanceCustomerPortalService{
              SELECT b.party_id
              FROM service_package_beneficiary b
              WHERE b.tenant_id=sp.tenant_id AND b.package_id=sp.id
-               AND b.status='ACTIVE'
+               AND b.status='ACTIVE' AND b.party_id=ANY($2::uuid[])
            ) AS beneficiary_party_ids
            FROM service_package sp
            JOIN service_package_plan plan
