@@ -367,3 +367,14 @@ test("Archiving a service cannot strand an active dance direction",()=>{
   assert.match(bookings,/Услуга используется активным направлением/);
   assert.match(bookings,/Сначала завершите или перенесите будущие записи/);
 });
+
+test("Family-purchased passes remain visible to payer, but never count as child visits before assignment",()=>{
+  assert.match(portal,/OR sp\.party_id=\$3/);
+  assert.match(portal,/\[context\.tenantId,studentParties,person\.party_id\]/);
+  assert.match(portal,/b\.status='ACTIVE' AND b\.party_id=ANY\(\$2::uuid\[\]\)/);
+  assert.match(portal,/person:\{name:person\.display_name,partyId:person\.party_id\}/);
+  assert.match(page,/unassignedFamilyPasses/);
+  assert.match(page,/Семейные абонементы без назначенного ученика/);
+  assert.match(page,/p\.beneficiary_party_ids\?\.includes\(student\.party_id\)/);
+  assert.match(page,/Доступно занятий: /);
+});
