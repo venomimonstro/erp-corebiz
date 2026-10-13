@@ -4451,3 +4451,36 @@ button, .primary, .secondary { font: inherit; }
 .commerce-rule-fields input{width:100%;min-width:0;border:1px solid #cdd7e2;background:#fff;padding:10px 11px;border-radius:10px;color:inherit}
 .commerce-rule-fields input:focus-visible{outline:3px solid #95b8e6;outline-offset:2px}
 @media(max-width:700px){.commerce-rule-fields{grid-template-columns:1fr}}
+
+
+/* Warehouse cockpit: source-ledger stock, expected arrivals and picker itinerary. */
+.wms-ops-head{display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:24px}
+.wms-ops-head h1{margin:4px 0 7px;letter-spacing:-.04em}
+.wms-ops-head p{font-size:13px;color:#657180;max-width:750px}
+.wms-ops-toolbar{display:flex;align-items:end;flex-wrap:wrap;gap:12px;margin-bottom:20px}
+.wms-ops-toolbar label{display:flex;flex-direction:column;gap:6px;font-size:12px}
+.wms-ops-toolbar select,.wms-ops-controls input{min-height:41px;border:1px solid #d3dce7;border-radius:10px;padding:9px;background:#fff}
+.wms-ops-toolbar a{font-size:13px;padding:9px;text-decoration:underline}
+.wms-ops-toolbar button,.wms-ops-error button{padding:11px;border-radius:10px;border:1px solid #c6d2e0;background:#fff}
+.wms-ops-section{border:1px solid #e0e6ee;background:#fff;border-radius:17px;padding:22px;margin:16px 0}
+.wms-ops-title{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}
+.wms-ops-title h2{margin:0 0 6px;font-size:22px}
+.wms-ops-title p{font-size:12px;color:#667386;max-width:760px;line-height:1.55}
+.wms-ops-title>strong{font-size:13px;background:#f0f4f8;padding:8px 12px;border-radius:20px}
+.wms-ops-controls{display:flex;align-items:center;flex-wrap:wrap;gap:14px;margin:20px 0}
+.wms-ops-controls input{min-width:min(280px,100%)}
+.wms-ops-controls label{font-size:13px;display:flex;align-items:center;gap:7px}
+.wms-ops-table-wrap{overflow-x:auto;max-width:100%}
+.wms-ops-table{border-collapse:collapse;width:100%;font-size:12px;min-width:950px;text-align:left}
+.wms-ops-table th{color:#687484;background:#f4f6f9;font-weight:650;padding:12px 9px}
+.wms-ops-table td{padding:12px 9px;border-bottom:1px solid #edf0f3;white-space:nowrap}
+.wms-ops-table td:first-child{white-space:normal;min-width:160px}
+.wms-ops-table td strong,.wms-ops-table td small{display:block}
+.wms-ops-table td small{font-size:11px;color:#8a95a4;margin-top:4px}
+.wms-ops-route{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:18px 0}
+.wms-ops-route article{display:flex;gap:12px;align-items:center;border:1px solid #e1e7ee;border-radius:12px;padding:13px;min-width:0}
+.wms-ops-step{font-size:13px;font-weight:700;background:#e8eff8;display:flex;align-items:center;justify-content:center;min-width:31px;height:31px;border-radius:50%}
+.wms-ops-route p{font-size:12px;color:#576476;margin:5px 0;overflow-wrap:anywhere}
+.wms-ops-route small{font-size:11px;color:#7d8897}
+.wms-ops-error{border:1px solid #e4d1ba;border-radius:14px;padding:15px;background:#fffbf5;margin:15px 0}
+@media(max-width:720px){.wms-ops-section{padding:15px}.wms-ops-route{grid-template-columns:1fr}}
