@@ -690,6 +690,13 @@ export class DanceStudioController {
     };
   }
 
+  @Get("rental-income")
+  @RequirePermission("finance.read")
+  async rentalIncome(@Req() req:AuthenticatedRequest,
+    @Query("month") month:string):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.budget.rentalIncome(this.ctx(req),month)};
+  }
+
   @Get("budget")
   @RequirePermission("finance.read")
   async budgetPlan(@Req() req:AuthenticatedRequest,
