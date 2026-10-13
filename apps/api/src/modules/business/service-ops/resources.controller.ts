@@ -133,6 +133,17 @@ export class ResourcesController {
     };
   }
 
+  @Post(":id/two-by-two")
+  @RequirePermission("service.write")
+  async twoByTwo(@Req() request:AuthenticatedRequest,
+    @Param("id") id:string,
+    @Body() body:{
+      startDate:string;days:number;startsWorking:boolean;
+      startMinute:number;endMinute:number;replaceWeeklySchedule?:boolean;
+    }):Promise<ApiSuccess<{days:number;blockedDays:number;timezone:string}>>{
+    return {ok:true,data:await this.resources.twoByTwo(this.context(request),id,body)};
+  }
+
   @Post(":id/blocks")
   @RequirePermission("service.write")
   async addBlock(
