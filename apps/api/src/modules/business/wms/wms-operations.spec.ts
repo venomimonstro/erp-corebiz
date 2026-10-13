@@ -78,7 +78,7 @@ describe("tenant-safe read-only warehouse operations",()=>{
       calls.push({sql,args});
       if(sql.includes("FROM warehouse\n"))return {rows:[{name:"Store A",branch_id:null}],rowCount:1};
       if(sql.includes("FROM warehouse WHERE"))return {rows:[{id:warehouseId}],rowCount:1};
-      if(sql.includes("FROM inventory_balance b"))return {
+      if(sql.includes("FROM all_skus sku_set"))return {
         rows:[{sku_id:"sku",sku_code:"SKU",product_name:"Product",
           physical_milli:"1000",reserved_milli:"500",expected_milli:"0",
           safety_milli:"0",sourcing_enabled:true}],rowCount:1
