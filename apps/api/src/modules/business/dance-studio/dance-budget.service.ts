@@ -73,6 +73,76 @@ export class DanceBudgetService{
     });
   }
 
+  /**
+   * Sales of subleased rooms are NOT the studio's own lease expenses.
+   * Count each booking exactly once even when it reserves multiple resources.
+   * A confirmed booking creates a receivable, never a verified payment.
+   */
+  async rentalIncome(context:TenantContext,month:string){
+    await this.requireScope(context,"finance.read");
+    const date=this.month(month);
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{
+        branch_id:string|null;branch_name:string|null;
+        bookings:number;booked_minor:string;receivable_minor:string;
+        settled_minor:string;unverified:number
+      }>(
+        `WITH rentals AS (
+           SELECT b.id,b.branch_id,b.price_minor_snapshot,
+                  coalesce(ch.amount_minor,0) AS receivable_minor,
+                  coalesce(ch.settled_minor,0) AS settled_minor,
+                  coalesce(ch.unverified,0) AS unverified
+           FROM service_booking b
+           LEFT JOIN LATERAL (
+             SELECT
+               coalesce(sum(c.amount_minor),0) AS amount_minor,
+               coalesce(sum(coalesce(o.settled_minor,0)),0) AS settled_minor,
+               count(*) FILTER (WHERE o.id IS NULL)::int AS unverified
+             FROM service_booking_charge c
+             LEFT JOIN financial_obligation o ON
+               o.tenant_id=c.tenant_id AND o.id=c.obligation_id
+             WHERE c.tenant_id=b.tenant_id AND c.booking_id=b.id
+           ) ch ON true
+           WHERE b.tenant_id=$1
+             AND b.delivery_format_snapshot='RENTAL'
+             AND b.status<>'CANCELLED'
+             AND b.starts_at>=($2::date AT TIME ZONE 'Europe/Moscow')
+             AND b.starts_at<(($2::date + interval '1 month')
+                                AT TIME ZONE 'Europe/Moscow')
+         )
+         SELECT r.branch_id,br.name AS branch_name,
+                count(*)::int AS bookings,
+                coalesce(sum(r.price_minor_snapshot),0)::text AS booked_minor,
+                coalesce(sum(r.receivable_minor),0)::text AS receivable_minor,
+                coalesce(sum(r.settled_minor),0)::text AS settled_minor,
+                coalesce(sum(r.unverified),0)::int AS unverified
+         FROM rentals r
+         LEFT JOIN branch br ON br.tenant_id=$1 AND br.id=r.branch_id
+         GROUP BY r.branch_id,br.name ORDER BY br.name NULLS LAST`,
+        [context.tenantId,date]
+      );
+      const branches=result.rows;
+      const sum=(key:"booked_minor"|"receivable_minor"|"settled_minor")=>
+        branches.reduce((total,row)=>total+BigInt(row[key]),0n).toString();
+      return {
+        month,
+        branches,
+        totals:{
+          bookings:branches.reduce((n,row)=>n+row.bookings,0),
+          bookedMinor:sum("booked_minor"),
+          receivableMinor:sum("receivable_minor"),
+          settledMinor:sum("settled_minor"),
+          unverified:branches.reduce((n,row)=>n+row.unverified,0)
+        },
+        notes:[
+          "Booked rent is not cash collected",
+          "Settlements exclude unverified obligations",
+          "Room lease costs are separately recorded expenses"
+        ]
+      };
+    });
+  }
+
   async save(context:TenantContext,input:BudgetInput){
     await this.requireScope(context,"finance.write");
     const month=this.month(input?.month);
