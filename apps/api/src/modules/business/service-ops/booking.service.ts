@@ -255,8 +255,16 @@ export class BookingService {
         [context.tenantId,serviceId]
       );
       if(!current.rowCount)throw new NotFoundException("Услуга не найдена");
-      // dance_program has no service_id column in schema 151. Guard
-      // active future bookings (below); never reference a nonexistent FK.
+      // Migration 153 adds dance_program.service_id. Prevent a live
+      // direction from silently losing the service offered to students.
+      const activePrograms=await client.query(
+        `SELECT 1 FROM dance_program
+         WHERE tenant_id=$1 AND service_id=$2 AND status='ACTIVE'
+         LIMIT 1`,[context.tenantId,serviceId]
+      );
+      if(activePrograms.rowCount)throw new ConflictException(
+        "Услуга используется активным направлением. Сначала архивируйте направление или назначьте другую услугу"
+      );
       const bookings=await client.query(
         `SELECT 1 FROM service_booking
          WHERE tenant_id=$1 AND service_id=$2 AND ends_at>now()
