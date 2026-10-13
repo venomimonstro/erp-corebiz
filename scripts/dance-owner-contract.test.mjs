@@ -309,3 +309,33 @@ test("Dance client must revoke session server-side and never navigate to staff E
   assert.match(portalPage,/window\.location\.assign\("\/login\?next=%2Fportal%2Fdance"\)/);
   assert.doesNotMatch(portalPage,/<a href="\/app">Рабочий кабинет<\/a>/);
 });
+
+test("52 trainers can be linked to real services with per-trainer price/duration",()=>{
+  const staff=src("apps/web/app/app/dance/staff/page.tsx");
+  const rules=src("apps/api/src/modules/business/service-ops/booking.service.ts");
+  assert.match(staff,/addTrainerService/);
+  assert.match(staff,/removeTrainerService/);
+  assert.match(staff,/\/service\/delivery-rules/);
+  assert.match(staff,/employeeResourceId:current\.id/);
+  assert.match(staff,/priceMinor,durationMinutes:minutes/);
+  assert.match(staff,/Назначить услугу/);
+  assert.match(rules,/async createDeliveryRule/);
+  assert.match(rules,/async archiveDeliveryRule/);
+  assert.match(workflow,/stats\.trainersWithServices=trainers\.length/);
+  assert.match(workflow,/stats\.trainersWithIndividualLessons=12/);
+  assert.match(workflow,/currentRules\.some/);
+});
+test("Reception sees student charges but not bank accounts or fictitious balances",()=>{
+  const reception=src("apps/web/app/app/dance/students/page.tsx");
+  const economics=src("apps/api/src/modules/business/dance-studio/dance-economics.service.ts");
+  assert.match(reception,/rights\.canViewStudentBilling\?apiRequest<Charge\[\]>/);
+  assert.match(reception,/item\.finance_verified/);
+  assert.match(reception,/!charge\.obligation_id/);
+  assert.match(reception,/Не сверено/);
+  assert.match(reception,/Уточняется/);
+  assert.match(economics,/dance\.charges\.read/);
+  assert.match(economics,/\(o\.id IS NOT NULL\) AS finance_verified/);
+  assert.match(economics,/CASE WHEN o\.id IS NULL THEN NULL/);
+  assert.doesNotMatch(roles,/'finance\.read'/);
+  assert.doesNotMatch(roles,/'finance\.write'/);
+});
