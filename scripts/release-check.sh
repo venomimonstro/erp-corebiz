@@ -32,6 +32,7 @@ echo "[release] validate owner playbooks and simulate every failure path"
 node --test scripts/owner-industry-journeys.test.mjs
 
 echo "[release] validate operator scripts and 99.9% SLO evaluator"
+node --check scripts/owner-17-vertical-api-e2e.mjs
 node --check scripts/service-desk-browser-journey.mjs
 node --check scripts/owner-business-setup-e2e.mjs
 node --check scripts/owner-first-day-journey.mjs
