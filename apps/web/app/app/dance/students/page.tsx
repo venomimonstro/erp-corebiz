@@ -6,7 +6,7 @@ import { DanceWorkspaceNav } from "../../../../components/dance-workspace-nav";
 import { StudioModal } from "../../../../components/studio-modal";
 import { apiRequest } from "../../../../lib/api";
 
-type DanceAccess={canViewFinance:boolean;canManageFinance:boolean;canManageDance:boolean};
+type DanceAccess={canViewFinance:boolean;canViewStudentBilling:boolean;canManageFinance:boolean;canManageDance:boolean};
 type Customer = {
   id: string;
   displayName: string;
@@ -167,7 +167,7 @@ export default function DanceStudentsPage() {
       if(search&&!student.display_name.toLocaleLowerCase("ru-RU").includes(search)&&
          !(student.payer_name??"").toLocaleLowerCase("ru-RU").includes(search))
         return false;
-      if (!access?.canViewFinance)return true;
+      if (!access?.canViewStudentBilling)return true;
       if (financeFilter === "DEBT") {
         return BigInt(student.family_debt_minor ?? "0") > 0n;
       }
@@ -185,7 +185,7 @@ export default function DanceStudentsPage() {
       if(debtA!==debtB) return debtA>debtB?-1:1;
       return a.display_name.localeCompare(b.display_name,"ru");
     });
-  },[students,financeFilter,studentSearch,access?.canViewFinance]);
+  },[students,financeFilter,studentSearch,access?.canViewStudentBilling]);
 
   useEffect(() => {
     if(!filteredStudents.some(student=>student.id===selectedId)){
@@ -531,7 +531,7 @@ export default function DanceStudentsPage() {
           <div>
             <span>Карточка ученика</span>
             <strong>{students.length} учеников в студии</strong>
-            {access?.canViewFinance?<div className="studio-filter-chips">
+            {access?.canViewStudentBilling?<div className="studio-filter-chips">
               {[
                 ["ALL","Все"],
                 ["DEBT","Есть долг"],
@@ -556,8 +556,8 @@ export default function DanceStudentsPage() {
             <option value="">Выберите ученика</option>
             {filteredStudents.map((student) => (
               <option key={student.id} value={student.id}>
-                {student.display_name}{access?.canViewFinance?" · семья "+money(student.family_debt_minor):""}
-                {access?.canViewFinance&&BigInt(student.family_overdue_minor ?? "0")>0n
+                {student.display_name}{access?.canViewStudentBilling?" · семья "+money(student.family_debt_minor):""}
+                {access?.canViewStudentBilling&&BigInt(student.family_overdue_minor ?? "0")>0n
                   ? " · просрочено " + money(student.family_overdue_minor)
                   : ""}
               </option>
@@ -579,7 +579,7 @@ export default function DanceStudentsPage() {
                 <strong>{selected.payer_name ?? "Сам ученик"}</strong>
                 <small>{selected.payer_party_id ? "семейный контур" : "личная оплата"}</small>
               </article>
-              {access?.canViewFinance?<><article className="owner-kpi">
+              {access?.canViewStudentBilling?<><article className="owner-kpi">
                 <span>Долг семьи</span>
                 <strong>{money(selected.family_debt_minor)}</strong>
                 <small>
@@ -603,7 +603,7 @@ export default function DanceStudentsPage() {
               </article>
             </div>
 
-            {access?.canViewFinance?<nav className="dance-segment-nav" aria-label="Рабочие режимы карточки">
+            {access?.canViewStudentBilling?<nav className="dance-segment-nav" aria-label="Рабочие режимы карточки">
               <button type="button" className={studentView==="PACKAGES"?"active":""}
                 aria-pressed={studentView==="PACKAGES"} onClick={()=>setStudentView("PACKAGES")}>Абонементы и отработки</button>
               <button type="button" className={studentView==="FINANCES"?"active":""}
