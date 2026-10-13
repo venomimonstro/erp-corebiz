@@ -155,8 +155,12 @@ function money(value: string | null) {
 }
 
 function dateInput(daysFromNow = 0) {
+  // Owners abroad must book the Moscow studio's date, never the browser
+  // timezone or UTC date (which can still be yesterday in Moscow).
   const date = new Date(Date.now() + daysFromNow * 86400000);
-  return date.toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat("sv-SE",{
+    timeZone:"Europe/Moscow",year:"numeric",month:"2-digit",day:"2-digit"
+  }).format(date);
 }
 
 export default function DanceGroupsPage() {
