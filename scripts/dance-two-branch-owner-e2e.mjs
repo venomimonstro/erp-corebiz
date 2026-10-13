@@ -342,6 +342,29 @@ async function main(){
   assert.ok(stored.length>=3);
   const allTrainers=await get(owner,"/service/resources");
   assert.ok(allTrainers.filter(x=>x.type==="EMPLOYEE").length>=54);
+  stage="08a coach account sees only personal groups";
+  // Reuse manager-2 login after receptionist tests: no 6th registration,
+  // no rate-limiter bypass. One linked EMPLOYEE resource also teaches.
+  const trainerOwnGroup=await post(owner,"/dance/groups",{
+    name:"Disposable trainer own-scope verification",
+    programId:createdPrograms[3].id,branchId:branches[1].id,
+    trainerResourceId:receptionistResources[1].id,
+    roomResourceId:hallB.id,capacity:10,breakEvenMembers:4,
+    schedule:[{weekday:6,startMinute:1140,durationMinutes:60}]
+  });
+  assert.ok(trainerOwnGroup.id);
+  await put(owner,"/roles/assign",{
+    membershipId:manager2,roleId:role("SERVICE_STAFF")
+  });
+  const coachContext=await get(actors.m2,"/workspace/context");
+  assert.deepEqual(coachContext.roles,["SERVICE_STAFF"]);
+  const visibleGroups=await get(actors.m2,"/dance/groups");
+  assert.ok(visibleGroups.some(x=>x.id===trainerOwnGroup.id));
+  assert.ok(visibleGroups.every(x=>x.trainer_resource_id===
+    receptionistResources[1].id),"Coach must not see unassigned branch groups");
+  await get(actors.m2,"/dance/charges",403);
+  await get(actors.m2,"/finance/summary",403);
+  await get(actors.m2,"/tenants/team",403);
   stage="09 negative archival: reassignment required";
   await post(owner,"/service/resources/"+trainers[0].id+"/archive",
     {},409);
