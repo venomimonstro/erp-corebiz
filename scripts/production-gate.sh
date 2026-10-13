@@ -152,6 +152,7 @@ pass_step "API:INTEGRATION"
 
 echo "[production-gate] 5/13 owner first-day + golden vertical business journeys"
 node --test scripts/owner-industry-journeys.test.mjs
+node scripts/owner-17-vertical-api-e2e.mjs
 node scripts/owner-business-setup-e2e.mjs
 node scripts/owner-first-day-journey.mjs
 node scripts/golden-business-journeys.mjs
