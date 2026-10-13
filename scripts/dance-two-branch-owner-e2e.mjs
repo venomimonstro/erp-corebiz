@@ -324,8 +324,15 @@ async function main(){
   const firstRentalDetail=await get(owner,"/service/bookings/"+rental1.id);
   assert.equal(firstRentalDetail.price_minor_snapshot,demoRentalPriceMinor);
   assert.equal(firstRentalDetail.delivery_format_snapshot,"RENTAL");
+  assert.equal(firstRentalDetail.billing?.amountMinor,demoRentalPriceMinor,
+    "Room booking must create a receivable for its own guest");
+  assert.equal(firstRentalDetail.billing?.settledMinor,"0",
+    "A room booking is NOT proof of customer payment");
   const secondRentalDetail=await get(owner,"/service/bookings/"+rental2.id);
   assert.equal(secondRentalDetail.price_minor_snapshot,demoRentalPriceMinor);
+  assert.equal(secondRentalDetail.billing?.amountMinor,demoRentalPriceMinor);
+  assert.notEqual(secondRentalDetail.billing?.id,firstRentalDetail.billing?.id,
+    "Two different rented halls need independent charges");
   stats.rentalBookings=2;
   stage="07 CRM family, memberships and client portal";
   const mother=await post(actors.m1,"/crm/customers",{
