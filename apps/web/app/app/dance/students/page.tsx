@@ -45,8 +45,9 @@ type Charge = {
   status: string;
   obligation_id: string;
   invoice_number: string | null;
-  settled_minor: string;
-  remaining_minor: string;
+  settled_minor: string|null;
+  remaining_minor: string|null;
+  finance_verified:boolean;
 };
 
 type Plan = {
@@ -137,13 +138,13 @@ export default function DanceStudentsPage() {
       const [studentRows,customerRows,chargeRows,planRows,packageRows,makeupRows]=await Promise.all([
         apiRequest<Student[]>("/dance/students"),
         rights.canManageDance?apiRequest<Customer[]>("/crm/customers"):Promise.resolve([] as Customer[]),
-        rights.canViewFinance?apiRequest<Charge[]>("/dance/charges"):Promise.resolve([] as Charge[]),
+        rights.canViewStudentBilling?apiRequest<Charge[]>("/dance/charges"):Promise.resolve([] as Charge[]),
         rights.canManageDance?apiRequest<Plan[]>("/service/package-plans"):Promise.resolve([] as Plan[]),
         rights.canManageDance?apiRequest<Pack[]>("/service/packages"):Promise.resolve([] as Pack[]),
         apiRequest<MakeupCredit[]>("/dance/makeup-credits")
       ]);
       setAccess(rights);
-      if(!rights.canViewFinance){setFinanceFilter("ALL");setStudentView("PACKAGES");}
+      if(!rights.canViewStudentBilling){setFinanceFilter("ALL");setStudentView("PACKAGES");}
       setStudents(studentRows);
       setCustomers(customerRows);
       setCharges(chargeRows);
@@ -213,7 +214,9 @@ export default function DanceStudentsPage() {
       .filter(
         (item) =>
           item.payer_party_id === selected.payer_party_id &&
-          BigInt(item.remaining_minor || "0") > 0n
+          item.finance_verified && item.obligation_id &&
+          item.remaining_minor!==null &&
+          BigInt(item.remaining_minor)>0n
       )
       .sort((a, b) =>
         String(a.due_at ?? "9999").localeCompare(String(b.due_at ?? "9999"))
@@ -635,8 +638,10 @@ export default function DanceStudentsPage() {
                         <td><strong>{charge.source_type}</strong><small>{charge.invoice_number ?? charge.id}</small></td>
                         <td>{charge.payer_name}</td>
                         <td>{money(charge.amount_minor)}</td>
-                        <td>{money(charge.settled_minor)}</td>
-                        <td><strong>{money(charge.remaining_minor)}</strong></td>
+                        <td>{charge.finance_verified&&charge.settled_minor!==null
+                          ?money(charge.settled_minor):"Не сверено"}</td>
+                        <td><strong>{charge.finance_verified&&charge.remaining_minor!==null
+                          ?money(charge.remaining_minor):"Уточняется"}</strong></td>
                         <td>{charge.due_at ? new Date(charge.due_at).toLocaleDateString("ru-RU") : "—"}</td>
                         <td><span className="status-pill">{charge.status}</span></td>
                       </tr>
