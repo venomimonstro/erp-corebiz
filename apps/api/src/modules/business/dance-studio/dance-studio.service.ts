@@ -126,8 +126,18 @@ export class DanceStudioService {
       }>(`SELECT
         (SELECT count(*)::int FROM branch
          WHERE tenant_id=$1 AND status='ACTIVE') AS branches,
-        (SELECT count(*)::int FROM service_resource
-         WHERE tenant_id=$1 AND status='ACTIVE' AND type='EMPLOYEE') AS trainers,
+        (SELECT count(*)::int
+         FROM service_resource r
+         WHERE r.tenant_id=$1 AND r.status='ACTIVE' AND r.type='EMPLOYEE'
+           AND NOT EXISTS(
+             SELECT 1 FROM membership_role mr
+             JOIN tenant_role tr ON tr.tenant_id=mr.tenant_id
+               AND tr.id=mr.role_id
+             WHERE mr.tenant_id=r.tenant_id
+               AND mr.membership_id=r.membership_id
+               AND tr.code='DANCE_MANAGER'
+           )
+        ) AS trainers,
         (SELECT count(*)::int FROM service_resource
          WHERE tenant_id=$1 AND status='ACTIVE'
            AND type IN ('ROOM','HALL')) AS halls,
@@ -140,10 +150,23 @@ export class DanceStudioService {
            AND status IN ('PLANNED','OPEN_FOR_BOOKING')) AS lessons,
         (SELECT count(*)::int FROM service_package_plan
          WHERE tenant_id=$1 AND status='ACTIVE') AS plans,
-        (SELECT count(DISTINCT employee_resource_id)::int
-         FROM service_delivery_rule
-         WHERE tenant_id=$1 AND status='ACTIVE'
-           AND employee_resource_id IS NOT NULL) AS coaches_with_services,
+        (SELECT count(DISTINCT rule.employee_resource_id)::int
+         FROM service_delivery_rule rule
+         JOIN service_resource r ON r.tenant_id=rule.tenant_id
+           AND r.id=rule.employee_resource_id AND r.status='ACTIVE'
+           AND r.type='EMPLOYEE'
+         JOIN service_catalog_item svc ON svc.tenant_id=rule.tenant_id
+           AND svc.id=rule.service_id AND svc.status='ACTIVE'
+         WHERE rule.tenant_id=$1 AND rule.status='ACTIVE'
+           AND rule.employee_resource_id IS NOT NULL
+           AND NOT EXISTS(
+             SELECT 1 FROM membership_role mr
+             JOIN tenant_role tr ON tr.tenant_id=mr.tenant_id
+               AND tr.id=mr.role_id
+             WHERE mr.tenant_id=r.tenant_id
+               AND mr.membership_id=r.membership_id
+               AND tr.code='DANCE_MANAGER'
+           )) AS coaches_with_services,
         (SELECT count(*)::int FROM dance_group
          WHERE tenant_id=$1 AND status='ACTIVE'
            AND (trainer_resource_id IS NULL OR room_resource_id IS NULL))
