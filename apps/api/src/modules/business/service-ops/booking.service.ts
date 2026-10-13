@@ -244,6 +244,8 @@ export class BookingService {
     context:TenantContext,serviceId:string
   ):Promise<{archived:true}>{
     await this.requireServiceAll(context,"service.write");
+    if((await this.authorization.resolveScope(context,"users.manage"))!=="all")
+      throw new ForbiddenException("Удаление услуги из каталога доступно владельцу или администратору");
     if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(serviceId))
       throw new BadRequestException("Некорректная услуга");
     return this.database.withTenantTransaction(context,async client=>{
