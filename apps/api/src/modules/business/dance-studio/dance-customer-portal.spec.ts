@@ -63,6 +63,8 @@ describe("Dance family customer portal, no insecure client supplied IDs",()=>{
     expect(debtQuery?.sql).toContain("finance_verified");
     const packageQuery=calls.find(x=>x.sql.includes("FROM service_package sp"));
     expect(packageQuery?.sql).toContain("sp.status='ACTIVE'");
+    expect(packageQuery?.sql).toContain("OR sp.party_id=$3");
+    expect(packageQuery?.args).toEqual([ctx.tenantId,[studentParty],payer]);
     expect(packageQuery?.sql).toContain("ELSE 0 END AS available_visits");
     const identity=calls.find(x=>x.sql.includes("FROM dance_customer_account a"));
     expect(identity?.args).toEqual([ctx.tenantId,ctx.membershipId,ctx.userId]);
