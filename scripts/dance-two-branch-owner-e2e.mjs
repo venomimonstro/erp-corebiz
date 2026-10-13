@@ -252,6 +252,23 @@ async function main(){
   await post(actors.m1,"/dance/groups/"+groupForParent.id+"/members",{
     studentId:student.id,status:"ACTIVE"
   });
+  // Generate real future group lessons: client portal must show dates,
+  // room and the assigned coach, not just a CRM/group membership.
+  const firstDate=new Date();
+  firstDate.setUTCDate(firstDate.getUTCDate()+7);
+  const lastDate=new Date(firstDate);
+  lastDate.setUTCDate(lastDate.getUTCDate()+21);
+  const generated=await post(actors.m1,
+    "/dance/groups/"+groupForParent.id+"/lessons/generate",{
+      from:firstDate.toISOString().slice(0,10),
+      to:lastDate.toISOString().slice(0,10)
+    });
+  assert.ok(generated.created.length>0,
+    "A future dated lesson is required for a real student portal");
+  const roster=await get(actors.m1,"/dance/lessons/"+
+    generated.created[0].id+"/participants");
+  assert.ok(roster.some(p=>p.student_id===student.id),
+    "Manager should find child in lesson attendance journal");
   const clientLink=await post(owner,"/dance/portal/link",{
     membershipId:parent,partyId:mother.id
   });
@@ -261,6 +278,8 @@ async function main(){
   assert.ok(portal.students.some(x=>x.id===student.id));
   assert.ok(portal.groups.some(x=>x.student_id===student.id));
   assert.ok(portal.packages.some(x=>x.id===familyPackage.id));
+  assert.ok(portal.visits.some(x=>x.student_id===student.id),
+    "Client should see actual Moscow lesson dates and trainer");
   await get(actors.parent,"/finance/summary",403);
   await get(actors.parent,"/dance/charges",403);
   const receivables=await get(actors.m1,"/dance/charges");
