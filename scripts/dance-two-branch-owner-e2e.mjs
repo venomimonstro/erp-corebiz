@@ -130,6 +130,47 @@ async function main(){
     timezone:"Europe/Moscow",capacity:20
   });
   stats.rooms=4;
+  // Rental pricing was not provided. 1,200 RUB/h is a DISPOSABLE
+  // test-only assumption. Production owner must explicitly set market rates.
+  stage="04a hypothetical small-hall rentals";
+  const rentServices=[];
+  for(const [index,room] of [small1,small2].entries()){
+    const rental=await post(owner,"/service/catalog",{
+      name:"TEST аренда малого зала "+(index+1)+" (условный прайс)",
+      category:"Аренда залов",durationMinutes:60,
+      priceMinor:money(1200),deliveryFormat:"RENTAL",groupCapacity:8
+    });
+    rentServices.push({serviceId:rental.id,resourceId:room.id});
+  }
+  const tenantRenter=await post(owner,"/crm/customers",{
+    type:"PERSON",displayName:"Тестовый арендатор "+seed.slice(0,6)
+  });
+  const rentStart=new Date();
+  rentStart.setUTCDate(rentStart.getUTCDate()+19);
+  rentStart.setUTCHours(10,0,0,0);
+  const createdRentBookings=[];
+  for(const [index,rental] of rentServices.entries()){
+    const booking=await post(owner,"/service/bookings",{
+      serviceId:rental.serviceId,
+      branchId:branches[0].id,
+      partyId:tenantRenter.id,
+      deliveryFormat:"RENTAL",
+      startsAt:rentStart.toISOString(),
+      resources:[{resourceId:rental.resourceId,capacityUnits:8}],
+      idempotencyKey:"dance-rental-"+index+"-"+seed,
+      notes:"Only disposable capacity test; no verified payment"
+    });
+    createdRentBookings.push(booking);
+  }
+  assert.equal(createdRentBookings.length,2);
+  await post(owner,"/service/bookings",{
+    serviceId:rentServices[0].serviceId,branchId:branches[0].id,
+    partyId:tenantRenter.id,deliveryFormat:"RENTAL",
+    startsAt:rentStart.toISOString(),
+    resources:[{resourceId:small1.id,capacityUnits:8}],
+    idempotencyKey:"dance-rental-conflict-"+seed
+  },409);
+
   const contracts=[];
   for(const [room,cost] of [
     [large,budget.leaseAFirstMinor],[small1,budget.leaseAOtherMinor],
@@ -319,6 +360,7 @@ async function main(){
       "Rent and expense assumptions for branch B unknown",
       "Real trainer compensation rules and wage taxes not configured",
       "2/2 duty blocked for 28 days, recurring automation still required",
+      "1,200 RUB/h rental bookings are disposable test assumptions, not signed prices",
       "Rental sale price and signed sublease terms for small halls unknown",
       "Full-payment package cannot be treated as paid without PSP reconciliation",
       "Partner has ADMIN role but formal second OWNER cannot yet be granted",
