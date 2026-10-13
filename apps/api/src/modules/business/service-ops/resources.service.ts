@@ -204,7 +204,7 @@ export class ResourcesService {
    * Archive an employee/hall without deleting attendance, payroll or bookings.
    * Reassignment is explicit; active future allocations cannot disappear.
    */
-  async archive(context:TenantContext,resourceId:string):Promise<{archived:true}>{
+  async archive(context:TenantContext,resourceId:string):Promise<{archived:true;loginSuspended:boolean;linkedUserRemainsActive:boolean}>{
     if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(resourceId))
       throw new BadRequestException("Некорректный ресурс");
     const access=await this.serviceScope(context,"service.write");
@@ -212,8 +212,8 @@ export class ResourcesService {
       (await this.authorization.resolveScope(context,"users.manage"))!=="all")
       throw new ForbiddenException("Архивирование сотрудников доступно руководителю");
     return this.database.withTenantTransaction(context,async client=>{
-      const resource=await client.query<{id:string;type:string}>(
-        `SELECT id,type FROM service_resource
+      const resource=await client.query<{id:string;type:string;membership_id:string|null}>(
+        `SELECT id,type,membership_id FROM service_resource
          WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE' FOR UPDATE`,
         [context.tenantId,resourceId]
       );
@@ -267,9 +267,51 @@ export class ResourcesService {
          WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
         [context.tenantId,resourceId]
       );
+      let loginSuspended=false;
+      let linkedUserRemainsActive=false;
+      // Archiving an employee resource is not always firing an account:
+      // one of the founders may still be a partner while retiring from
+      // teaching. Only deactivate a dedicated trainer-only login.
+      if(item.type==="EMPLOYEE"&&item.membership_id){
+        const member=await client.query<{is_owner:boolean;status:string}>(
+          `SELECT is_owner,status FROM tenant_membership
+           WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+          [context.tenantId,item.membership_id]
+        );
+        const membership=member.rows[0];
+        if(membership?.status==="ACTIVE"){
+          const assigned=await client.query<{code:string}>(
+            `SELECT r.code FROM membership_role mr
+             JOIN tenant_role r ON r.tenant_id=mr.tenant_id
+               AND r.id=mr.role_id
+             WHERE mr.tenant_id=$1 AND mr.membership_id=$2`,
+            [context.tenantId,item.membership_id]
+          );
+          const codes=assigned.rows.map(r=>r.code);
+          const dedicatedCoach=(!membership.is_owner &&
+            context.membershipId!==item.membership_id &&
+            codes.length===1 &&
+            ["DANCE_TRAINER","SERVICE_STAFF"].includes(codes[0]!));
+          if(dedicatedCoach){
+            await client.query(
+              `UPDATE tenant_membership SET status='SUSPENDED',updated_at=now()
+               WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+              [context.tenantId,item.membership_id]
+            );
+            await this.audit(client,context,"membership.suspended",
+              "tenant_membership",item.membership_id,
+              {reason:"linked trainer resource archived"});
+            loginSuspended=true;
+          }else{
+            // Do not silently revoke the co-owner's administrative access.
+            linkedUserRemainsActive=true;
+          }
+        }
+      }
       await this.audit(client,context,"service.resource_archived",
-        "service_resource",resourceId,{type:item.type});
-      return {archived:true};
+        "service_resource",resourceId,
+        {type:item.type,loginSuspended,linkedUserRemainsActive});
+      return {archived:true,loginSuspended,linkedUserRemainsActive};
     });
   }
 
