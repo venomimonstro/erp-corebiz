@@ -84,6 +84,10 @@ test("Warehouse owner searches ALL SKUs using SQL keyset pagination",()=>{
 });
 test("Explicit destination warehouse prevents misallocated expected procurement",()=>{
   assert.match(ops,/coalesce\(po\.destination_warehouse_id,ub\.warehouse_id\)/);
+  assert.equal((ops.match(/SELECT sku_id FROM inventory_policy/g)||[]).length,2,
+    "Old and paged WMS views must include zero-stock policy SKUs");
+  assert.match(inventory,/WITH positions AS \(/);
+  assert.match(inventory,/SELECT warehouse_id,sku_id FROM inventory_policy/);
   assert.match(inventory,/COALESCE\(po\.destination_warehouse_id,t\.warehouse_id\)/);
   assert.match(inventory,/HAVING count\(\*\)=1/);
   assert.match(logic,/const available=physical-reserved/);
