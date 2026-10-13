@@ -239,6 +239,51 @@ export class BookingService {
     });
   }
 
+  /** Remove a service from new sales, never delete historical attendance. */
+  async archiveService(
+    context:TenantContext,serviceId:string
+  ):Promise<{archived:true}>{
+    await this.requireServiceAll(context,"service.write");
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(serviceId))
+      throw new BadRequestException("Некорректная услуга");
+    return this.database.withTenantTransaction(context,async client=>{
+      const current=await client.query(
+        `SELECT 1 FROM service_catalog_item
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE' FOR UPDATE`,
+        [context.tenantId,serviceId]
+      );
+      if(!current.rowCount)throw new NotFoundException("Услуга не найдена");
+      const programs=await client.query(
+        `SELECT 1 FROM dance_program
+         WHERE tenant_id=$1 AND service_id=$2 AND status='ACTIVE' LIMIT 1`,
+        [context.tenantId,serviceId]
+      );
+      if(programs.rowCount)throw new ConflictException(
+        "Сначала переведите связанные направления в архив"
+      );
+      const bookings=await client.query(
+        `SELECT 1 FROM service_booking
+         WHERE tenant_id=$1 AND service_id=$2 AND ends_at>now()
+           AND status NOT IN ('CANCELLED','COMPLETED','NO_SHOW')
+         LIMIT 1`,[context.tenantId,serviceId]
+      );
+      if(bookings.rowCount)throw new ConflictException(
+        "Сначала завершите или перенесите будущие записи"
+      );
+      await client.query(
+        `UPDATE service_catalog_item SET status='ARCHIVED',updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,[context.tenantId,serviceId]
+      );
+      await client.query(
+        `INSERT INTO audit_event(tenant_id,actor_user_id,actor_membership_id,
+          action,resource_type,resource_id)
+         VALUES($1,$2,$3,'service.catalog_archived','service_catalog_item',$4)`,
+        [context.tenantId,context.userId,context.membershipId,serviceId]
+      );
+      return {archived:true};
+    });
+  }
+
   async deliveryRules(
     context: TenantContext,
     serviceId?: string
