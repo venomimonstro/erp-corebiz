@@ -36,5 +36,5 @@ test("UI has explicit settings, safely rejects malformed quantities",()=>{
   assert.match(page,/const saveRule=async/);
   assert.match(page,/minimumBatchMilli:batch/);
   assert.match(page,/leadDays:lead,reviewDays:review/);
-  assert.match(page,/Ничего не заказывается автоматически/);
+  assert.match(page,/Автозакупок нет/);
 });
