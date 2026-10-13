@@ -31,6 +31,13 @@ export default function InvitationPage(){
     }).catch(()=>setIsSignedIn(false));
   },[]);
 
+  async function destination(){
+    try{
+      const context=await apiRequest<{roles:string[]}>("/workspace/context");
+      return context.roles.includes("DANCE_CUSTOMER")?"/portal/dance":"/app";
+    }catch{return "/app";}
+  }
+
   async function accept(){
     if(!token||busy)return;
     setBusy(true);setError("");setNotice("");
@@ -42,7 +49,7 @@ export default function InvitationPage(){
         body:JSON.stringify({membershipId:a.membershipId})});
       window.sessionStorage.removeItem("corebiz.pending_invite");
       setNotice("Приглашение принято, компания доступна.");
-      router.push("/app");router.refresh();
+      router.push(await destination());router.refresh();
     }catch(e){setError(e instanceof Error?e.message:"Приглашение недоступно");}
     finally{setBusy(false);}
   }
@@ -56,7 +63,7 @@ export default function InvitationPage(){
         body:JSON.stringify({email,password,invitationToken:token})
       });
       window.sessionStorage.removeItem("corebiz.pending_invite");
-      router.push("/app");router.refresh();
+      router.push(await destination());router.refresh();
     }catch(e){setError(e instanceof Error?e.message:"Не удалось присоединиться");}
     finally{setBusy(false);}
   }
