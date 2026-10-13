@@ -12,8 +12,9 @@ type StockItem={
   recommendedPurchaseMilli:string;state:string;
 };
 type Stock={warehouseId:string;warehouseName:string;
-  planningExpectedIsNotPhysical:boolean;requiresPagination:boolean;
-  totalShown:number;shortages:number;items:StockItem[]};
+  planningExpectedIsNotPhysical:boolean;hasMore:boolean;
+  nextCursor:string|null;items:StockItem[]};
+type Supplier={id:string;displayName:string};
 type Wave={id:string;strategy:string;status:string};
 type Route={warehouseId:string;waveId:string|null;globallyOptimal:boolean;
   ordering:string;truncated:boolean;tasks:Array<{
@@ -45,6 +46,14 @@ export default function WarehouseOperationsPage(){
   const [waveId,setWaveId]=useState("");
   const [waves,setWaves]=useState<Wave[]>([]);
   const [filter,setFilter]=useState("");
+  const [appliedFilter,setAppliedFilter]=useState("");
+  const [suppliers,setSuppliers]=useState<Supplier[]>([]);
+  const [canProcure,setCanProcure]=useState(false);
+  const [supplierId,setSupplierId]=useState("");
+  const [selectedSku,setSelectedSku]=useState("");
+  const [purchaseBusy,setPurchaseBusy]=useState(false);
+  const [purchaseNotice,setPurchaseNotice]=useState("");
+  const [moreBusy,setMoreBusy]=useState(false);
   const [onlyProblems,setOnlyProblems]=useState(false);
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
@@ -59,6 +68,24 @@ export default function WarehouseOperationsPage(){
         e instanceof Error?e.message:"Не удалось загрузить склады");});
     return()=>{cancelled=true;};
   },[]);
+  useEffect(()=>{
+    let cancelled=false;
+    void Promise.allSettled([
+      apiRequest<Supplier[]>("/procurement/suppliers"),
+      apiRequest<{permissions:Array<{code:string;scope:string}>}>("/workspace/context")
+    ]).then(([sup,ctx])=>{
+      if(cancelled)return;
+      if(sup.status==="fulfilled")setSuppliers(sup.value);
+      if(ctx.status==="fulfilled")setCanProcure(ctx.value.permissions.some(x=>
+        (x.code==="procurement.write"||x.code==="*")&&
+        x.scope==="all"));
+    });
+    return()=>{cancelled=true;};
+  },[]);
+  const stockUrl=(cursor?:string)=>"/wms/operations/warehouses/"+
+    encodeURIComponent(warehouseId)+"/stock-page?limit=100&onlyProblems="+
+    String(onlyProblems)+"&query="+encodeURIComponent(appliedFilter)+
+    (cursor?"&cursor="+encodeURIComponent(cursor):"");
   const load=useCallback(async()=>{
     if(!warehouseId)return;
     const current=++requestVersion.current;
@@ -66,8 +93,7 @@ export default function WarehouseOperationsPage(){
     setStock(null);setRoute(null);
     try{
       const [s,r,w]=await Promise.all([
-        apiRequest<Stock>("/wms/operations/warehouses/"+
-          encodeURIComponent(warehouseId)+"/stock"),
+        apiRequest<Stock>(stockUrl()),
         apiRequest<Route>("/wms/operations/warehouses/"+
           encodeURIComponent(warehouseId)+"/pick-route"+
           (waveId?"?waveId="+encodeURIComponent(waveId):"")),
@@ -83,12 +109,47 @@ export default function WarehouseOperationsPage(){
     }finally{
       if(current===requestVersion.current)setLoading(false);
     }
-  },[warehouseId,waveId,refreshNo]);
+  },[warehouseId,waveId,refreshNo,appliedFilter,onlyProblems]);
   useEffect(()=>{void load();},[load]);
-  const shown=useMemo(()=>(stock?.items??[]).filter(item=>
-    (!onlyProblems||["RESERVATION_SHORTAGE","BELOW_SAFETY"].includes(item.state))
-    &&(item.sku+" "+item.productName).toLowerCase().includes(filter.toLowerCase().trim())
-  ),[stock,onlyProblems,filter]);
+  const shown=stock?.items??[];
+  const selectedItem=shown.find(item=>item.skuId===selectedSku);
+  async function loadMore(){
+    const cursor=stock?.nextCursor;
+    if(!cursor||moreBusy||loading)return;
+    const revision=requestVersion.current;
+    setMoreBusy(true);
+    try{
+      const page=await apiRequest<Stock>(stockUrl(cursor));
+      if(revision!==requestVersion.current)return;
+      setStock(prev=>prev?{...prev,items:[...prev.items,...page.items],
+        nextCursor:page.nextCursor,hasMore:page.hasMore}:prev);
+    }catch(e){
+      if(revision===requestVersion.current)setError(
+        e instanceof Error?e.message:"Не удалось получить следующую страницу");
+    }finally{setMoreBusy(false);}
+  }
+  async function createPurchase(){
+    if(!canProcure||!supplierId||!selectedItem||purchaseBusy)return;
+    if(BigInt(selectedItem.recommendedPurchaseMilli)<=0n)return;
+    setPurchaseBusy(true);setPurchaseNotice("");setError("");
+    try{
+      const order=await apiRequest<{id:string;number:string}>("/procurement/orders",{
+        method:"POST",
+        body:JSON.stringify({
+          supplierPartyId:supplierId,destinationWarehouseId:warehouseId,
+          lines:[{
+            skuId:selectedItem.skuId,
+            quantityMilli:selectedItem.recommendedPurchaseMilli
+          }],
+          notes:"Черновик закупки на основе складского дефицита CoreBiz"
+        })
+      });
+      setPurchaseNotice("Черновик "+order.number+" создан. "+
+        "Подтвердите количество, цену и поставщика в разделе закупок.");
+      setSelectedSku("");setRefreshNo(x=>x+1);
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось создать черновик");}
+    finally{setPurchaseBusy(false);}
+  }
   return <main className="app-shell">
     <AppSidebar active="wms"/>
     <section className="workspace workspace-wide">
@@ -134,16 +195,19 @@ export default function WarehouseOperationsPage(){
           <div><h2>Остаток, резерв и ожидание</h2>
             <p>Заказ резервирует товар, но не списывает его. Подтверждённая
               поставка входит в план, но не в доступный физический остаток.</p></div>
-          <strong>{stock.shortages} проблемных SKU</strong>
+          <strong>{shown.length} SKU на загруженных страницах</strong>
         </div>
-        {stock.requiresPagination?<p role="alert" className="wms-ops-error">
-          Показаны первые 500 позиций. Для больших каталогов требуется постраничный отчёт;
-          сводные количества по этому экрану не являются полным балансом.</p>:null}
+        <p className="muted">Поиск выполняется по всему каталогу на сервере.
+          Показаны только загруженные страницы; это не сводный остаток всех SKU.</p>
         <div className="wms-ops-controls">
-          <input value={filter} placeholder="Поиск товара или SKU" aria-label="Поиск SKU"
-            onChange={e=>setFilter(e.target.value)}/>
+          <form onSubmit={e=>{e.preventDefault();setAppliedFilter(filter.trim());}}>
+            <input value={filter} placeholder="Поиск по всем товарам или SKU"
+              aria-label="Поиск SKU" maxLength={80}
+              onChange={e=>setFilter(e.target.value)}/>
+            <button type="submit">Найти</button>
+          </form>
           <label><input type="checkbox" checked={onlyProblems}
-            onChange={e=>setOnlyProblems(e.target.checked)}/> Только проблемы</label>
+            onChange={e=>setOnlyProblems(e.target.checked)}/> Только дефицит</label>
         </div>
         <div className="wms-ops-table-wrap"><table className="wms-ops-table">
           <thead><tr><th>Товар / SKU</th><th>Физически</th><th>Резерв</th>
@@ -157,10 +221,45 @@ export default function WarehouseOperationsPage(){
             <td>{quantity(item.expectedMilli)}</td>
             <td>{quantity(item.sellableNowMilli)}</td>
             <td>{quantity(item.recommendedPurchaseMilli)}</td>
-            <td>{states[item.state]??item.state}</td>
+            <td>{states[item.state]??item.state}
+              {canProcure&&BigInt(item.recommendedPurchaseMilli)>0n?
+                <button type="button" onClick={()=>setSelectedSku(item.skuId)}>
+                  Подготовить закупку
+                </button>:null}
+            </td>
           </tr>)}</tbody>
         </table></div>
         {shown.length===0?<p className="muted">Нет позиций по выбранным условиям.</p>:null}
+        {stock.hasMore?<button type="button" disabled={moreBusy||loading}
+          onClick={()=>void loadMore()}>
+          {moreBusy?"Загружаем…":"Показать следующие 100 SKU"}
+        </button>:null}
+        {selectedItem&&canProcure?<div className="wms-ops-section">
+          <h3>Черновик заказа поставщику</h3>
+          <p>{selectedItem.productName} · {selectedItem.sku} ·
+            рекомендуется {quantity(selectedItem.recommendedPurchaseMilli)}.</p>
+          <p>Черновик не пополняет остатки и не создаёт оплату.
+            Количество и цену подтвердит закупщик перед отправкой.</p>
+          <label>Поставщик
+            <select value={supplierId} onChange={e=>setSupplierId(e.target.value)}>
+              <option value="">Выберите поставщика</option>
+              {suppliers.map(x=><option key={x.id} value={x.id}>
+                {x.displayName}</option>)}
+            </select>
+          </label>
+          {suppliers.length===0?<p><a href="/app/purchases">
+            Сначала добавьте поставщика →</a></p>:null}
+          <button type="button" disabled={purchaseBusy||!supplierId}
+            onClick={()=>void createPurchase()}>
+            {purchaseBusy?"Создаём…":"Создать черновик закупки"}
+          </button>
+          <button type="button" onClick={()=>setSelectedSku("")}>
+            Отменить
+          </button>
+        </div>:null}
+        {purchaseNotice?<p role="status">{purchaseNotice}{" "}
+          <a href="/app/purchases">Открыть закупки →</a></p>:null}
+
       </section>:null}
       {route?<section className="wms-ops-section">
         <div className="wms-ops-title"><div>
