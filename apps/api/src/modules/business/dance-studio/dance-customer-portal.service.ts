@@ -211,8 +211,9 @@ export class DanceCustomerPortalService{
              plan.name AS plan_name,
              sp.status,sp.starts_at,sp.expires_at,
              sp.visit_limit_snapshot,sp.reserved_visits,sp.used_visits,
-             (sp.visit_limit_snapshot-sp.reserved_visits-sp.used_visits)
-               AS available_visits
+             CASE WHEN sp.status='ACTIVE' THEN
+               GREATEST(0,sp.visit_limit_snapshot-sp.reserved_visits-sp.used_visits)
+             ELSE 0 END AS available_visits
            ,ARRAY(
              SELECT b.party_id
              FROM service_package_beneficiary b
@@ -235,9 +236,12 @@ export class DanceCustomerPortalService{
         ),
         client.query(
           `SELECT c.student_id,c.id,c.amount_minor::text,
-             COALESCE(o.settled_minor,0)::text AS paid_minor,
-             (c.amount_minor-COALESCE(o.settled_minor,0))::text
+             CASE WHEN o.id IS NULL THEN NULL
+               ELSE o.settled_minor::text END AS paid_minor,
+             CASE WHEN o.id IS NULL THEN NULL
+               ELSE (c.amount_minor-o.settled_minor)::text END
                AS remaining_minor,
+             (o.id IS NOT NULL) AS finance_verified,
              c.currency,c.status,c.due_at
            FROM dance_student_charge c
            LEFT JOIN financial_obligation o
