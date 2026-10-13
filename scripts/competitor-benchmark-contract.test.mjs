@@ -15,10 +15,10 @@ const sql=repoFile("infrastructure/postgres/248_service_public_online_policy.sql
 const publicUi=repoFile("apps/web/app/app/dance/staff/page.tsx");
 
 test("Procurement recommendations separate physical shortage from inbound stock",()=>{
-  assert.match(inv,/purchase_order_line pol/);
+  assert.match(inv,/purchase_order_line pl/);
   assert.match(inv,/po.status IN \('CONFIRMED','PARTIALLY_RECEIVED'\)/);
-  assert.match(inv,/ordered_quantity_milli-pol.received_quantity_milli/);
-  assert.match(inv,/count\(\*\) FROM warehouse other/);
+  assert.match(inv,/pl\.ordered_quantity_milli-\s*pl\.received_quantity_milli/);
+  assert.match(inv,/HAVING count\(\*\)=1/);
   assert.match(inv,/planReplenishment/);
   assert.match(planner,/BigInt\(input.physicalMilli\)/);
   assert.match(planner,/BigInt\(input.confirmedInboundMilli\)/);
@@ -35,7 +35,7 @@ test("Online specialist toggle stays independent of manual diary",()=>{
   assert.match(booking,/if\(input.source==="PUBLIC_SITE"\)/);
   assert.match(booking,/!x.online_booking_enabled/);
   assert.match(booking,/startsAt.getTime\(\)<Date.now\(\)\+minLead/);
-  assert.match(publicForms,/online.has\(slot.resourceId\)/);
+  assert.match(publicForms,/eligible=allowed.filter\(id=>online.has\(id\)\)/);
   assert.match(publicForms,/online.get\(slot.resourceId\)/);
   assert.match(publicUi,/Доступен клиентам онлайн/);
   assert.match(publicUi,/Сохранить настройки записи/);
