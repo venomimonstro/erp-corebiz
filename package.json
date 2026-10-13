@@ -27,7 +27,9 @@
     "owner:industry:api": "node scripts/owner-17-vertical-api-e2e.mjs",
     "owner:business:e2e": "node scripts/owner-business-setup-e2e.mjs",
     "test:roles": "node --test scripts/multirole-source-contract.test.mjs",
-    "test:roles:e2e": "node scripts/multirole-api-e2e.mjs"
+    "test:roles:e2e": "node scripts/multirole-api-e2e.mjs",
+    "test:dance:owner": "node --test scripts/dance-owner-contract.test.mjs",
+    "test:dance:owner:e2e": "node scripts/dance-two-branch-owner-e2e.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
