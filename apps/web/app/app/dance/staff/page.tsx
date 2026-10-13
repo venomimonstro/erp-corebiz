@@ -10,6 +10,11 @@ type Group={trainer_resource_id:string;name:string;program_name:string;status:st
 type Lesson={id:string;trainer_resource_id:string|null;starts_at:string;ends_at:string;
   status:string;booked_count:number;attended_count:number};
 type Organization={branches:Branch[]};
+type Service={id:string;name:string;category:string|null;
+  delivery_format:string;price_minor:string;duration_minutes:number};
+type DeliveryRule={id:string;service_id:string;service_name:string;
+  employee_resource_id:string|null;branch_id:string|null;
+  delivery_format:string;price_minor:string|null;duration_minutes:number|null};
 type Context={permissions:Array<{code:string;scope:string}>};
 type TeamMember={membership_id:string;email:string;status:string;
   is_owner:boolean;roles:Array<{code:string}>};
@@ -18,6 +23,11 @@ export default function DanceStaffPage(){
   const [branches,setBranches]=useState<Branch[]>([]);
   const [groups,setGroups]=useState<Group[]>([]);
   const [members,setMembers]=useState<TeamMember[]>([]);
+  const [services,setServices]=useState<Service[]>([]);
+  const [deliveryRules,setDeliveryRules]=useState<DeliveryRule[]>([]);
+  const [assignService,setAssignService]=useState("");
+  const [assignPrice,setAssignPrice]=useState("");
+  const [assignDuration,setAssignDuration]=useState("60");
   const [lessons,setLessons]=useState<Lesson[]|null>(null);
   const [canManage,setCanManage]=useState(false);
   const [query,setQuery]=useState("");
@@ -42,16 +52,19 @@ export default function DanceStaffPage(){
       const lessonUrl="/dance/lessons?from="+
         encodeURIComponent(nowMonth+"-01T00:00:00+03:00")+"&to="+
         encodeURIComponent(nextMonth+"-01T00:00:00+03:00");
-      const [r,o,g,c,team,lessonsInMonth]=await Promise.all([
+      const [r,o,g,c,team,lessonsInMonth,serviceList,ruleList]=await Promise.all([
         apiRequest<Worker[]>("/service/resources"),
         apiRequest<Organization>("/organization"),
         apiRequest<Group[]>("/dance/groups"),
         apiRequest<Context>("/workspace/context"),
         apiRequest<TeamMember[]>("/tenants/team"),
-        apiRequest<Lesson[]>(lessonUrl).catch(()=>null)
+        apiRequest<Lesson[]>(lessonUrl).catch(()=>null),
+        apiRequest<Service[]>("/service/catalog"),
+        apiRequest<DeliveryRule[]>("/service/delivery-rules")
       ]);
       setWorkers(r.filter(x=>x.type==="EMPLOYEE"));
       setBranches(o.branches);setGroups(g);setMembers(team);
+      setServices(serviceList);setDeliveryRules(ruleList);
       setLessons(lessonsInMonth);
       setCanManage(c.permissions.some(x=>(x.code==="users.manage"||x.code==="*")
         &&x.scope==="all"));
@@ -83,8 +96,61 @@ export default function DanceStaffPage(){
   const trainerCandidates=members.filter(x=>x.status==="ACTIVE"&&
     x.roles.length===1&&x.roles[0]?.code==="DANCE_TRAINER"&&
     !workers.some(resource=>resource.membership_id===x.membership_id));
+  const ownRules=deliveryRules.filter(x=>
+    x.employee_resource_id===current?.id);
+  const assignableServices=services.filter(x=>
+    !ownRules.some(rule=>rule.service_id===x.id)&&
+    ["INDIVIDUAL","GROUP"].includes(x.delivery_format));
   const activeGroups=groups.filter(x=>x.trainer_resource_id===current?.id&&
     ["ACTIVE","PAUSED"].includes(x.status));
+  function changeSelectedService(serviceId:string){
+    setAssignService(serviceId);
+    const chosen=services.find(x=>x.id===serviceId);
+    setAssignDuration(String(chosen?.duration_minutes??60));
+    setAssignPrice(chosen?.price_minor?
+      (Number(chosen.price_minor)/100).toFixed(2):"");
+  }
+  async function addTrainerService(e:FormEvent){
+    e.preventDefault();
+    if(!canManage||!current||!assignService||busy)return;
+    const chosen=services.find(x=>x.id===assignService);
+    const money=assignPrice.trim().replace(",",".");
+    const minutes=Number(assignDuration);
+    if(!chosen||!/^\d{1,9}(?:\.\d{1,2})?$/.test(money)||
+      !Number.isInteger(minutes)||minutes<5||minutes>1440){
+      setError("Укажите услугу, цену и допустимую длительность");return;
+    }
+    const [whole,fraction=""]=money.split(".");
+    const priceMinor=(BigInt(whole)*100n+
+      BigInt(fraction.padEnd(2,"0"))).toString();
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/service/delivery-rules",{
+        method:"POST",
+        body:JSON.stringify({
+          serviceId:chosen.id,employeeResourceId:current.id,
+          branchId:current.branch_id??undefined,
+          deliveryFormat:chosen.delivery_format,
+          priceMinor,durationMinutes:minutes
+        })
+      });
+      setNotice("Услуга назначена тренеру. Индивидуальная цена и длительность сохранены.");
+      setAssignService("");setAssignPrice("");
+      await reload();
+    }catch(e){
+      setError(e instanceof Error?e.message:"Не удалось назначить услугу");
+    }finally{setBusy(false);}
+  }
+  async function removeTrainerService(ruleId:string){
+    if(!canManage||busy)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/service/delivery-rules/"+ruleId+"/archive",{method:"POST"});
+      setNotice("Правило удалено из новых записей. История визитов не изменилась.");
+      await reload();
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось снять услугу");}
+    finally{setBusy(false);}
+  }
   async function linkTrainer(){
     if(!canManage||!current||current.membership_id||!trainerLogin||busy)return;
     setBusy(true);setError("");setNotice("");
@@ -223,6 +289,46 @@ export default function DanceStaffPage(){
           <article key={g.name+g.program_name}>
             <strong>{g.name}</strong><span>{g.program_name}</span>
           </article>)}</div>
+        {canManage?<section className="dance-customer-panel">
+          <h3>Какие услуги ведёт тренер</h3>
+          <p>Для каждого мастера можно задать свои цену и длительность.
+            Изменение применяется к новым записям и не пересчитывает старые.</p>
+          {ownRules.length>0?<div className="dance-customer-list">
+            {ownRules.map(rule=><article key={rule.id}>
+              <strong>{rule.service_name}</strong>
+              <span>{rule.price_minor===null?"Цена из каталога":
+                new Intl.NumberFormat("ru-RU",{style:"currency",currency:"RUB",
+                  maximumFractionDigits:0}).format(Number(rule.price_minor)/100)}
+                {" · "}{rule.duration_minutes??"Стандартная"} мин</span>
+              <button type="button" disabled={busy}
+                onClick={()=>void removeTrainerService(rule.id)}>
+                Снять назначение для будущих записей
+              </button>
+            </article>)}
+          </div>:<p>Персональных услуг пока нет.</p>}
+          {assignableServices.length>0?<form onSubmit={e=>void addTrainerService(e)}
+            className="dance-budget-fields">
+            <label>Услуга
+              <select required value={assignService}
+                onChange={e=>changeSelectedService(e.target.value)}>
+                <option value="">Выбрать из каталога</option>
+                {assignableServices.map(item=><option key={item.id}
+                  value={item.id}>{item.category??"Услуги"} · {item.name}</option>)}
+              </select>
+            </label>
+            <label>Цена тренера, ₽
+              <input required inputMode="decimal" value={assignPrice}
+                onChange={e=>setAssignPrice(e.target.value)}/>
+            </label>
+            <label>Длительность, мин
+              <input required type="number" min={5} max={1440}
+                value={assignDuration}
+                onChange={e=>setAssignDuration(e.target.value)}/>
+            </label>
+            <button type="submit" disabled={busy||!assignService||
+              !assignPrice.trim()}>Назначить услугу</button>
+          </form>:<p>Все доступные услуги уже назначены.</p>}
+        </section>:null}
         {canManage?<div className="dance-staff-actions">
           <form onSubmit={e=>void rename(e)}>
             <label>Название сотрудника<input value={editedName}
