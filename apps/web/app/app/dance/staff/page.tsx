@@ -9,10 +9,13 @@ type Branch={id:string;name:string};
 type Group={trainer_resource_id:string;name:string;program_name:string;status:string};
 type Organization={branches:Branch[]};
 type Context={permissions:Array<{code:string;scope:string}>};
+type TeamMember={membership_id:string;email:string;status:string;
+  is_owner:boolean;roles:Array<{code:string}>};
 export default function DanceStaffPage(){
   const [workers,setWorkers]=useState<Worker[]>([]);
   const [branches,setBranches]=useState<Branch[]>([]);
   const [groups,setGroups]=useState<Group[]>([]);
+  const [members,setMembers]=useState<TeamMember[]>([]);
   const [canManage,setCanManage]=useState(false);
   const [query,setQuery]=useState("");
   const [filter,setFilter]=useState("");
@@ -21,20 +24,22 @@ export default function DanceStaffPage(){
   const [selected,setSelected]=useState("");
   const [editedName,setEditedName]=useState("");
   const [archive,setArchive]=useState(false);
+  const [confirmAccess,setConfirmAccess]=useState(false);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const reload=useCallback(async()=>{
     setBusy(true);setError("");
     try{
-      const [r,o,g,c]=await Promise.all([
+      const [r,o,g,c,team]=await Promise.all([
         apiRequest<Worker[]>("/service/resources"),
         apiRequest<Organization>("/organization"),
         apiRequest<Group[]>("/dance/groups"),
-        apiRequest<Context>("/workspace/context")
+        apiRequest<Context>("/workspace/context"),
+        apiRequest<TeamMember[]>("/tenants/team")
       ]);
       setWorkers(r.filter(x=>x.type==="EMPLOYEE"));
-      setBranches(o.branches);setGroups(g);
+      setBranches(o.branches);setGroups(g);setMembers(team);
       setCanManage(c.permissions.some(x=>(x.code==="users.manage"||x.code==="*")
         &&x.scope==="all"));
     }catch(e){setError(e instanceof Error?e.message:"Данные сотрудников недоступны");}
@@ -45,6 +50,7 @@ export default function DanceStaffPage(){
     (!filter||x.branch_id===filter)&&x.name.toLocaleLowerCase("ru")
       .includes(query.trim().toLocaleLowerCase("ru"))),[workers,filter,query]);
   const current=workers.find(x=>x.id===selected);
+  const linked=members.find(x=>x.membership_id===current?.membership_id);
   const activeGroups=groups.filter(x=>x.trainer_resource_id===current?.id&&
     ["ACTIVE","PAUSED"].includes(x.status));
   async function create(e:FormEvent){
@@ -84,6 +90,22 @@ export default function DanceStaffPage(){
       setError(err instanceof Error?err.message:"Перед увольнением переназначьте занятия");
     }finally{setBusy(false);}
   }
+  async function changeStaffAccess(membershipId:string,status:"ACTIVE"|"SUSPENDED"){
+    if(!canManage||!confirmAccess)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/tenants/team/"+membershipId+
+        (status==="SUSPENDED"?"/suspend":"/reactivate"),{method:"POST"});
+      setConfirmAccess(false);
+      setNotice(status==="SUSPENDED"
+        ?"Вход сотрудника в эту компанию приостановлен. История сохранена."
+        :"Рабочий доступ восстановлен.");
+      await reload();
+    }catch(e){
+      setError(e instanceof Error?e.message:"Не удалось изменить рабочий доступ");
+    }finally{setBusy(false);}
+  }
+
   return <main className="app-shell">
     <AppSidebar active="dance-team"/>
     <section className="workspace workspace-wide">
@@ -117,6 +139,7 @@ export default function DanceStaffPage(){
               ["ACTIVE","PAUSED"].includes(g.status));
             return <button type="button" key={x.id} onClick={()=>{
               setSelected(x.id);setEditedName(x.name);setArchive(false);
+              setConfirmAccess(false);
             }} className={selected===x.id?"active":""}>
               <strong>{x.name}</strong><span>{x.branch_name??"Без филиала"}</span>
               <small>Групп: {assigned.length}
@@ -148,10 +171,43 @@ export default function DanceStaffPage(){
           <button type="button" disabled={busy||!archive}
             onClick={()=>void archiveWorker()}>Архивировать тренера</button>
         </div>:null}
+        {canManage&&current.membership_id?<div className="dance-customer-panel">
+          <h3>Вход сотрудника в CoreBiz</h3>
+          <p>{linked?.email??"Логин"} · {linked?.status??"статус неизвестен"}.
+            Приостановка доступа действует только в этой компании и не удаляет
+            сведения о посещениях или выплатах.</p>
+          {linked?.is_owner?<p>Аккаунт владельца нельзя отключать через кадровые операции.</p>:
+            linked&&["ACTIVE","SUSPENDED"].includes(linked.status)?<>
+              <label><input type="checkbox" checked={confirmAccess}
+                onChange={e=>setConfirmAccess(e.target.checked)}/>
+                Подтверждаю, что это именно учётная запись сотрудника,
+                и изменение доступа согласовано.</label>
+              <button disabled={busy||!confirmAccess} type="button"
+                onClick={()=>void changeStaffAccess(linked.membership_id,
+                  linked.status==="ACTIVE"?"SUSPENDED":"ACTIVE")}>
+                {linked.status==="ACTIVE"?"Приостановить вход":"Восстановить вход"}
+              </button>
+            </>:<p>Статус не позволяет выполнить операцию.</p>}
+        </div>:null}
         <p><a href="/app/dance/groups">Переназначить группу →</a>{" "}
           <a href="/app/dance/team">Настроить зарплату →</a>{" "}
           <a href="/app/service/resources">Графики и отпуска →</a></p>
       </section>:null}
+      {canManage&&members.some(x=>x.status==="SUSPENDED")?
+        <section className="dance-customer-panel">
+          <h2>Сотрудники с приостановленным входом</h2>
+          {members.filter(x=>x.status==="SUSPENDED").map(x=>
+            <article key={x.membership_id}>
+              <strong>{x.email}</strong>
+              <span>{" · "}{x.roles.map(r=>r.code).join(", ")}</span>
+              {confirmAccess?<button disabled={busy} type="button"
+                onClick={()=>void changeStaffAccess(x.membership_id,"ACTIVE")}>
+                Восстановить доступ</button>:null}
+            </article>)}
+          <label><input type="checkbox" checked={confirmAccess}
+            onChange={e=>setConfirmAccess(e.target.checked)}/>
+            Подтверждаю проверку права на восстановление доступа.</label>
+        </section>:null}
       {canManage?<section className="dance-customer-panel">
         <h2>Добавить тренера</h2>
         <form className="dance-budget-fields" onSubmit={e=>void create(e)}>
