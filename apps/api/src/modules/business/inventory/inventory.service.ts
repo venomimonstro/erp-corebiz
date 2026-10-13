@@ -274,14 +274,13 @@ export class InventoryService {
     }
     return balances.flatMap(item=>{
       if(!item.sourcingEnabled)return [];
-      const physical=BigInt(item.physicalMilli);
-      const reserved=BigInt(item.reservedMilli);
-      const safety=BigInt(item.safetyStockMilli);
-      const available=physical-reserved;
-      const needed=reserved+safety-physical;
-      if(needed<=0n)return [];
-      const confirmedInbound=located.get(item.warehouseId+":"+item.skuId)??0n;
-      const recommended=needed>confirmedInbound?needed-confirmedInbound:0n;
+      const plan=planReplenishment({
+        physicalMilli:item.physicalMilli,
+        reservedMilli:item.reservedMilli,
+        safetyStockMilli:item.safetyStockMilli,
+        confirmedInboundMilli:(located.get(item.warehouseId+":"+item.skuId)??0n).toString()
+      });
+      if(!plan.requiresAttention)return [];
       return [{
         warehouseId:item.warehouseId,
         warehouseName:item.warehouseName,
@@ -291,16 +290,14 @@ export class InventoryService {
         physicalMilli:item.physicalMilli,
         reservedMilli:item.reservedMilli,
         safetyStockMilli:item.safetyStockMilli,
-        availableMilli:available.toString(),
-        confirmedInboundMilli:confirmedInbound.toString(),
+        availableMilli:plan.availableMilli,
+        confirmedInboundMilli:plan.confirmedInboundMilli,
         unallocatedInboundMilli:(unallocated.get(item.skuId)??0n).toString(),
-        grossShortageMilli:needed.toString(),
-        shortageBeforeInboundMilli:needed.toString(),
+        grossShortageMilli:plan.shortageBeforeInboundMilli,
+        shortageBeforeInboundMilli:plan.shortageBeforeInboundMilli,
         inboundScope:"UNIQUE_BRANCH_WAREHOUSE" as const,
-        recommendedPurchaseMilli:recommended.toString(),
-        urgency:recommended===0n?"AWAITING_RECEIPT" as const:
-          available<0n?"RESERVATION_SHORTAGE" as const:
-          "BELOW_SAFETY_STOCK" as const,
+        recommendedPurchaseMilli:plan.recommendedPurchaseMilli,
+        urgency:plan.urgency,
         purchaseOrderCreated:false
       }];
     }).sort((a,b)=>{
