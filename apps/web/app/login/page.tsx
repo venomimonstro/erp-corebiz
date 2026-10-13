@@ -22,7 +22,20 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password })
       });
       const pendingInvite=window.sessionStorage.getItem("corebiz.pending_invite");
-      router.push(pendingInvite?"/invite":"/app");
+      // Only our known internal portal path may be used as a return target.
+      // This is not an open redirect to an arbitrary site.
+      const requested=new URLSearchParams(window.location.search).get("next");
+      let route=pendingInvite?"/invite":requested==="/portal/dance"
+        ?"/portal/dance":"/app";
+      if(!pendingInvite&&route==="/app"){
+        try{
+          const context=await apiRequest<{roles:string[]}>("/workspace/context");
+          if(context.roles.includes("DANCE_CUSTOMER")){
+            route="/portal/dance";
+          }
+        }catch{ /* Keep standard app login for accounts without workspace metadata. */ }
+      }
+      router.push(route);
       router.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось войти");
