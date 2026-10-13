@@ -333,6 +333,14 @@ async function main(){
   await get(actors.m1,"/finance/summary",403);
   await get(actors.m2,"/dance/students");
   stage="08 owner control and expense isolation";
+  const cofounderCalendar=await get(actors.woman,
+    "/dance/trainer/me?from="+firstDate.toISOString().slice(0,10)+
+    "&to="+lastDate.toISOString().slice(0,10));
+  assert.equal(cofounderCalendar.trainer.id,trainers[1].id,
+    "Partner ADMIN is a teacher in the same Moscow branch");
+  assert.ok(cofounderCalendar.lessons.every(x=>
+    !Object.prototype.hasOwnProperty.call(x,"amount_minor")),
+    "Cofounder personal calendar must not expose financial ledger");
   const access=await get(owner,"/dance/access");
   assert.equal(access.canViewFinance,true);
   const finance=await get(owner,"/dance/dashboard");
