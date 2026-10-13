@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
@@ -236,6 +237,68 @@ export class TenantsService {
          GROUP BY m.id,u.id ORDER BY m.is_owner DESC,u.email LIMIT 200`,
         [context.tenantId]);
       return result.rows;
+    });
+  }
+
+  /**
+   * Tenant-scoped staff suspension. A suspended membership is rejected by
+   * corebiz_auth_resolve_session on the NEXT request, without destroying
+   * the employee's history or sessions in other companies.
+   */
+  async setStaffStatus(context:TenantContext,membershipId:string,
+    targetStatus:"ACTIVE"|"SUSPENDED"){
+    if(typeof membershipId!=="string"||
+       !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(membershipId))
+      throw new BadRequestException("Некорректный участник");
+    if(!["ACTIVE","SUSPENDED"].includes(targetStatus))
+      throw new BadRequestException("Некорректный статус");
+    return this.database.withTenantTransaction(context,async client=>{
+      await this.requireManageAll(client,context);
+      if(context.membershipId===membershipId)
+        throw new ForbiddenException("Нельзя отключить собственный рабочий доступ");
+      const target=await client.query<{is_owner:boolean;status:string}>(
+        `SELECT is_owner,status FROM tenant_membership
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,membershipId]
+      );
+      const member=target.rows[0];
+      if(!member)throw new NotFoundException("Участник не найден");
+      if(member.is_owner)throw new ForbiddenException("Нельзя отключить владельца");
+      if(!["ACTIVE","SUSPENDED"].includes(member.status))
+        throw new ConflictException("Доступ не активен и не был приостановлен");
+      const elevated=await client.query(
+        `SELECT 1 FROM membership_role mr
+         JOIN tenant_role r ON r.tenant_id=mr.tenant_id AND r.id=mr.role_id
+         WHERE mr.tenant_id=$1 AND mr.membership_id=$2
+           AND r.code IN ('OWNER','ADMIN') LIMIT 1`,
+        [context.tenantId,membershipId]
+      );
+      if(elevated.rowCount){
+        const actor=await client.query<{is_owner:boolean}>(
+          `SELECT is_owner FROM tenant_membership
+           WHERE tenant_id=$1 AND id=$2 AND user_id=$3 AND status='ACTIVE'`,
+          [context.tenantId,context.membershipId,context.userId]
+        );
+        if(!actor.rows[0]?.is_owner)
+          throw new ForbiddenException("Только владелец может отключить администратора");
+      }
+      if(member.status===targetStatus)
+        return {status:targetStatus,changed:false};
+      await client.query(
+        `UPDATE tenant_membership SET status=$3,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,membershipId,targetStatus]
+      );
+      await client.query(
+        `INSERT INTO audit_event(tenant_id,actor_user_id,actor_membership_id,
+          action,resource_type,resource_id,after_data)
+         VALUES($1,$2,$3,$4,'tenant_membership',$5,
+                jsonb_build_object('status',$6::text))`,
+        [context.tenantId,context.userId,context.membershipId,
+          targetStatus==="SUSPENDED"?"membership.suspended":"membership.reactivated",
+          membershipId,targetStatus]
+      );
+      return {status:targetStatus,changed:true};
     });
   }
 
