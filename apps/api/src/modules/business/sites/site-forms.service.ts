@@ -266,30 +266,48 @@ export class SiteFormsService {
       tenantId:binding.tenant_id,userId:"00000000-0000-0000-0000-000000000000",
       membershipId:"00000000-0000-0000-0000-000000000000"
     };
-    const [slots,online]=await Promise.all([
-      this.bookings.availability(context,{
-        serviceId,from:start.toISOString(),to:end.toISOString(),slotStepMinutes:30
-      }),
-      this.database.withTenantTransaction(context,async client=>{
-        const result=await client.query<{
-          id:string;online_min_lead_minutes:number
-        }>(
-          `SELECT id,online_min_lead_minutes
-           FROM service_resource
-           WHERE tenant_id=$1 AND id=ANY($2::uuid[])
-             AND status='ACTIVE' AND online_booking_enabled=true`,
-          [binding.tenant_id,allowed]
-        );
-        return new Map(result.rows.map(row=>[row.id,row.online_min_lead_minutes]));
-      })
-    ]);
+    const online=await this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{
+        id:string;online_min_lead_minutes:number
+      }>(
+        `SELECT id,online_min_lead_minutes
+         FROM service_resource
+         WHERE tenant_id=$1 AND id=ANY($2::uuid[])
+           AND status='ACTIVE' AND online_booking_enabled=true`,
+        [binding.tenant_id,allowed]
+      );
+      return new Map(result.rows.map(row=>[row.id,row.online_min_lead_minutes]));
+    });
+    const eligible=allowed.filter(id=>online.has(id));
+    if(!eligible.length)return [];
     const now=Date.now();
-    return slots.filter(slot=>
-      allowed.includes(slot.resourceId) &&
-      online.has(slot.resourceId) &&
-      new Date(slot.startsAt).getTime()>=
-        now+(online.get(slot.resourceId)??0)*60000
-    ).slice(0,100);
+    const candidates:Array<{
+      resourceId:string;resourceName:string;startsAt:string;endsAt:string
+    }>=[];
+    // A company might have 50+ masters. The global availability cap must
+    // not allow the first alphabetical employees to crowd out the selected
+    // public form's staff. Search exactly the configured employees, in
+    // batches of two so public traffic cannot spike database concurrency.
+    for(let offset=0;offset<eligible.length;offset+=2){
+      const batch=eligible.slice(offset,offset+2);
+      const results=await Promise.all(batch.map(resourceId=>
+        this.bookings.availability(context,{
+          serviceId,from:start.toISOString(),to:end.toISOString(),
+          resourceId,slotStepMinutes:30
+        })
+      ));
+      for(const slots of results){
+        candidates.push(...slots.filter(slot=>
+          new Date(slot.startsAt).getTime()>=
+          now+(online.get(slot.resourceId)??0)*60000
+        ));
+      }
+    }
+    candidates.sort((a,b)=>
+      Date.parse(a.startsAt)-Date.parse(b.startsAt)||
+      a.resourceName.localeCompare(b.resourceName,"ru")
+    );
+    return candidates.slice(0,100);
   }
 
   async submit(
