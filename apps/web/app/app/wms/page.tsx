@@ -1077,6 +1077,7 @@ export default function WmsPage() {
           <div>
             <p className="muted">Склад / WMS</p>
             <h1>Адресное хранение</h1>
+            <p><a href="/app/wms/operations">Остатки, ожидания и маршрут сборщика →</a></p>
             <p className="workspace-summary">
               Обычный склад остаётся простым. Адресный режим включается только там, где реально нужны зоны и ячейки.
             </p>
