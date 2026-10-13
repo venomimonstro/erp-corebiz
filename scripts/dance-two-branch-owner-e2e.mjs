@@ -326,6 +326,34 @@ async function main(){
   assert.ok(portal.packages.some(x=>x.id===familyPackage.id));
   assert.ok(portal.visits.some(x=>x.student_id===student.id),
     "Client should see actual Moscow lesson dates and trainer");
+  stage="07b parent privacy, another family and revocation";
+  const otherPayer=await post(owner,"/crm/customers",{
+    type:"PERSON",displayName:"Посторонний плательщик "+seed.slice(0,6)
+  });
+  const otherChild=await post(owner,"/crm/customers",{
+    type:"PERSON",displayName:"Чужой ученик "+seed.slice(0,6)
+  });
+  const otherStudent=await post(owner,"/dance/students",{
+    partyId:otherChild.id,payerPartyId:otherPayer.id,
+    payerRelation:"PARENT",status:"ACTIVE",
+    preferredBranchId:branches[1].id
+  });
+  assert.ok(otherStudent.id);
+  const secondFamilyView=await get(actors.parent,"/dance/portal/me");
+  assert.equal(secondFamilyView.students.some(x=>x.id===otherStudent.id),false,
+    "Another parent's child must never appear in this portal");
+  assert.equal(secondFamilyView.students.every(x=>x.id===student.id),true);
+  await post(actors.m1,"/dance/portal/accounts/"+parent+"/revoke",{},403);
+  const links=await get(owner,"/dance/portal/accounts");
+  assert.ok(links.some(x=>x.membership_id===parent&&x.status==="ACTIVE"));
+  const revoked=await post(owner,"/dance/portal/accounts/"+parent+"/revoke",{});
+  assert.equal(revoked.revoked,true);
+  await get(actors.parent,"/dance/portal/me",403);
+  await post(owner,"/dance/portal/link",{
+    membershipId:parent,partyId:mother.id
+  });
+  const restoredPortal=await get(actors.parent,"/dance/portal/me");
+  assert.ok(restoredPortal.students.some(x=>x.id===student.id));
   await get(actors.parent,"/finance/summary",403);
   await get(actors.parent,"/dance/charges",403);
   const receivables=await get(actors.m1,"/dance/charges");
