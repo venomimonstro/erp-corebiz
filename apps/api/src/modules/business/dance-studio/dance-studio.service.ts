@@ -3455,15 +3455,54 @@ export class DanceStudioService {
       "SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))",
       [context.tenantId,"dance:"+key]
     );
-    const existing=await client.query(
-      `SELECT l.id,l.version,l.status
+    const existing=await client.query<{
+      id:string;version:number;status:string;
+      group_id:string|null;lesson_type:string;service_id:string;
+      trainer_resource_id:string|null;room_resource_id:string|null;
+      room_zone_id:string|null;room_capacity_units:number;
+      starts_at:Date;ends_at:Date;capacity:number;
+    }>(
+      `SELECT l.id,l.version,l.status,l.group_id,l.lesson_type,
+              b.service_id,l.trainer_resource_id,l.room_resource_id,
+              l.room_zone_id,l.room_capacity_units,l.starts_at,l.ends_at,
+              l.capacity
        FROM dance_lesson l
        JOIN service_booking b
          ON b.tenant_id=l.tenant_id AND b.id=l.host_booking_id
        WHERE l.tenant_id=$1 AND b.idempotency_key=$2`,
       [context.tenantId,"dance:"+key]
     );
-    if(existing.rows[0]) return existing.rows[0];
+    const prior=existing.rows[0];
+    if(prior){
+      // This must be the *same* intended lesson. A reused key may not
+      // silently confirm another group, rental hall or customer slot.
+      const previousMinutes=
+        (new Date(prior.ends_at).getTime()-
+         new Date(prior.starts_at).getTime())/60000;
+      if(
+        new Date(prior.starts_at).getTime()!==startsAt.getTime() ||
+        (input.groupId??null)!==prior.group_id ||
+        (input.lessonType!==undefined &&
+          input.lessonType!==prior.lesson_type) ||
+        (input.serviceId!==undefined&&input.serviceId!==prior.service_id) ||
+        (input.trainerResourceId!==undefined&&
+          input.trainerResourceId!==prior.trainer_resource_id) ||
+        (input.roomResourceId!==undefined&&
+          input.roomResourceId!==prior.room_resource_id) ||
+        (input.roomZoneId!==undefined&&
+          input.roomZoneId!==prior.room_zone_id) ||
+        (input.roomCapacityUnits!==undefined&&
+          input.roomCapacityUnits!==Number(prior.room_capacity_units)) ||
+        (input.durationMinutes!==undefined&&
+          input.durationMinutes!==previousMinutes) ||
+        (input.capacity!==undefined&&input.capacity!==prior.capacity)
+      ){
+        throw new ConflictException(
+          "Ключ повторного запроса уже закреплён за другим занятием"
+        );
+      }
+      return {id:prior.id,version:prior.version,status:prior.status};
+    }
 
     let group:any=null;
     if(input.groupId){
