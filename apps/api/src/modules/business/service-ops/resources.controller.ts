@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -33,6 +34,13 @@ export class ResourcesController {
       ok: true,
       data: await this.resources.create(this.context(request), body)
     };
+  }
+
+  @Patch(":id")
+  @RequirePermission("service.write")
+  async rename(@Req() request:AuthenticatedRequest,@Param("id") id:string,
+    @Body() body:{name:string}):Promise<ApiSuccess<{updated:true}>>{
+    return {ok:true,data:await this.resources.rename(this.context(request),id,body)};
   }
 
   @Post(":id/archive")
