@@ -157,3 +157,23 @@ test("GO and LIVE decisions fail closed without an up-to-date server verdict",()
   assert.match(page,/\/go-live\/review/);
   assert.doesNotMatch(page,/window\.(?:prompt|confirm)\(/);
 });
+
+
+test("Client sees short niche menu without losing any advanced capabilities",()=>{
+  const sidebar=readFileSync(
+    new URL("../apps/web/components/app-sidebar.tsx",import.meta.url),"utf8"
+  );
+  const home=readFileSync(
+    new URL("../apps/web/app/app/page.tsx",import.meta.url),"utf8"
+  );
+  assert.match(sidebar,/const essentialItems:/);
+  assert.match(sidebar,/corebiz\.menu\.mode\./);
+  assert.match(sidebar,/Основные действия/);
+  assert.match(sidebar,/Все инструменты/);
+  assert.match(sidebar,/showAdvanced/);
+  assert.match(sidebar,/Настроить бизнес/);
+  assert.match(sidebar,/workspaceContext\.permissions/);
+  assert.match(home,/BEAUTY_SALON:\{label:[^\n]*href:"\/app\/service\/desk"/);
+  assert.match(home,/NAIL_SALON:\{label:[^\n]*href:"\/app\/service\/desk"/);
+  assert.match(home,/BARBERSHOP:\{label:[^\n]*href:"\/app\/service\/desk"/);
+});
