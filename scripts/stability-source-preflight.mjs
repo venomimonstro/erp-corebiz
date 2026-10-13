@@ -222,7 +222,7 @@ async function inspectRequiredHardening(root) {
     {
       path:"scripts/service-desk-browser-journey.mjs",
       patterns:[/COREBIZ_CONFIRM_DISPOSABLE_DB/,/BEAUTY_SALON/,
-        /Сохранить персональную цену/,/Свободное время/,
+        /Сохранить правило мастера/,/Свободное время/,
         /Сохранить запись/,/390/],
       message:"Salon onboarding must be executable through the unified desk"
     },
