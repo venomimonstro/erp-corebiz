@@ -34,7 +34,8 @@ export default function InvitationPage(){
   async function destination(){
     try{
       const context=await apiRequest<{roles:string[]}>("/workspace/context");
-      return context.roles.includes("DANCE_CUSTOMER")?"/portal/dance":"/app";
+      return context.roles.includes("DANCE_CUSTOMER")?"/portal/dance":
+        context.roles.includes("DANCE_TRAINER")?"/portal/trainer":"/app";
     }catch{return "/app";}
   }
 
