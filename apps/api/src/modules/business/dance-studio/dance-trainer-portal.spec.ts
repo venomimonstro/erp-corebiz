@@ -50,9 +50,11 @@ describe("Self-service dance trainer profile",()=>{
     expect(read?.args).toEqual([ctx.tenantId,ctx.membershipId,ctx.userId]);
     const lessons=calls.find(x=>x.sql.includes("FROM dance_lesson l"));
     expect(lessons?.args).toEqual([
-      ctx.tenantId,resourceId,"2026-10-01","2026-11-01","Europe/Moscow"
+      ctx.tenantId,ctx.membershipId,"2026-10-01","2026-11-01",
+      [resourceId]
     ]);
-    expect(lessons?.sql).toContain("l.trainer_resource_id=$2");
+    expect(lessons?.sql).toContain("l.trainer_resource_id=ANY($5::uuid[])");
+    expect(lessons?.sql).toContain("coach.membership_id=$2");
     expect(lessons?.sql).not.toContain("party.display_name");
     expect(lessons?.sql).not.toContain("finance");
     expect(JSON.stringify(response)).not.toContain("customer_name");
@@ -72,13 +74,14 @@ describe("Self-service dance trainer profile",()=>{
       .rejects.toBeInstanceOf(ForbiddenException);
     expect(f.db.withTenantTransaction).not.toHaveBeenCalled();
   });
-  it("binds tenant membership to an unclaimed employee only",async()=>{
+  it("links only unclaimed or already-owned resources, including second branch",async()=>{
     const f=fixture();
     const result=await f.service.link(ctx,{membershipId:ctx.membershipId,resourceId});
     expect(result.linked).toBe(true);
     const sql=f.calls.find(x=>x.sql.startsWith("UPDATE service_resource s"));
     expect(sql?.sql).toContain("s.membership_id IS NULL OR s.membership_id=$3");
-    expect(sql?.sql).toContain("other.id<>s.id");
+    expect(sql?.sql).not.toContain("other.id<>s.id");
+    expect(sql?.sql).toContain("s.type='EMPLOYEE'");
     expect(sql?.args).toEqual([ctx.tenantId,resourceId,ctx.membershipId]);
   });
 });
