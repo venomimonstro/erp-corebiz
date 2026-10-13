@@ -75,21 +75,29 @@ export class DanceTrainerPortalService{
       new Date(toTime).toISOString().slice(0,10)!==to)
       throw new BadRequestException("Интервал календаря: от 1 до 92 дней");
     return this.database.withTenantTransaction(context,async client=>{
-      const res=await client.query<{id:string;name:string;timezone:string}>(
-        `SELECT r.id,r.name,r.timezone FROM service_resource r
+      // A single invited trainer can teach in several branches. Collect
+      // all their active employee resources, not an arbitrary LIMIT 1 row.
+      const resources=await client.query<{
+        id:string;name:string;timezone:string;branch_name:string|null
+      }>(
+        `SELECT r.id,r.name,r.timezone,b.name AS branch_name
+         FROM service_resource r
          JOIN tenant_membership m ON m.tenant_id=r.tenant_id
            AND m.id=r.membership_id AND m.status='ACTIVE'
+         LEFT JOIN branch b ON b.tenant_id=r.tenant_id AND b.id=r.branch_id
          WHERE r.tenant_id=$1 AND r.membership_id=$2
            AND m.user_id=$3 AND r.type='EMPLOYEE' AND r.status='ACTIVE'
-         LIMIT 1`,
+         ORDER BY b.name NULLS LAST,r.name,r.id LIMIT 50`,
         [context.tenantId,context.membershipId,context.userId]
       );
-      const resource=res.rows[0];
-      if(!resource)throw new ForbiddenException(
+      if(resources.rows.length===0)throw new ForbiddenException(
         "Логин тренера пока не привязан к рабочему ресурсу"
       );
+      const resourceIds=resources.rows.map(r=>r.id);
       const lessons=await client.query(
         `SELECT l.id,l.lesson_type,l.status,l.starts_at,l.ends_at,
+           l.trainer_resource_id,
+           coach.name AS trainer_name,branch.name AS branch_name,
            g.name AS group_name,pr.name AS direction_name,
            room.name AS room_name,
            count(lp.id) FILTER (WHERE lp.status IN
@@ -97,23 +105,37 @@ export class DanceTrainerPortalService{
            count(lp.id) FILTER (WHERE lp.status IN
              ('ATTENDED','LATE'))::int AS attended_count
          FROM dance_lesson l
+         JOIN service_resource coach
+           ON coach.tenant_id=l.tenant_id AND coach.id=l.trainer_resource_id
+           AND coach.status='ACTIVE' AND coach.membership_id=$2
+         LEFT JOIN branch ON branch.tenant_id=coach.tenant_id
+           AND branch.id=coach.branch_id
          LEFT JOIN dance_group g ON g.tenant_id=l.tenant_id AND g.id=l.group_id
          LEFT JOIN dance_program pr ON pr.tenant_id=g.tenant_id AND pr.id=g.program_id
          LEFT JOIN service_resource room ON room.tenant_id=l.tenant_id
            AND room.id=l.room_resource_id
          LEFT JOIN dance_lesson_participant lp ON lp.tenant_id=l.tenant_id
            AND lp.lesson_id=l.id
-         WHERE l.tenant_id=$1 AND l.trainer_resource_id=$2
-           AND l.starts_at>=($3::date::timestamp AT TIME ZONE $5)
-           AND l.starts_at<($4::date::timestamp AT TIME ZONE $5)
-         GROUP BY l.id,g.name,pr.name,room.name
+         WHERE l.tenant_id=$1 AND l.trainer_resource_id=ANY($5::uuid[])
+           AND (l.starts_at AT TIME ZONE
+                coalesce(coach.timezone,'Europe/Moscow'))::date >= $3::date
+           AND (l.starts_at AT TIME ZONE
+                coalesce(coach.timezone,'Europe/Moscow'))::date < $4::date
+         GROUP BY l.id,g.name,pr.name,room.name,coach.id,branch.name
          ORDER BY l.starts_at ASC LIMIT 400`,
-        [context.tenantId,resource.id,from,to,resource.timezone]
+        [context.tenantId,context.membershipId,from,to,resourceIds]
       );
-      // No attendees' identities, fees, internal pay rates, owner financial
-      // ledgers or other coaches are part of the response.
-      return {trainer:{id:resource.id,name:resource.name,timezone:resource.timezone},
-        from,to,lessons:lessons.rows};
+      // Preserve the one-resource response field for existing UI clients,
+      // and expose all active workplaces for cross-branch staff.
+      return {
+        trainer:{
+          id:resources.rows[0]!.id,
+          name:resources.rows[0]!.name,
+          timezone:resources.rows[0]!.timezone
+        },
+        resources:resources.rows,
+        from,to,lessons:lessons.rows
+      };
     });
   }
 }
