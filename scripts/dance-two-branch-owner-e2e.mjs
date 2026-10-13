@@ -197,6 +197,18 @@ async function main(){
   assert.equal(replayRental.id,createdRentBookings[0].id,
     "Repeated booking must use the original record");
   stats.rentalBookings=2;
+  const rentedMonth=rentStart.toISOString().slice(0,7);
+  const rentReport=await get(owner,
+    "/dance/rental-income?month="+rentedMonth);
+  assert.equal(rentReport.totals.bookings,2,
+    "Rented rooms must not be counted as regular dance lessons");
+  assert.equal(rentReport.totals.bookedMinor,money(2400));
+  assert.equal(rentReport.totals.receivableMinor,money(2400));
+  assert.equal(rentReport.totals.settledMinor,"0",
+    "Rental receivables are not proven payments");
+  assert.equal(rentReport.totals.unverified,0);
+  assert.equal(rentReport.branches[0].branch_id,branches[0].id);
+  await get(actors.m1,"/dance/rental-income?month="+rentedMonth,403);
   await post(owner,"/service/bookings",{
     serviceId:rentServices[0].serviceId,branchId:branches[0].id,
     partyId:tenantRenter.id,deliveryFormat:"RENTAL",
