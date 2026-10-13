@@ -2332,6 +2332,22 @@ export class WmsService {
         return {status:"OPEN",varianceMilli:variance.toString()};
       }
 
+      // Aggregated stock alone is not authoritative on 3PL warehouses.
+      // Without a confirmed owner allocation, the adjustment would corrupt
+      // the owner ledger. Keep it pending until a dedicated owner-level
+      // discrepancy workflow is implemented.
+      const profile=await client.query<{owner_tracking_state:string}>(
+        `SELECT owner_tracking_state FROM warehouse_wms_profile
+         WHERE tenant_id=$1 AND warehouse_id=$2
+         FOR UPDATE`,
+        [context.tenantId,row.warehouse_id]
+      );
+      if(profile.rows[0]?.owner_tracking_state==="OWNER_LEDGER"){
+        throw new ConflictException(
+          "Для 3PL-состава нужна проверка конкретного товаровладельца; "+
+          "проводить разницу только общим остатком запрещено"
+        );
+      }
       const now=await client.query<{physical_milli:string}>(
         `SELECT physical_milli::text FROM warehouse_location_balance
          WHERE tenant_id=$1 AND warehouse_id=$2
