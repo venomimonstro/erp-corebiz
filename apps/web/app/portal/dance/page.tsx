@@ -13,8 +13,8 @@ type Package={id:string;party_id:string;beneficiary_party_ids:string[];plan_name
   expires_at:string;visit_limit_snapshot:number;reserved_visits:number;
   used_visits:number;available_visits:number};
 type Charge={id:string;student_id:string;amount_minor:string;
-  paid_minor:string;remaining_minor:string;currency:string;status:string;
-  due_at:string|null};
+  paid_minor:string|null;remaining_minor:string|null;
+  finance_verified:boolean;currency:string;status:string;due_at:string|null};
 type Portal={person:{name:string};students:Student[];
   groups:Group[];visits:Visit[];packages:Package[];charges:Charge[]};
 
@@ -55,7 +55,10 @@ export default function DanceCustomerPage(){
     p.party_id===student?.party_id ||
     p.beneficiary_party_ids?.includes(student?.party_id??"")
   )??[],[data,student?.party_id]);
-  const due=charges.reduce((sum,c)=>sum+BigInt(c.remaining_minor),0n);
+  const due=charges.reduce((sum,c)=>sum+
+    (c.finance_verified&&c.remaining_minor!==null?
+      BigInt(c.remaining_minor):0n),0n);
+  const unverified=charges.filter(c=>!c.finance_verified).length;
   return <main className="dance-customer-portal">
     <header className="dance-customer-head">
       <div><p>COREBIZ · КАБИНЕТ КЛИЕНТА</p>
@@ -93,7 +96,7 @@ export default function DanceCustomerPage(){
             <strong>{visits.filter(v=>Date.parse(v.starts_at)>Date.now()
               &&!v.lesson_status.startsWith("CANCELLED")).length}</strong></div>
           <div><small>Группы</small><strong>{groups.length}</strong></div>
-          <div><small>К оплате</small><strong>{price(due.toString())}</strong></div>
+          <div><small>Подтверждённая задолженность</small><strong>{price(due.toString())}</strong></div>
         </section>
         <section className="dance-customer-panel">
           <h2>Группы и тренеры</h2>
@@ -122,16 +125,27 @@ export default function DanceCustomerPage(){
             <div className="dance-customer-list">{packages.map(p=>
               <article key={p.id}><strong>{p.plan_name}</strong>
                 <span>Действует до {date(p.expires_at)}</span>
-                <small>Доступно занятий: {p.available_visits} · статус {p.status}</small>
+                <small>{p.status==="ACTIVE"
+                  ?"Доступно занятий: "+p.available_visits
+                  :p.status==="PENDING_PAYMENT"
+                    ?"Ожидает подтверждения оплаты. Посещения пока недоступны"
+                    :"Посещения недоступны · "+p.status}
+                </small>
               </article>)}</div>}
         </section>
         <section className="dance-customer-panel">
           <h2>Оплаты и задолженность</h2>
-          <p>Начисления отображаются отдельно от фактически полученных денег.</p>
+          <p>Поступления подтверждаются финансовыми обязательствами.
+            Без такой связи суммы не считаются оплаченными или просроченными.</p>
+          {unverified>0?<p role="status">Не подтверждена финансовая связь у
+            {unverified} начислений. Обратитесь к менеджеру для сверки.</p>:null}
           {charges.length===0?<p>Начислений по выбранному ученику нет.</p>:
             <div className="dance-customer-list">{charges.map(c=>
               <article key={c.id}><strong>Начислено {price(c.amount_minor)}</strong>
-                <span>Оплачено {price(c.paid_minor)} · остаток {price(c.remaining_minor)}</span>
+                <span>{c.finance_verified&&c.paid_minor!==null&&c.remaining_minor!==null
+                  ?"Оплачено "+price(c.paid_minor)+" · к оплате "+
+                    price(c.remaining_minor)
+                  :"Платёж и задолженность требуют сверки в студии"}</span>
                 <small>{c.due_at?"Срок "+date(c.due_at)+" · ":""}{c.status}</small>
               </article>)}</div>}
         </section>
