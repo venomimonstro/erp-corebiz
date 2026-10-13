@@ -28,6 +28,7 @@ export default function DanceStaffPage(){
   const [editedName,setEditedName]=useState("");
   const [archive,setArchive]=useState(false);
   const [confirmAccess,setConfirmAccess]=useState(false);
+  const [trainerLogin,setTrainerLogin]=useState("");
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
@@ -79,8 +80,25 @@ export default function DanceStaffPage(){
       .includes(query.trim().toLocaleLowerCase("ru"))),[workers,filter,query]);
   const current=workers.find(x=>x.id===selected);
   const linked=members.find(x=>x.membership_id===current?.membership_id);
+  const trainerCandidates=members.filter(x=>x.status==="ACTIVE"&&
+    x.roles.length===1&&x.roles[0]?.code==="DANCE_TRAINER"&&
+    !workers.some(resource=>resource.membership_id===x.membership_id));
   const activeGroups=groups.filter(x=>x.trainer_resource_id===current?.id&&
     ["ACTIVE","PAUSED"].includes(x.status));
+  async function linkTrainer(){
+    if(!canManage||!current||current.membership_id||!trainerLogin||busy)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/dance/trainer/link",{
+        method:"POST",body:JSON.stringify({
+          resourceId:current.id,membershipId:trainerLogin
+        })
+      });
+      setNotice("Логин привязан к тренеру. Он может открыть /portal/trainer.");
+      setTrainerLogin("");await reload();
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось связать логин");}
+    finally{setBusy(false);}
+  }
   async function create(e:FormEvent){
     e.preventDefault();setError("");setNotice("");
     if(!canManage)return;
@@ -210,6 +228,21 @@ export default function DanceStaffPage(){
           </label>
           <button type="button" disabled={busy||!archive}
             onClick={()=>void archiveWorker()}>Архивировать тренера</button>
+        </div>:null}
+        {canManage&&!current.membership_id?<div className="dance-customer-panel">
+          <h3>Личный календарь тренера</h3>
+          <p>После приглашения тренера с ролью DANCE_TRAINER свяжите
+            его учётную запись с рабочим ресурсом. Тренер получит доступ
+            только к своему расписанию, без финансов и других клиентов.</p>
+          <select aria-label="Логин тренера" value={trainerLogin}
+            onChange={e=>setTrainerLogin(e.target.value)}>
+            <option value="">Выбрать приглашённый аккаунт</option>
+            {trainerCandidates.map(user=><option key={user.membership_id}
+              value={user.membership_id}>{user.email}</option>)}
+          </select>
+          <button type="button" disabled={busy||!trainerLogin}
+            onClick={()=>void linkTrainer()}>Связать аккаунт с тренером</button>
+          <p><a href="/app/settings/team">Пригласить тренера в команду →</a></p>
         </div>:null}
         {canManage&&current.membership_id?<div className="dance-customer-panel">
           <h3>Вход сотрудника в CoreBiz</h3>
