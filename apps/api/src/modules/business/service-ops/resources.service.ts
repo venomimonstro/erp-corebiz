@@ -183,8 +183,9 @@ export class ResourcesService {
     if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(resourceId))
       throw new BadRequestException("Некорректный ресурс");
     const access=await this.serviceScope(context,"service.write");
-    if(access.scope!=="all")
-      throw new ForbiddenException("Увольнение и архивирование доступны руководителю");
+    if(access.scope!=="all"||
+      (await this.authorization.resolveScope(context,"users.manage"))!=="all")
+      throw new ForbiddenException("Архивирование сотрудников доступно руководителю");
     return this.database.withTenantTransaction(context,async client=>{
       const resource=await client.query<{id:string;type:string}>(
         `SELECT id,type FROM service_resource
