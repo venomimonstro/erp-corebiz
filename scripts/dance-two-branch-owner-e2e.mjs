@@ -339,6 +339,7 @@ async function main(){
     preferredBranchId:branches[1].id
   });
   assert.ok(otherStudent.id);
+  stats.customers+=2;
   const secondFamilyView=await get(actors.parent,"/dance/portal/me");
   assert.equal(secondFamilyView.students.some(x=>x.id===otherStudent.id),false,
     "Another parent's child must never appear in this portal");
