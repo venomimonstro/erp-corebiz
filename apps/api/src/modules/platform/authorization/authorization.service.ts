@@ -132,7 +132,7 @@ export class AuthorizationService {
       else if (has("WAREHOUSE")) workspace = "WAREHOUSE";
       else if (has("FINANCE")) workspace = "FINANCE";
       else if (has("PROCUREMENT")) workspace = "PROCUREMENT";
-      else if (has("SERVICE_STAFF")) workspace = "SERVICE";
+      else if (has("DANCE_MANAGER") || has("SERVICE_STAFF")) workspace = "SERVICE";
       else if (has("SALES_HEAD") || has("SALES_MANAGER")) workspace = "SALES";
 
       return {
