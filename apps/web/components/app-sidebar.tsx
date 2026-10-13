@@ -146,6 +146,25 @@ const profileSections: Record<MenuProfile, readonly string[]> = {
   warehouse: ["Клиенты и задачи", "Продажи и товары", "Склад и 3PL", "Управление"]
 };
 
+// Client-friendly mode keeps the full modules available behind an explicit
+// switch. This only reduces navigation noise: backend permissions still apply.
+const essentialItems:Record<MenuProfile,readonly string[]>={
+  all:["first-day","deals","customers","tasks","products","orders",
+    "finance","billing","team-settings","support"],
+  service:["first-day","service-desk","customers","service-team",
+    "service-packages","finance","team-settings","billing","support"],
+  dance:["first-day","dance","dance-students","dance-groups",
+    "dance-team","dance-setup","finance","billing","support"],
+  automotive:["first-day","automotive","service-assets","bookings",
+    "products","stock","orders","finance","billing","support"],
+  commerce:["first-day","orders","products","stock","purchases","oms",
+    "sites","channels","retail","returns","finance","billing","support"],
+  warehouse:["first-day","wms","wms-inbound","wms-mobile","wms-owners",
+    "wms-billing","stock","products","billing","support"],
+  agency:["first-day","deals","customers","agency","projects",
+    "tasks","finance","billing","support"]
+};
+
 const sections: Section[] = [
   { title: "Клиенты и задачи", items: [
     ["/app/crm/deals", "Сделки", "deals"],
@@ -232,6 +251,7 @@ export function AppSidebar({ active }: { active: string }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [profile, setProfile] = useState<MenuProfile>("all");
+  const [showAdvanced,setShowAdvanced]=useState(false);
   const [capabilities, setCapabilities] = useState<Record<string,boolean> | null>(null);
   const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContext | null>(null);
 
@@ -269,7 +289,9 @@ export function AppSidebar({ active }: { active: string }) {
             ];
             setProfile(choices.includes(stored as MenuProfile)
               ? stored as MenuProfile:preset);
-          }catch{setProfile(preset);}
+            setShowAdvanced(window.localStorage.getItem(
+              "corebiz.menu.mode."+context.tenantId)==="advanced");
+          }catch{setProfile(preset);setShowAdvanced(false);}
         }
       } catch {
         // Fail open for navigation only. Backend guards remain authoritative.
@@ -300,6 +322,22 @@ export function AppSidebar({ active }: { active: string }) {
       } catch { /* no persistence */ }
     }
   }
+  function updateNavigationMode(advanced:boolean){
+    setShowAdvanced(advanced);
+    if(workspaceContext?.tenantId){
+      try{
+        window.localStorage.setItem(
+          "corebiz.menu.mode."+workspaceContext.tenantId,
+          advanced?"advanced":"basic"
+        );
+      }catch{ /* browser storage is optional */ }
+    }
+  }
+
+  const canManageProfile=Boolean(workspaceContext?.permissions.some(
+    permission=>permission.code==="*"||
+      permission.code==="customization.manage"
+  ));
   const capabilityFilteredSections = useMemo(
     () =>
       sections
@@ -311,6 +349,8 @@ export function AppSidebar({ active }: { active: string }) {
             // An industry sidebar shows only relevant workflows. Users can
             // still choose "all" when they run a mixed business.
             const key=entry[2];
+            if(!showAdvanced && !essentialItems[profile].includes(key))
+              return false;
             if(profile==="dance" && (
               key==="automotive" || key==="service-assets" ||
               (key.startsWith("service-") &&
@@ -351,7 +391,7 @@ export function AppSidebar({ active }: { active: string }) {
           })
         }))
         .filter((section) => section.items.length > 0),
-    [active, capabilities, workspaceContext, profile]
+    [active, capabilities, workspaceContext, profile,showAdvanced]
   );
 
   const visibleSections = capabilityFilteredSections.filter((section) =>
@@ -399,10 +439,24 @@ export function AppSidebar({ active }: { active: string }) {
             <option value="warehouse">Склад и логистика</option>
           </select>
         </label>
+        <label className="sidebar-profile">
+          <span>Режим меню</span>
+          <select aria-label="Сложность меню" value={showAdvanced?"advanced":"basic"}
+            onChange={event=>updateNavigationMode(event.target.value==="advanced")}>
+            <option value="basic">Основные действия</option>
+            <option value="advanced">Все инструменты</option>
+          </select>
+        </label>
         <GlobalCommandPalette />
         <a className={active === "dashboard" ? "active sidebar-home" : "sidebar-home"
           aria-current={active === "dashboard" ? "page" : undefined}
           href="/app" onClick={() => setMobileOpen(false)}>Сегодня</a>
+        {canManageProfile?<a href="/app/start"
+          className={active==="first-day"?"active sidebar-home":"sidebar-home"}
+          aria-current={active==="first-day"?"page":undefined}
+          onClick={()=>setMobileOpen(false)}>
+          Настроить бизнес
+        </a>:null}
         {visibleSections.map((section) => (
           <details key={section.title}
             className="sidebar-group"
