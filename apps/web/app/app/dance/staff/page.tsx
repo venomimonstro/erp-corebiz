@@ -4,7 +4,8 @@ import {AppSidebar} from "../../../../components/app-sidebar";
 import {DanceWorkspaceNav} from "../../../../components/dance-workspace-nav";
 import {apiRequest} from "../../../../lib/api";
 type Worker={id:string;name:string;type:string;branch_id:string|null;
-  branch_name:string|null;membership_id:string|null};
+  branch_name:string|null;membership_id:string|null;
+  online_booking_enabled:boolean;online_min_lead_minutes:number};
 type Branch={id:string;name:string};
 type Group={trainer_resource_id:string;name:string;program_name:string;status:string};
 type Lesson={id:string;trainer_resource_id:string|null;starts_at:string;ends_at:string;
@@ -36,6 +37,8 @@ export default function DanceStaffPage(){
   const [newBranch,setNewBranch]=useState("");
   const [selected,setSelected]=useState("");
   const [editedName,setEditedName]=useState("");
+  const [onlineEnabled,setOnlineEnabled]=useState(true);
+  const [onlineLead,setOnlineLead]=useState("0");
   const [archive,setArchive]=useState(false);
   const [confirmAccess,setConfirmAccess]=useState(false);
   const [trainerLogin,setTrainerLogin]=useState("");
@@ -180,6 +183,24 @@ export default function DanceStaffPage(){
     }catch(err){setError(err instanceof Error?err.message:"Не удалось создать");}
     finally{setBusy(false);}
   }
+  async function updateOnline(e:FormEvent){
+    e.preventDefault();
+    if(!current||!canManage)return;
+    const lead=Number(onlineLead);
+    if(!Number.isInteger(lead)||lead<0||lead>10080){
+      setError("Минимальное время до записи: от 0 до 10080 минут");return;
+    }
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/service/resources/"+current.id+"/online-policy",{
+        method:"PUT",
+        body:JSON.stringify({enabled:onlineEnabled,minimumNoticeMinutes:lead})
+      });
+      setNotice("Онлайн-запись обновлена. Ручной журнал сотрудника работает независимо.");
+      await reload();
+    }catch(e){setError(e instanceof Error?e.message:"Ошибка настройки онлайн-записи");}
+    finally{setBusy(false);}
+  }
   async function rename(e:FormEvent){
     e.preventDefault();if(!current||!canManage)return;
     setBusy(true);setError("");setNotice("");
@@ -262,6 +283,8 @@ export default function DanceStaffPage(){
               ["ACTIVE","PAUSED"].includes(g.status));
             return <button type="button" key={x.id} onClick={()=>{
               setSelected(x.id);setEditedName(x.name);setArchive(false);setTrainerLogin("");
+              setOnlineEnabled(x.online_booking_enabled!==false);
+              setOnlineLead(String(x.online_min_lead_minutes??0));
               setConfirmAccess(false);
             }} className={selected===x.id?"active":""}>
               <strong>{x.name}</strong><span>{x.branch_name??"Без филиала"}</span>
@@ -290,6 +313,22 @@ export default function DanceStaffPage(){
           <article key={g.name+g.program_name}>
             <strong>{g.name}</strong><span>{g.program_name}</span>
           </article>)}</div>
+        {canManage?<section className="dance-customer-panel">
+          <h3>Онлайн-запись тренера</h3>
+          <p>Как в YCLIENTS: мастер может принимать записи в журнале,
+            но не отображаться в публичной форме. Укажите время до визита,
+            после которого клиент уже не сможет записаться самостоятельно.</p>
+          <form className="dance-budget-fields" onSubmit={e=>void updateOnline(e)}>
+            <label><input type="checkbox" checked={onlineEnabled}
+              onChange={e=>setOnlineEnabled(e.target.checked)}/>
+              Доступен клиентам онлайн</label>
+            <label>Минимальное время до начала, минут
+              <input type="number" min={0} max={10080} step={5}
+                value={onlineLead} onChange={e=>setOnlineLead(e.target.value)}/>
+            </label>
+            <button type="submit" disabled={busy}>Сохранить настройки записи</button>
+          </form>
+        </section>:null}
         {canManage?<section className="dance-customer-panel">
           <h3>Какие услуги ведёт тренер</h3>
           <p>Для каждого мастера можно задать свои цену и длительность.
