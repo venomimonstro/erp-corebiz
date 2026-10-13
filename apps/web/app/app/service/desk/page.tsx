@@ -8,6 +8,7 @@ type Service={id:string;name:string;duration_minutes:number;price_minor:string;c
 type Resource={id:string;name:string;type:string;capacity:number;timezone?:string|null};
 type Customer={id:string;displayName:string;phone:string|null};
 type Rule={id:string;service_id:string;employee_resource_id:string|null;price_minor:string|null;duration_minutes:number|null};
+type TechCard={id:string;name:string;lines:Array<{skuId:string;warehouseId:string;quantityMilli:string}>};
 type Slot={resourceId:string;resourceName:string;startsAt:string;endsAt:string};
 type Visit={
   id:string;business_number:string;status:string;starts_at:string;ends_at:string;
@@ -75,6 +76,7 @@ export default function ServiceDeskPage(){
   const [customers,setCustomers]=useState<Customer[]>([]);
   const [visits,setVisits]=useState<Visit[]>([]);
   const [rules,setRules]=useState<Rule[]>([]);
+  const [technologyCards,setTechnologyCards]=useState<TechCard[]>([]);
   const [economics,setEconomics]=useState<Economy|null>(null);
   const [customerAccess,setCustomerAccess]=useState(true);
   const [economicsAccess,setEconomicsAccess]=useState(true);
@@ -103,6 +105,8 @@ export default function ServiceDeskPage(){
   const [priceService,setPriceService]=useState("");
   const [priceStaff,setPriceStaff]=useState("");
   const [personalPrice,setPersonalPrice]=useState("");
+  const [personalDuration,setPersonalDuration]=useState("");
+  const [personalTechCard,setPersonalTechCard]=useState("");
   const [newResource,setNewResource]=useState("");
   const [scheduleResource,setScheduleResource]=useState("");
   const [newCustomer,setNewCustomer]=useState({name:"",phone:"",email:""});
@@ -142,7 +146,8 @@ export default function ServiceDeskPage(){
       apiRequest<Visit[]>("/service/bookings?from="+encodeURIComponent(fetchFrom.toISOString())+"&to="+encodeURIComponent(fetchUntil.toISOString())),
       apiRequest<Customer[]>("/crm/customers"),
       apiRequest<Rule[]>("/service/delivery-rules"),
-      apiRequest<Economy>("/service/economics")
+      apiRequest<Economy>("/service/economics"),
+      apiRequest<TechCard[]>("/service/technology-cards")
     ]);
     // Reject stale responses when the operator changes week or another
     // save starts a newer refresh while the old one is still running.
@@ -162,6 +167,7 @@ export default function ServiceDeskPage(){
     setCustomerAccess(people!==null);
     setCustomers(people??[]);
     setRules(read<Rule[]>(4)??[]);
+    setTechnologyCards(read<TechCard[]>(6)??[]);
     const financial=read<Economy>(5);
     setEconomicsAccess(financial!==null);
     setEconomics(financial);
@@ -236,7 +242,13 @@ export default function ServiceDeskPage(){
     const service=services.find(x=>x.id===priceService);
     const employee=staff.find(x=>x.id===priceStaff);
     const normalized=personalPrice.trim().replace(",",".");
-    if(!service||!employee||!/^\d{1,9}(?:\.\d{1,2})?$/.test(normalized)){
+    if(!service||!employee||!/^\d{1,9}(?:\.\d{1,2})?$/.test(normalized)||
+      (personalDuration.trim()!==""&&
+        (!/^\d{1,4}$/.test(personalDuration)||Number(personalDuration)<5||
+         Number(personalDuration)>1440))){
+      setError("Укажите корректную цену и длительность (5–1440 минут).");return;
+    }
+    if(personalTechCard&&!technologyCards.some(c=>c.id===personalTechCard)){
       setError("Выберите услугу, специалиста и цену в рублях.");return;
     }
     if(rules.some(rule=>rule.service_id===service.id&&
@@ -250,10 +262,13 @@ export default function ServiceDeskPage(){
         method:"POST",
         body:JSON.stringify({
           serviceId:service.id,employeeResourceId:employee.id,
-          deliveryFormat:"INDIVIDUAL",priceMinor:minor
+          deliveryFormat:"INDIVIDUAL",priceMinor:minor,
+          durationMinutes:personalDuration?Number(personalDuration):undefined,
+          technologyCardId:personalTechCard||undefined
         })
       });
       setPersonalPrice("");setPriceService("");setPriceStaff("");
+      setPersonalDuration("");setPersonalTechCard("");
     },"Персональная цена специалиста сохранена. Она применяется сервером при новых записях.");
   }
   async function createResource(e:FormEvent){
@@ -489,8 +504,10 @@ export default function ServiceDeskPage(){
           </div>
           <form className="service-desk-panel" onSubmit={e=>void savePersonalPrice(e)}>
             <span className="service-desk-index">05</span>
-            <h3>Индивидуальная цена мастера</h3>
-            <p className="muted">Для каждого специалиста можно назначить свою стоимость услуги. Уже оформленные визиты сохраняют первоначальную цену.</p>
+            <h3>Правила услуги конкретного мастера</h3>
+            <p className="muted">Задайте персональную цену, длительность и расходные материалы.
+              После оказания услуги складские списания выполняет сервер по техкарте.
+              Уже оформленные визиты сохраняют зафиксированные параметры.</p>
             <div className="service-desk-two">
               <label>Услуга<select required value={priceService} onChange={e=>setPriceService(e.target.value)}>
                 <option value="">Выберите услугу</option>
@@ -503,8 +520,27 @@ export default function ServiceDeskPage(){
             </div>
             <label>Цена, ₽<input required inputMode="decimal" value={personalPrice}
               onChange={e=>setPersonalPrice(e.target.value)} placeholder="2000"/></label>
+            <label>Длительность для мастера, минуты (необязательно)
+              <input type="number" min={5} max={1440} value={personalDuration}
+                onChange={e=>setPersonalDuration(e.target.value)}
+                placeholder="Как в общей карточке услуги"/>
+            </label>
+            <label>Технологическая карта расходников (необязательно)
+              <select value={personalTechCard}
+                onChange={e=>setPersonalTechCard(e.target.value)}>
+                <option value="">Без индивидуальной техкарты</option>
+                {technologyCards.map(card=>
+                  <option key={card.id} value={card.id}>
+                    {card.name} · {card.lines.length} поз.
+                  </option>)}
+              </select>
+            </label>
+            {technologyCards.length===0?<p className="muted">
+              Нет действующих техкарт. Сначала создайте карту на странице
+              <a href="/app/service/setup"> расширенной настройки услуг →</a>
+            </p>:null}
             <button disabled={busy||!priceService||!priceStaff||!personalPrice.trim()}>
-              Сохранить персональную цену
+              Сохранить правило мастера
             </button>
             <p className="muted">Правил сохранено: {rules.length}. Для редактирования существующих правил, периодов и приоритетов используйте расширенные настройки.</p>
           </form>
