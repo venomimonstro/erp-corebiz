@@ -28,6 +28,7 @@ const permissionByKey: Record<string,string> = {
   products: "catalog.read",
   purchases: "procurement.read",
   stock: "inventory.read",
+  replenishment: "inventory.read",
   retail: "inventory.read",
   finance: "finance.read",
   "finance-forecast": "finance.read",
@@ -157,10 +158,10 @@ const essentialItems:Record<MenuProfile,readonly string[]>={
     "dance-team","dance-setup","finance","billing","support"],
   automotive:["first-day","automotive","service-assets","bookings",
     "products","stock","orders","finance","billing","support"],
-  commerce:["first-day","orders","products","stock","purchases","oms",
+  commerce:["first-day","orders","products","stock","replenishment","purchases","oms",
     "sites","channels","retail","returns","finance","billing","support"],
   warehouse:["first-day","wms","wms-inbound","wms-mobile","wms-owners",
-    "wms-billing","stock","products","billing","support"],
+    "wms-billing","stock","replenishment","products","billing","support"],
   agency:["first-day","deals","customers","agency","projects",
     "tasks","finance","billing","support"]
 };
@@ -178,6 +179,7 @@ const sections: Section[] = [
     ["/app/catalog/products", "Товары и услуги", "products"],
     ["/app/purchases", "Закупки", "purchases"],
     ["/app/inventory/stock", "Остатки", "stock"],
+    ["/app/inventory/replenishment", "Пополнить запасы", "replenishment"],
     ["/app/retail", "Сеть магазинов", "retail"],
     ["/app/finance", "Деньги", "finance"],
     ["/app/finance/forecast", "Платёжный календарь", "finance-forecast"],
