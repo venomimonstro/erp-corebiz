@@ -6,6 +6,7 @@ const read=(name)=>readFileSync(new URL("../"+name,import.meta.url),"utf8");
 const service=read("apps/api/src/modules/business/wms/wms.service.ts");
 const controller=read("apps/api/src/modules/business/wms/wms.controller.ts");
 const migration=read("infrastructure/postgres/248_wms_count_variance_review.sql");
+const approvals=read("infrastructure/postgres/249_wms_count_approval_permission.sql");
 const screen=read("apps/web/app/app/wms/operations/page.tsx");
 const inventory=read("apps/api/src/modules/business/inventory/inventory.service.ts");
 
@@ -51,7 +52,7 @@ test("Recount reopens the task without modifying stock",()=>{
   const review=service.slice(service.indexOf("  async reviewCountVariance("),
     service.indexOf("  async planReplenishment("));
   const from=review.indexOf('if(input.decision==="RECOUNT")');
-  const to=review.indexOf("      const now=await client.query",from);
+  const to=review.indexOf("      const profile=await client.query",from);
   assert.ok(from>=0&&to>from);
   const recount=review.slice(from,to);
   assert.match(recount,/UPDATE warehouse_task/);
@@ -60,10 +61,13 @@ test("Recount reopens the task without modifying stock",()=>{
   assert.doesNotMatch(recount,/applyWmsCountAdjustment|UPDATE warehouse_location_balance/);
 });
 test("Permission-guarded review endpoints visible to user",()=>{
-  assert.match(controller,/@Get\("warehouses\/:warehouseId\/count-variances"\)\s+@RequirePermission\("wms.manage"\)/);
-  assert.match(controller,/@Post\("count-lines\/:lineId\/review"\)\s+@RequirePermission\("wms.manage"\)/);
+  assert.match(controller,/@Get\("warehouses\/:warehouseId\/count-variances"\)\s+@RequirePermission\("wms.count.approve"\)/);
+  assert.match(controller,/@Post\("count-lines\/:lineId\/review"\)\s+@RequirePermission\("wms.count.approve"\)/);
   assert.match(screen,/count-variances/);
   assert.match(screen,/Утвердить разницу/);
   assert.match(screen,/Пересчитать заново/);
   assert.match(screen,/countPending/);
+  assert.match(approvals,/wms\\.count\\.approve/);
+  assert.match(approvals,/code='ADMIN'/);
+  assert.doesNotMatch(approvals,/code='WAREHOUSE'/);
 });
