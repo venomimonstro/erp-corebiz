@@ -253,6 +253,7 @@ export default function StockPage() {
           </div>
 
           <div className="header-actions">
+            <a className="secondary-button" href="/app/inventory/replenishment">Что закупить →</a>
             <button className="secondary-button" onClick={createWarehouse} type="button">
               + Склад
             </button>
