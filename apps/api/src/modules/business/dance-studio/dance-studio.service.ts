@@ -37,7 +37,9 @@ export class DanceStudioService {
       this.authorization.resolveScope(context,"dance.write")
     ]);
     return {
-      canViewFinance:Boolean(financeRead),
+      canViewFinance:financeRead==="all",
+      canViewStudentBilling:financeRead==="all"||
+        (await this.authorization.resolveScope(context,"dance.charges.read"))==="all",
       canManageFinance:financeWrite==="all",
       canManageDance:Boolean(danceWrite),
       canAdministerDance:danceWrite==="all"
@@ -709,7 +711,8 @@ export class DanceStudioService {
   async students(context: TenantContext) {
     const scopeIds = await this.scopeIds(context, "dance.read");
     const canViewFinancials=
-      await this.authorization.resolveScope(context,"finance.read")==="all";
+      (await this.authorization.resolveScope(context,"finance.read")==="all")||
+      (await this.authorization.resolveScope(context,"dance.charges.read")==="all");
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `SELECT
