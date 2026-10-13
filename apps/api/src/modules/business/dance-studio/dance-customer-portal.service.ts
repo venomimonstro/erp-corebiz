@@ -201,7 +201,11 @@ export class DanceCustomerPortalService{
            LEFT JOIN service_resource room ON room.tenant_id=l.tenant_id
              AND room.id=l.room_resource_id
            WHERE lp.tenant_id=$1 AND lp.student_id=ANY($2::uuid[])
-           ORDER BY l.starts_at DESC LIMIT 250`,
+           ORDER BY
+             CASE WHEN l.starts_at>=now() THEN 0 ELSE 1 END,
+             CASE WHEN l.starts_at>=now() THEN l.starts_at END ASC NULLS LAST,
+             CASE WHEN l.starts_at<now() THEN l.starts_at END DESC NULLS LAST
+           LIMIT 250`,
           [context.tenantId,studentIds]
         ),
         client.query(
