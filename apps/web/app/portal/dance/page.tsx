@@ -44,6 +44,22 @@ export default function DanceCustomerPage(){
     }finally{setPending(false);}
   },[]);
   useEffect(()=>{void reload();},[reload]);
+  const [signingOut,setSigningOut]=useState(false);
+  async function signOut(){
+    if(signingOut)return;
+    setSigningOut(true);setError("");
+    try{
+      await apiRequest("/auth/logout",{method:"POST",body:JSON.stringify({})});
+      setData(null);
+      // Navigation only happens AFTER the server revoked the session.
+      window.location.assign("/login?next=%2Fportal%2Fdance");
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:
+        "Выход не подтверждён сервером. Повторите действие.");
+      setSigningOut(false);
+    }
+  }
+
   const student=useMemo(()=>data?.students.find(s=>s.id===selected),[data,selected]);
   const visits=useMemo(()=>(data?.visits??[]).filter(v=>v.student_id===selected)
     .sort((a,b)=>Date.parse(b.starts_at)-Date.parse(a.starts_at)),[data,selected]);
@@ -65,8 +81,12 @@ export default function DanceCustomerPage(){
         <h1>Мои занятия</h1>
         <span>Расписание и абонементы вашей студии</span>
       </div>
-      <nav><a href="/app">Рабочий кабинет</a>{" "}
-        <a href="/login">Другой аккаунт</a></nav>
+      <nav aria-label="Аккаунт клиента">
+        <button type="button" disabled={signingOut}
+          onClick={()=>void signOut()}>
+          {signingOut?"Выходим…":"Выйти из кабинета"}
+        </button>
+      </nav>
     </header>
     {pending?<p role="status">Загружаем данные…</p>:null}
     {error?<section role="alert" className="dance-customer-alert">
