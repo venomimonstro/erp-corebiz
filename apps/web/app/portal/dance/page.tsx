@@ -15,7 +15,7 @@ type Package={id:string;party_id:string;beneficiary_party_ids:string[];plan_name
 type Charge={id:string;student_id:string;amount_minor:string;
   paid_minor:string|null;remaining_minor:string|null;
   finance_verified:boolean;currency:string;status:string;due_at:string|null};
-type Portal={person:{name:string};students:Student[];
+type Portal={person:{name:string;partyId:string};students:Student[];
   groups:Group[];visits:Visit[];packages:Package[];charges:Charge[]};
 
 const price=(value:string)=>new Intl.NumberFormat("ru-RU",{
@@ -71,6 +71,11 @@ export default function DanceCustomerPage(){
     p.party_id===student?.party_id ||
     p.beneficiary_party_ids?.includes(student?.party_id??"")
   )??[],[data,student?.party_id]);
+  const unassignedFamilyPasses=useMemo(()=>(data?.packages??[]).filter(p=>
+    p.party_id===data?.person.partyId &&
+    !data?.students.some(student=>student.party_id===p.party_id ||
+      p.beneficiary_party_ids?.includes(student.party_id))
+  ),[data]);
   const due=charges.reduce((sum,c)=>sum+
     (c.finance_verified&&c.remaining_minor!==null?
       BigInt(c.remaining_minor):0n),0n);
@@ -153,6 +158,18 @@ export default function DanceCustomerPage(){
                 </small>
               </article>)}</div>}
         </section>
+        {unassignedFamilyPasses.length>0?(
+          <section className="dance-customer-panel">
+            <h2>Семейные абонементы без назначенного ученика</h2>
+            <p>Абонемент оформлен на ваш аккаунт, но пока не назначен ребёнку.
+              Для использования попросите администратора добавить получателя.</p>
+            <div className="dance-customer-list">{unassignedFamilyPasses.map(p=>
+              <article key={p.id}><strong>{p.plan_name}</strong>
+                <span>{p.status==="ACTIVE"?"Активен":"Статус: "+p.status}</span>
+                <small>Управление получателями выполняет студия</small>
+              </article>)}</div>
+          </section>
+        ):null}
         <section className="dance-customer-panel">
           <h2>Оплаты и задолженность</h2>
           <p>Поступления подтверждаются финансовыми обязательствами.
