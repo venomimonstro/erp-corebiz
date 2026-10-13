@@ -12,7 +12,7 @@ const coachMembership="55555555-5555-4555-8555-555555555555";
 function fixture(opts:{
   roles?:string[];isOwner?:boolean;resourceType?:string;
   futureGroups?:boolean;hasMembership?:boolean;
-  manage?:boolean;active?:boolean;
+  manage?:boolean;active?:boolean;otherActiveResource?:boolean;
 }={}){
   const query=jest.fn(async(sql:string)=>{
     if(sql.includes("SELECT id,type,membership_id FROM service_resource"))
@@ -33,6 +33,12 @@ function fixture(opts:{
         status:opts.active===false?"SUSPENDED":"ACTIVE"}],rowCount:1};
     if(sql.includes("FROM membership_role mr"))
       return {rows:(opts.roles??["DANCE_TRAINER"]).map(code=>({code})),rowCount:1};
+    if(sql.includes("FROM service_resource") &&
+       sql.includes("membership_id=$2") && sql.includes("id<>$3")){
+      return opts.otherActiveResource
+        ?{rows:[{id:"another-active-branch"}],rowCount:1}
+        :{rows:[],rowCount:0};
+    }
     if(sql.includes("UPDATE tenant_membership"))
       return {rows:[{}],rowCount:1};
     throw Error("Unexpected PostgreSQL query "+sql.slice(0,100));
@@ -57,6 +63,25 @@ describe("Dance coach offboarding with shared partner membership",()=>{
     const suspended=sql.findIndex(x=>x.includes("UPDATE tenant_membership"));
     expect(archive).toBeGreaterThan(-1);
     expect(suspended).toBeGreaterThan(archive);
+  });
+  it("keeps a dedicated coach login when their other branch resource remains active",async()=>{
+    const t=fixture({otherActiveResource:true});
+    const result=await t.service.archive(ctx,resourceId);
+    expect(result).toEqual({
+      archived:true,loginSuspended:false,linkedUserRemainsActive:true
+    });
+    expect(t.query.mock.calls.some(([sql])=>String(sql)
+      .includes("UPDATE tenant_membership"))).toBe(false);
+    expect(t.query.mock.calls.some(([sql])=>String(sql)
+      .includes("id<>$3"))).toBe(true);
+  });
+  it("suspends a dedicated coach only when the LAST active assignment is archived",async()=>{
+    const t=fixture({otherActiveResource:false});
+    const result=await t.service.archive(ctx,resourceId);
+    expect(result.loginSuspended).toBe(true);
+    const checkedOther=t.query.mock.calls.some(([sql])=>String(sql)
+      .includes("id<>$3"));
+    expect(checkedOther).toBe(true);
   });
   it("does not revoke the co-owner while archiving a teaching resource",async()=>{
     const t=fixture({roles:["DANCE_PARTNER"]});
