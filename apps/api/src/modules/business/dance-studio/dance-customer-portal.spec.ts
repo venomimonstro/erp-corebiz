@@ -86,7 +86,7 @@ describe("Dance family customer portal, no insecure client supplied IDs",()=>{
   });
   it("restricts the account directory to authorized owner and tenant",async()=>{
     const f=fixture();
-    f.client.query.mockImplementation(async(sql:string,args:unknown[])=>{
+    (f.client.query as jest.Mock).mockImplementation(async(sql:string,args:unknown[])=>{
       f.calls.push({sql,args});
       if(sql.includes("FROM dance_customer_account a")){
         return {rows:[{membership_id:ctx.membershipId,
@@ -104,7 +104,7 @@ describe("Dance family customer portal, no insecure client supplied IDs",()=>{
   });
   it("revokes portal access transactionally without deleting attendance",async()=>{
     const f=fixture();
-    f.client.query.mockImplementation(async(sql:string,args:unknown[])=>{
+    (f.client.query as jest.Mock).mockImplementation(async(sql:string,args:unknown[])=>{
       f.calls.push({sql,args});
       if(sql.includes("UPDATE dance_customer_account"))
         return {rows:[{id:"revoked-binding"}],rowCount:1};
