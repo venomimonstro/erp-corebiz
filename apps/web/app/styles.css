@@ -4339,3 +4339,15 @@ button, .primary, .secondary { font: inherit; }
 .first-day-readiness-item small{font-size:12px;color:#657282;grid-column:1;line-height:1.45}
 .first-day-readiness-item span{grid-column:2;grid-row:1/3;align-self:center}
 @media(max-width:720px){.first-day-readiness-blockers{grid-template-columns:1fr}.first-day-next-action{padding:16px}}
+
+
+/* Explicit go-live review: accessible, no browser prompt() side effects. */
+.go-live-decision{border:1px solid #dbe2ec;border-radius:17px;padding:20px;background:#f9fafc}
+.go-live-decision h2{font-size:19px;letter-spacing:-.025em;margin:2px 0 10px}
+.go-live-decision-form{display:flex;flex-direction:column;gap:14px;max-width:690px;margin-top:14px}
+.go-live-decision-form>label:first-child{display:flex;flex-direction:column;gap:7px;font-size:14px;font-weight:600}
+.go-live-decision-form textarea{width:100%;min-height:95px;border-radius:11px;border:1px solid #cdd6e0;padding:12px;resize:vertical;font:inherit;line-height:1.5}
+.go-live-decision-consent{display:flex;align-items:flex-start;gap:10px;font-size:13px;line-height:1.5}
+.go-live-decision-consent input{width:17px;height:17px;flex:none;margin-top:2px}
+.go-live-decision-actions{display:flex;flex-wrap:wrap;gap:10px}
+.go-live-decision :is(input,textarea,button):focus-visible{outline:3px solid #91b4ee;outline-offset:2px}
