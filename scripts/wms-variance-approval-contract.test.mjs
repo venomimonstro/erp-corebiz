@@ -67,7 +67,7 @@ test("Permission-guarded review endpoints visible to user",()=>{
   assert.match(screen,/Утвердить разницу/);
   assert.match(screen,/Пересчитать заново/);
   assert.match(screen,/countPending/);
-  assert.match(approvals,/wms\\.count\\.approve/);
+  assert.match(approvals,/wms\.count\.approve/);
   assert.match(approvals,/code='ADMIN'/);
   assert.doesNotMatch(approvals,/code='WAREHOUSE'/);
 });
