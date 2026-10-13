@@ -249,7 +249,7 @@ export default function ServiceDeskPage(){
       setError("Укажите корректную цену и длительность (5–1440 минут).");return;
     }
     if(personalTechCard&&!technologyCards.some(c=>c.id===personalTechCard)){
-      setError("Выберите услугу, специалиста и цену в рублях.");return;
+      setError("Выбранная технологическая карта больше недоступна. Обновите список.");return;
     }
     if(rules.some(rule=>rule.service_id===service.id&&
       rule.employee_resource_id===employee.id)){
@@ -269,7 +269,7 @@ export default function ServiceDeskPage(){
       });
       setPersonalPrice("");setPriceService("");setPriceStaff("");
       setPersonalDuration("");setPersonalTechCard("");
-    },"Персональная цена специалиста сохранена. Она применяется сервером при новых записях.");
+    },"Правило мастера сохранено. Индивидуальная длительность и расходники применяются при новых записях.");
   }
   async function createResource(e:FormEvent){
     e.preventDefault();
