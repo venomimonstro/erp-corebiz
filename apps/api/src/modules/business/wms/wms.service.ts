@@ -2100,7 +2100,8 @@ export class WmsService {
 
       const row=task.rows[0];
       if(!row) throw new NotFoundException("COUNT-задача не найдена");
-      if(row.task_status==="COMPLETED"&&row.line_status==="POSTED"){
+      if(row.task_status==="COMPLETED"&&
+        (row.line_status==="POSTED"||row.line_status==="REVIEW_REQUIRED")){
         const line=await client.query<{variance_milli:string}>(
           `SELECT variance_milli::text
            FROM wms_cycle_count_line
@@ -2143,65 +2144,21 @@ export class WmsService {
 
       const variance=counted-expected;
 
-      if(variance!==0n){
-        await this.inventory.applyWmsCountAdjustment(
-          client,
-          context,
-          {
-            warehouseId:row.warehouse_id,
-            skuId:row.sku_id,
-            quantityDeltaMilli:variance,
-            countId:row.count_id,
-            countLineId:row.line_id,
-            reason:"WMS cycle count",
-            idempotencyKey:"wms-count-adjust:"+row.line_id
-          }
-        );
-
-        await client.query(
-          `UPDATE warehouse_location_balance
-           SET physical_milli=$5::bigint,updated_at=now()
-           WHERE tenant_id=$1 AND warehouse_id=$2
-             AND location_id=$3 AND sku_id=$4`,
-          [
-            context.tenantId,row.warehouse_id,row.location_id,row.sku_id,
-            counted.toString()
-          ]
-        );
-
-        await client.query(
-          `INSERT INTO wms_location_movement(
-             tenant_id,warehouse_id,sku_id,movement_type,
-             from_location_id,to_location_id,quantity_milli,
-             source_type,source_id,source_line_id,
-             idempotency_key,actor_membership_id
-           ) VALUES (
-             $1,$2,$3,'ADJUSTMENT',
-             CASE WHEN $4::bigint<0 THEN $5::uuid ELSE NULL END,
-             CASE WHEN $4::bigint>0 THEN $5::uuid ELSE NULL END,
-             abs($4::bigint),
-             'WMS_CYCLE_COUNT',$6,$7,$8,$9
-           )
-           ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
-          [
-            context.tenantId,row.warehouse_id,row.sku_id,
-            variance.toString(),row.location_id,row.count_id,row.line_id,
-            "count-location-adjust:"+row.line_id,
-            context.membershipId
-          ]
-        );
-      }
-
+      // Counts record observed quantities only. A nonzero difference is
+      // a review proposal, NEVER an inventory movement or write-off.
+      // Only approveCycleCountVariance posts both ledgers atomically.
       await client.query(
         `UPDATE wms_cycle_count_line
          SET counted_milli=$3,
              variance_milli=$4,
-             status='POSTED',
-             posted_at=now()
+             status=CASE WHEN $4::bigint=0
+               THEN 'POSTED' ELSE 'REVIEW_REQUIRED' END,
+             counted_by_membership_id=$5,
+             posted_at=CASE WHEN $4::bigint=0 THEN now() ELSE NULL END
          WHERE tenant_id=$1 AND id=$2`,
         [
           context.tenantId,row.line_id,
-          counted.toString(),variance.toString()
+          counted.toString(),variance.toString(),context.membershipId
         ]
       );
 
@@ -2220,27 +2177,35 @@ export class WmsService {
         ]
       );
 
-      const open=await client.query(
-        `SELECT 1
-         FROM wms_cycle_count_line
-         WHERE tenant_id=$1 AND count_id=$2 AND status='OPEN'
+      const remaining=await client.query<{status:string}>(
+        `SELECT status FROM wms_cycle_count_line
+         WHERE tenant_id=$1 AND count_id=$2
+           AND status IN ('OPEN','REVIEW_REQUIRED')
          LIMIT 1`,
         [context.tenantId,row.count_id]
       );
-
-      const countCompleted=!open.rowCount;
+      const countCompleted=!remaining.rowCount;
       if(countCompleted){
         await client.query(
           `UPDATE wms_cycle_count
            SET status='POSTED',posted_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status IN ('OPEN','REVIEW_REQUIRED')`,
+          [context.tenantId,row.count_id]
+        );
+      } else if(remaining.rows[0]?.status==="REVIEW_REQUIRED"){
+        await client.query(
+          `UPDATE wms_cycle_count SET status='REVIEW_REQUIRED'
            WHERE tenant_id=$1 AND id=$2 AND status='OPEN'`,
           [context.tenantId,row.count_id]
         );
       }
 
-      await this.assertLocationReconciliation(
-        client,context.tenantId,row.warehouse_id
-      );
+      // No ledger has changed in a count-only step.
+      await this.audit(client,context,"wms.count_recorded",
+        "wms_cycle_count_line",row.line_id,{
+          countId:row.count_id,varianceMilli:variance.toString(),
+          requiresReview:variance!==0n
+        });
 
       return {
         varianceMilli:variance.toString(),
