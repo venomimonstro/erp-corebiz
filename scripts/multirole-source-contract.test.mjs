@@ -120,7 +120,8 @@ test("Role E2E uses genuine permission switching without exceeding registration 
   assert.match(multi,/Second company|second-tenant-isolation/);
   assert.match(multi,/logout-revocation/);
   assert.match(multi,/roleId:roleByCode\.get\("OWNER"\)\.id/);
-  assert.doesNotMatch(multi,/process\.stdout\.write\(JSON\.stringify\(.*cookie/s);
+  assert.match(multi,/result:"PASS",mode:"DISPOSABLE_MULTI_ROLE_API_E2E"/);
+  assert.doesNotMatch(multi,/console\.log\(.*(?:cookie|oneTimeToken)/);
 });
 
 test("Service staff cannot view visit charges or finance accounts",()=>{
