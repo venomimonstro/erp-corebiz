@@ -359,3 +359,11 @@ test("Trainer resource linking and own-only calendar cover multiple studio branc
   assert.match(portalPage,/Нагрузка по филиалам/);
   assert.match(portalPage,/apiRequest\("\/auth\/logout"/);
 });
+
+test("Archiving a service cannot strand an active dance direction",()=>{
+  const migration=src("infrastructure/postgres/153_service_package_entitlements.sql");
+  assert.match(migration,/ALTER TABLE dance_program\s+ADD COLUMN IF NOT EXISTS service_id/);
+  assert.match(bookings,/FROM dance_program\s+WHERE tenant_id=\$1 AND service_id=\$2 AND status='ACTIVE'/);
+  assert.match(bookings,/Услуга используется активным направлением/);
+  assert.match(bookings,/Сначала завершите или перенесите будущие записи/);
+});
