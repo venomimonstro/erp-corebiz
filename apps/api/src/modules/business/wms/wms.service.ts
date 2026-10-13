@@ -2177,14 +2177,19 @@ export class WmsService {
         ]
       );
 
-      const remaining=await client.query<{status:string}>(
-        `SELECT status FROM wms_cycle_count_line
-         WHERE tenant_id=$1 AND count_id=$2
-           AND status IN ('OPEN','REVIEW_REQUIRED')
-         LIMIT 1`,
+      const remaining=await client.query<{
+        has_open:boolean;has_review:boolean
+      }>(
+        `SELECT
+           bool_or(status='OPEN') AS has_open,
+           bool_or(status='REVIEW_REQUIRED') AS has_review
+         FROM wms_cycle_count_line
+         WHERE tenant_id=$1 AND count_id=$2`,
         [context.tenantId,row.count_id]
       );
-      const countCompleted=!remaining.rowCount;
+      const hasOpen=remaining.rows[0]?.has_open??false;
+      const hasReview=remaining.rows[0]?.has_review??false;
+      const countCompleted=!hasOpen&&!hasReview;
       if(countCompleted){
         await client.query(
           `UPDATE wms_cycle_count
@@ -2192,7 +2197,7 @@ export class WmsService {
            WHERE tenant_id=$1 AND id=$2 AND status IN ('OPEN','REVIEW_REQUIRED')`,
           [context.tenantId,row.count_id]
         );
-      } else if(remaining.rows[0]?.status==="REVIEW_REQUIRED"){
+      } else if(!hasOpen&&hasReview){
         await client.query(
           `UPDATE wms_cycle_count SET status='REVIEW_REQUIRED'
            WHERE tenant_id=$1 AND id=$2 AND status='OPEN'`,
