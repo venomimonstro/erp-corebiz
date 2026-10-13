@@ -180,7 +180,7 @@ export class CommerceDecisionsService {
           " CASE WHEN r.enabled=true THEN r.review_days ELSE NULL END AS review_days",
           " FROM demand d LEFT JOIN procurement_reorder_rule r",
           " ON r.tenant_id=$1 AND r.sku_id=d.sku_id",
-          ")"
+          ")",
           "SELECT d.sku_id,s.code AS sku,p.name AS product_name,",
           "d.ordered_milli::text AS ordered_milli_30d,",
           "COALESCE(a.sellable_milli,0)::text AS sellable_milli,",
