@@ -4484,3 +4484,16 @@ button, .primary, .secondary { font: inherit; }
 .wms-ops-route small{font-size:11px;color:#7d8897}
 .wms-ops-error{border:1px solid #e4d1ba;border-radius:14px;padding:15px;background:#fffbf5;margin:15px 0}
 @media(max-width:720px){.wms-ops-section{padding:15px}.wms-ops-route{grid-template-columns:1fr}}
+
+
+/* Count review is not physical stock: explicit second-person approval. */
+.wms-count-review-list{display:flex;flex-direction:column;gap:10px;margin-top:15px}
+.wms-count-review-row{display:grid;grid-template-columns:minmax(180px,1fr) minmax(220px,1.1fr) auto;gap:12px;align-items:center;border:1px solid #e4e9ef;border-radius:13px;background:#fff;padding:14px}
+.wms-count-review-row p{font-size:12px;color:#626e7d;line-height:1.45;margin:6px 0 0}
+.wms-count-review-row label{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600}
+.wms-count-review-row input{min-width:0;border:1px solid #d5dce6;border-radius:9px;padding:10px;font-size:13px}
+.wms-count-review-actions{display:flex;flex-wrap:wrap;gap:7px}
+.wms-count-review-actions button{font-size:12px;min-height:38px}
+.wms-count-review-row :is(button,input):focus-visible{outline:3px solid #9abce8;outline-offset:2px}
+@media(max-width:1120px){.wms-count-review-row{grid-template-columns:1fr 1fr}.wms-count-review-actions{grid-column:1/-1}}
+@media(max-width:690px){.wms-count-review-row{grid-template-columns:1fr}.wms-count-review-actions{grid-column:auto}}
