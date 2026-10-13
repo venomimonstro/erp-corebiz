@@ -4388,3 +4388,10 @@ button, .primary, .secondary { font: inherit; }
 .dance-customer-secret input{width:100%}
 @media(max-width:800px){.dance-customer-main,.dance-client-admin-grid{grid-template-columns:1fr}}
 @media(max-width:560px){.dance-customer-portal{padding:14px}.dance-customer-head{flex-direction:column;align-items:flex-start}.dance-customer-metrics{grid-template-columns:1fr}.dance-customer-head h1{font-size:26px}}
+
+
+/* A planning scenario is not an accounting ledger; missing data remain blank. */
+.dance-budget-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:20px 0}
+.dance-budget-fields label{display:flex;flex-direction:column;gap:8px;font-size:13px;font-weight:650}
+.dance-budget-fields input{min-width:0;padding:11px;border-radius:10px;border:1px solid #ced7e1}
+@media(max-width:720px){.dance-budget-fields{grid-template-columns:1fr}}
