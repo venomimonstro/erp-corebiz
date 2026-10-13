@@ -35,6 +35,17 @@ export class DanceStudioController {
     return {ok:true,data:await this.studio.access(this.ctx(req))};
   }
 
+  @Get("setup-doctor")
+  @RequirePermission("dance.read")
+  async setupDoctor(
+    @Req() req:AuthenticatedRequest,
+    @Query("scenario") scenario?:string
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.studio.setupDoctor(
+      this.ctx(req),scenario??"two_branch_52"
+    )};
+  }
+
   @Get("readiness")
   @RequirePermission("dance.read")
   async readiness(@Req() req:AuthenticatedRequest):Promise<ApiSuccess<unknown>>{
