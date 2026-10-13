@@ -262,3 +262,32 @@ test("A second founder controls company finances but never becomes platform OWNE
   assert.match(workflow,/partnerDashboard.canViewFinancials,true/);
   assert.match(workflow,/membershipId:woman,roleId:role\("OWNER"\)/);
 });
+
+test("Room rentals have separate earned/billed/settled dashboards",()=>{
+  const report=src("apps/api/src/modules/business/dance-studio/dance-budget.service.ts");
+  const controller=src("apps/api/src/modules/business/dance-studio/dance-studio.controller.ts");
+  const budget=src("apps/web/app/app/dance/budget/page.tsx");
+  assert.match(report,/async rentalIncome\(/);
+  assert.match(report,/b\.delivery_format_snapshot='RENTAL'/);
+  assert.match(report,/count\(c\.id\)=0 AND b\.price_minor_snapshot>0/);
+  assert.match(report,/b\.tenant_id=\$1/);
+  assert.match(report,/await this\.requireScope\(context,"finance\.read"\)/);
+  assert.match(controller,/@Get\("rental-income"\)\s+@RequirePermission\("finance\.read"\)/);
+  assert.match(budget,/Начислено арендаторам/);
+  assert.match(budget,/Подтверждённые поступления/);
+  assert.match(workflow,/rentedDetails\[0\]\.billing\?\.id/);
+  assert.match(workflow,/rentReport\.totals\.settledMinor/);
+  assert.match(workflow,/get\(actors\.m1,"\/dance\/rental-income\?month="/);
+});
+
+test("Retried studio lesson cannot silently become another booking",()=>{
+  const source=src("apps/api/src/modules/business/dance-studio/dance-studio.service.ts");
+  assert.match(source,/Ключ повторного запроса уже закреплён за другим занятием/);
+  assert.match(source,/prior\.trainer_resource_id/);
+  assert.match(source,/prior\.room_resource_id/);
+  assert.match(source,/prior\.group_id/);
+  assert.match(source,/prior\.starts_at/);
+  const spec=src("apps/api/src/modules/business/dance-studio/dance-lesson-idempotency.spec.ts");
+  assert.match(spec,/changed rental room/);
+  assert.match(spec,/ConflictException/);
+});
