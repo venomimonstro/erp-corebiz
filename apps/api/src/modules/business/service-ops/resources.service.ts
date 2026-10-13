@@ -490,11 +490,9 @@ export class ResourcesService {
           "INSERT INTO service_resource_schedule(tenant_id,resource_id,weekday,start_minute,end_minute) SELECT $1,$2,w,$3,$4 FROM generate_series(1,7) w",
           [context.tenantId,resourceId,input.startMinute,input.endMinute]);
       }
-      const last=new Date(Date.parse(date+"T00:00:00Z")+input.days*86400000)
-        .toISOString().slice(0,10);
       await client.query(
-        "DELETE FROM service_resource_block WHERE tenant_id=$1 AND resource_id=$2 AND reason='COREBIZ_2X2_MANAGER_OFF' AND starts_at<($4::date::timestamp AT TIME ZONE $3) AND ends_at>($5::date::timestamp AT TIME ZONE $3)",
-        [context.tenantId,resourceId,timezone,last,date]);
+        "DELETE FROM service_resource_block WHERE tenant_id=$1 AND resource_id=$2 AND reason='COREBIZ_2X2_MANAGER_OFF' AND starts_at>=($4::date::timestamp AT TIME ZONE $3)",
+        [context.tenantId,resourceId,timezone,date]);
       const off=await client.query(
         `WITH days AS (
            SELECT day::date AS d,(row_number() OVER (ORDER BY day)-1)::int AS i
