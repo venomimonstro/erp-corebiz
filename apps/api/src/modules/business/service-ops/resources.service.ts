@@ -454,7 +454,8 @@ export class ResourcesService {
     startMinute:number;endMinute:number;replaceWeeklySchedule?:boolean;
   }):Promise<{days:number;blockedDays:number;timezone:string}>{
     const date=typeof input?.startDate==="string"?input.startDate:"";
-    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(resourceId)||
+    if(!input||
+      !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(resourceId)||
       !/^\d{4}-\d{2}-\d{2}$/.test(date)||
       !Number.isInteger(input.days)||input.days<4||input.days>90||
       !Number.isInteger(input.startMinute)||!Number.isInteger(input.endMinute)||
