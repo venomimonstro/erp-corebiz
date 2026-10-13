@@ -23,8 +23,11 @@ export class DanceEconomicsService {
 
   async charges(context:TenantContext,studentId?:string){
     const scopeIds=await this.scopeIds(context,"dance.read");
-    if(!await this.authorization.resolveScope(context,"finance.read"))
-      throw new ForbiddenException("Для просмотра начислений нужны финансовые права");
+    const hasCustomerBilling=
+      (await this.authorization.resolveScope(context,"finance.read")==="all")||
+      (await this.authorization.resolveScope(context,"dance.charges.read")==="all");
+    if(!hasCustomerBilling)
+      throw new ForbiddenException("Нет прав на клиентские начисления");
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
