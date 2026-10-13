@@ -20,7 +20,7 @@ const seed=randomUUID();
 const actors={owner:{cookie:""},woman:{cookie:""},m1:{cookie:""},m2:{cookie:""},parent:{cookie:""}};
 let stage="health";
 const stats={branches:0,directions:0,trainerResources:0,rooms:0,
-  contracts:0,groups:0,customers:0,customerLogins:0,checks:0,denied:0};
+  contracts:0,groups:0,rentalBookings:0,customers:0,customerLogins:0,checks:0,denied:0};
 const api=async(actor,method,path,body,expected=method==="POST"?201:200)=>{
   const response=await fetch(new URL("/api/v1"+path,base),{
     method,redirect:"error",signal:AbortSignal.timeout(30000),
@@ -285,6 +285,48 @@ async function main(){
     deliveryFormat:"INDIVIDUAL"
   });
   assert.ok(oneVisit.id&&tenVisits.id&&individual.id);
+  stage="06b independent rental income and two small rooms";
+  // 1 000 RUB is test-only. The owner never supplied a commercial rental
+  // tariff. Never mix this revenue with the 700 000 RUB lease expense.
+  const demoRentalPriceMinor=money(1000);
+  const rentService=await post(owner,"/service/catalog",{
+    name:"TEST ONLY · аренда малого зала (уточнить тариф)",
+    category:"Аренда залов",durationMinutes:60,
+    priceMinor:demoRentalPriceMinor,currency:"RUB",
+    deliveryFormat:"RENTAL"
+  });
+  const tenantA=await post(owner,"/crm/customers",{
+    type:"PERSON",displayName:"Тестовый арендатор "+seed.slice(0,6)
+  });
+  const bookingDate=new Date();
+  bookingDate.setUTCDate(bookingDate.getUTCDate()+12);
+  bookingDate.setUTCHours(12,0,0,0);
+  const rentalInput={
+    serviceId:rentService.id,resourceIds:[small1.id],
+    branchId:branches[0].id,partyId:tenantA.id,
+    deliveryFormat:"RENTAL",source:"MANUAL",
+    startsAt:bookingDate.toISOString(),
+    idempotencyKey:"rental-"+seed
+  };
+  const rental1=await post(owner,"/service/bookings",rentalInput);
+  assert.ok(rental1.id);
+  const rentalReplay=await post(owner,"/service/bookings",rentalInput);
+  assert.equal(rentalReplay.id,rental1.id,
+    "Replay must not double-book or duplicate rental revenue");
+  await post(owner,"/service/bookings",{
+    ...rentalInput,resourceIds:[small2.id]
+  },409);
+  const rental2=await post(owner,"/service/bookings",{
+    ...rentalInput,resourceIds:[small2.id],
+    idempotencyKey:"rental-other-room-"+seed
+  });
+  assert.ok(rental2.id&&rental2.id!==rental1.id);
+  const firstRentalDetail=await get(owner,"/service/bookings/"+rental1.id);
+  assert.equal(firstRentalDetail.price_minor_snapshot,demoRentalPriceMinor);
+  assert.equal(firstRentalDetail.delivery_format_snapshot,"RENTAL");
+  const secondRentalDetail=await get(owner,"/service/bookings/"+rental2.id);
+  assert.equal(secondRentalDetail.price_minor_snapshot,demoRentalPriceMinor);
+  stats.rentalBookings=2;
   stage="07 CRM family, memberships and client portal";
   const mother=await post(actors.m1,"/crm/customers",{
     type:"PERSON",displayName:"Мама тестового ученика "+seed.slice(0,6)
