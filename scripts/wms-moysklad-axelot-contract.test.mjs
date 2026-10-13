@@ -12,7 +12,7 @@ const inventory=file("apps/api/src/modules/business/inventory/inventory.service.
 const oldWms=file("apps/api/src/modules/business/wms/wms.service.ts");
 
 test("CoreBiz keeps ONE warehouse ledger, no parallel inventory writes",()=>{
-  assert.match(ops,/FROM inventory_balance b/);
+  assert.match(ops,/LEFT JOIN inventory_balance b/);
   assert.match(ops,/FROM purchase_order_line l/);
   assert.match(ops,/po.status IN \('CONFIRMED','PARTIALLY_RECEIVED'\)/);
   assert.match(ops,/HAVING count\(\*\)=1/);
