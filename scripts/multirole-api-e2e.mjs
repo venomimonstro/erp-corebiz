@@ -96,6 +96,8 @@ async function main(){
   const ready=await read(owner,"/health/ready");
   assert.equal(ready.status,"ok");
   await read(owner,"/auth/me",401);
+  await read(owner,"/finance/summary",401);
+  await read(owner,"/roles",401);
 
   phaseIs("owner-register");
   const registered=await write(owner,"/auth/register",{
@@ -152,6 +154,16 @@ async function main(){
   }
   const employeeMembership=await invite(employee,"role-employee");
   const colleagueMembership=await invite(colleague,"role-colleague");
+  // A second concurrently active manager allows testing the OWN scope
+  // against a genuine colleague, not just the company owner.
+  await modify(owner,"/roles/assign",{
+    membershipId:colleagueMembership,
+    roleId:roleByCode.get("SALES_MANAGER").id
+  });
+  const colleagueDeal=await write(colleague,"/crm/deals",{
+    title:"Other salesperson deal "+run.slice(0,6),amountMinor:"45000"
+  });
+  assert.ok(colleagueDeal.id);
   await read(employee,"/tenants/team",403);
   await read(employee,"/finance/summary",403);
   await write(employee,"/catalog/products",{
@@ -181,6 +193,8 @@ async function main(){
       const board=await read(employee,"/crm/board");
       assert.equal(board.stages.some(s=>s.deals.some(d=>d.id===ownerDeal.id)),
         false,"Sales manager must not see owner-assigned CRM deal");
+      assert.equal(board.stages.some(s=>s.deals.some(d=>d.id===colleagueDeal.id)),
+        false,"Sales manager must not see colleague-assigned CRM deal");
       const own=await write(employee,"/crm/deals",{
         title:"Staff owned "+run.slice(0,6),amountMinor:"50000"
       });
@@ -192,6 +206,7 @@ async function main(){
       const board=await read(employee,"/crm/board");
       assert.ok(board.stages.some(s=>s.deals.some(d=>d.id===ownerDeal.id)));
       assert.ok(board.stages.some(s=>s.deals.some(d=>d.id===ownedDealId)));
+      assert.ok(board.stages.some(s=>s.deals.some(d=>d.id===colleagueDeal.id)));
     }
     if(code==="WAREHOUSE"){
       assert.equal(hasPermission(context,"inventory.write"),"all");
@@ -291,7 +306,7 @@ async function main(){
     denialChecks:audit.filter(x=>x.status>=400).length,
     invariantChecks:[
       "role changes take effect on current session",
-      "crm own/all scope enforced",
+      "crm own/all scope enforced against owner and colleague",
       "admin cannot mint OWNER",
       "owner cannot assign OWNER to a nonowner",
       "worker finance isolation",
