@@ -129,8 +129,16 @@ export default function DanceStaffPage(){
     if(!current||!canManage||!archive)return;
     setBusy(true);setError("");setNotice("");
     try{
-      await apiRequest("/service/resources/"+current.id+"/archive",{method:"POST"});
-      setNotice("Тренер архивирован. История сохранена.");
+      const outcome=await apiRequest<{archived:true;loginSuspended:boolean;
+        linkedUserRemainsActive:boolean}>(
+        "/service/resources/"+current.id+"/archive",{method:"POST"}
+      );
+      setNotice(outcome.loginSuspended
+        ?"Тренер архивирован, его личный доступ остановлен. История сохранена."
+        :outcome.linkedUserRemainsActive
+          ?"Тренер архивирован, но логин остаётся активным: у человека есть "
+           +"другие права (например, совладелец). Проверьте его роль в команде."
+          :"Тренер архивирован. История сохранена.");
       setSelected("");setArchive(false);await reload();
     }catch(err){
       setError(err instanceof Error?err.message:"Перед увольнением переназначьте занятия");
