@@ -60,9 +60,9 @@ test("Managers see pupil receivables without bank, payroll or account administra
 });
 
 test("Net profit excludes unverified second-branch rent, coach payroll and taxes",()=>{
-  assert.match(ownerBudget,/rentB:""/);
-  assert.match(ownerBudget,/trainerSalaries:""/);
-  assert.match(ownerBudget,/taxes:""/);
+  assert.match(ownerBudget,/rentBranchBMinor/);
+  assert.match(ownerBudget,/trainersMinor/);
+  assert.match(ownerBudget,/taxesMinor/);
   assert.match(ownerBudget,/profit===null/);
   assert.match(ownerBudget,/Плановые предположения владельца/);
   assert.match(finance,/dance_lesson_profitability/);
