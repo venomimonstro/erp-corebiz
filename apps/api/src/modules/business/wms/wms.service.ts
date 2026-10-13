@@ -2219,6 +2219,190 @@ export class WmsService {
     });
   }
 
+  /** AXELOT-style discrepancy review. The count task is completed
+   * by a warehouse worker; a different membership explicitly authorizes
+   * physical and financial stock-ledger changes, in the SAME transaction.
+   */
+  async countVariances(context:TenantContext,warehouseId:string){
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(warehouseId))
+      throw new BadRequestException("Некорректный склад");
+    return this.database.withTenantTransaction(context,async client=>{
+      const wh=await client.query(
+        "SELECT 1 FROM warehouse WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
+        [context.tenantId,warehouseId]
+      );
+      if(!wh.rowCount)throw new NotFoundException("Склад не найден");
+      const rows=await client.query(
+        `SELECT l.id,l.count_id,l.warehouse_id,l.location_id,l.sku_id,
+           loc.full_code AS location_code,s.code AS sku_code,
+           l.expected_milli::text,l.counted_milli::text,
+           l.variance_milli::text,l.counted_by_membership_id,
+           l.status,l.created_at
+         FROM wms_cycle_count_line l
+         JOIN warehouse_location loc ON loc.tenant_id=l.tenant_id
+           AND loc.id=l.location_id
+         JOIN sku s ON s.tenant_id=l.tenant_id AND s.id=l.sku_id
+         WHERE l.tenant_id=$1 AND l.warehouse_id=$2
+           AND l.status='REVIEW_REQUIRED'
+         ORDER BY l.created_at,l.id LIMIT 200`,
+        [context.tenantId,warehouseId]
+      );
+      return {items:rows.rows,limit:200,mayHaveMore:rows.rows.length===200};
+    });
+  }
+
+  async reviewCountVariance(
+    context:TenantContext,lineId:string,
+    input:{decision:"APPROVE"|"RECOUNT";note?:string}
+  ):Promise<{status:string;varianceMilli:string}>{
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(lineId))
+      throw new BadRequestException("Некорректная строка пересчёта");
+    if(input?.decision!=="APPROVE"&&input?.decision!=="RECOUNT")
+      throw new BadRequestException("Укажите APPROVE или RECOUNT");
+    const note=input.note?.trim()??"";
+    if(note.length<8||note.length>1500)
+      throw new BadRequestException("Основание решения: от 8 до 1500 символов");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{
+        id:string;count_id:string;task_id:string;warehouse_id:string;
+        location_id:string;sku_id:string;status:string;count_status:string;
+        expected_milli:string;counted_milli:string;variance_milli:string;
+        counted_by_membership_id:string|null;
+      }>(
+        `SELECT l.id,l.count_id,l.task_id,l.warehouse_id,l.location_id,
+           l.sku_id,l.status,c.status AS count_status,
+           l.expected_milli::text,l.counted_milli::text,
+           l.variance_milli::text,l.counted_by_membership_id
+         FROM wms_cycle_count_line l
+         JOIN wms_cycle_count c ON c.tenant_id=l.tenant_id
+           AND c.id=l.count_id
+         WHERE l.tenant_id=$1 AND l.id=$2
+         FOR UPDATE OF l,c`,
+        [context.tenantId,lineId]
+      );
+      const row=result.rows[0];
+      if(!row)throw new NotFoundException("Строка пересчёта не найдена");
+      if(row.status==="POSTED"){
+        if(input.decision==="APPROVE")return {
+          status:"POSTED",varianceMilli:row.variance_milli
+        };
+        throw new ConflictException("Проведённый пересчёт нельзя отправить назад");
+      }
+      if(row.status!=="REVIEW_REQUIRED"||
+        !["OPEN","REVIEW_REQUIRED"].includes(row.count_status)){
+        throw new ConflictException("Расхождение не ожидает проверки");
+      }
+      if(!row.counted_by_membership_id||
+        row.counted_by_membership_id===context.membershipId){
+        throw new ConflictException(
+          "Проверку должен выполнить другой сотрудник, не проводивший подсчёт"
+        );
+      }
+      const variance=BigInt(row.variance_milli);
+      const expected=BigInt(row.expected_milli);
+      if(variance===0n)throw new ConflictException("Нет расхождения");
+
+      if(input.decision==="RECOUNT"){
+        await client.query(
+          `UPDATE wms_cycle_count_line
+           SET status='OPEN',counted_milli=NULL,variance_milli=NULL,
+             counted_by_membership_id=NULL,
+             reviewed_by_membership_id=$3,reviewed_at=now(),review_note=$4
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,lineId,context.membershipId,note]
+        );
+        await client.query(
+          `UPDATE warehouse_task SET status='OPEN',
+             claimed_by_membership_id=NULL,claimed_at=NULL,
+             completed_at=NULL,result=NULL,updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND task_type='COUNT'
+             AND status='COMPLETED'`,
+          [context.tenantId,row.task_id]
+        );
+        await client.query(
+          `UPDATE wms_cycle_count SET status='OPEN',posted_at=NULL
+           WHERE tenant_id=$1 AND id=$2 AND status='REVIEW_REQUIRED'`,
+          [context.tenantId,row.count_id]
+        );
+        await this.audit(client,context,"wms.count_recount_requested",
+          "wms_cycle_count_line",lineId,{note});
+        return {status:"OPEN",varianceMilli:variance.toString()};
+      }
+
+      const now=await client.query<{physical_milli:string}>(
+        `SELECT physical_milli::text FROM warehouse_location_balance
+         WHERE tenant_id=$1 AND warehouse_id=$2
+           AND location_id=$3 AND sku_id=$4 FOR UPDATE`,
+        [context.tenantId,row.warehouse_id,row.location_id,row.sku_id]
+      );
+      if(BigInt(now.rows[0]?.physical_milli??"0")!==expected){
+        throw new ConflictException(
+          "Остаток изменился после подсчёта. Отправьте на повторный пересчёт"
+        );
+      }
+      await this.inventory.applyWmsCountAdjustment(client,context,{
+        warehouseId:row.warehouse_id,skuId:row.sku_id,
+        quantityDeltaMilli:variance,
+        countId:row.count_id,countLineId:lineId,
+        reason:"Approved WMS count: "+note,
+        idempotencyKey:"wms-count-adjust:"+lineId
+      });
+      await client.query(
+        `UPDATE warehouse_location_balance
+         SET physical_milli=$5::bigint,updated_at=now()
+         WHERE tenant_id=$1 AND warehouse_id=$2
+           AND location_id=$3 AND sku_id=$4`,
+        [context.tenantId,row.warehouse_id,row.location_id,
+          row.sku_id,row.counted_milli]
+      );
+      await client.query(
+        `INSERT INTO wms_location_movement(
+           tenant_id,warehouse_id,sku_id,movement_type,
+           from_location_id,to_location_id,quantity_milli,
+           source_type,source_id,source_line_id,
+           idempotency_key,actor_membership_id
+         ) VALUES($1,$2,$3,'ADJUSTMENT',
+           CASE WHEN $4::bigint<0 THEN $5::uuid ELSE NULL END,
+           CASE WHEN $4::bigint>0 THEN $5::uuid ELSE NULL END,
+           abs($4::bigint),'WMS_CYCLE_COUNT',$6,$7,$8,$9)
+         ON CONFLICT (tenant_id,idempotency_key) DO NOTHING`,
+        [context.tenantId,row.warehouse_id,row.sku_id,
+          variance.toString(),row.location_id,row.count_id,lineId,
+          "count-location-adjust:"+lineId,context.membershipId]
+      );
+      await client.query(
+        `UPDATE wms_cycle_count_line SET status='POSTED',posted_at=now(),
+           reviewed_by_membership_id=$3,reviewed_at=now(),review_note=$4
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,lineId,context.membershipId,note]
+      );
+      const remaining=await client.query<{unfinished:boolean}>(
+        `SELECT EXISTS(
+           SELECT 1 FROM wms_cycle_count_line
+           WHERE tenant_id=$1 AND count_id=$2
+             AND status IN ('OPEN','REVIEW_REQUIRED')
+         ) AS unfinished`,
+        [context.tenantId,row.count_id]
+      );
+      if(!remaining.rows[0]?.unfinished){
+        await client.query(
+          `UPDATE wms_cycle_count SET status='POSTED',posted_at=now()
+           WHERE tenant_id=$1 AND id=$2
+             AND status IN ('OPEN','REVIEW_REQUIRED')`,
+          [context.tenantId,row.count_id]
+        );
+      }
+      await this.assertLocationReconciliation(
+        client,context.tenantId,row.warehouse_id
+      );
+      await this.audit(client,context,"wms.count_variance_approved",
+        "wms_cycle_count_line",lineId,{
+          varianceMilli:variance.toString(),note
+        });
+      return {status:"POSTED",varianceMilli:variance.toString()};
+    });
+  }
+
   async planReplenishment(
     context:TenantContext,
     warehouseId:string
