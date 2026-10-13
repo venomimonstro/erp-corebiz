@@ -230,10 +230,9 @@ export class InventoryService {
     // purchase order is expected stock, NOT physical stock.
     const balances=await this.balances(context);
     const incoming=await this.database.withTenantTransaction(context,async client=>{
-      // Purchase orders reference a branch, not a particular warehouse.
-      // We may allocate inbound to a warehouse only when that branch has
-      // exactly ONE active warehouse. Otherwise return the ambiguity as
-      // unallocated; silently crediting every warehouse would underbuy.
+      // A Purchase Order can point to a particular warehouse. Otherwise
+      // use its branch ONLY when there is exactly one active warehouse.
+      // Never allocate an ambiguous delivery across multiple warehouses.
       const result=await client.query<{
         sku_id:string;warehouse_id:string|null;inbound_milli:string;
       }>(
@@ -245,7 +244,8 @@ export class InventoryService {
            GROUP BY branch_id
            HAVING count(*)=1
          )
-         SELECT pl.sku_id,t.warehouse_id,
+         SELECT pl.sku_id,
+           COALESCE(po.destination_warehouse_id,t.warehouse_id) AS warehouse_id,
            SUM(GREATEST(pl.ordered_quantity_milli-
              pl.received_quantity_milli,0))::text AS inbound_milli
          FROM purchase_order_line pl
@@ -254,7 +254,7 @@ export class InventoryService {
          LEFT JOIN branch_target t ON t.branch_id=po.destination_branch_id
          WHERE pl.tenant_id=$1
            AND po.status IN ('CONFIRMED','PARTIALLY_RECEIVED')
-         GROUP BY pl.sku_id,t.warehouse_id`,
+         GROUP BY pl.sku_id,COALESCE(po.destination_warehouse_id,t.warehouse_id)`,
         [context.tenantId]
       );
       return result.rows;
@@ -295,7 +295,7 @@ export class InventoryService {
         unallocatedInboundMilli:(unallocated.get(item.skuId)??0n).toString(),
         grossShortageMilli:plan.shortageBeforeInboundMilli,
         shortageBeforeInboundMilli:plan.shortageBeforeInboundMilli,
-        inboundScope:"UNIQUE_BRANCH_WAREHOUSE" as const,
+        inboundScope:"EXPLICIT_WAREHOUSE_OR_UNIQUE_BRANCH" as const,
         recommendedPurchaseMilli:plan.recommendedPurchaseMilli,
         urgency:plan.urgency,
         purchaseOrderCreated:false
