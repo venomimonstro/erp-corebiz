@@ -12,6 +12,13 @@ BEGIN
  INSERT INTO role_permission(tenant_id,role_id,permission_code,scope)
  VALUES(p_tenant_id,v_role,'dance.trainer.read','own')
  ON CONFLICT(role_id,permission_code) DO UPDATE SET scope='own';
+ -- An ADMIN who also coaches may view only their own calendar, not other
+ -- trainers. This is not an ownership or full studio finance grant.
+ INSERT INTO role_permission(tenant_id,role_id,permission_code,scope)
+ SELECT p_tenant_id,r.id,'dance.trainer.read','own'
+ FROM tenant_role r
+ WHERE r.tenant_id=p_tenant_id AND r.code='ADMIN'
+ ON CONFLICT(role_id,permission_code) DO NOTHING;
 END;
 $$;
 REVOKE ALL ON FUNCTION public.corebiz_seed_dance_trainer_role(uuid) FROM PUBLIC;
