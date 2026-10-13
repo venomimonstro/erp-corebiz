@@ -3,6 +3,7 @@ import {useCallback,useEffect,useState} from "react";
 import {AppSidebar} from "../../../../components/app-sidebar";
 import {DanceWorkspaceNav} from "../../../../components/dance-workspace-nav";
 import {apiRequest} from "../../../../lib/api";
+import recoveryCases from "../../../../lib/dance-setup-recovery.json";
 
 type Check={id:string;label:string;observed:number;target:number;
   href:string;fix:string;importance:"blocker"|"warning";ok:boolean};
@@ -14,6 +15,8 @@ export default function DanceSetupDiagnostics(){
   const [error,setError]=useState("");
   const [busy,setBusy]=useState(false);
   const [showDone,setShowDone]=useState(false);
+  const [search,setSearch]=useState("");
+  const [expanded,setExpanded]=useState("");
   const run=useCallback(async()=>{
     setBusy(true);setError("");setDiagnostic(null);
     try{
@@ -55,6 +58,41 @@ export default function DanceSetupDiagnostics(){
           карточками: данные не нужно вводить заново. Обратитесь к
           администратору с названием неоткрывающегося раздела.</p>
       </section>:null}
+      <section className="dance-customer-panel">
+        <h2>Я не могу настроить…</h2>
+        <p>Найдите проблему своими словами. Эти инструкции доступны,
+          даже если проверка сервера временно не отвечает.</p>
+        <label className="dance-doctor-search">
+          Поиск проблемы
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Например: тренер, абонемент, зал, оплата, 403"/>
+        </label>
+        <div className="dance-doctor-recovery">
+          {recoveryCases.filter(item=>
+            (item.title+" "+item.cause+" "+item.recovery)
+              .toLocaleLowerCase("ru")
+              .includes(search.trim().toLocaleLowerCase("ru"))
+          ).map(item=><article key={item.id}>
+            <button type="button" aria-expanded={expanded===item.id}
+              onClick={()=>setExpanded(prev=>prev===item.id?"":item.id)}>
+              <span>{item.title}</span>
+              <span aria-hidden="true">{expanded===item.id?"−":"+"}</span>
+            </button>
+            {expanded===item.id?<div>
+              <p><strong>Возможная причина:</strong> {item.cause}</p>
+              <p><strong>Что сделать:</strong> {item.recovery}</p>
+              <a href={item.href}>Открыть нужный экран →</a>
+            </div>:null}
+          </article>)}
+          {recoveryCases.filter(item=>
+            (item.title+" "+item.cause+" "+item.recovery)
+              .toLocaleLowerCase("ru")
+              .includes(search.trim().toLocaleLowerCase("ru"))
+          ).length===0?<p>По вашему запросу пока нет готового сценария.
+            Проверьте сообщение об ошибке, затем обратитесь к администратору.
+            Повторное создание операции без проверки может дать дубли.</p>:null}
+        </div>
+      </section>
       {diagnostic?<section className="dance-customer-panel">
         <h2>Состояние настройки</h2>
         <div className="dance-doctor-summary">
