@@ -48,7 +48,7 @@ export class ResourcesController {
   async archive(
     @Req() request:AuthenticatedRequest,
     @Param("id") id:string
-  ):Promise<ApiSuccess<{archived:true}>>{
+  ):Promise<ApiSuccess<{archived:true;loginSuspended:boolean;linkedUserRemainsActive:boolean}>>{
     return {ok:true,data:await this.resources.archive(this.context(request),id)};
   }
 
