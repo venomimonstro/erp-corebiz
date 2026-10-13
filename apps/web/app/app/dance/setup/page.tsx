@@ -17,6 +17,8 @@ export default function DanceSetupPage(){
   const [error,setError]=useState("");
   const [refreshing,setRefreshing]=useState(false);
   const reload=useCallback(async()=>{
+    // An old green progress bar cannot survive a failed server refresh.
+    setData(null);setError("");
     setRefreshing(true);
     try{
       const result=await apiRequest<Readiness>("/dance/readiness");
@@ -52,6 +54,15 @@ export default function DanceSetupPage(){
         </div>
       </header>
       <DanceWorkspaceNav active="setup"/>
+      <section className="dance-setup-troubleshooting">
+        <strong>Не можете закончить настройку?</strong>
+        <p>Проверьте отсутствие услуги у тренера, занятого зала,
+          просроченного абонемента, роли менеджера и финансовых связей.
+          Система покажет конкретные недостающие данные и способ исправления.</p>
+        <a href="/app/dance/diagnostics" className="secondary-button">
+          Найти ошибку и исправить →
+        </a>
+      </section>
       {error?<div className="dance-owner-error" role="alert">
         <span>{error}</span>
         <button onClick={()=>void reload()} type="button">Повторить</button>
@@ -59,14 +70,14 @@ export default function DanceSetupPage(){
       {!data&&!error?<p className="dance-owner-loading">Проверяем структуру студии…</p>:null}
       {data?<>
         <section className="dance-setup-progress">
-          <div><p className="dance-owner-kicker">Готовность к работе</p>
+          <div><p className="dance-owner-kicker">Первые настройки</p>
             <h2>{data.ready} из {data.all} шагов настроены</h2>
-            <p>{data.canLaunch?"Базовый процесс занятий настроен. Дальше — абонементы, зарплата и оптимизация.":
-              "Пройдите обязательные шаги, чтобы начать управлять занятиями."}</p>
+            <p>{data.canLaunch?"Первые операции можно пробовать на тестовых данных. Финансы, права, абонементы и коммерческий запуск проверяются отдельно.":
+              "Заполните основные данные и сформируйте расписание. Это ещё не разрешение принимать реальные платежи."}</p>
           </div>
           <div className="dance-setup-progress-chart">
             <strong>{Math.round(data.ready/data.all*100)}%</strong>
-            <div role="progressbar" aria-label="Готовность студии"
+            <div role="progressbar" aria-label="Заполненные первые шаги студии"
               aria-valuenow={data.ready} aria-valuemin={0} aria-valuemax={data.all}>
               <span style={{width:Math.round(data.ready/data.all*100)+"%"}}/>
             </div>
