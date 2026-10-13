@@ -237,7 +237,10 @@ export class SiteFormsService {
              WHERE l.tenant_id=$1 AND l.group_id=$2
                AND l.status='OPEN_FOR_BOOKING'
                AND l.starts_at >= $3 AND l.starts_at < $4
-               AND l.starts_at > now()
+               AND tr.id IS NOT NULL AND tr.status='ACTIVE'
+               AND tr.online_booking_enabled=true
+               AND l.starts_at>=now()+
+                   tr.online_min_lead_minutes*interval '1 minute'
              GROUP BY l.id,g.name,tr.name
              ORDER BY l.starts_at
              LIMIT 100`,
@@ -506,9 +509,14 @@ export class SiteFormsService {
           context,
           async client=>{
             const result=await client.query(
-              `SELECT 1 FROM dance_lesson
-               WHERE tenant_id=$1 AND id=$2 AND group_id=$3
-                 AND status='OPEN_FOR_BOOKING' AND starts_at>now()`,
+              `SELECT 1 FROM dance_lesson l
+               JOIN service_resource tr ON tr.tenant_id=l.tenant_id
+                 AND tr.id=l.trainer_resource_id AND tr.status='ACTIVE'
+               WHERE l.tenant_id=$1 AND l.id=$2 AND l.group_id=$3
+                 AND l.status='OPEN_FOR_BOOKING'
+                 AND tr.online_booking_enabled=true
+                 AND l.starts_at>=now()+
+                     tr.online_min_lead_minutes*interval '1 minute'`,
               [row.tenant_id,lessonId,groupId]
             );
             return Boolean(result.rowCount);
