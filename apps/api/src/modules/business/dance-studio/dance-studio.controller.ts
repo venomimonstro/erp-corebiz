@@ -686,6 +686,19 @@ export class DanceStudioController {
     };
   }
 
+  @Get("portal/accounts")
+  @RequirePermission("users.manage")
+  async customerAccounts(@Req() req:AuthenticatedRequest):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.portal.accounts(this.ctx(req))};
+  }
+
+  @Post("portal/accounts/:membershipId/revoke")
+  @RequirePermission("users.manage")
+  async revokeCustomer(@Req() req:AuthenticatedRequest,
+    @Param("membershipId") membershipId:string):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.portal.revoke(this.ctx(req),membershipId)};
+  }
+
   @Post("portal/link")
   @RequirePermission("users.manage")
   async linkCustomer(
