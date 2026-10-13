@@ -209,18 +209,23 @@ async function main(){
       name:"Менеджер 2/2 №"+(i+1)
     }));
   }
-  // Mark alternating two-day periods unavailable. This is a 30-day trial
-  // roster; the service still needs a real repeating 2/2 scheduling editor.
+  // Real server-enforced two-on/two-off roster, with existing vacations intact.
   const anchor=new Date();anchor.setUTCHours(0,0,0,0);
-  for(let day=0;day<28;day++){
-    const off=Math.floor(day/2)%2;
-    const start=new Date(anchor.getTime()+day*86400000);
-    const end=new Date(start.getTime()+86400000);
-    await post(owner,"/service/resources/"+receptionistResources[off].id+
-      "/blocks",{
-      startsAt:start.toISOString(),endsAt:end.toISOString(),
-      type:"UNAVAILABLE",reason:"Дежурство 2/2 второго менеджера"
-    });
+  const startDate=anchor.toISOString().slice(0,10);
+  for(const [i,resource] of receptionistResources.entries()){
+    const calendar=await post(owner,"/service/resources/"+resource.id+
+      "/two-by-two",{
+        startDate,days:60,startsWorking:i===0,
+        startMinute:540,endMinute:1260
+      });
+    assert.equal(calendar.days,60);
+    assert.equal(calendar.blockedDays,30);
+    const weekly=await get(owner,"/service/resources/"+resource.id+"/schedule");
+    assert.equal(weekly.length,7);
+    const blocks=await get(owner,"/service/resources/"+resource.id+"/blocks?from="+
+      encodeURIComponent(startDate+"T00:00:00Z")+"&to="+
+      encodeURIComponent(new Date(anchor.getTime()+61*86400000).toISOString()));
+    assert.ok(blocks.filter(x=>x.reason==="COREBIZ_2X2_MANAGER_OFF").length>=29);
   }
 
   stage="06 12 directions, service prices, groups";
@@ -382,7 +387,7 @@ async function main(){
     outstanding:[
       "Rent and expense assumptions for branch B unknown",
       "Real trainer compensation rules and wage taxes not configured",
-      "2/2 duty blocked for 28 days, recurring automation still required",
+      "2/2 schedules materialized for 60 days; extend before the end or implement recurring horizon jobs",
       "1,200 RUB/h rental bookings are disposable test assumptions, not signed prices",
       "Rental sale price and signed sublease terms for small halls unknown",
       "Full-payment package cannot be treated as paid without PSP reconciliation",
