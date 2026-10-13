@@ -122,3 +122,28 @@ test("Month plans persist per tenant and never silently fill example figures",()
   assert.match(plan,/method:"PATCH"/);
   assert.match(plan,/rubles\(v\)===null/);
 });
+
+test("Leased small halls are not sold twice at full room capacity",()=>{
+  assert.match(workflow,/DISPOSABLE/);
+  assert.match(workflow,/rentServices/);
+  assert.match(workflow,/deliveryFormat:"RENTAL"/);
+  assert.match(workflow,/priceMinor:money\(1200\)/);
+  assert.match(workflow,/resources:\[\{resourceId:rental.resourceId,capacityUnits:8\}\]/);
+  assert.match(workflow,/idempotencyKey:"dance-rental-conflict-"/);
+  assert.match(workflow,/\},409\);/);
+});
+test("Trainer exit suspends tenant membership while preserving history",()=>{
+  const tenantService=src("apps/api/src/modules/platform/tenants/tenants.service.ts");
+  const tenantController=src("apps/api/src/modules/platform/tenants/tenants.controller.ts");
+  const authDb=src("infrastructure/postgres/119_auth_rls_bootstrap.sql");
+  assert.match(tenantService,/async setStaffStatus/);
+  assert.match(tenantService,/if\(member\.is_owner\)/);
+  assert.match(tenantService,/context\.membershipId===membershipId/);
+  assert.match(tenantService,/membership\.suspended/);
+  assert.match(tenantService,/membership\.reactivated/);
+  assert.match(tenantController,/@Post\("team\/:membershipId\/suspend"\)/);
+  assert.match(tenantController,/@Post\("team\/:membershipId\/reactivate"\)/);
+  assert.match(authDb,/m\.status = 'ACTIVE'/);
+  assert.match(team,/Приостановить вход/);
+  assert.match(team,/Восстановить вход/);
+});
