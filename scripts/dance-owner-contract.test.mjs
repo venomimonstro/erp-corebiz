@@ -355,7 +355,7 @@ test("Trainer resource linking and own-only calendar cover multiple studio branc
   assert.match(trainer,/coalesce\(coach\.timezone,'Europe\/Moscow'\)/);
   assert.match(trainerSpec,/both resources of the same authenticated trainer/);
   assert.match(employeeSpec,/other branch resource remains active/);
-  assert.match(staffPage,/already-linked login must remain selectable/);
+  assert.match(staffPage,/An already-linked login must remain selectable/);
   assert.match(portalPage,/Нагрузка по филиалам/);
   assert.match(portalPage,/apiRequest\("\/auth\/logout"/);
 });
