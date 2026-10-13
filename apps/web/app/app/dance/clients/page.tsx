@@ -25,19 +25,34 @@ export default function DanceClientAccessPage(){
   const [error,setError]=useState("");
   const refresh=useCallback(async()=>{
     setLoading(true);setError("");
-    try{
-      const [team,customers,roles,linked]=await Promise.all([
-        apiRequest<TeamMember[]>("/tenants/team"),
-        apiRequest<Customer[]>("/crm/customers"),
-        apiRequest<Role[]>("/roles"),
-        apiRequest<ClientAccount[]>("/dance/portal/accounts")
-      ]);
-      setMembers(team);setParties(customers);setAccounts(linked);
-      setRole(roles.find(x=>x.code==="DANCE_CUSTOMER")??null);
-    }catch(e){setError(e instanceof Error?e.message:"Не удалось загрузить клиентов");}
-    finally{setLoading(false);}
+    // Stale invitees must never remain visible after a failed access check.
+    setMembers([]);setParties([]);setAccounts([]);setRole(null);
+    const [team,customers,roles,linked]=await Promise.allSettled([
+      apiRequest<TeamMember[]>("/tenants/team"),
+      apiRequest<Customer[]>("/crm/customers"),
+      apiRequest<Role[]>("/roles"),
+      apiRequest<ClientAccount[]>("/dance/portal/accounts")
+    ]);
+    const issues:string[]=[];
+    if(team.status==="fulfilled")setMembers(team.value);
+    else issues.push("Не загружены приглашения сотрудников — проверьте права владельца.");
+    if(customers.status==="fulfilled")setParties(customers.value);
+    else issues.push("CRM недоступна — сначала проверьте клиентов.");
+    if(roles.status==="fulfilled"){
+      const customerRole=roles.value.find(x=>x.code==="DANCE_CUSTOMER");
+      setRole(customerRole??null);
+      if(!customerRole)issues.push(
+        "Отсутствует роль клиента. Примените миграции и проверьте каталог ролей."
+      );
+    }else issues.push("Не удалось проверить клиентскую роль.");
+    if(linked.status==="fulfilled")setAccounts(linked.value);
+    else issues.push("Список привязанных аккаунтов не проверен. Не создавайте дубли.");
+    setError(issues.join(" "));
+    setLoading(false);
   },[]);
   useEffect(()=>{void refresh();},[refresh]);
+  const pendingInvites=members.filter(x=>x.status==="INVITED"&&
+    x.roles.some(r=>r.code==="DANCE_CUSTOMER"));
   const candidates=members.filter(x=>x.status==="ACTIVE"&&
     x.roles.length===1&&x.roles[0]?.code==="DANCE_CUSTOMER");
   async function invite(e:FormEvent){
@@ -102,6 +117,8 @@ export default function DanceClientAccessPage(){
           <button type="submit" disabled={!role||busy||!email.trim()}>
             Создать приглашение
           </button>
+          {!role?<p role="status">Нельзя отправить приглашение: роль клиента
+            пока не подтверждена. Проверьте миграции и права администратора.</p>:null}
           {token?<div className="dance-customer-secret">
             <strong>Одноразовая ссылка приглашения</strong>
             <p>Скопируйте и передайте конкретному клиенту. После
@@ -131,6 +148,15 @@ export default function DanceClientAccessPage(){
                 {x.displayName}{x.phone?" · "+x.phone:""}</option>)}
             </select>
           </label>
+          {candidates.length===0?<p role="status">Пока нет активных
+            клиентских аккаунтов. Родитель должен принять приглашение
+            и завершить регистрацию; затем нажмите «Обновить».</p>:null}
+          {pendingInvites.length>0?<p>Приглашение ожидают:
+            {" "}{pendingInvites.map(x=>x.email).join(", ")}.
+            Не создавайте второе приглашение до проверки первого.</p>:null}
+          {parties.length===0?<p>Нет клиентов для привязки.
+            <a href="/app/dance/students"> Создайте ученика и плательщика →</a>
+          </p>:null}
           <button type="submit" disabled={busy||!member||!party}>Связать</button>
           <p><a href="/portal/dance">Открыть клиентский кабинет →</a></p>
         </form>
