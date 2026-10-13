@@ -9,12 +9,15 @@ import {Wms3plRequestsService} from "./wms-3pl-requests.service";
 import {WmsInboundController} from "./wms-inbound.controller";
 import {WmsInboundService} from "./wms-inbound.service";
 import {WmsController} from "./wms.controller";
+import {WmsOperationsController} from "./wms-operations.controller";
+import {WmsOperationsService} from "./wms-operations.service";
 import {WmsService} from "./wms.service";
 
 @Module({
   imports:[InventoryModule],
   controllers:[
     WmsController,
+    WmsOperationsController,
     Wms3plBillingController,
     Wms3plPortalController,
     Wms3plRequestsController,
@@ -22,6 +25,7 @@ import {WmsService} from "./wms.service";
   ],
   providers:[
     WmsService,
+    WmsOperationsService,
     Wms3plBillingService,
     Wms3plPortalService,
     Wms3plRequestsService,
