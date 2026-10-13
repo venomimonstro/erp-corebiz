@@ -64,13 +64,14 @@ try{
   await page.getByText("Установлен график:",{exact:false}).waitFor({timeout:20000});
 
   const pricingPanel=page.locator(".service-desk-panel").filter({
-    has:page.getByRole("heading",{name:"Индивидуальная цена мастера"})
+    has:page.getByRole("heading",{name:"Правила услуги конкретного мастера"})
   });
   await pricingPanel.getByLabel("Услуга").selectOption({index:1});
   await pricingPanel.getByLabel("Специалист").selectOption({index:1});
   await pricingPanel.getByLabel("Цена, ₽").fill("1750");
+  await pricingPanel.getByLabel("Длительность для мастера, минуты (необязательно)").fill("50");
   await pricingPanel.getByRole("button",{
-    name:"Сохранить персональную цену"
+    name:"Сохранить правило мастера"
   }).click();
   await page.getByText("Персональная цена специалиста сохранена.",{
     exact:false
