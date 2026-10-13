@@ -43,7 +43,7 @@ type Charge = {
   amount_minor: string;
   due_at: string | null;
   status: string;
-  obligation_id: string;
+  obligation_id: string|null;
   invoice_number: string | null;
   settled_minor: string|null;
   remaining_minor: string|null;
@@ -364,6 +364,8 @@ export default function DanceStudentsPage() {
     const allocations: Array<{ obligationId: string; amountMinor: string }> = [];
     for (const charge of payerOpenCharges) {
       if (left <= 0n) break;
+      if(!charge.finance_verified||!charge.obligation_id||
+        charge.remaining_minor===null)continue;
       const open = BigInt(charge.remaining_minor);
       const amount = open < left ? open : left;
       allocations.push({
