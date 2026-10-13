@@ -14,13 +14,15 @@ import { RequirePermission } from "../../platform/authorization/require-permissi
 import { DanceEconomicsService } from "./dance-economics.service";
 import { DanceStudioService } from "./dance-studio.service";
 import {DanceOperationsService} from "./dance-operations.service";
+import {DanceCustomerPortalService} from "./dance-customer-portal.service";
 
 @Controller("dance")
 export class DanceStudioController {
   constructor(
     private readonly studio:DanceStudioService,
     private readonly economics:DanceEconomicsService,
-    private readonly operations:DanceOperationsService
+    private readonly operations:DanceOperationsService,
+    private readonly portal:DanceCustomerPortalService
   ) {}
 
   @Get("access")
@@ -682,6 +684,21 @@ export class DanceStudioController {
       ok:true,
       data:await this.economics.createRoomContract(this.ctx(req),body)
     };
+  }
+
+  @Post("portal/link")
+  @RequirePermission("users.manage")
+  async linkCustomer(
+    @Req() req:AuthenticatedRequest,
+    @Body() body:{membershipId:string;partyId:string}
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.portal.link(this.ctx(req),body)};
+  }
+
+  @Get("portal/me")
+  @RequirePermission("dance.portal.read")
+  async customerPortal(@Req() req:AuthenticatedRequest):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.portal.self(this.ctx(req))};
   }
 
   private ctx(req:AuthenticatedRequest):TenantContext {
