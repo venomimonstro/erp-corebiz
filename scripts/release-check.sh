@@ -29,7 +29,7 @@ echo "[release] standalone migration gate regression tests"
 node --test scripts/migration-preflight.test.mjs scripts/env-boundary.test.mjs scripts/security-runtime-grants.test.mjs
 
 echo "[release] validate owner playbooks and simulate every failure path"
-node --test scripts/owner-industry-journeys.test.mjs scripts/multirole-source-contract.test.mjs scripts/dance-owner-contract.test.mjs scripts/dance-shift-pattern.test.mjs scripts/dance-negative-onboarding.test.mjs
+node --test scripts/owner-industry-journeys.test.mjs scripts/multirole-source-contract.test.mjs scripts/dance-owner-contract.test.mjs scripts/dance-shift-pattern.test.mjs scripts/dance-negative-onboarding.test.mjs scripts/procurement-rules-contract.test.mjs
 
 echo "[release] validate operator scripts and 99.9% SLO evaluator"
 node --check scripts/multirole-api-e2e.mjs
