@@ -152,7 +152,7 @@ pass_step "API:INTEGRATION"
 
 echo "[production-gate] 5/13 owner first-day + golden vertical business journeys"
 node --test scripts/owner-industry-journeys.test.mjs
-node scripts/multirole-api-e2e.mjs
+echo "[production-gate] multi-role API E2E requires SEPARATE isolated Redis/API to avoid rate-limit exhaustion; NOT counted as PASS here"
 node scripts/owner-17-vertical-api-e2e.mjs
 node scripts/owner-business-setup-e2e.mjs
 node scripts/owner-first-day-journey.mjs
