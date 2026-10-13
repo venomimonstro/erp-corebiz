@@ -1,5 +1,5 @@
 "use client";
-import {useCallback,useEffect,useState} from "react";
+import {type FormEvent,useCallback,useEffect,useState} from "react";
 import {AppSidebar} from "../../../../components/app-sidebar";
 import {DanceWorkspaceNav} from "../../../../components/dance-workspace-nav";
 import {apiRequest} from "../../../../lib/api";
@@ -35,7 +35,7 @@ export default function DanceClientAccessPage(){
   useEffect(()=>{void refresh();},[refresh]);
   const candidates=members.filter(x=>x.status==="ACTIVE"&&
     x.roles.length===1&&x.roles[0]?.code==="DANCE_CUSTOMER");
-  async function invite(e:React.FormEvent){
+  async function invite(e:FormEvent){
     e.preventDefault();
     if(!role||busy)return;
     setBusy(true);setError("");setToken("");setNotice("");
@@ -49,7 +49,7 @@ export default function DanceClientAccessPage(){
     }catch(e){setError(e instanceof Error?e.message:"Не удалось пригласить");}
     finally{setBusy(false);}
   }
-  async function bind(e:React.FormEvent){
+  async function bind(e:FormEvent){
     e.preventDefault();if(busy||!member||!party)return;
     setBusy(true);setError("");setNotice("");
     try{
@@ -72,7 +72,7 @@ export default function DanceClientAccessPage(){
         <button type="button" onClick={()=>void refresh()}
           disabled={loading||busy}>Обновить</button>
       </header>
-      <DanceWorkspaceNav active="students"/>
+      <DanceWorkspaceNav active="clients"/>
       {error?<p role="alert" className="dance-owner-error">{error}</p>:null}
       {notice?<p role="status">{notice}</p>:null}
       <div className="dance-client-admin-grid">
