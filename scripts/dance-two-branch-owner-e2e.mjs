@@ -19,7 +19,8 @@ const origin=process.env.COREBIZ_SMOKE_WEB_ORIGIN??"http://localhost:3000";
 const seed=randomUUID();
 const actors={owner:{cookie:""},woman:{cookie:""},m1:{cookie:""},m2:{cookie:""},parent:{cookie:""}};
 let stage="health";
-const stats={branches:0,directions:0,trainerResources:0,rooms:0,
+const stats={branches:0,directions:0,trainerResources:0,trainersWithServices:0,
+  trainersWithIndividualLessons:0,rooms:0,
   contracts:0,groups:0,rentalBookings:0,customers:0,customerLogins:0,checks:0,denied:0};
 const api=async(actor,method,path,body,expected=method==="POST"?201:200)=>{
   const response=await fetch(new URL("/api/v1"+path,base),{
@@ -276,6 +277,7 @@ async function main(){
 
   stage="06 12 directions, service prices, groups";
   const createdPrograms=[];
+  const groupServices=[];
   let groupForParent;
   let groupLesson;
   for(let i=0;i<programs.length;i++){
@@ -284,6 +286,7 @@ async function main(){
       durationMinutes:60,priceMinor:budget.groupVisitMinor,
       currency:"RUB",deliveryFormat:"GROUP",groupCapacity:16
     });
+    groupServices.push(service);
     const created=await post(owner,"/dance/programs",{
       name:programs[i],serviceId:service.id,branchId:branches[i<2?0:i%2].id,
       defaultDurationMinutes:60
@@ -303,6 +306,24 @@ async function main(){
   }
   assert.equal(createdPrograms.length,12);
   assert.ok(groupForParent?.id);
+  stage="06a trainer-service assignments for all 52 coaches";
+  for(let i=0;i<trainers.length;i++){
+    const service=groupServices[i%groupServices.length];
+    const rule=await post(owner,"/service/delivery-rules",{
+      serviceId:service.id,
+      employeeResourceId:trainers[i].id,
+      branchId:branches[i<2?0:i%2].id,
+      deliveryFormat:"GROUP",
+      priceMinor:budget.groupVisitMinor,
+      durationMinutes:60
+    });
+    assert.ok(rule.id,"Trainer must have an explicit active service rule");
+  }
+  const currentRules=await get(owner,"/service/delivery-rules");
+  for(const trainer of trainers)
+    assert.ok(currentRules.some(r=>r.employee_resource_id===trainer.id),
+      "Trainer "+trainer.id+" has no linked service");
+  stats.trainersWithServices=trainers.length;
   const oneVisit=await post(owner,"/service/package-plans",{
     name:"Разовое групповое 2 400 ₽",packageKind:"VISITS",
     visitLimit:1,durationDays:30,priceMinor:budget.groupVisitMinor,
@@ -322,6 +343,17 @@ async function main(){
     deliveryFormat:"INDIVIDUAL"
   });
   assert.ok(oneVisit.id&&tenVisits.id&&individual.id);
+  for(const trainer of trainers.slice(0,12)){
+    const personalized=await post(owner,"/service/delivery-rules",{
+      serviceId:individual.id,employeeResourceId:trainer.id,
+      deliveryFormat:"INDIVIDUAL",
+      branchId:branches[trainer.id===trainers[0].id||trainer.id===trainers[1].id
+        ?0:trainers.indexOf(trainer)%2].id,
+      priceMinor:budget.individualVisitMinor,durationMinutes:60
+    });
+    assert.ok(personalized.id);
+  }
+  stats.trainersWithIndividualLessons=12;
   stage="07 CRM family, memberships and client portal";
   const mother=await post(actors.m1,"/crm/customers",{
     type:"PERSON",displayName:"Мама тестового ученика "+seed.slice(0,6)
