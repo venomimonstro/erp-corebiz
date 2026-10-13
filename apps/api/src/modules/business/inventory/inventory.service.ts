@@ -211,6 +211,47 @@ export class InventoryService {
     });
   }
 
+  /**
+   * Purchasing recommendations from authoritative physical, reserved and
+   * safety stock balances. Advisory only: not an incoming shipment or PO.
+   *
+   * No unconfirmed supplier order, forecast or expected stock is counted as
+   * received inventory. Quantities remain exact thousandths as strings.
+   */
+  async replenishment(context:TenantContext){
+    const balances=await this.balances(context);
+    return balances.flatMap(item=>{
+      if(!item.sourcingEnabled)return [];
+      const physical=BigInt(item.physicalMilli);
+      const reserved=BigInt(item.reservedMilli);
+      const safety=BigInt(item.safetyStockMilli);
+      const available=physical-reserved;
+      const needed=reserved+safety-physical;
+      if(needed<=0n)return [];
+      return [{
+        warehouseId:item.warehouseId,
+        warehouseName:item.warehouseName,
+        skuId:item.skuId,
+        sku:item.sku,
+        productName:item.productName,
+        physicalMilli:item.physicalMilli,
+        reservedMilli:item.reservedMilli,
+        safetyStockMilli:item.safetyStockMilli,
+        availableMilli:available.toString(),
+        recommendedPurchaseMilli:needed.toString(),
+        urgency:available<0n?"RESERVATION_SHORTAGE" as const:
+          "BELOW_SAFETY_STOCK" as const,
+        // Forecasts and supplier orders must be checked separately.
+        purchaseOrderCreated:false
+      }];
+    }).sort((a,b)=>{
+      if(a.urgency!==b.urgency)
+        return a.urgency==="RESERVATION_SHORTAGE"?-1:1;
+      return a.warehouseName.localeCompare(b.warehouseName,"ru")||
+        a.productName.localeCompare(b.productName,"ru");
+    });
+  }
+
   async adjust(
     context: TenantContext,
     input: {
