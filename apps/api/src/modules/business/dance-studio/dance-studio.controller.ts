@@ -420,7 +420,7 @@ export class DanceStudioController {
   }
 
   @Get("charges")
-  @RequirePermission("finance.read")
+  @RequirePermission("dance.read")
   async charges(
     @Req() req:AuthenticatedRequest,
     @Query("studentId") studentId?:string
