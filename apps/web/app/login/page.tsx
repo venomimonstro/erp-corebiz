@@ -25,14 +25,13 @@ export default function LoginPage() {
       // Only our known internal portal path may be used as a return target.
       // This is not an open redirect to an arbitrary site.
       const requested=new URLSearchParams(window.location.search).get("next");
-      let route=pendingInvite?"/invite":requested==="/portal/dance"
-        ?"/portal/dance":"/app";
+      let route=pendingInvite?"/invite":(requested==="/portal/dance"||requested==="/portal/trainer")
+        ?requested:"/app";
       if(!pendingInvite&&route==="/app"){
         try{
           const context=await apiRequest<{roles:string[]}>("/workspace/context");
-          if(context.roles.includes("DANCE_CUSTOMER")){
-            route="/portal/dance";
-          }
+          if(context.roles.includes("DANCE_CUSTOMER"))route="/portal/dance";
+          else if(context.roles.includes("DANCE_TRAINER"))route="/portal/trainer";
         }catch{ /* Keep standard app login for accounts without workspace metadata. */ }
       }
       router.push(route);
