@@ -169,6 +169,10 @@ test("Moscow 2-on/2-off manager rota uses one shared resource calendar",()=>{
   assert.match(workflow,/\/two-by-two/);
   assert.match(workflow,/calendar\.blockedDays,30/);
   assert.match(workflow,/calendar\.days,60/);
+  const booking=src("apps/api/src/modules/business/service-ops/booking.service.ts");
+  assert.match(booking,/FROM service_resource_block rb/);
+  assert.match(booking,/Number\(row\.blocked\)\+capacityUnits>row\.capacity/);
+
 });
 test("Shift rosters have negative tests for management authorization and manual overrides",()=>{
   const suite=src("apps/api/src/modules/business/service-ops/resources-two-by-two.spec.ts");
