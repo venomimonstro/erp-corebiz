@@ -172,14 +172,14 @@ async function main(){
   },409);
 
   const contracts=[];
-  for(const [room,cost] of [
-    [large,budget.leaseAFirstMinor],[small1,budget.leaseAOtherMinor],
-    [small2,budget.leaseAOtherMinor]
+  for(const [room,cost,units] of [
+    [large,budget.leaseAFirstMinor,24],[small1,budget.leaseAOtherMinor,8],
+    [small2,budget.leaseAOtherMinor,8]
   ]){
     const agreement=await post(owner,"/dance/room-contracts",{
       roomResourceId:room.id,pricingType:"FIXED_MONTHLY",
       monthlyMinor:cost,validFrom:"2026-10-01",
-      capacityUnits:1
+      capacityUnits:units
     });
     contracts.push(agreement);stats.contracts++;
   }
