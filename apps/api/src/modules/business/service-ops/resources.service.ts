@@ -212,6 +212,14 @@ export class ResourcesService {
       (await this.authorization.resolveScope(context,"users.manage"))!=="all")
       throw new ForbiddenException("Архивирование сотрудников доступно руководителю");
     return this.database.withTenantTransaction(context,async client=>{
+      // Offboarding two assignments of the same coach concurrently must
+      // serialize BEFORE any service_resource row is locked. Otherwise two
+      // requests can each lock their own resource then deadlock while
+      // checking the other's remaining active assignment.
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [context.tenantId+"|dance-staff-offboarding"]
+      );
       const resource=await client.query<{id:string;type:string;membership_id:string|null}>(
         `SELECT id,type,membership_id FROM service_resource
          WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE' FOR UPDATE`,
