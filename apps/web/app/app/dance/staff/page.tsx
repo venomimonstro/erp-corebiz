@@ -93,9 +93,10 @@ export default function DanceStaffPage(){
       .includes(query.trim().toLocaleLowerCase("ru"))),[workers,filter,query]);
   const current=workers.find(x=>x.id===selected);
   const linked=members.find(x=>x.membership_id===current?.membership_id);
+  // One trainer account can be linked to multiple active branch resources.
+  // An already-linked login must remain selectable for a second branch.
   const trainerCandidates=members.filter(x=>x.status==="ACTIVE"&&
-    x.roles.length===1&&x.roles[0]?.code==="DANCE_TRAINER"&&
-    !workers.some(resource=>resource.membership_id===x.membership_id));
+    x.roles.length===1&&x.roles[0]?.code==="DANCE_TRAINER");
   const ownRules=deliveryRules.filter(x=>
     x.employee_resource_id===current?.id);
   const assignableServices=services.filter(x=>
@@ -160,7 +161,7 @@ export default function DanceStaffPage(){
           resourceId:current.id,membershipId:trainerLogin
         })
       });
-      setNotice("Логин привязан к тренеру. Он может открыть /portal/trainer.");
+      setNotice("Логин привязан к ресурсу. В /portal/trainer тренер увидит все свои активные филиалы.");
       setTrainerLogin("");await reload();
     }catch(e){setError(e instanceof Error?e.message:"Не удалось связать логин");}
     finally{setBusy(false);}
@@ -351,8 +352,14 @@ export default function DanceStaffPage(){
           <select aria-label="Логин тренера" value={trainerLogin}
             onChange={e=>setTrainerLogin(e.target.value)}>
             <option value="">Выбрать приглашённый аккаунт</option>
-            {trainerCandidates.map(user=><option key={user.membership_id}
-              value={user.membership_id}>{user.email}</option>)}
+            {trainerCandidates.map(user=>{
+              const assigned=workers.filter(resource=>
+                resource.membership_id===user.membership_id);
+              return <option key={user.membership_id} value={user.membership_id}>
+                {user.email}{assigned.length
+                  ?" · активных назначений: "+assigned.length:""}
+              </option>;
+            })}
           </select>
           <button type="button" disabled={busy||!trainerLogin}
             onClick={()=>void linkTrainer()}>Связать аккаунт с тренером</button>
