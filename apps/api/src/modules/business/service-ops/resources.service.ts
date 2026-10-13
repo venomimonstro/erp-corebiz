@@ -448,6 +448,77 @@ export class ResourcesService {
     });
   }
 
+  /** Atomically materialize a 2/2 rota. Existing holiday/manual blocks remain intact. */
+  async twoByTwo(context:TenantContext,resourceId:string,input:{
+    startDate:string;days:number;startsWorking:boolean;
+    startMinute:number;endMinute:number;replaceWeeklySchedule?:boolean;
+  }):Promise<{days:number;blockedDays:number;timezone:string}>{
+    const date=typeof input?.startDate==="string"?input.startDate:"";
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(resourceId)||
+      !/^\d{4}-\d{2}-\d{2}$/.test(date)||
+      !Number.isInteger(input.days)||input.days<4||input.days>90||
+      !Number.isInteger(input.startMinute)||!Number.isInteger(input.endMinute)||
+      input.startMinute<0||input.endMinute>1440||
+      input.endMinute-input.startMinute<60||
+      typeof input.startsWorking!=="boolean"||
+      !Number.isFinite(Date.parse(date+"T00:00:00Z"))||
+      new Date(date+"T00:00:00Z").toISOString().slice(0,10)!==date)
+      throw new BadRequestException("График 2/2: дата, 4–90 дней, часы и сотрудник обязательны");
+    const access=await this.serviceScope(context,"service.write");
+    if(access.scope!=="all"||
+       (await this.authorization.resolveScope(context,"users.manage"))!=="all")
+       throw new ForbiddenException("График смен утверждает руководитель");
+    return this.database.withTenantTransaction(context,async client=>{
+      const resource=await client.query<{type:string;timezone:string}>(
+        "SELECT type,timezone FROM service_resource WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE' FOR UPDATE",
+        [context.tenantId,resourceId]);
+      if(resource.rows[0]?.type!=="EMPLOYEE")
+        throw new BadRequestException("Выберите действующего сотрудника");
+      const timezone=resource.rows[0]!.timezone;
+      const schedule=await client.query<{weekday:number;start_minute:number;end_minute:number}>(
+        "SELECT weekday,start_minute,end_minute FROM service_resource_schedule WHERE tenant_id=$1 AND resource_id=$2 FOR UPDATE",
+        [context.tenantId,resourceId]);
+      const same=schedule.rows.length===7&&schedule.rows.every(x=>
+        x.start_minute===input.startMinute&&x.end_minute===input.endMinute);
+      if(schedule.rowCount&&!same&&!input.replaceWeeklySchedule)
+        throw new ConflictException("Сохранён другой график. Подтвердите замену.");
+      if(!same){
+        await client.query(
+          "DELETE FROM service_resource_schedule WHERE tenant_id=$1 AND resource_id=$2",
+          [context.tenantId,resourceId]);
+        await client.query(
+          "INSERT INTO service_resource_schedule(tenant_id,resource_id,weekday,start_minute,end_minute) SELECT $1,$2,w,$3,$4 FROM generate_series(1,7) w",
+          [context.tenantId,resourceId,input.startMinute,input.endMinute]);
+      }
+      const last=new Date(Date.parse(date+"T00:00:00Z")+input.days*86400000)
+        .toISOString().slice(0,10);
+      await client.query(
+        "DELETE FROM service_resource_block WHERE tenant_id=$1 AND resource_id=$2 AND reason='COREBIZ_2X2_MANAGER_OFF' AND starts_at<($4::date::timestamp AT TIME ZONE $3) AND ends_at>($5::date::timestamp AT TIME ZONE $3)",
+        [context.tenantId,resourceId,timezone,last,date]);
+      const off=await client.query(
+        `WITH days AS (
+           SELECT day::date AS d,(row_number() OVER (ORDER BY day)-1)::int AS i
+           FROM generate_series($3::date,$3::date+($4::int-1),'1 day'::interval) day
+         )
+         INSERT INTO service_resource_block(
+           tenant_id,resource_id,starts_at,ends_at,
+           type,reason,created_by_membership_id
+         )
+         SELECT $1,$2,d::timestamp AT TIME ZONE $5,
+           (d+1)::timestamp AT TIME ZONE $5,
+           'UNAVAILABLE','COREBIZ_2X2_MANAGER_OFF',$7
+         FROM days
+         WHERE ((i+CASE WHEN $6::boolean THEN 0 ELSE 2 END)/2)%2=1
+         RETURNING id`,
+        [context.tenantId,resourceId,date,input.days,timezone,
+          input.startsWorking,context.membershipId]);
+      await this.audit(client,context,"service.schedule_two_by_two",
+        "service_resource",resourceId,
+        {date,days:input.days,blockedDays:off.rowCount,timezone});
+      return {days:input.days,blockedDays:off.rowCount,timezone};
+    });
+  }
+
   async addBlock(
     context: TenantContext,
     resourceId: string,
