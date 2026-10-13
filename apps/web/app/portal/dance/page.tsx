@@ -3,13 +3,13 @@
 import {useCallback,useEffect,useMemo,useState} from "react";
 import {apiRequest} from "../../../lib/api";
 
-type Student={id:string;display_name:string;status:string;training_level:string|null};
+type Student={id:string;party_id:string;display_name:string;status:string;training_level:string|null};
 type Group={student_id:string;group_name:string;program_name:string;
   trainer_name:string|null;enrollment_status:string};
 type Visit={student_id:string;lesson_id:string;starts_at:string;ends_at:string;
   group_name:string|null;program_name:string|null;trainer_name:string|null;
   room_name:string|null;lesson_status:string;attendance_status:string};
-type Package={id:string;party_id:string;plan_name:string;status:string;
+type Package={id:string;party_id:string;beneficiary_party_ids:string[];plan_name:string;status:string;
   expires_at:string;visit_limit_snapshot:number;reserved_visits:number;
   used_visits:number;available_visits:number};
 type Charge={id:string;student_id:string;amount_minor:string;
@@ -51,6 +51,10 @@ export default function DanceCustomerPage(){
     [data,selected]);
   const charges=useMemo(()=>(data?.charges??[]).filter(v=>v.student_id===selected),
     [data,selected]);
+  const packages=useMemo(()=>data?.packages.filter(p=>
+    p.party_id===student?.party_id ||
+    p.beneficiary_party_ids?.includes(student?.party_id??"")
+  )??[],[data,student?.party_id]);
   const due=charges.reduce((sum,c)=>sum+BigInt(c.remaining_minor),0n);
   return <main className="dance-customer-portal">
     <header className="dance-customer-head">
@@ -114,8 +118,8 @@ export default function DanceCustomerPage(){
         </section>
         <section className="dance-customer-panel">
           <h2>Мои абонементы</h2>
-          {data.packages.length===0?<p>Активированных абонементов пока нет.</p>:
-            <div className="dance-customer-list">{data.packages.map(p=>
+          {packages.length===0?<p>Абонементов для выбранного ученика пока нет.</p>:
+            <div className="dance-customer-list">{packages.map(p=>
               <article key={p.id}><strong>{p.plan_name}</strong>
                 <span>Действует до {date(p.expires_at)}</span>
                 <small>Доступно занятий: {p.available_visits} · статус {p.status}</small>
