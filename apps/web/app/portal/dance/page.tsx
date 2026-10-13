@@ -63,6 +63,14 @@ export default function DanceCustomerPage(){
   const student=useMemo(()=>data?.students.find(s=>s.id===selected),[data,selected]);
   const visits=useMemo(()=>(data?.visits??[]).filter(v=>v.student_id===selected)
     .sort((a,b)=>Date.parse(b.starts_at)-Date.parse(a.starts_at)),[data,selected]);
+  const upcoming=useMemo(()=>visits.filter(v=>
+    Date.parse(v.starts_at)>=Date.now() &&
+    !v.lesson_status.startsWith("CANCELLED")
+  ).sort((a,b)=>Date.parse(a.starts_at)-Date.parse(b.starts_at)),[visits]);
+  const history=useMemo(()=>visits.filter(v=>
+    Date.parse(v.starts_at)<Date.now()||
+    v.lesson_status.startsWith("CANCELLED")
+  ).sort((a,b)=>Date.parse(b.starts_at)-Date.parse(a.starts_at)),[visits]);
   const groups=useMemo(()=>(data?.groups??[]).filter(v=>v.student_id===selected),
     [data,selected]);
   const charges=useMemo(()=>(data?.charges??[]).filter(v=>v.student_id===selected),
@@ -134,9 +142,20 @@ export default function DanceCustomerPage(){
               </article>)}</div>}
         </section>
         <section className="dance-customer-panel">
-          <h2>Посещения и расписание</h2>
-          {visits.length===0?<p>Посещений пока нет.</p>:
-            <div className="dance-customer-list">{visits.slice(0,100).map(v=>
+          <h2>Ближайшие занятия</h2>
+          {upcoming.length===0?<p>Будущих занятий пока нет.</p>:
+            <div className="dance-customer-list">{upcoming.slice(0,50).map(v=>
+              <article key={v.lesson_id}>
+                <strong>{date(v.starts_at)} · {clock(v.starts_at)}</strong>
+                <span>{v.group_name??v.program_name??"Индивидуальное занятие"}
+                  {" · "}{v.trainer_name??"Тренер уточняется"}</span>
+                <small>{v.room_name??"Зал уточняется"} · {v.attendance_status}</small>
+              </article>)}</div>}
+        </section>
+        <section className="dance-customer-panel">
+          <h2>История посещений</h2>
+          {history.length===0?<p>Прошедших занятий пока нет.</p>:
+            <div className="dance-customer-list">{history.slice(0,100).map(v=>
               <article key={v.lesson_id}>
                 <strong>{date(v.starts_at)} · {clock(v.starts_at)}</strong>
                 <span>{v.group_name??v.program_name??"Индивидуальное занятие"}
