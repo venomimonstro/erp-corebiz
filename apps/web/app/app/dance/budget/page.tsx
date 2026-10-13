@@ -7,6 +7,15 @@ import {apiRequest} from "../../../../lib/api";
 type Month={revenue_minor:string;trainer_cost_minor:string;
   room_cost_minor:string;other_cost_minor:string;owner_margin_minor:string};
 type Dashboard={canViewFinancials:boolean;monthEconomics:Month|null};
+type RentalIncome={
+  month:string;
+  branches:Array<{branch_id:string|null;branch_name:string|null;
+    bookings:number;booked_minor:string;receivable_minor:string;
+    settled_minor:string;unverified:number}>;
+  totals:{bookings:number;bookedMinor:string;receivableMinor:string;
+    settledMinor:string;unverified:number};
+};
+
 const keys=["monthlyRevenue","rentA","rentB","managerSalaries",
   "trainerSalaries","taxes","otherExpenses","subleaseRevenue"] as const;
 type Key=typeof keys[number];
@@ -53,11 +62,13 @@ export default function DanceBudgetPage(){
   const [updatedAt,setUpdatedAt]=useState<string|null>(null);
   const [dirty,setDirty]=useState(false);
   const [dashboard,setDashboard]=useState<Dashboard|null>(null);
+  const [rental,setRental]=useState<RentalIncome|null>(null);
+  const [rentalError,setRentalError]=useState("");
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
   const refresh=useCallback(async()=>{
-    setBusy(true);setError("");setNotice("");setVersion(null);setDashboard(null);
+    setBusy(true);setError("");setNotice("");setVersion(null);setDashboard(null);setRental(null);setRentalError("");
     try{
       const [data,budget]=await Promise.all([
         apiRequest<Dashboard>("/dance/dashboard"),
@@ -69,6 +80,16 @@ export default function DanceBudgetPage(){
       setInputs(Object.fromEntries(keys.map(k=>
         [k,fromMinor(budget.values[mapping[k]])])) as Inputs);
       setDirty(false);
+      try{
+        const income=await apiRequest<RentalIncome>(
+          "/dance/rental-income?month="+encodeURIComponent(month)
+        );
+        setRental(income);
+      }catch{
+        setRental(null);
+        setRentalError("Данные о субаренде пока не получены. "
+          +"Отсутствие отчёта не означает нулевую выручку.");
+      }
     }catch(e){
       setError(e instanceof Error?e.message:"Бюджет недоступен");
       setInputs(empty());setUpdatedAt(null);setDirty(false);
@@ -184,6 +205,35 @@ export default function DanceBudgetPage(){
           </div>}
         <p>Суммы отражают только зарегистрированные операции.
           Не учитывайте аренду повторно, если она уже включена в себестоимость.</p>
+      </section>
+      <section className="dance-customer-panel">
+        <h2>Сдача малых залов: бронирования и деньги</h2>
+        <p>Отдельный финансовый контур для арендаторов. Бронирование
+          не равно оплате; доход не вычитается из собственных арендных
+          расходов компании.</p>
+        {rentalError?<p role="status">{rentalError}</p>:null}
+        {rental?<>
+          <div className="dance-customer-metrics">
+            <div><small>Арендных записей</small>
+              <strong>{rental.totals.bookings}</strong></div>
+            <div><small>Начислено арендаторам</small>
+              <strong>{money(BigInt(rental.totals.receivableMinor))}</strong></div>
+            <div><small>Подтверждённые поступления</small>
+              <strong>{money(BigInt(rental.totals.settledMinor))}</strong></div>
+          </div>
+          <p>Стоимость забронированной аренды: {money(BigInt(rental.totals.bookedMinor))}.
+            {" "}Неподтверждённых начислений: {rental.totals.unverified}.
+            Если они есть, сумму дебиторской задолженности необходимо сверить.</p>
+          <div className="dance-customer-list">
+            {rental.branches.map(branch=><article key={branch.branch_id??"no-branch"}>
+              <strong>{branch.branch_name??"Филиал не указан"}</strong>
+              <span>Записей: {branch.bookings} · начислено{" "}
+                {money(BigInt(branch.receivable_minor))}</span>
+              <small>Подтверждённая оплата{" "}
+                {money(BigInt(branch.settled_minor))}</small>
+            </article>)}
+          </div>
+        </>:!rentalError?<p>Нет подтверждённого отчёта за этот период.</p>:null}
       </section>
       <section className="dance-customer-panel">
         <h2>Плановые значения</h2>
