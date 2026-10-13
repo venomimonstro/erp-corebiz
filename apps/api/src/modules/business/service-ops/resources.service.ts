@@ -35,7 +35,7 @@ export class ResourcesService {
            r.id, r.branch_id, b.name AS branch_name, r.membership_id,
            r.type, r.name, r.code, r.capacity,
            r.cost_per_hour_minor::text, r.currency, r.timezone,
-           r.status, r.metadata,
+           r.status, r.metadata, r.online_booking_enabled, r.online_min_lead_minutes,
            COALESCE(
              json_agg(
                json_build_object(
@@ -172,6 +172,40 @@ export class ResourcesService {
         }
         throw error;
       }
+    });
+  }
+
+  /** Owners may hide the staff member from public checkout while keeping
+   * the same internal diary available to reception and phone bookings. */
+  async updateOnlinePolicy(
+    context:TenantContext,
+    resourceId:string,
+    input:{enabled:boolean;minimumNoticeMinutes:number}
+  ):Promise<{enabled:boolean;minimumNoticeMinutes:number}>{
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(resourceId)||
+      typeof input?.enabled!=="boolean"||
+      !Number.isSafeInteger(input.minimumNoticeMinutes)||
+      input.minimumNoticeMinutes<0||input.minimumNoticeMinutes>10080){
+      throw new BadRequestException("Некорректные настройки онлайн-записи");
+    }
+    const access=await this.serviceScope(context,"service.write");
+    if(access.scope!=="all"||
+      (await this.authorization.resolveScope(context,"users.manage"))!=="all"){
+      throw new ForbiddenException("Настройка онлайн-записи доступна руководителю");
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const row=await client.query(
+        `UPDATE service_resource
+         SET online_booking_enabled=$3,online_min_lead_minutes=$4,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+         RETURNING id`,
+        [context.tenantId,resourceId,input.enabled,input.minimumNoticeMinutes]
+      );
+      if(!row.rowCount)throw new NotFoundException("Сотрудник или ресурс не найден");
+      await this.audit(client,context,"service.resource_online_policy_changed",
+        "service_resource",resourceId,input);
+      return {enabled:input.enabled,minimumNoticeMinutes:input.minimumNoticeMinutes};
     });
   }
 
