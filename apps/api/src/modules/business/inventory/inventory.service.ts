@@ -295,8 +295,10 @@ export class InventoryService {
         confirmedInboundMilli:confirmedInbound.toString(),
         unallocatedInboundMilli:(unallocated.get(item.skuId)??0n).toString(),
         grossShortageMilli:needed.toString(),
+        shortageBeforeInboundMilli:needed.toString(),
+        inboundScope:"UNIQUE_BRANCH_WAREHOUSE" as const,
         recommendedPurchaseMilli:recommended.toString(),
-        urgency:recommended===0n?"COVERED_BY_CONFIRMED_INBOUND" as const:
+        urgency:recommended===0n?"AWAITING_RECEIPT" as const:
           available<0n?"RESERVATION_SHORTAGE" as const:
           "BELOW_SAFETY_STOCK" as const,
         purchaseOrderCreated:false
