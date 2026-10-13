@@ -28,6 +28,9 @@ pnpm stability:check
 echo "[release] standalone migration gate regression tests"
 node --test scripts/migration-preflight.test.mjs scripts/env-boundary.test.mjs scripts/security-runtime-grants.test.mjs
 
+echo "[release] compare WMS business invariants with benchmark"
+node --test scripts/wms-moysklad-axelot-contract.test.mjs
+
 echo "[release] validate owner playbooks and simulate every failure path"
 node --test scripts/owner-industry-journeys.test.mjs scripts/multirole-source-contract.test.mjs scripts/dance-owner-contract.test.mjs scripts/dance-shift-pattern.test.mjs scripts/dance-negative-onboarding.test.mjs scripts/procurement-rules-contract.test.mjs scripts/competitor-benchmark-contract.test.mjs
 
