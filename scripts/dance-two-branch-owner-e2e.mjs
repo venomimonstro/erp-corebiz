@@ -347,26 +347,40 @@ async function main(){
   assert.ok(stored.length>=3);
   const allTrainers=await get(owner,"/service/resources");
   assert.ok(allTrainers.filter(x=>x.type==="EMPLOYEE").length>=54);
-  stage="08a coach account sees only personal groups";
-  // Reuse manager-2 login after receptionist tests: no 6th registration,
-  // no rate-limiter bypass. One linked EMPLOYEE resource also teaches.
+  stage="08a coach account sees only personal lessons";
+  // Reuse manager-2's existing login after receptionist tests. This keeps
+  // five registrations/IP and proves that demotion immediately revokes
+  // broader receptionist privileges without deleting historical schedules.
   const trainerOwnGroup=await post(owner,"/dance/groups",{
-    name:"Disposable trainer own-scope verification",
+    name:"Тренер: личная загрузка",
     programId:createdPrograms[3].id,branchId:branches[1].id,
     trainerResourceId:receptionistResources[1].id,
     roomResourceId:hallB.id,capacity:10,breakEvenMembers:4,
     schedule:[{weekday:6,startMinute:1140,durationMinutes:60}]
   });
   assert.ok(trainerOwnGroup.id);
+  const ownStart=new Date();ownStart.setUTCDate(ownStart.getUTCDate()+3);
+  const ownEnd=new Date(ownStart.getTime()+31*86400000);
+  const generatedTrainer=await post(owner,
+    "/dance/groups/"+trainerOwnGroup.id+"/lessons/generate",{
+      from:ownStart.toISOString().slice(0,10),
+      to:ownEnd.toISOString().slice(0,10)
+    });
+  assert.ok(generatedTrainer.created.length>0,
+    "A trainer calendar needs an actual future lesson");
   await put(owner,"/roles/assign",{
-    membershipId:manager2,roleId:role("SERVICE_STAFF")
+    membershipId:manager2,roleId:role("DANCE_TRAINER")
   });
   const coachContext=await get(actors.m2,"/workspace/context");
-  assert.deepEqual(coachContext.roles,["SERVICE_STAFF"]);
-  const visibleGroups=await get(actors.m2,"/dance/groups");
-  assert.ok(visibleGroups.some(x=>x.id===trainerOwnGroup.id));
-  assert.ok(visibleGroups.every(x=>x.trainer_resource_id===
-    receptionistResources[1].id),"Coach must not see unassigned branch groups");
+  assert.deepEqual(coachContext.roles,["DANCE_TRAINER"]);
+  const personal=await get(actors.m2,"/dance/trainer/me?from="+
+    ownStart.toISOString().slice(0,10)+"&to="+
+    ownEnd.toISOString().slice(0,10));
+  assert.equal(personal.trainer.id,receptionistResources[1].id);
+  assert.ok(personal.lessons.length>0);
+  assert.ok(personal.lessons.every(x=>!Object.prototype.hasOwnProperty.call(x,"party_id")&&
+    !Object.prototype.hasOwnProperty.call(x,"amount_minor")));
+  await get(actors.m2,"/dance/groups",403);
   await get(actors.m2,"/dance/charges",403);
   await get(actors.m2,"/finance/summary",403);
   await get(actors.m2,"/tenants/team",403);
