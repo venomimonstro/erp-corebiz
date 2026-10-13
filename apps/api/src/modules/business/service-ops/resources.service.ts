@@ -175,6 +175,78 @@ export class ResourcesService {
     });
   }
 
+  /**
+   * Archive an employee/hall without deleting attendance, payroll or bookings.
+   * Reassignment is explicit; active future allocations cannot disappear.
+   */
+  async archive(context:TenantContext,resourceId:string):Promise<{archived:true}>{
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(resourceId))
+      throw new BadRequestException("Некорректный ресурс");
+    const access=await this.serviceScope(context,"service.write");
+    if(access.scope!=="all")
+      throw new ForbiddenException("Увольнение и архивирование доступны руководителю");
+    return this.database.withTenantTransaction(context,async client=>{
+      const resource=await client.query<{id:string;type:string}>(
+        `SELECT id,type FROM service_resource
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE' FOR UPDATE`,
+        [context.tenantId,resourceId]
+      );
+      const item=resource.rows[0];
+      if(!item)throw new NotFoundException("Тренер или зал не найден");
+      const groups=await client.query(
+        `SELECT 1 FROM dance_group WHERE tenant_id=$1
+         AND status IN ('ACTIVE','PAUSED')
+         AND (trainer_resource_id=$2 OR room_resource_id=$2)
+         AND (ends_on IS NULL OR ends_on>=current_date) LIMIT 1`,
+        [context.tenantId,resourceId]
+      );
+      if(groups.rowCount)throw new ConflictException(
+        "Сначала переназначьте тренера или зал в действующих группах"
+      );
+      const lessons=await client.query(
+        `SELECT 1 FROM dance_lesson WHERE tenant_id=$1
+         AND (trainer_resource_id=$2 OR room_resource_id=$2)
+         AND ends_at>now()
+         AND status NOT IN ('COMPLETED','CANCELLED_BY_STUDIO',
+                           'CANCELLED_BY_TRAINER') LIMIT 1`,
+        [context.tenantId,resourceId]
+      );
+      if(lessons.rowCount)throw new ConflictException(
+        "Сначала перенесите или отмените будущие занятия"
+      );
+      const bookings=await client.query(
+        `SELECT 1 FROM service_booking_resource br
+         JOIN service_booking b ON b.tenant_id=br.tenant_id
+           AND b.id=br.booking_id
+         WHERE br.tenant_id=$1 AND br.resource_id=$2
+           AND b.ends_at>now()
+           AND b.status NOT IN ('COMPLETED','CANCELLED','NO_SHOW')
+         LIMIT 1`,[context.tenantId,resourceId]
+      );
+      if(bookings.rowCount)throw new ConflictException(
+        "Ресурс занят в будущих клиентских записях"
+      );
+      const contracts=await client.query(
+        `SELECT 1 FROM room_rental_contract
+         WHERE tenant_id=$1 AND room_resource_id=$2
+           AND status='ACTIVE'
+           AND (valid_to IS NULL OR valid_to>=current_date)
+         LIMIT 1`,[context.tenantId,resourceId]
+      );
+      if(contracts.rowCount)throw new ConflictException(
+        "Сначала завершите действующий договор аренды зала"
+      );
+      await client.query(
+        `UPDATE service_resource SET status='ARCHIVED',updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+        [context.tenantId,resourceId]
+      );
+      await this.audit(client,context,"service.resource_archived",
+        "service_resource",resourceId,{type:item.type});
+      return {archived:true};
+    });
+  }
+
   async createSkill(
     context: TenantContext,
     input: { code: string; name: string }
