@@ -35,8 +35,11 @@ export class DanceEconomicsService {
            c.payer_party_id,pp.display_name AS payer_name,
            c.source_type,c.source_id,c.currency,c.amount_minor::text,
            c.due_at,c.status,c.note,c.obligation_id,c.invoice_id,
-           coalesce(o.settled_minor,0)::text AS settled_minor,
-           (c.amount_minor-coalesce(o.settled_minor,0))::text AS remaining_minor,
+           CASE WHEN o.id IS NULL THEN NULL
+             ELSE o.settled_minor::text END AS settled_minor,
+           CASE WHEN o.id IS NULL THEN NULL
+             ELSE (c.amount_minor-o.settled_minor)::text END AS remaining_minor,
+           (o.id IS NOT NULL) AS finance_verified,
            i.business_number AS invoice_number
          FROM dance_student_charge c
          JOIN dance_student s
