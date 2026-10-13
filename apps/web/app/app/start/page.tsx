@@ -17,6 +17,13 @@ type Activation = {
   progressPercent: number; doneCount: number; total: number;
   milestones: Array<{key:string; title:string;detail:string;href:string;done:boolean}>;
 };
+type LaunchCheck={
+  code:string;title:string;detail:string;href:string;ok:boolean;blocking:boolean;
+};
+type LaunchReadiness={
+  ready:boolean;stage:string;blockers:LaunchCheck[];warnings:LaunchCheck[];
+  checks:LaunchCheck[];
+};
 const startPage:Record<string,string>={
   DANCE_FITNESS:"/app/dance/setup",
   AUTO_SERVICE:"/app/automotive",
@@ -60,36 +67,80 @@ export default function FirstDayPage(){
   const [busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true);
   const [confirmChange,setConfirmChange]=useState(false);
+  const [launch,setLaunch]=useState<LaunchReadiness|null>(null);
+  const [launchLoading,setLaunchLoading]=useState(false);
+  const [launchError,setLaunchError]=useState("");
 
   const reload=useCallback(async()=>{
     setLoading(true);
     try{
-      const [options,current,progress]=await Promise.all([
+      // The catalog and current profile are critical. Activation progress
+      // is optional: a delayed dashboard must not block business setup.
+      const [optionsResult,currentResult,progressResult]=await Promise.allSettled([
         apiRequest<Vertical[]>("/customization/business-verticals"),
         apiRequest<BusinessProfile>("/customization/business-profile"),
         apiRequest<Activation>("/dashboard/activation")
       ]);
-      setVerticals(options);
-      setProfile(current);
-      setActivation(progress);
-      const requested=typeof window==="undefined" ? null :
-        new URLSearchParams(window.location.search).get("vertical");
-      setChosen(prev=>prev ||
-        (requested && options.some(x=>x.code===requested)?requested:
-          current.verticalCode??"GENERAL"));
-      setError("");
+      const warnings:string[]=[];
+      let options:Vertical[]|null=null;
+      let current:BusinessProfile|null=null;
+      if(optionsResult.status==="fulfilled"){
+        options=optionsResult.value;
+        setVerticals(options);
+      }else{
+        warnings.push("Не удалось загрузить список видов бизнеса.");
+      }
+      if(currentResult.status==="fulfilled"){
+        current=currentResult.value;
+        setProfile(current);
+      }else{
+        // Do not let the user blindly overwrite an unknown saved profile.
+        setProfile(null);
+        warnings.push("Не удалось проверить текущие настройки компании.");
+      }
+      if(progressResult.status==="fulfilled"){
+        setActivation(progressResult.value);
+      }else{
+        setActivation(null);
+        warnings.push("Шаги первого запуска временно недоступны.");
+      }
+      if(options&&current){
+        const requested=typeof window==="undefined"?null:
+          new URLSearchParams(window.location.search).get("vertical");
+        setChosen(prev=>prev&&options.some(v=>v.code===prev)?prev:
+          requested&&options.some(v=>v.code===requested)?requested:
+            current.verticalCode??"GENERAL");
+      }
+      setError(warnings.join(" "));
     }catch(cause){
       setError(cause instanceof Error?cause.message:"Не удалось открыть настройку компании");
     }finally{setLoading(false);}
   },[]);
   useEffect(()=>{void reload();},[reload]);
 
+  // Commercial readiness is intentionally separate from activation.
+  // A successful first booking is NOT proof of acquiring, fiscalization,
+  // backups or production-release checks.
+  useEffect(()=>{
+    if(!profile?.verticalCode)return;
+    let cancelled=false;
+    setLaunchLoading(true);setLaunch(null);setLaunchError("");
+    void apiRequest<LaunchReadiness>("/go-live/readiness")
+      .then(value=>{if(!cancelled)setLaunch(value);})
+      .catch(()=>{if(!cancelled){
+        setLaunch(null);
+        setLaunchError("Проверка коммерческого запуска сейчас недоступна. "
+          +"Это не подтверждение готовности к продаже.");
+      }})
+      .finally(()=>{if(!cancelled)setLaunchLoading(false);});
+    return()=>{cancelled=true;};
+  },[profile?.verticalCode]);
   const selected=verticals.find(x=>x.code===chosen);
   const isChange=profile?.verticalCode!==null && profile?.verticalCode!==chosen;
   const applied=profile?.verticalCode===chosen;
 
   async function apply(){
-    if(!selected || busy || (isChange&&!confirmChange))return;
+    if(!selected || !profile || busy || (isChange&&!confirmChange))return;
     setBusy(true);setError("");setNotice("");
     try{
       await apiRequest("/customization/business-vertical",{
@@ -106,6 +157,7 @@ export default function FirstDayPage(){
     }finally{setBusy(false);}
   }
   const steps=activation?.milestones??[];
+  const nextAction=applied?steps.find(step=>!step.done):null;
   const groupKeys=Array.from(new Set(verticals.map(v=>niches[v.code]??"Другие")));
 
   return (
@@ -168,10 +220,32 @@ export default function FirstDayPage(){
               Понимаю, что смена ниши переключит модули и меню,
               но не удалит существующие записи
             </label>:null}
-            <button type="button" disabled={busy||!selected||
+            <button type="button" disabled={busy||!profile||!selected||
               (isChange&&!confirmChange)}
               onClick={()=>void apply()}>
               {busy?"Настраиваем…":applied?"Применить настройки заново":"Применить профиль"}
+            </button>
+          </section>
+        ):null}
+        {applied&&nextAction?(
+          <section className="first-day-next-action" aria-label="Следующее действие">
+            <div>
+              <span>Рекомендуемый следующий шаг</span>
+              <h2>{nextAction.title}</h2>
+              <p>{nextAction.detail}</p>
+            </div>
+            <a className="secondary-button" href={nextAction.href}>
+              Выполнить →
+            </a>
+          </section>
+        ):null}
+        {applied&&activation===null&&!loading?(
+          <section className="studio-section">
+            <h2>Первый запуск</h2>
+            <p className="muted">Система пока не смогла проверить выполненные шаги.
+              Вы можете продолжить настройку бизнеса, но прогресс не подтверждён.</p>
+            <button type="button" className="secondary-button" onClick={()=>void reload()}>
+              Проверить ещё раз
             </button>
           </section>
         ):null}
@@ -205,11 +279,55 @@ export default function FirstDayPage(){
               успешный тест всех операций на вашем сервере.</p>
           </section>
         ):null}
+        {applied?(
+          <section className="studio-section first-day-launch-readiness" aria-label="Готовность к работе с клиентами">
+            <div className="studio-section-head">
+              <div>
+                <span>03 · Готовность к запуску</span>
+                <h2>Можно ли уже работать с клиентами?</h2>
+                <p>Проверка платежей, прав доступа, данных компании и подтверждений релиза.
+                  Это отдельный контроль, не процент заполнения карточек.</p>
+              </div>
+              <a href="/app/settings/go-live" className="secondary-button">
+                Центр проверки запуска →
+              </a>
+            </div>
+            {launchLoading?<p role="status" className="muted">Проверяем блокирующие условия…</p>:null}
+            {launchError?<p role="status" className="muted">{launchError}</p>:null}
+            {launch&&!launchLoading?(
+              <>
+                <p className="first-day-readiness-state" role="status">
+                  {launch.ready
+                    ?"По доступным проверкам сервера нет блокирующих условий. "
+                     +"Перед реальными продажами завершите внешние и юридические проверки."
+                    :"Запуск ещё не подтверждён: "+
+                      launch.blockers.length+" блокирующих условий, "+
+                      launch.warnings.length+" предупреждений."}
+                </p>
+                {launch.blockers.length>0?(
+                  <div className="first-day-readiness-blockers">
+                    {launch.blockers.slice(0,6).map(item=>(
+                      <a href={item.href} key={item.code} className="first-day-readiness-item">
+                        <strong>{item.title}</strong>
+                        <small>{item.detail}</small>
+                        <span aria-hidden="true">→</span>
+                      </a>
+                    ))}
+                  </div>
+                ):null}
+                {launch.blockers.length>6?<p className="muted">
+                  Ещё {launch.blockers.length-6} причин. Полный список — в центре запуска.</p>:null}
+                {launch.warnings.length>0?<p className="muted">
+                  Предупреждений: {launch.warnings.length}. Они также требуют внимания владельца.</p>:null}
+              </>
+            ):null}
+          </section>
+        ):null}
         {selected&&Array.isArray(industryPlaybooks.verticals[chosen as keyof typeof industryPlaybooks.verticals])?(
           <section className="studio-section" aria-label="Полный маршрут владельца">
             <div className="studio-section-head">
               <div>
-                <span>03 · Настройка и самопроверка</span>
+                <span>04 · Настройка и самопроверка</span>
                 <h2>Все экраны для «{selected.title}»</h2>
                 <p>После первых рабочих шагов проверьте бизнес целиком:
                   что вводить на экране, какой результат получить и как действовать при ошибке.</p>
