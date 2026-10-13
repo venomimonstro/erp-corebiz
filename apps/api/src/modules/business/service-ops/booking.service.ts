@@ -2527,6 +2527,29 @@ export class BookingService {
         resourceIds
       );
       this.assertResourceScope(resources, scopedMembershipIds);
+      if(input.source==="PUBLIC_SITE"){
+        const online=await client.query<{
+          id:string;online_booking_enabled:boolean;
+          online_min_lead_minutes:number;
+        }>(
+          `SELECT id,online_booking_enabled,online_min_lead_minutes
+           FROM service_resource
+           WHERE tenant_id=$1 AND id=ANY($2::uuid[])`,
+          [context.tenantId,resourceIds]
+        );
+        if(online.rows.length!==resourceIds.length ||
+          online.rows.some(x=>!x.online_booking_enabled)){
+          throw new ConflictException(
+            "Онлайн-запись к выбранному специалисту недоступна. Свяжитесь с администратором"
+          );
+        }
+        const minLead=Math.max(0,...online.rows.map(x=>x.online_min_lead_minutes));
+        if(startsAt.getTime()<Date.now()+minLead*60000){
+          throw new ConflictException(
+            "Слишком поздно для онлайн-записи. Выберите более позднее время"
+          );
+        }
+      }
       await this.assertRequirements(
         client,
         context.tenantId,
