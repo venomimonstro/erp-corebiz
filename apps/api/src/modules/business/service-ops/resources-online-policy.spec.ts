@@ -7,7 +7,7 @@ const ctx={
 };
 const resourceId="44444444-4444-4444-8444-444444444444";
 function fixture(executive=true){
-  const query=jest.fn(async(sql:string)=>{
+  const query=jest.fn(async(sql:string,_args?:unknown[])=>{
     if(sql.includes("UPDATE service_resource"))
       return {rows:[{id:resourceId}],rowCount:1};
     if(sql.includes("INSERT INTO audit_event"))
