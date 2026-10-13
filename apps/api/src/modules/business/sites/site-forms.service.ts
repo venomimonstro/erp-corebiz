@@ -266,10 +266,30 @@ export class SiteFormsService {
       tenantId:binding.tenant_id,userId:"00000000-0000-0000-0000-000000000000",
       membershipId:"00000000-0000-0000-0000-000000000000"
     };
-    const slots=await this.bookings.availability(context,{
-      serviceId,from:start.toISOString(),to:end.toISOString(),slotStepMinutes:30
-    });
-    return slots.filter(slot=>allowed.includes(slot.resourceId) && new Date(slot.startsAt).getTime()>Date.now()).slice(0,100);
+    const [slots,online]=await Promise.all([
+      this.bookings.availability(context,{
+        serviceId,from:start.toISOString(),to:end.toISOString(),slotStepMinutes:30
+      }),
+      this.database.withTenantTransaction(context,async client=>{
+        const result=await client.query<{
+          id:string;online_min_lead_minutes:number
+        }>(
+          `SELECT id,online_min_lead_minutes
+           FROM service_resource
+           WHERE tenant_id=$1 AND id=ANY($2::uuid[])
+             AND status='ACTIVE' AND online_booking_enabled=true`,
+          [binding.tenant_id,allowed]
+        );
+        return new Map(result.rows.map(row=>[row.id,row.online_min_lead_minutes]));
+      })
+    ]);
+    const now=Date.now();
+    return slots.filter(slot=>
+      allowed.includes(slot.resourceId) &&
+      online.has(slot.resourceId) &&
+      new Date(slot.startsAt).getTime()>=
+        now+(online.get(slot.resourceId)??0)*60000
+    ).slice(0,100);
   }
 
   async submit(
