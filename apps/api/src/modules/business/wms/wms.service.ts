@@ -2065,10 +2065,13 @@ export class WmsService {
     varianceMilli:string;
     countCompleted:boolean;
   }>{
-    if(!/^\d+$/.test(countedMilliInput)){
+    if(!/^\d{1,19}$/.test(countedMilliInput)){
       throw new BadRequestException("Некорректный фактический остаток");
     }
     const counted=BigInt(countedMilliInput);
+    if(counted>9223372036854775807n){
+      throw new BadRequestException("Количество превышает предел складского учёта");
+    }
 
     return this.database.withTenantTransaction(context,async client=>{
       const task=await client.query<{
