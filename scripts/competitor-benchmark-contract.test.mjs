@@ -74,7 +74,7 @@ test("Staff-specific services use a single delivery rule and technology card, no
   assert.match(journey,/Правила услуги конкретного мастера/);
   const rules=booking.slice(
     booking.indexOf("async createDeliveryRule("),
-    booking.indexOf("async technologyCards(")
+    booking.indexOf("async createTechnologyCard(")
   );
   assert.match(rules,/technologyCardId/);
   assert.match(rules,/employeeResourceId/);
