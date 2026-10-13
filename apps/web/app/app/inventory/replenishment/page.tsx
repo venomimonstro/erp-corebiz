@@ -9,7 +9,8 @@ type Alert={
   safetyStockMilli:string;availableMilli:string;
   recommendedPurchaseMilli:string;
   urgency:"RESERVATION_SHORTAGE"|"BELOW_SAFETY_STOCK"|"AWAITING_RECEIPT";
-  confirmedInboundMilli:string;shortageBeforeInboundMilli:string;
+  confirmedInboundMilli:string;unallocatedInboundMilli:string;
+  shortageBeforeInboundMilli:string;
   inboundScope:"UNIQUE_BRANCH_WAREHOUSE";
   purchaseOrderCreated:false;
 };
@@ -88,7 +89,14 @@ export default function ReplenishmentPage(){
               <small>В резерве: {quantity(item.reservedMilli)}</small>
               <small>Страховой запас: {quantity(item.safetyStockMilli)}</small>
               <small>Дефицит до поставки: {quantity(item.shortageBeforeInboundMilli)}</small>
-              <small>Подтверждено к поступлению: {quantity(item.confirmedInboundMilli)}</small>
+              <small>Подтверждено к поступлению на этот склад: {quantity(item.confirmedInboundMilli)}</small>
+              {BigInt(item.unallocatedInboundMilli)>0n?(
+                <small role="status">
+                  <strong>Нужна привязка поставки к складу:</strong>{" "}
+                  {quantity(item.unallocatedInboundMilli)}. Это количество
+                  не вычтено из дополнительной закупки.
+                </small>
+              ):null}
               <strong>Дополнительно заказать: {quantity(item.recommendedPurchaseMilli)}</strong>
             </div>
           </article>)}
