@@ -87,7 +87,7 @@ export default function CommerceDecisionsPage() {
     const text=minimumBatch.trim().replace(",",".");
     if(!Number.isInteger(lead)||lead<1||lead>180||
        !Number.isInteger(review)||review<1||review>90||
-       !/^(0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,3})?$/.test(text)){
+       !/^(0|[1-9][0-9]{0,11})(?:\.[0-9]{1,3})?$/.test(text)){
       setError("Укажите срок поставки 1–180 дней, период заказа 1–90 и неотрицательную минимальную партию.");
       return;
     }
