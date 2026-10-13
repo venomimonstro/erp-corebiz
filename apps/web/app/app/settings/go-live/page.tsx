@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { AppSidebar } from "../../../../components/app-sidebar";
 import { apiRequest } from "../../../../lib/api";
 
@@ -72,7 +72,7 @@ export default function GoLivePage() {
     setError("");
   }
 
-  async function submitDecision(event:React.FormEvent<HTMLFormElement>){
+  async function submitDecision(event:FormEvent<HTMLFormElement>){
     event.preventDefault();
     if(!pendingDecision||!data||busy||loading)return;
     if(!acknowledged)return;
