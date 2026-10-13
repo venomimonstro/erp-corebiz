@@ -26,7 +26,6 @@ export default function DanceShifts(){
   const [opens,setOpens]=useState("09:00");
   const [closes,setCloses]=useState("21:00");
   const [replace,setReplace]=useState(false);
-  const [working,setWorking]=useState(false);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
@@ -66,7 +65,7 @@ export default function DanceShifts(){
     return Number.isInteger(h)&&Number.isInteger(m)?h*60+m:NaN;
   };
   async function apply(){
-    setError("");setNotice("");setWorking(false);
+    setError("");setNotice("");
     const size=Number(days),a=minute(opens),b=minute(closes);
     if(!mayManage||!first||!second||first===second||
       !Number.isInteger(size)||size<4||size>90||
