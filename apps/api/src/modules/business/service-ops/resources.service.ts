@@ -175,6 +175,31 @@ export class ResourcesService {
     });
   }
 
+  async rename(
+    context:TenantContext,resourceId:string,input:{name:string}
+  ):Promise<{updated:true}>{
+    const label=input?.name?.trim();
+    if(!label||label.length<2||label.length>160)
+      throw new BadRequestException("Название сотрудника или зала: от 2 до 160 символов");
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(resourceId))
+      throw new BadRequestException("Некорректный ресурс");
+    const access=await this.serviceScope(context,"service.write");
+    if(access.scope!=="all"||
+      (await this.authorization.resolveScope(context,"users.manage"))!=="all")
+      throw new ForbiddenException("Изменять сотрудников может руководитель");
+    return this.database.withTenantTransaction(context,async client=>{
+      const updated=await client.query(
+        `UPDATE service_resource SET name=$3,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE' RETURNING id`,
+        [context.tenantId,resourceId,label]
+      );
+      if(!updated.rowCount)throw new NotFoundException("Ресурс не найден");
+      await this.audit(client,context,"service.resource_renamed",
+        "service_resource",resourceId,{name:label});
+      return {updated:true};
+    });
+  }
+
   /**
    * Archive an employee/hall without deleting attendance, payroll or bookings.
    * Reassignment is explicit; active future allocations cannot disappear.
