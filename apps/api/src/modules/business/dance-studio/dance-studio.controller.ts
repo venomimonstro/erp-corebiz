@@ -15,6 +15,7 @@ import { DanceEconomicsService } from "./dance-economics.service";
 import { DanceStudioService } from "./dance-studio.service";
 import {DanceOperationsService} from "./dance-operations.service";
 import {DanceCustomerPortalService} from "./dance-customer-portal.service";
+import {DanceBudgetService} from "./dance-budget.service";
 
 @Controller("dance")
 export class DanceStudioController {
@@ -22,7 +23,8 @@ export class DanceStudioController {
     private readonly studio:DanceStudioService,
     private readonly economics:DanceEconomicsService,
     private readonly operations:DanceOperationsService,
-    private readonly portal:DanceCustomerPortalService
+    private readonly portal:DanceCustomerPortalService,
+    private readonly budget:DanceBudgetService
   ) {}
 
   @Get("access")
@@ -684,6 +686,27 @@ export class DanceStudioController {
       ok:true,
       data:await this.economics.createRoomContract(this.ctx(req),body)
     };
+  }
+
+  @Get("budget")
+  @RequirePermission("finance.read")
+  async budgetPlan(@Req() req:AuthenticatedRequest,
+    @Query("month") month:string):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.budget.read(this.ctx(req),month)};
+  }
+
+  @Patch("budget")
+  @RequirePermission("finance.write")
+  async saveBudget(@Req() req:AuthenticatedRequest,
+    @Body() body:{
+      month:string;expectedVersion:number;
+      values:Record<
+        "revenueMinor"|"rentBranchAMinor"|"rentBranchBMinor"|
+        "managersMinor"|"trainersMinor"|"taxesMinor"|"otherMinor"|"subleaseMinor",
+        string|null
+      >;
+    }):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.budget.save(this.ctx(req),body)};
   }
 
   @Get("portal/accounts")
