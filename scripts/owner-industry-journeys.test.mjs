@@ -118,3 +118,42 @@ test("Incomplete playbooks never count as a working vertical",()=>{
   wrongRoute.verticals.RETAIL_STORE[0].route="/app/nonexistent";
   assert.throws(()=>validateCatalog(wrongRoute));
 });
+
+test("Owner can configure niche even when activation progress is unavailable",()=>{
+  const start=readFileSync(
+    new URL("../apps/web/app/app/start/page.tsx",import.meta.url),"utf8"
+  );
+  assert.match(start,/Promise\.allSettled/);
+  assert.match(start,/setActivation\(null\)/);
+  assert.match(start,/setProfile\(null\)/);
+  assert.match(start,/!profile\|\|!selected/);
+  assert.match(start,/Повторить загрузку/);
+  assert.match(start,/nextAction/);
+});
+
+test("First value never masquerades as approved commercial readiness",()=>{
+  const start=readFileSync(
+    new URL("../apps/web/app/app/start/page.tsx",import.meta.url),"utf8"
+  );
+  assert.match(start,/\/go-live\/readiness/);
+  assert.match(start,/launch\.blockers\.length/);
+  assert.match(start,/запуск ещё не подтверждён/i);
+  assert.match(start,/Это не процент коммерческой готовности/);
+  assert.match(start,/Это не подтверждение готовности к продаже/);
+  assert.match(start,/setLaunch\(null\)/);
+});
+
+test("GO and LIVE decisions fail closed without an up-to-date server verdict",()=>{
+  const page=readFileSync(
+    new URL("../apps/web/app/app/settings/go-live/page.tsx",import.meta.url),"utf8"
+  );
+  assert.match(page,/setData\(null\);/);
+  assert.match(page,/setLoading\(true\);/);
+  assert.match(page,/setPendingDecision\(null\)/);
+  assert.match(page,/!data\?\.ready/);
+  assert.match(page,/!acknowledged/);
+  assert.match(page,/reviewNote\.trim\(\)\.length<12/);
+  assert.match(page,/\/go-live\/finish-hypercare/);
+  assert.match(page,/\/go-live\/review/);
+  assert.doesNotMatch(page,/window\.(?:prompt|confirm)\(/);
+});
