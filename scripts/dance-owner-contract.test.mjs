@@ -31,11 +31,11 @@ test("Owners do not mistakenly report net profit from partial costs",()=>{
   assert.equal(7000/10,700);
   assert.ok(700<2400);
   assert.equal((2400-700)/2400,17/24);
-  assert.match(plan,/Расчётная прибыль/);
+  assert.match(plan,/Предварительная прибыль/);
   assert.match(plan,/calculated\.profit===null/);
-  assert.match(plan,/Аренда филиала Б/);
-  assert.match(plan,/Налоги и обязательные взносы/);
-  assert.match(plan,/Плановые предположения владельца/);
+  assert.match(plan,/Аренда залов филиала Б/);
+  assert.match(plan,/Налоги и страховые взносы/);
+  assert.match(plan,/Плановые значения/);
   assert.match(workflow,/PARTIAL_PASS_NO_COMMERCIAL_GO/);
   assert.match(workflow,/Rent and expense assumptions for branch B unknown/);
 });
@@ -93,4 +93,32 @@ test("No E2E network calls permitted without explicit disposable database",()=>{
   assert.match(workflow,/127\.0\.0\.1/);
   assert.match(workflow,/registeredAccounts|inviteRole\(actors\.parent|rolesToCycle|clientLink/);
   assert.doesNotMatch(workflow,/process\.stdout\.write\(JSON\.stringify\(\{[\s\S]*cookie:/);
+});
+
+test("Client invitations work with the real hash-token acceptor and safe redirects",()=>{
+  const invite=src("apps/web/app/invite/page.tsx");
+  const login=src("apps/web/app/login/page.tsx");
+  const owner=src("apps/web/app/app/dance/clients/page.tsx");
+  assert.match(invite,/window\.location\.hash/);
+  assert.match(owner,/\/invite#token=/);
+  assert.match(invite,/context\.roles\.includes\("DANCE_CUSTOMER"\)/);
+  assert.match(login,/requested==="\/portal\/dance"/);
+  assert.match(login,/context\.roles\.includes\("DANCE_CUSTOMER"\)/);
+});
+
+test("Month plans persist per tenant and never silently fill example figures",()=>{
+  const sql=src("infrastructure/postgres/248_dance_owner_budget_plan.sql");
+  const logic=src("apps/api/src/modules/business/dance-studio/dance-budget.service.ts");
+  assert.match(sql,/PRIMARY KEY\(tenant_id,month_start\)/);
+  assert.match(sql,/ENABLE ROW LEVEL SECURITY/);
+  assert.match(sql,/rent_branch_b_minor bigint/);
+  assert.match(logic,/expectedVersion/);
+  assert.match(logic,/WHERE dance_budget_plan\.version=\$12/);
+  assert.match(logic,/finance\.read/);
+  assert.match(logic,/finance\.write/);
+  assert.match(plan,/const empty=/);
+  assert.match(plan,/setInputs\(sample\(\)\)/);
+  assert.match(plan,/\/dance\/budget\?month=/);
+  assert.match(plan,/method:"PATCH"/);
+  assert.match(plan,/rubles\(v\)===null/);
 });
