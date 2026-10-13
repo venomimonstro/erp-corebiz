@@ -15,6 +15,11 @@ type Stock={warehouseId:string;warehouseName:string;
   planningExpectedIsNotPhysical:boolean;hasMore:boolean;
   nextCursor:string|null;items:StockItem[]};
 type Supplier={id:string;displayName:string};
+type CountVariance={
+  id:string;location_code:string;sku_code:string;
+  expected_milli:string;counted_milli:string;variance_milli:string
+};
+type CountQueue={items:CountVariance[];mayHaveMore:boolean;limit:number};
 type Wave={id:string;strategy:string;status:string};
 type Route={warehouseId:string;waveId:string|null;globallyOptimal:boolean;
   ordering:string;truncated:boolean;tasks:Array<{
@@ -45,6 +50,11 @@ export default function WarehouseOperationsPage(){
   const [route,setRoute]=useState<Route|null>(null);
   const [waveId,setWaveId]=useState("");
   const [waves,setWaves]=useState<Wave[]>([]);
+  const [countReview,setCountReview]=useState<CountQueue|null>(null);
+  const [countIssue,setCountIssue]=useState("");
+  const [countNotes,setCountNotes]=useState<Record<string,string>>({});
+  const [countPending,setCountPending]=useState(false);
+  const [countFeedback,setCountFeedback]=useState("");
   const [filter,setFilter]=useState("");
   const [appliedFilter,setAppliedFilter]=useState("");
   const [suppliers,setSuppliers]=useState<Supplier[]>([]);
@@ -90,18 +100,25 @@ export default function WarehouseOperationsPage(){
     if(!warehouseId)return;
     const current=++requestVersion.current;
     setLoading(true);setError("");
-    setStock(null);setRoute(null);
+    setStock(null);setRoute(null);setCountReview(null);setCountIssue("");
     try{
-      const [s,r,w]=await Promise.all([
+      const [s,r,w,q]=await Promise.all([
         apiRequest<Stock>(stockUrl()),
         apiRequest<Route>("/wms/operations/warehouses/"+
           encodeURIComponent(warehouseId)+"/pick-route"+
           (waveId?"?waveId="+encodeURIComponent(waveId):"")),
         apiRequest<{waves:Wave[]}>("/wms/warehouses/"+
-          encodeURIComponent(warehouseId)+"/dispatcher").catch(()=>null)
+          encodeURIComponent(warehouseId)+"/dispatcher").catch(()=>null),
+        apiRequest<CountQueue>("/wms/warehouses/"+
+          encodeURIComponent(warehouseId)+"/count-variances")
+          .then(data=>({ok:true as const,data}))
+          .catch(e=>({ok:false as const,message:
+            e instanceof Error?e.message:"Очередь сверки недоступна"}))
       ]);
       if(current===requestVersion.current){
         setStock(s);setRoute(r);setWaves(w?.waves??[]);
+        if(q.ok)setCountReview(q.data);
+        else setCountIssue(q.message);
       }
     }catch(e){
       if(current===requestVersion.current)
@@ -113,6 +130,26 @@ export default function WarehouseOperationsPage(){
   useEffect(()=>{void load();},[load]);
   const shown=stock?.items??[];
   const selectedItem=shown.find(item=>item.skuId===selectedSku);
+  async function resolveCount(line:CountVariance,decision:"APPROVE"|"RECOUNT"){
+    if(countPending||loading)return;
+    const note=(countNotes[line.id]??"").trim();
+    if(note.length<8){setCountFeedback("Обоснование: не менее 8 символов.");return;}
+    setCountPending(true);setCountFeedback("");
+    try{
+      await apiRequest("/wms/count-lines/"+encodeURIComponent(line.id)+"/review",{
+        method:"POST",body:JSON.stringify({decision,note})
+      });
+      setCountFeedback(decision==="APPROVE"
+        ?"Разница подтверждена в учёте склада."
+        :"Создано повторное задание на пересчёт.");
+      setCountNotes(n=>({...n,[line.id]:""}));
+    }catch(e){
+      setCountFeedback((e instanceof Error?e.message:"Операция не подтверждена")+
+        ". Проверьте данные перед повторением.");
+    }finally{
+      setCountPending(false);setRefreshNo(n=>n+1);
+    }
+  }
   async function loadMore(){
     const cursor=stock?.nextCursor;
     if(!cursor||moreBusy||loading)return;
@@ -261,6 +298,54 @@ export default function WarehouseOperationsPage(){
           <a href="/app/purchases">Открыть закупки →</a></p>:null}
 
       </section>:null}
+      {(countReview||countIssue)?(
+        <section className="wms-ops-section" aria-label="Расхождения инвентаризации">
+          <div className="wms-ops-title">
+            <div><h2>Расхождения инвентаризации</h2>
+              <p>Кладовщик фиксирует подсчёт. Другой сотрудник утверждает
+                корректировку или возвращает ячейку на пересчёт.</p>
+            </div>
+            {countReview?<strong>{countReview.items.length} на проверке</strong>:null}
+          </div>
+          {countIssue?<p role="status" className="muted">
+            Очередь недоступна для текущей роли либо временно не отвечает:
+            {" "}{countIssue}</p>:null}
+          {countFeedback?<p role="status">{countFeedback}</p>:null}
+          {countReview?.mayHaveMore?<p role="alert">
+            Показаны первые 200 записей, очередь может быть больше.</p>:null}
+          <div className="wms-count-review-list">
+            {countReview?.items.map(line=><article className="wms-count-review-row"
+              key={line.id}>
+              <div><strong>SKU {line.sku_code} · {line.location_code}</strong>
+                <p>Учёт: {quantity(line.expected_milli)}
+                  {" · "}Факт: {quantity(line.counted_milli)}
+                  {" · "}Разница: {quantity(line.variance_milli)}</p>
+              </div>
+              <label>Причина решения
+                <input maxLength={1500} value={countNotes[line.id]??""}
+                  placeholder="Повторно проверено по документу…"
+                  onChange={e=>setCountNotes(prev=>({
+                    ...prev,[line.id]:e.target.value
+                  }))}/>
+              </label>
+              <div className="wms-count-review-actions">
+                <button disabled={countPending||loading||
+                  (countNotes[line.id]??"").trim().length<8}
+                  onClick={()=>void resolveCount(line,"APPROVE")}>
+                  Утвердить разницу
+                </button>
+                <button className="secondary-button" disabled={countPending||loading||
+                  (countNotes[line.id]??"").trim().length<8}
+                  onClick={()=>void resolveCount(line,"RECOUNT")}>
+                  Пересчитать заново
+                </button>
+              </div>
+            </article>)}
+          </div>
+          {countReview?.items.length===0?<p className="muted">
+            Нет расхождений, ожидающих решения.</p>:null}
+        </section>
+      ):null}
       {route?<section className="wms-ops-section">
         <div className="wms-ops-title"><div>
           <h2>Маршрут комплектации</h2>
