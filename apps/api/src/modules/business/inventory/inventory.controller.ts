@@ -42,6 +42,14 @@ export class InventoryController {
     };
   }
 
+  @Get("replenishment")
+  @RequirePermission("inventory.read")
+  async replenishment(
+    @Req() request:AuthenticatedRequest
+  ):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.inventory.replenishment(this.context(request))};
+  }
+
   @Post("adjustments")
   @RequirePermission("inventory.write")
   async adjust(
