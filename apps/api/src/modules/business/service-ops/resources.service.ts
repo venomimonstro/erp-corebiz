@@ -496,8 +496,8 @@ export class ResourcesService {
         [context.tenantId,resourceId,timezone,date]);
       const off=await client.query(
         `WITH days AS (
-           SELECT day::date AS d,(row_number() OVER (ORDER BY day)-1)::int AS i
-           FROM generate_series($3::date,$3::date+($4::int-1),'1 day'::interval) day
+           SELECT ($3::date+i)::date AS d,i
+           FROM generate_series(0,$4::int-1) i
          )
          INSERT INTO service_resource_block(
            tenant_id,resource_id,starts_at,ends_at,
