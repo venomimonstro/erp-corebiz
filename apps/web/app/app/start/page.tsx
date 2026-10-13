@@ -136,7 +136,7 @@ export default function FirstDayPage(){
     return()=>{cancelled=true;};
   },[profile?.verticalCode]);
   const selected=verticals.find(x=>x.code===chosen);
-  const isChange=profile?.verticalCode!==null && profile?.verticalCode!==chosen;
+  const isChange=Boolean(profile?.verticalCode&&profile.verticalCode!==chosen);
   const applied=profile?.verticalCode===chosen;
 
   async function apply(){
@@ -174,7 +174,13 @@ export default function FirstDayPage(){
           <a href="/app" className="secondary-button">Мой кабинет →</a>
         </header>
         {loading?<p>Проверяем рабочее пространство…</p>:null}
-        {error?<p role="alert" className="inline-error">{error}</p>:null}
+        {error?<div role="alert" className="inline-error">
+          <p>{error}</p>
+          <button className="secondary-button" type="button"
+            disabled={loading||busy} onClick={()=>void reload()}>
+            Повторить загрузку
+          </button>
+        </div>:null}
         {notice?<p role="status">{notice}</p>:null}
         {verticals.length>0 ? (
           <section className="studio-section">
