@@ -107,6 +107,159 @@ export class DanceStudioService {
     });
   }
 
+  /**
+   * Scenario-specific onboarding diagnostics. They are intentionally NOT
+   * commercial approval: PSP, KKT, taxes and real payments require their own
+   * independent gates. Counts are scoped to this tenant on the server.
+   */
+  async setupDoctor(context:TenantContext,scenario:string){
+    await this.requireAll(context,"dance.read");
+    if(scenario!=="two_branch_52")
+      throw new BadRequestException("Неизвестный сценарий настройки студии");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{
+        branches:number;trainers:number;halls:number;groups:number;
+        directions:number;lessons:number;plans:number;
+        coaches_with_services:number;groups_without_resources:number;
+        managers:number;contracts:number;coach_payroll:number;
+        clients:number;client_logins:number;unverified_charges:number;
+      }>(`SELECT
+        (SELECT count(*)::int FROM branch
+         WHERE tenant_id=$1 AND status='ACTIVE') AS branches,
+        (SELECT count(*)::int FROM service_resource
+         WHERE tenant_id=$1 AND status='ACTIVE' AND type='EMPLOYEE') AS trainers,
+        (SELECT count(*)::int FROM service_resource
+         WHERE tenant_id=$1 AND status='ACTIVE'
+           AND type IN ('ROOM','HALL')) AS halls,
+        (SELECT count(*)::int FROM dance_group
+         WHERE tenant_id=$1 AND status='ACTIVE') AS groups,
+        (SELECT count(*)::int FROM dance_program
+         WHERE tenant_id=$1 AND status='ACTIVE') AS directions,
+        (SELECT count(*)::int FROM dance_lesson
+         WHERE tenant_id=$1 AND starts_at>now()
+           AND status IN ('PLANNED','OPEN_FOR_BOOKING')) AS lessons,
+        (SELECT count(*)::int FROM service_package_plan
+         WHERE tenant_id=$1 AND status='ACTIVE') AS plans,
+        (SELECT count(DISTINCT employee_resource_id)::int
+         FROM service_delivery_rule
+         WHERE tenant_id=$1 AND status='ACTIVE'
+           AND employee_resource_id IS NOT NULL) AS coaches_with_services,
+        (SELECT count(*)::int FROM dance_group
+         WHERE tenant_id=$1 AND status='ACTIVE'
+           AND (trainer_resource_id IS NULL OR room_resource_id IS NULL))
+           AS groups_without_resources,
+        (SELECT count(DISTINCT m.id)::int
+         FROM tenant_membership m
+         JOIN membership_role mr ON mr.tenant_id=m.tenant_id
+           AND mr.membership_id=m.id
+         JOIN tenant_role r ON r.tenant_id=mr.tenant_id AND r.id=mr.role_id
+         WHERE m.tenant_id=$1 AND m.status='ACTIVE'
+           AND r.code='DANCE_MANAGER') AS managers,
+        (SELECT count(*)::int FROM room_rental_contract
+         WHERE tenant_id=$1 AND status='ACTIVE'
+           AND (valid_to IS NULL OR valid_to>=current_date)) AS contracts,
+        (SELECT count(DISTINCT trainer_resource_id)::int
+         FROM trainer_payroll_profile
+         WHERE tenant_id=$1 AND status='ACTIVE') AS coach_payroll,
+        (SELECT count(*)::int FROM dance_student
+         WHERE tenant_id=$1 AND status IN ('ACTIVE','TRIAL')) AS clients,
+        (SELECT count(*)::int FROM dance_customer_account a
+         JOIN tenant_membership m ON m.tenant_id=a.tenant_id
+           AND m.id=a.membership_id AND m.status='ACTIVE'
+         WHERE a.tenant_id=$1 AND a.status='ACTIVE') AS client_logins,
+        (SELECT count(*)::int FROM dance_student_charge
+         WHERE tenant_id=$1 AND status NOT IN ('CANCELLED','PAID')
+           AND obligation_id IS NULL) AS unverified_charges
+      `,[context.tenantId]);
+      const facts=result.rows[0]!;
+      type DoctorCheck={
+        id:string;label:string;observed:number;target:number;
+        href:string;fix:string;importance:"blocker"|"warning";
+      };
+      const checks:DoctorCheck[]=[
+        {id:"branches",label:"Два филиала",observed:facts.branches,target:2,
+          href:"/app/settings",fix:"Создайте оба филиала и назначьте им помещения.",
+          importance:"blocker"},
+        {id:"trainers",label:"52 рабочих ресурса тренеров",
+          observed:facts.trainers,target:52,href:"/app/dance/staff",
+          fix:"Добавьте тренеров или импортируйте список; отдельно пригласите их логины.",
+          importance:"blocker"},
+        {id:"directions",label:"12 направлений",observed:facts.directions,target:12,
+          href:"/app/dance/groups",fix:"Создайте направления на основе услуг и цен.",
+          importance:"blocker"},
+        {id:"rooms",label:"Залы двух филиалов",observed:facts.halls,target:4,
+          href:"/app/dance/setup",fix:"Добавьте три зала первого филиала и хотя бы один второго.",
+          importance:"blocker"},
+        {id:"group",label:"Группы",observed:facts.groups,target:12,
+          href:"/app/dance/groups",fix:"Назначьте тренера, зал и расписание каждой группе.",
+          importance:"blocker"},
+        {id:"missing_resources",label:"Группы без тренера или зала",
+          observed:facts.groups_without_resources,target:0,
+          href:"/app/dance/groups",
+          fix:"Откройте группу и назначьте тренера и зал; не публикуйте пустое расписание.",
+          importance:"blocker"},
+        {id:"delivery_rules",label:"Тренеры с услугами",
+          observed:facts.coaches_with_services,target:52,
+          href:"/app/dance/staff",
+          fix:"Укажите услуги и цены каждого тренера. Созданный ресурс сам по себе не принимает записи.",
+          importance:"blocker"},
+        {id:"lessons",label:"Будущие занятия",observed:facts.lessons,target:1,
+          href:"/app/dance/groups",
+          fix:"После создания групп отдельно сформируйте уроки на будущие даты.",
+          importance:"blocker"},
+        {id:"plans",label:"Абонементы и разовые занятия",
+          observed:facts.plans,target:2,
+          href:"/app/service/packages",
+          fix:"Настройте разовое 2 400 ₽ и 10 занятий за 7 000 ₽; проверьте условия активации.",
+          importance:"blocker"},
+        {id:"managers",label:"Два менеджера",observed:facts.managers,target:2,
+          href:"/app/settings/team",
+          fix:"Пригласите обоих с ролью «Менеджер студии»; затем задайте смены 2/2.",
+          importance:"blocker"},
+        {id:"rent",label:"Договоры аренды трёх залов",
+          observed:facts.contracts,target:3,
+          href:"/app/dance/team",
+          fix:"Укажите ежемесячные расходы каждого зала, даты и условия договора.",
+          importance:"warning"},
+        {id:"payroll",label:"Настройки начислений тренерам",
+          observed:facts.coach_payroll,target:52,
+          href:"/app/dance/team",
+          fix:"Без ставок по тренерам себестоимость и чистая прибыль недостоверны.",
+          importance:"warning"},
+        {id:"clients",label:"Первый ученик",observed:facts.clients,target:1,
+          href:"/app/dance/students",
+          fix:"Создайте ребёнка, плательщика, семейную связь и запись в группу.",
+          importance:"warning"},
+        {id:"portal",label:"Личный кабинет родителя",
+          observed:facts.client_logins,target:1,
+          href:"/app/dance/clients",
+          fix:"Пригласите родителя с клиентской ролью и привяжите его к CRM-карточке.",
+          importance:"warning"},
+        {id:"reconcile",label:"Начисления без финансового обязательства",
+          observed:facts.unverified_charges,target:0,
+          href:"/app/dance/students",
+          fix:"Проверьте неподтверждённые начисления. Нельзя считать их оплаченными.",
+          importance:"warning"}
+      ];
+      const resultChecks=checks.map(check=>({
+        ...check,
+        ok:check.id==="missing_resources"||check.id==="reconcile"
+          ?check.observed===0:check.observed>=check.target
+      }));
+      const blockers=resultChecks.filter(c=>!c.ok&&c.importance==="blocker");
+      const warnings=resultChecks.filter(c=>!c.ok&&c.importance==="warning");
+      return {
+        scenario,checks:resultChecks,blockers,warnings,
+        nextAction:(blockers[0]??warnings[0]??null),
+        operationalSetupComplete:blockers.length===0,
+        commercialReady:false,
+        externalGates:["Подтвердить оплату у провайдера",
+          "Проверить кассу и налоговый режим","Провести полный E2E и сверку по двум филиалам"],
+        disclaimer:"Диагностика заполнения, не разрешение на реальные продажи"
+      };
+    });
+  }
+
   async dashboard(context: TenantContext) {
     const scopeIds = await this.scopeIds(context, "dance.read");
     // Trainers need their roster and lessons, not the company's unit economics.
