@@ -7,6 +7,8 @@ type Worker={id:string;name:string;type:string;branch_id:string|null;
   branch_name:string|null;membership_id:string|null};
 type Branch={id:string;name:string};
 type Group={trainer_resource_id:string;name:string;program_name:string;status:string};
+type Lesson={id:string;trainer_resource_id:string|null;starts_at:string;ends_at:string;
+  status:string;booked_count:number;attended_count:number};
 type Organization={branches:Branch[]};
 type Context={permissions:Array<{code:string;scope:string}>};
 type TeamMember={membership_id:string;email:string;status:string;
@@ -16,6 +18,7 @@ export default function DanceStaffPage(){
   const [branches,setBranches]=useState<Branch[]>([]);
   const [groups,setGroups]=useState<Group[]>([]);
   const [members,setMembers]=useState<TeamMember[]>([]);
+  const [lessons,setLessons]=useState<Lesson[]|null>(null);
   const [canManage,setCanManage]=useState(false);
   const [query,setQuery]=useState("");
   const [filter,setFilter]=useState("");
@@ -31,21 +34,46 @@ export default function DanceStaffPage(){
   const reload=useCallback(async()=>{
     setBusy(true);setError("");
     try{
-      const [r,o,g,c,team]=await Promise.all([
+      const nowMonth=new Intl.DateTimeFormat("sv-SE",{timeZone:"Europe/Moscow",
+        year:"numeric",month:"2-digit"}).format(new Date());
+      const [year,mnum]=nowMonth.split("-").map(Number);
+      const nextMonth=new Date(Date.UTC(year,mnum,1)).toISOString().slice(0,7);
+      const lessonUrl="/dance/lessons?from="+
+        encodeURIComponent(nowMonth+"-01T00:00:00+03:00")+"&to="+
+        encodeURIComponent(nextMonth+"-01T00:00:00+03:00");
+      const [r,o,g,c,team,lessonsInMonth]=await Promise.all([
         apiRequest<Worker[]>("/service/resources"),
         apiRequest<Organization>("/organization"),
         apiRequest<Group[]>("/dance/groups"),
         apiRequest<Context>("/workspace/context"),
-        apiRequest<TeamMember[]>("/tenants/team")
+        apiRequest<TeamMember[]>("/tenants/team"),
+        apiRequest<Lesson[]>(lessonUrl).catch(()=>null)
       ]);
       setWorkers(r.filter(x=>x.type==="EMPLOYEE"));
       setBranches(o.branches);setGroups(g);setMembers(team);
+      setLessons(lessonsInMonth);
       setCanManage(c.permissions.some(x=>(x.code==="users.manage"||x.code==="*")
         &&x.scope==="all"));
     }catch(e){setError(e instanceof Error?e.message:"Данные сотрудников недоступны");}
     finally{setBusy(false);}
   },[]);
   useEffect(()=>{void reload();},[reload]);
+  const loadByTrainer=useMemo(()=>{
+    const all=new Map<string,{count:number;hours:number;booked:number;attended:number}>();
+    for(const lesson of lessons??[]){
+      const id=lesson.trainer_resource_id;
+      if(!id||lesson.status.startsWith("CANCELLED"))continue;
+      const prev=all.get(id)??{count:0,hours:0,booked:0,attended:0};
+      const duration=Math.max(0,
+        (Date.parse(lesson.ends_at)-Date.parse(lesson.starts_at))/3600000);
+      all.set(id,{
+        count:prev.count+1,hours:prev.hours+duration,
+        booked:prev.booked+Number(lesson.booked_count||0),
+        attended:prev.attended+Number(lesson.attended_count||0)
+      });
+    }
+    return all;
+  },[lessons]);
   const visible=useMemo(()=>workers.filter(x=>
     (!filter||x.branch_id===filter)&&x.name.toLocaleLowerCase("ru")
       .includes(query.trim().toLocaleLowerCase("ru"))),[workers,filter,query]);
@@ -123,6 +151,8 @@ export default function DanceStaffPage(){
       {notice?<p role="status">{notice}</p>:null}
       <section className="dance-customer-panel">
         <h2>Поиск по {workers.length} сотрудникам</h2>
+        {lessons===null?<p role="status">Нагрузка за месяц пока недоступна;
+          число групп не равно фактически отработанным часам.</p>:null}
         <div className="dance-customer-selection">
           <label>Найти тренера
             <input placeholder="Имя" value={query}
@@ -143,6 +173,7 @@ export default function DanceStaffPage(){
             }} className={selected===x.id?"active":""}>
               <strong>{x.name}</strong><span>{x.branch_name??"Без филиала"}</span>
               <small>Групп: {assigned.length}
+                {lessons!==null?" · уроков: "+(loadByTrainer.get(x.id)?.count??0):""}
                 {assigned.length?" · "+assigned.map(g=>g.program_name).slice(0,2).join(", "):""}
               </small>
             </button>;
@@ -151,6 +182,15 @@ export default function DanceStaffPage(){
       </section>
       {current?<section className="dance-customer-panel">
         <h2>{current.name}</h2>
+        {lessons!==null?<div className="dance-customer-metrics">
+          <div><small>Уроков за месяц</small>
+            <strong>{loadByTrainer.get(current.id)?.count??0}</strong></div>
+          <div><small>Запланировано часов</small>
+            <strong>{(loadByTrainer.get(current.id)?.hours??0).toFixed(1)}</strong></div>
+          <div><small>Записей / посещений</small>
+            <strong>{loadByTrainer.get(current.id)?.booked??0} /{" "}
+              {loadByTrainer.get(current.id)?.attended??0}</strong></div>
+        </div>:null}
         <p>Действующих групп: {activeGroups.length}. При назначенных будущих
           группах и уроках увольнение будет заблокировано до передачи другому тренеру.</p>
         <div className="dance-customer-list">{activeGroups.map(g=>
