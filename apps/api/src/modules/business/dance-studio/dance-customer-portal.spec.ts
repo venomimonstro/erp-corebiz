@@ -58,6 +58,12 @@ describe("Dance family customer portal, no insecure client supplied IDs",()=>{
     expect(result.visits).toHaveLength(1);
     expect(result.packages).toHaveLength(1);
     expect(result.charges[0].remaining_minor).toBe("700000");
+    const debtQuery=calls.find(x=>x.sql.includes("FROM dance_student_charge c"));
+    expect(debtQuery?.sql).toContain("o.id IS NULL THEN NULL");
+    expect(debtQuery?.sql).toContain("finance_verified");
+    const packageQuery=calls.find(x=>x.sql.includes("FROM service_package sp"));
+    expect(packageQuery?.sql).toContain("sp.status='ACTIVE'");
+    expect(packageQuery?.sql).toContain("ELSE 0 END AS available_visits");
     const identity=calls.find(x=>x.sql.includes("FROM dance_customer_account a"));
     expect(identity?.args).toEqual([ctx.tenantId,ctx.membershipId,ctx.userId]);
     expect(identity?.sql).toContain("another.role_id<>mr.role_id");
