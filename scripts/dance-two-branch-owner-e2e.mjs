@@ -172,6 +172,31 @@ async function main(){
     createdRentBookings.push(booking);
   }
   assert.equal(createdRentBookings.length,2);
+  const rentedDetails=[];
+  for(let index=0;index<createdRentBookings.length;index++){
+    const detail=await get(owner,
+      "/service/bookings/"+createdRentBookings[index].id);
+    assert.equal(detail.delivery_format_snapshot,"RENTAL");
+    assert.equal(detail.price_minor_snapshot,money(1200));
+    assert.equal(detail.billing?.amountMinor,money(1200),
+      "Room rental must create a customer receivable");
+    assert.equal(detail.billing?.settledMinor,"0",
+      "A booking alone does not constitute payment");
+    rentedDetails.push(detail);
+  }
+  assert.notEqual(rentedDetails[0].billing?.id,rentedDetails[1].billing?.id,
+    "Two halls create independent customer obligations");
+  const replayRental=await post(owner,"/service/bookings",{
+    serviceId:rentServices[0].serviceId,branchId:branches[0].id,
+    partyId:tenantRenter.id,deliveryFormat:"RENTAL",
+    startsAt:rentStart.toISOString(),
+    resources:[{resourceId:small1.id,capacityUnits:8}],
+    idempotencyKey:"dance-rental-0-"+seed,
+    notes:"Only disposable capacity test; no verified payment"
+  });
+  assert.equal(replayRental.id,createdRentBookings[0].id,
+    "Repeated booking must use the original record");
+  stats.rentalBookings=2;
   await post(owner,"/service/bookings",{
     serviceId:rentServices[0].serviceId,branchId:branches[0].id,
     partyId:tenantRenter.id,deliveryFormat:"RENTAL",
@@ -285,55 +310,6 @@ async function main(){
     deliveryFormat:"INDIVIDUAL"
   });
   assert.ok(oneVisit.id&&tenVisits.id&&individual.id);
-  stage="06b independent rental income and two small rooms";
-  // 1 000 RUB is test-only. The owner never supplied a commercial rental
-  // tariff. Never mix this revenue with the 700 000 RUB lease expense.
-  const demoRentalPriceMinor=money(1000);
-  const rentService=await post(owner,"/service/catalog",{
-    name:"TEST ONLY · аренда малого зала (уточнить тариф)",
-    category:"Аренда залов",durationMinutes:60,
-    priceMinor:demoRentalPriceMinor,currency:"RUB",
-    deliveryFormat:"RENTAL"
-  });
-  const tenantA=await post(owner,"/crm/customers",{
-    type:"PERSON",displayName:"Тестовый арендатор "+seed.slice(0,6)
-  });
-  const bookingDate=new Date();
-  bookingDate.setUTCDate(bookingDate.getUTCDate()+12);
-  bookingDate.setUTCHours(12,0,0,0);
-  const rentalInput={
-    serviceId:rentService.id,resourceIds:[small1.id],
-    branchId:branches[0].id,partyId:tenantA.id,
-    deliveryFormat:"RENTAL",source:"MANUAL",
-    startsAt:bookingDate.toISOString(),
-    idempotencyKey:"rental-"+seed
-  };
-  const rental1=await post(owner,"/service/bookings",rentalInput);
-  assert.ok(rental1.id);
-  const rentalReplay=await post(owner,"/service/bookings",rentalInput);
-  assert.equal(rentalReplay.id,rental1.id,
-    "Replay must not double-book or duplicate rental revenue");
-  await post(owner,"/service/bookings",{
-    ...rentalInput,resourceIds:[small2.id]
-  },409);
-  const rental2=await post(owner,"/service/bookings",{
-    ...rentalInput,resourceIds:[small2.id],
-    idempotencyKey:"rental-other-room-"+seed
-  });
-  assert.ok(rental2.id&&rental2.id!==rental1.id);
-  const firstRentalDetail=await get(owner,"/service/bookings/"+rental1.id);
-  assert.equal(firstRentalDetail.price_minor_snapshot,demoRentalPriceMinor);
-  assert.equal(firstRentalDetail.delivery_format_snapshot,"RENTAL");
-  assert.equal(firstRentalDetail.billing?.amountMinor,demoRentalPriceMinor,
-    "Room booking must create a receivable for its own guest");
-  assert.equal(firstRentalDetail.billing?.settledMinor,"0",
-    "A room booking is NOT proof of customer payment");
-  const secondRentalDetail=await get(owner,"/service/bookings/"+rental2.id);
-  assert.equal(secondRentalDetail.price_minor_snapshot,demoRentalPriceMinor);
-  assert.equal(secondRentalDetail.billing?.amountMinor,demoRentalPriceMinor);
-  assert.notEqual(secondRentalDetail.billing?.id,firstRentalDetail.billing?.id,
-    "Two different rented halls need independent charges");
-  stats.rentalBookings=2;
   stage="07 CRM family, memberships and client portal";
   const mother=await post(actors.m1,"/crm/customers",{
     type:"PERSON",displayName:"Мама тестового ученика "+seed.slice(0,6)
