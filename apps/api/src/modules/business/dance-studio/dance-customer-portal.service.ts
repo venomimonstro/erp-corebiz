@@ -206,8 +206,8 @@ export class DanceCustomerPortalService{
         ),
         client.query(
           `SELECT DISTINCT sp.id,
-             CASE WHEN sp.party_id=ANY($2::uuid[]) THEN sp.party_id
-                  ELSE NULL END AS party_id,
+             CASE WHEN sp.party_id=ANY($2::uuid[]) OR sp.party_id=$3
+                  THEN sp.party_id ELSE NULL END AS party_id,
              plan.name AS plan_name,
              sp.status,sp.starts_at,sp.expires_at,
              sp.visit_limit_snapshot,sp.reserved_visits,sp.used_visits,
@@ -230,14 +230,7 @@ export class DanceCustomerPortalService{
                WHERE b.tenant_id=sp.tenant_id AND b.package_id=sp.id
                  AND b.status='ACTIVE' AND b.party_id=ANY($2::uuid[])
              )
-             OR (
-               sp.party_id=$3
-               AND EXISTS(
-                 SELECT 1 FROM service_package_beneficiary b
-                 WHERE b.tenant_id=sp.tenant_id AND b.package_id=sp.id
-                   AND b.status='ACTIVE' AND b.party_id=ANY($2::uuid[])
-               )
-             )
+             OR sp.party_id=$3
            )
            ORDER BY sp.expires_at DESC LIMIT 250`,
           [context.tenantId,studentParties,person.party_id]
