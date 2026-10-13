@@ -80,7 +80,7 @@ export default function DanceBudgetPage(){
     const values={} as BudgetValues;
     for(const key of keys){
       const v=inputs[key].trim();
-      if(v&&!rubles(v) && v!=="0"){
+      if(v && rubles(v)===null){
         setError("Проверьте сумму: "+labels[key]);return;
       }
       const minorValue=rubles(v);
