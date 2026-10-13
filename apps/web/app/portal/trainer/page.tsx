@@ -3,11 +3,15 @@ import {useCallback,useEffect,useMemo,useState} from "react";
 import {apiRequest} from "../../../lib/api";
 type Lesson={
   id:string;lesson_type:string;status:string;starts_at:string;ends_at:string;
+  trainer_resource_id:string;branch_name:string|null;
   group_name:string|null;direction_name:string|null;room_name:string|null;
   booked_count:number;attended_count:number;
 };
-type TrainerCalendar={trainer:{id:string;name:string;timezone:string};
-  from:string;to:string;lessons:Lesson[]};
+type TrainerCalendar={
+  trainer:{id:string;name:string;timezone:string};
+  resources:Array<{id:string;name:string;timezone:string;branch_name:string|null}>;
+  from:string;to:string;lessons:Lesson[]
+};
 const dateInMoscow=(date:Date)=>new Intl.DateTimeFormat("sv-SE",{
   timeZone:"Europe/Moscow",year:"numeric",month:"2-digit",day:"2-digit"
 }).format(date);
@@ -18,6 +22,7 @@ export default function DanceTrainerPage(){
   const [month,setMonth]=useState(()=>dateInMoscow(new Date()).slice(0,7));
   const [data,setData]=useState<TrainerCalendar|null>(null);
   const [busy,setBusy]=useState(false);
+  const [signingOut,setSigningOut]=useState(false);
   const [error,setError]=useState("");
   const reload=useCallback(async()=>{
     setBusy(true);setData(null);setError("");
@@ -35,6 +40,36 @@ export default function DanceTrainerPage(){
     finally{setBusy(false);}
   },[month]);
   useEffect(()=>{void reload();},[reload]);
+  async function signOut(){
+    if(signingOut)return;
+    setSigningOut(true);setError("");
+    try{
+      await apiRequest("/auth/logout",{
+        method:"POST",body:JSON.stringify({})
+      });
+      setData(null);
+      window.location.assign("/login?next=%2Fportal%2Ftrainer");
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Выход не подтверждён сервером");
+      setSigningOut(false);
+    }
+  }
+  const resourceById=useMemo(()=>new Map((data?.resources??[]).map(r=>[r.id,r])),
+    [data?.resources]);
+  const branchLoads=useMemo(()=>{
+    const rows=data?.lessons.filter(x=>!x.status.startsWith("CANCELLED"))??[];
+    return (data?.resources??[]).map(r=>{
+      const own=rows.filter(x=>x.trainer_resource_id===r.id);
+      return {
+        id:r.id,
+        branch:r.branch_name??"Филиал не указан",
+        lessons:own.length,
+        hours:own.reduce((sum,x)=>sum+Math.max(0,
+          (Date.parse(x.ends_at)-Date.parse(x.starts_at))/3600000),0)
+      };
+    });
+  },[data]);
+
   const metrics=useMemo(()=>{
     const rows=data?.lessons.filter(x=>!x.status.startsWith("CANCELLED"))??[];
     return {
@@ -50,7 +85,11 @@ export default function DanceTrainerPage(){
         <h1>Моё расписание</h1>
         <span>Личный календарь тренера. Без чужих данных и финансов студии.</span>
       </div>
-      <a href="/login?next=%2Fportal%2Ftrainer">Другой аккаунт</a>
+      <nav aria-label="Аккаунт тренера">
+        <button type="button" disabled={signingOut} onClick={()=>void signOut()}>
+          {signingOut?"Выходим…":"Выйти"}
+        </button>
+      </nav>
     </header>
     <section className="dance-customer-intro">
       <div className="dance-customer-selection">
@@ -76,12 +115,25 @@ export default function DanceTrainerPage(){
             maximumFractionDigits:1
           }).format(metrics.hours)} ч</strong></div>
       </section>
+      <section className="dance-customer-panel">
+        <h2>Нагрузка по филиалам</h2>
+        <div className="dance-customer-list">
+          {branchLoads.map(item=><article key={item.id}>
+            <strong>{item.branch}</strong>
+            <span>{item.lessons} занятий · {new Intl.NumberFormat("ru-RU",{
+              maximumFractionDigits:1
+            }).format(item.hours)} часа(ов)</span>
+          </article>)}
+        </div>
+      </section>
       <section className="dance-customer-panel dance-trainer-list">
         <h2>Мои занятия и залы</h2>
         {data.lessons.length===0?<p>Запланированных занятий нет.</p>:
           <div className="dance-customer-list">{data.lessons.map(l=>
             <article key={l.id}>
-              <strong>{moscowTime(l.starts_at,data.trainer.timezone)}</strong>
+              <strong>{moscowTime(l.starts_at,
+                resourceById.get(l.trainer_resource_id)?.timezone
+                  ??data.trainer.timezone)} · {l.branch_name??"Филиал не указан"}</strong>
               <span>{l.group_name??l.direction_name??"Индивидуальная тренировка"}
                 {" · "}{l.room_name??"Зал уточняется"}</span>
               <small>{l.status} · Записано: {l.booked_count} ·
