@@ -66,6 +66,7 @@ const permissionByKey: Record<string,string> = {
   conversions: "analytics.read",
   "analytics-settings": "analytics.read",
   wms: "wms.read",
+  "wms-operations": "wms.read",
   "wms-inbound": "wms.read",
   "wms-mobile": "wms.read",
   "wms-owners": "wms.read",
@@ -128,6 +129,7 @@ const capabilityByKey: Record<string,string> = {
   conversions: "growth",
   "analytics-settings": "growth",
   wms: "wms",
+  "wms-operations": "wms",
   "wms-inbound": "wms",
   "wms-mobile": "wms",
   "wms-owners": "wms",
@@ -160,7 +162,7 @@ const essentialItems:Record<MenuProfile,readonly string[]>={
     "products","stock","orders","finance","billing","support"],
   commerce:["first-day","orders","products","stock","replenishment","purchases","oms",
     "sites","channels","retail","returns","finance","billing","support"],
-  warehouse:["first-day","wms","wms-inbound","wms-mobile","wms-owners",
+  warehouse:["first-day","wms","wms-operations","wms-inbound","wms-mobile","wms-owners",
     "wms-billing","stock","replenishment","products","billing","support"],
   agency:["first-day","deals","customers","agency","projects",
     "tasks","finance","billing","support"]
@@ -223,6 +225,7 @@ const sections: Section[] = [
   ] },
   { title: "Склад и 3PL", items: [
     ["/app/wms", "Складские задания", "wms"],
+    ["/app/wms/operations", "Остатки и сборка", "wms-operations"],
     ["/app/wms/inbound", "Приёмка", "wms-inbound"],
     ["/app/wms/mobile", "Рабочее место ТСД", "wms-mobile"],
     ["/app/wms/owners", "Владельцы товара", "wms-owners"],
