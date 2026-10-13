@@ -12,6 +12,10 @@ type Replenishment = {
   sellableMilli: string;
   inboundMilli: string;
   targetMilli14d: string;
+  targetDaysSku?: number;
+  leadDays?: number | null;
+  reviewDays?: number | null;
+  minimumBatchMilli?: string;
   suggestedMilli: string;
   stockCoverDays: string;
   urgency: "OUT" | "CRITICAL" | "REPLENISH";
@@ -45,9 +49,16 @@ export default function CommerceDecisionsPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>("ALL");
+  const [editing,setEditing]=useState<Replenishment|null>(null);
+  const [leadDays,setLeadDays]=useState("7");
+  const [reviewDays,setReviewDays]=useState("7");
+  const [minimumBatch,setMinimumBatch]=useState("0");
+  const [saving,setSaving]=useState(false);
+  const [notice,setNotice]=useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
+    setData(null); // Avoid showing stale stock decisions after refresh failure.
     setError("");
     try {
       setData(await apiRequest<Snapshot>("/dashboard/commerce"));
@@ -59,6 +70,43 @@ export default function CommerceDecisionsPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  const editRule=(row:Replenishment)=>{
+    setEditing(row);
+    setLeadDays(String(row.leadDays??7));
+    setReviewDays(String(row.reviewDays??7));
+    const n=BigInt(row.minimumBatchMilli??"0");
+    setMinimumBatch((n/1000n).toString()+
+      (n%1000n===0n?"":"."+String(n%1000n).padStart(3,"0").replace(/0+$/,"")));
+    setNotice("");
+  };
+
+  const saveRule=async()=>{
+    if(!editing||saving)return;
+    const lead=Number(leadDays),review=Number(reviewDays);
+    const text=minimumBatch.trim().replace(",",".");
+    if(!Number.isInteger(lead)||lead<1||lead>180||
+       !Number.isInteger(review)||review<1||review>90||
+       !/^(0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,3})?$/.test(text)){
+      setError("Укажите срок поставки 1–180 дней, период заказа 1–90 и неотрицательную минимальную партию.");
+      return;
+    }
+    const [whole,decimal=""]=text.split(".");
+    const batch=(BigInt(whole)*1000n+BigInt(decimal.padEnd(3,"0"))).toString();
+    setSaving(true);setError("");setNotice("");
+    try{
+      await apiRequest("/dashboard/commerce/rules/"+editing.skuId,{
+        method:"PUT",body:JSON.stringify({
+          leadDays:lead,reviewDays:review,minimumBatchMilli:batch,enabled:true
+        })
+      });
+      setEditing(null);
+      setNotice("Правило сохранено. Рекомендации пересчитаны из текущих документов.");
+      await load();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось сохранить правило");
+    }finally{setSaving(false);}
+  };
 
   const rows = useMemo(() => (data?.replenishment ?? []).filter(row =>
     filter === "ALL" ||
@@ -85,6 +133,7 @@ export default function CommerceDecisionsPage() {
         </header>
 
         {error ? <div className="studio-message error" role="alert">{error}</div> : null}
+        {notice ? <p className="muted" role="status">{notice}</p> : null}
         {loading && !data ? <p className="muted">Собираем показатели…</p> : null}
 
         {data ? (
@@ -118,8 +167,9 @@ export default function CommerceDecisionsPage() {
                   <p className="muted">Данные заказов за {data.windowDays} дней</p>
                   <h2>Что стоит проверить перед закупкой</h2>
                   <p>
-                    Ориентир: запас на {data.targetDays} дней.
-                    Подтверждённые поставки учитываются отдельно. Ничего не заказывается автоматически.
+                    По умолчанию запас на {data.targetDays} дней. Для каждого SKU можно
+                    указать срок поставки, интервал заказа и минимальную партию.
+                    Подтверждённые поставки учитываются. Автозакупок нет.
                   </p>
                 </div>
                 <a className="secondary-button" href="/app/purchases">Перейти к закупкам ↗</a>
@@ -146,6 +196,7 @@ export default function CommerceDecisionsPage() {
                         <th>Заказано за 30 дней</th>
                         <th>Запас, дней</th>
                         <th>Предложение</th>
+                        <th>Правило</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -170,6 +221,8 @@ export default function CommerceDecisionsPage() {
                               <strong>Рассмотреть +{quantity(row.suggestedMilli)}</strong> :
                               <span>Поставка может покрыть потребность</span>}
                           </td>
+                          <td><button type="button" className="secondary-button"
+                            onClick={()=>editRule(row)}>Настроить · {row.targetDaysSku??14} дн.</button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -184,6 +237,29 @@ export default function CommerceDecisionsPage() {
                   </span>
                 </div>
               )}
+              {editing?<form className="section-block" onSubmit={event=>{
+                event.preventDefault();void saveRule();
+              }}>
+                <h3>Правило закупки · {editing.productName}</h3>
+                <p>Сроки учитываются только в подсказке. Заказ поставщику
+                  создаётся отдельно после проверки закупщиком.</p>
+                <div className="commerce-rule-fields">
+                  <label>Срок поставки, дней
+                    <input type="number" min={1} max={180} required value={leadDays}
+                      onChange={event=>setLeadDays(event.target.value)}/></label>
+                  <label>Интервал между заказами, дней
+                    <input type="number" min={1} max={90} required value={reviewDays}
+                      onChange={event=>setReviewDays(event.target.value)}/></label>
+                  <label>Минимальная партия, ед.
+                    <input type="text" inputMode="decimal" required value={minimumBatch}
+                      onChange={event=>setMinimumBatch(event.target.value)}/></label>
+                </div>
+                <div className="service-desk-actions">
+                  <button type="submit" disabled={saving}>Сохранить правило</button>
+                  <button type="button" className="secondary-button" disabled={saving}
+                    onClick={()=>setEditing(null)}>Отмена</button>
+                </div>
+              </form>:null}
               <p className="commerce-method">{data.method}</p>
             </section>
 
