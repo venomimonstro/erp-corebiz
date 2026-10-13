@@ -15,6 +15,7 @@ import { DanceEconomicsService } from "./dance-economics.service";
 import { DanceStudioService } from "./dance-studio.service";
 import {DanceOperationsService} from "./dance-operations.service";
 import {DanceCustomerPortalService} from "./dance-customer-portal.service";
+import {DanceTrainerPortalService} from "./dance-trainer-portal.service";
 import {DanceBudgetService} from "./dance-budget.service";
 
 @Controller("dance")
@@ -24,6 +25,7 @@ export class DanceStudioController {
     private readonly economics:DanceEconomicsService,
     private readonly operations:DanceOperationsService,
     private readonly portal:DanceCustomerPortalService,
+    private readonly trainerPortal:DanceTrainerPortalService,
     private readonly budget:DanceBudgetService
   ) {}
 
@@ -707,6 +709,20 @@ export class DanceStudioController {
       >;
     }):Promise<ApiSuccess<unknown>>{
     return {ok:true,data:await this.budget.save(this.ctx(req),body)};
+  }
+
+  @Post("trainer/link")
+  @RequirePermission("users.manage")
+  async linkTrainer(@Req() req:AuthenticatedRequest,
+    @Body() body:{membershipId:string;resourceId:string}):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.trainerPortal.link(this.ctx(req),body)};
+  }
+
+  @Get("trainer/me")
+  @RequirePermission("dance.trainer.read")
+  async myTrainerCalendar(@Req() req:AuthenticatedRequest,
+    @Query("from") from:string,@Query("to") to:string):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.trainerPortal.self(this.ctx(req),from,to)};
   }
 
   @Get("portal/accounts")
