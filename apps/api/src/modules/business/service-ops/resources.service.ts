@@ -293,15 +293,30 @@ export class ResourcesService {
             codes.length===1 &&
             ["DANCE_TRAINER","SERVICE_STAFF"].includes(codes[0]!));
           if(dedicatedCoach){
-            await client.query(
-              `UPDATE tenant_membership SET status='SUSPENDED',updated_at=now()
-               WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
-              [context.tenantId,item.membership_id]
+            // The same staff login can teach in multiple branches or have
+            // more than one active resource. Never suspend it when another
+            // active assignment still exists. This check runs in the same
+            // transaction as the archive to avoid a partial staff exit.
+            const otherActive=await client.query<{id:string}>(
+              `SELECT id FROM service_resource
+               WHERE tenant_id=$1 AND membership_id=$2 AND id<>$3
+                 AND type='EMPLOYEE' AND status='ACTIVE'
+               LIMIT 1 FOR UPDATE`,
+              [context.tenantId,item.membership_id,resourceId]
             );
-            await this.audit(client,context,"membership.suspended",
-              "tenant_membership",item.membership_id,
-              {reason:"linked trainer resource archived"});
-            loginSuspended=true;
+            if(otherActive.rowCount){
+              linkedUserRemainsActive=true;
+            }else{
+              await client.query(
+                `UPDATE tenant_membership SET status='SUSPENDED',updated_at=now()
+                 WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+                [context.tenantId,item.membership_id]
+              );
+              await this.audit(client,context,"membership.suspended",
+                "tenant_membership",item.membership_id,
+                {reason:"last active linked trainer resource archived"});
+              loginSuspended=true;
+            }
           }else{
             // Do not silently revoke the co-owner's administrative access.
             linkedUserRemainsActive=true;
