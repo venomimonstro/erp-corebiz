@@ -64,7 +64,7 @@ describe("Dance family customer portal, no insecure client supplied IDs",()=>{
     const authorized=calls.find(x=>x.sql.includes("party_relationship"));
     expect(authorized?.args).toEqual([ctx.tenantId,payer]);
     for(const call of calls.filter(x=>x.sql.includes("ANY($2::uuid[])"))){
-      expect(call.args).toEqual(expect.arrayContaining([studentId]));
+      expect(call.args[1]).toEqual(expect.arrayContaining([studentId]));
       expect(JSON.stringify(call.args)).not.toContain("other-tenant");
     }
   });
