@@ -1,5 +1,5 @@
 "use client";
-import {useCallback,useEffect,useMemo,useRef,useState} from "react";
+import {useCallback,useEffect,useRef,useState} from "react";
 import {AppSidebar} from "../../../../components/app-sidebar";
 import {apiRequest} from "../../../../lib/api";
 
@@ -62,6 +62,7 @@ export default function WarehouseOperationsPage(){
   const [supplierId,setSupplierId]=useState("");
   const [selectedSku,setSelectedSku]=useState("");
   const [purchaseBusy,setPurchaseBusy]=useState(false);
+  const [purchaseAttempted,setPurchaseAttempted]=useState(false);
   const [purchaseNotice,setPurchaseNotice]=useState("");
   const [moreBusy,setMoreBusy]=useState(false);
   const [onlyProblems,setOnlyProblems]=useState(false);
@@ -166,9 +167,10 @@ export default function WarehouseOperationsPage(){
     }finally{setMoreBusy(false);}
   }
   async function createPurchase(){
-    if(!canProcure||!supplierId||!selectedItem||purchaseBusy)return;
+    if(!canProcure||!supplierId||!selectedItem||purchaseBusy||purchaseAttempted)return;
     if(BigInt(selectedItem.recommendedPurchaseMilli)<=0n)return;
-    setPurchaseBusy(true);setPurchaseNotice("");setError("");
+    setPurchaseBusy(true);setPurchaseAttempted(true);
+    setPurchaseNotice("");setError("");
     try{
       const order=await apiRequest<{id:string;number:string}>("/procurement/orders",{
         method:"POST",
@@ -184,7 +186,8 @@ export default function WarehouseOperationsPage(){
       setPurchaseNotice("Черновик "+order.number+" создан. "+
         "Подтвердите количество, цену и поставщика в разделе закупок.");
       setSelectedSku("");setRefreshNo(x=>x+1);
-    }catch(e){setError(e instanceof Error?e.message:"Не удалось создать черновик");}
+    }catch(e){setError((e instanceof Error?e.message:"Не удалось создать черновик")+
+      ". Ответ мог потеряться после создания заказа. Проверьте закупки перед новой попыткой.");}
     finally{setPurchaseBusy(false);}
   }
   return <main className="app-shell">
@@ -260,7 +263,7 @@ export default function WarehouseOperationsPage(){
             <td>{quantity(item.recommendedPurchaseMilli)}</td>
             <td>{states[item.state]??item.state}
               {canProcure&&BigInt(item.recommendedPurchaseMilli)>0n?
-                <button type="button" onClick={()=>setSelectedSku(item.skuId)}>
+                <button type="button" onClick={()=>{setSelectedSku(item.skuId);setPurchaseAttempted(false);}}>
                   Подготовить закупку
                 </button>:null}
             </td>
@@ -286,10 +289,13 @@ export default function WarehouseOperationsPage(){
           </label>
           {suppliers.length===0?<p><a href="/app/purchases">
             Сначала добавьте поставщика →</a></p>:null}
-          <button type="button" disabled={purchaseBusy||!supplierId}
+          <button type="button" disabled={purchaseBusy||purchaseAttempted||!supplierId}
             onClick={()=>void createPurchase()}>
             {purchaseBusy?"Создаём…":"Создать черновик закупки"}
           </button>
+          {purchaseAttempted?<p role="status">Запрос отправлен. Чтобы избежать
+            дубля после сетевой ошибки, сначала проверьте заказы в
+            <a href="/app/purchases"> разделе закупок</a>.</p>:null}
           <button type="button" onClick={()=>setSelectedSku("")}>
             Отменить
           </button>
