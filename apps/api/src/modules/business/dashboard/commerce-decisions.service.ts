@@ -1,6 +1,7 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import type { TenantContext } from "@corebiz/contracts";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { AuthorizationService } from "../../platform/authorization/authorization.service";
 
 export type CommerceSnapshot = {
   windowDays: 30;
@@ -16,6 +17,10 @@ export type CommerceSnapshot = {
     sellableMilli: string;
     inboundMilli: string;
     targetMilli14d: string;
+    targetDaysSku: number;
+    leadDays: number | null;
+    reviewDays: number | null;
+    minimumBatchMilli: string;
     suggestedMilli: string;
     stockCoverDays: string;
     urgency: "OUT" | "CRITICAL" | "REPLENISH";
@@ -25,7 +30,73 @@ export type CommerceSnapshot = {
 
 @Injectable()
 export class CommerceDecisionsService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly authorization: AuthorizationService
+  ) {}
+
+  async rules(context: TenantContext) {
+    const scope=await this.authorization.resolveScope(context,"procurement.read");
+    if(scope!=="all")throw new ForbiddenException("Нет доступа к правилам закупок");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `SELECT r.sku_id,r.lead_days,r.review_days,
+            r.minimum_batch_milli::text,r.enabled,s.code AS sku,
+            p.name AS product_name,r.updated_at
+          FROM procurement_reorder_rule r
+          JOIN sku s ON s.tenant_id=r.tenant_id AND s.id=r.sku_id
+          JOIN product_variant v ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+          JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+          WHERE r.tenant_id=$1 ORDER BY p.name LIMIT 500`,
+        [context.tenantId]
+      );
+      return result.rows;
+    });
+  }
+
+  async updateRule(context: TenantContext, skuId: string,
+    input: {leadDays:number;reviewDays:number;minimumBatchMilli:string;enabled:boolean}) {
+    const scope=await this.authorization.resolveScope(context,"procurement.write");
+    if(scope!=="all")
+      throw new ForbiddenException("Изменять закупочные правила может только закупщик или владелец");
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(skuId))
+      throw new BadRequestException("Неверный SKU");
+    if(!input||!Number.isInteger(input.leadDays)||input.leadDays<1||input.leadDays>180||
+      !Number.isInteger(input.reviewDays)||input.reviewDays<1||input.reviewDays>90||
+      typeof input.minimumBatchMilli!=="string"||
+      !/^(0|[1-9][0-9]{0,14})$/.test(input.minimumBatchMilli)||
+      typeof input.enabled!=="boolean")
+      throw new BadRequestException("Проверьте срок поставки, период заказа и минимальную партию");
+    return this.database.withTenantTransaction(context,async client=>{
+      const exists=await client.query(
+        `SELECT 1 FROM sku s JOIN product_variant v
+         ON v.tenant_id=s.tenant_id AND v.id=s.variant_id
+         JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id
+         WHERE s.tenant_id=$1 AND s.id=$2 AND s.track_inventory=true
+           AND s.status='ACTIVE' AND v.status='ACTIVE' AND p.status='ACTIVE'`,
+        [context.tenantId,skuId]
+      );
+      if(!exists.rowCount)throw new NotFoundException("Активный складской SKU не найден");
+      const result=await client.query(
+        `INSERT INTO procurement_reorder_rule(
+           tenant_id,sku_id,lead_days,review_days,minimum_batch_milli,
+           enabled,updated_by_membership_id
+         ) VALUES($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT(tenant_id,sku_id) DO UPDATE SET
+           lead_days=EXCLUDED.lead_days,
+           review_days=EXCLUDED.review_days,
+           minimum_batch_milli=EXCLUDED.minimum_batch_milli,
+           enabled=EXCLUDED.enabled,
+           updated_by_membership_id=EXCLUDED.updated_by_membership_id,
+           updated_at=now()
+         RETURNING sku_id,lead_days,review_days,
+           minimum_batch_milli::text,enabled,updated_at`,
+        [context.tenantId,skuId,input.leadDays,input.reviewDays,
+          input.minimumBatchMilli,input.enabled,context.membershipId]
+      );
+      return result.rows[0];
+    });
+  }
 
   /**
    * An owner's read-only queue, not an automated procurement engine.
@@ -61,6 +132,10 @@ export class CommerceDecisionsService {
         sellable_milli: string;
         inbound_milli: string;
         target_milli_14d: string;
+        target_days_sku: number;
+        lead_days: number | null;
+        review_days: number | null;
+        minimum_batch_milli: string;
         suggested_milli: string;
         stock_cover_days: string;
         urgency: "OUT" | "CRITICAL" | "REPLENISH";
@@ -97,14 +172,27 @@ export class CommerceDecisionsService {
           " WHERE pl.tenant_id=$1 AND pl.sku_id IN (SELECT sku_id FROM demand)",
           " AND po.status IN ('CONFIRMED','PARTIALLY_RECEIVED')",
           " GROUP BY pl.sku_id",
-          ")",
+          "), policy AS (",
+          " SELECT d.sku_id,",
+          " CASE WHEN r.enabled=true THEN r.lead_days+r.review_days ELSE 14 END AS target_days,",
+          " CASE WHEN r.enabled=true THEN r.minimum_batch_milli ELSE 0 END AS batch_milli,",
+          " CASE WHEN r.enabled=true THEN r.lead_days ELSE NULL END AS lead_days,",
+          " CASE WHEN r.enabled=true THEN r.review_days ELSE NULL END AS review_days",
+          " FROM demand d LEFT JOIN procurement_reorder_rule r",
+          " ON r.tenant_id=$1 AND r.sku_id=d.sku_id",
+          ")"
           "SELECT d.sku_id,s.code AS sku,p.name AS product_name,",
           "d.ordered_milli::text AS ordered_milli_30d,",
           "COALESCE(a.sellable_milli,0)::text AS sellable_milli,",
           "COALESCE(i.inbound_milli,0)::text AS inbound_milli,",
-          "CEIL(d.ordered_milli*14/30)::text AS target_milli_14d,",
-          "GREATEST(CEIL(d.ordered_milli*14/30)-COALESCE(a.sellable_milli,0)-",
-          "COALESCE(i.inbound_milli,0),0)::text AS suggested_milli,",
+          "CEIL(d.ordered_milli*pol.target_days/30)::text AS target_milli_14d,",
+          "pol.target_days AS target_days_sku,pol.lead_days,pol.review_days,",
+          "pol.batch_milli::text AS minimum_batch_milli,",
+          "CASE WHEN CEIL(d.ordered_milli*pol.target_days/30)>",
+          " COALESCE(a.sellable_milli,0)+COALESCE(i.inbound_milli,0)",
+          " THEN GREATEST(CEIL(d.ordered_milli*pol.target_days/30)-",
+          " COALESCE(a.sellable_milli,0)-COALESCE(i.inbound_milli,0),",
+          " pol.batch_milli) ELSE 0 END::text AS suggested_milli,",
           "ROUND(COALESCE(a.sellable_milli,0)*30/d.ordered_milli,1)::text AS stock_cover_days,",
           "CASE WHEN COALESCE(a.sellable_milli,0)=0 THEN 'OUT'",
           " WHEN COALESCE(a.sellable_milli,0)*30<d.ordered_milli*7 THEN 'CRITICAL'",
@@ -115,8 +203,10 @@ export class CommerceDecisionsService {
           "JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id",
           "LEFT JOIN available a ON a.sku_id=d.sku_id",
           "LEFT JOIN inbound i ON i.sku_id=d.sku_id",
+          "JOIN policy pol ON pol.sku_id=d.sku_id",
           "WHERE v.status='ACTIVE' AND p.status='ACTIVE'",
-          "AND COALESCE(a.sellable_milli,0)<d.ordered_milli*14/30",
+          "AND COALESCE(a.sellable_milli,0)+COALESCE(i.inbound_milli,0)<",
+          " d.ordered_milli*pol.target_days/30",
           "ORDER BY COALESCE(a.sellable_milli,0)*30/d.ordered_milli ASC,d.ordered_milli DESC",
           "LIMIT 20"
         ].join(" "),
@@ -140,12 +230,16 @@ export class CommerceDecisionsService {
           sellableMilli: row.sellable_milli,
           inboundMilli: row.inbound_milli,
           targetMilli14d: row.target_milli_14d,
+          targetDaysSku: row.target_days_sku,
+          leadDays: row.lead_days,
+          reviewDays: row.review_days,
+          minimumBatchMilli: row.minimum_batch_milli,
           suggestedMilli: row.suggested_milli,
           stockCoverDays: row.stock_cover_days,
           urgency: row.urgency
         })),
         method: "Оценка на основании количества в подтверждённых/выполненных заказах за 30 дней. " +
-          "Цель: 14 дней при неизменном спросе. Учтены текущие доступные остатки, " +
+          "Цель: 14 дней по умолчанию или срок поставки + период пересмотра по SKU. Учтены доступные остатки, " +
           "страховые запасы и количество в подтверждённых заказах поставщикам. " +
           "Это подсказка, не прогноз и не закупочный документ: не учтены сезонность, " +
           "возвраты, сроки поставки и изменения спроса. Рассмотрены до 200 " +
