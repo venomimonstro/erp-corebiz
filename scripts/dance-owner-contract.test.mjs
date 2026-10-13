@@ -225,3 +225,23 @@ test("Moscow family trial denies unrelated children and checks immediate revocat
   assert.match(portal,/dance\.portal_revoked/);
   assert.match(api,/@Post\("portal\/accounts\/:membershipId\/revoke"\)/);
 });
+
+test("Customer portal is revocable and never invents settled balances",()=>{
+  const customerPage=src("apps/web/app/portal/dance/page.tsx");
+  const portalSource=src("apps/api/src/modules/business/dance-studio/dance-customer-portal.service.ts");
+  const unit=src("apps/api/src/modules/business/dance-studio/dance-customer-portal.spec.ts");
+  assert.match(workflow,/stage="09b revoke and recover parent portal access"/);
+  assert.match(workflow,/revoked\.revoked,true/);
+  assert.match(workflow,/get\(actors\.parent,"\/dance\/portal\/me",403\)/);
+  assert.match(workflow,/recovered\.students\.some/);
+  assert.match(portalSource,/async revoke\(context:TenantContext/);
+  assert.match(portalSource,/status='REVOKED'/);
+  assert.match(portalSource,/dance\.portal_revoked/);
+  assert.match(portalSource,/sp\.status='ACTIVE'/);
+  assert.match(portalSource,/o\.id IS NULL THEN NULL/);
+  assert.match(customerPage,/finance_verified/);
+  assert.match(customerPage,/Ожидает подтверждения оплаты/);
+  assert.match(customerPage,/Подтверждённая задолженность/);
+  assert.match(unit,/restricts the account directory/);
+  assert.match(unit,/revokes portal access transactionally/);
+});
