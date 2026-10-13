@@ -42,7 +42,8 @@ export class WmsOperationsService{
            GROUP BY branch_id HAVING count(*)=1
          ),
          expected AS (
-           SELECT l.sku_id,ub.warehouse_id,
+           SELECT l.sku_id,
+             coalesce(po.destination_warehouse_id,ub.warehouse_id) AS warehouse_id,
              sum(greatest(l.ordered_quantity_milli -
                           l.received_quantity_milli,0)) AS inbound_milli
            FROM purchase_order_line l
@@ -52,7 +53,7 @@ export class WmsOperationsService{
              ON ub.branch_id=po.destination_branch_id
            WHERE l.tenant_id=$1 AND
              po.status IN ('CONFIRMED','PARTIALLY_RECEIVED')
-           GROUP BY l.sku_id,ub.warehouse_id
+           GROUP BY l.sku_id,coalesce(po.destination_warehouse_id,ub.warehouse_id)
          )
          ,all_skus AS (
            SELECT sku_id FROM inventory_balance
