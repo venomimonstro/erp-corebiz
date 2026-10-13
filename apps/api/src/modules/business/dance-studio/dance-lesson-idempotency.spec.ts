@@ -21,7 +21,12 @@ const request={
 };
 function fixture(){
   const queries:string[]=[];
-  const row={
+  const row:{
+    id:string;version:number;status:string;group_id:string|null;
+    lesson_type:string;service_id:string;trainer_resource_id:string|null;
+    room_resource_id:string|null;room_zone_id:string|null;
+    room_capacity_units:number;starts_at:Date;ends_at:Date;capacity:number;
+  }={
     id:"88888888-8888-4888-8888-888888888888",
     version:1,status:"OPEN_FOR_BOOKING",
     group_id:group,lesson_type:"GROUP",service_id:service,
