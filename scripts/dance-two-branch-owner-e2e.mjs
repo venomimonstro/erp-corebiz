@@ -191,7 +191,7 @@ async function main(){
   const trainers=[];
   for(let i=0;i<52;i++){
     const r=await post(owner,"/service/resources",{
-      type:"EMPLOYEE",branchId:branches[i%2].id,
+      type:"EMPLOYEE",branchId:branches[i<2?0:i%2].id,
       membershipId:i===0?registered.auth.membershipId:
         i===1?woman:undefined,
       timezone:"Europe/Moscow",capacity:1,
@@ -234,15 +234,15 @@ async function main(){
       currency:"RUB",deliveryFormat:"GROUP",groupCapacity:16
     });
     const created=await post(owner,"/dance/programs",{
-      name:programs[i],serviceId:service.id,branchId:branches[i%2].id,
+      name:programs[i],serviceId:service.id,branchId:branches[i<2?0:i%2].id,
       defaultDurationMinutes:60
     });
     createdPrograms.push(created);stats.directions++;
     const g=await post(owner,"/dance/groups",{
       name:programs[i]+" группа "+(i+1),
-      programId:created.id,branchId:branches[i%2].id,
+      programId:created.id,branchId:branches[i<2?0:i%2].id,
       trainerResourceId:trainers[i].id,
-      roomResourceId:i%2===0?large.id:hallB.id,
+      roomResourceId:i<2||i%2===0?large.id:hallB.id,
       capacity:16,breakEvenMembers:8,
       schedule:[{weekday:(i%5)+1,startMinute:660+(i%3)*120,
         durationMinutes:60}]
