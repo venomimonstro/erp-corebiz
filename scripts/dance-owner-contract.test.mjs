@@ -209,3 +209,19 @@ test("A trainer gets private own-only calendar, never the company's clients or c
   assert.match(workflow,/get\(actors\.m2,"\/dance\/trainer\/me\?from="/);
   assert.match(workflow,/get\(actors\.m2,"\/dance\/charges",403\)/);
 });
+
+test("Tenant RLS portal links also enforce same-tenant foreign keys",()=>{
+  const ddl=src("infrastructure/postgres/249_dance_portal_tenant_guard.sql");
+  assert.match(ddl,/CREATE TRIGGER dance_customer_account_tenant_refs_v1/);
+  assert.match(ddl,/corebiz_guard_tenant_references/);
+  assert.match(ddl,/'membership_id','tenant_membership'/);
+  assert.match(ddl,/'party_id','party'/);
+  assert.match(ddl,/'linked_by_membership_id','tenant_membership'/);
+});
+test("Moscow family trial denies unrelated children and checks immediate revocation",()=>{
+  assert.match(workflow,/secondFamilyView\.students/);
+  assert.match(workflow,/post\(actors\.m1,"\/dance\/portal\/accounts\//);
+  assert.match(workflow,/get\(actors\.parent,"\/dance\/portal\/me",403\)/);
+  assert.match(portal,/dance\.portal_revoked/);
+  assert.match(api,/@Post\("portal\/accounts\/:membershipId\/revoke"\)/);
+});
