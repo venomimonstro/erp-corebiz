@@ -163,9 +163,30 @@ export default function PurchasesPage(){
         (retry.current.orderId!==receiptOrder.id||
          retry.current.fingerprint!==fingerprint))
         throw new Error("После неопределённого ответа предыдущей приёмки нельзя менять состав. Сначала сверьте заказ.");
-      if(!retry.current)retry.current={
-        key:crypto.randomUUID(),fingerprint,orderId:receiptOrder.id
-      };
+      const storageKey="corebiz.procurement.receipt."+receiptOrder.id;
+      if(!retry.current){
+        try{
+          const previous=window.sessionStorage.getItem(storageKey);
+          if(previous){
+            const parsed=JSON.parse(previous) as {
+              key:string;fingerprint:string;orderId:string
+            };
+            if(parsed.orderId!==receiptOrder.id||
+              parsed.fingerprint!==fingerprint){
+              throw new Error("Есть незавершённая приёмка с другим составом. Сначала сверьте документы.");
+            }
+            retry.current=parsed;
+          }
+        }catch(e){
+          if(e instanceof Error&&e.message.includes("незавершённая приёмка"))
+            throw e;
+        }
+      }
+      if(!retry.current){
+        retry.current={key:crypto.randomUUID(),fingerprint,orderId:receiptOrder.id};
+        try{window.sessionStorage.setItem(storageKey,JSON.stringify(retry.current))}
+        catch{ /* storage may be unavailable: key remains valid in memory */ }
+      }
       const response=await apiRequest<{number:string}>(
         "/procurement/orders/"+receiptOrder.id+"/receipts",{
           method:"POST",body:JSON.stringify({
@@ -173,6 +194,7 @@ export default function PurchasesPage(){
           })
         });
       retry.current=null;
+      try{window.sessionStorage.removeItem(storageKey)}catch{}
       setNotice("Приёмка "+response.number+" проведена. Остатки обновлены складским ledger.");
       setReceiptOrder(null);setPanel(null);setAck(false);
       await load();
@@ -224,7 +246,7 @@ export default function PurchasesPage(){
             <h2>{panel==="supplier"?"Новый поставщик":
               panel==="order"?"Заказ поставщику":"Приёмка "+receiptOrder?.number}</h2>
             <button type="button" className="secondary-button" disabled={busy}
-              onClick={()=>{setPanel(null);setReceiptOrder(null);retry.current=null;}}>
+              onClick={()=>{setPanel(null);setReceiptOrder(null);}}>
               Закрыть</button>
           </div>
           {panel==="supplier"?<form className="catalog-editor-form"
