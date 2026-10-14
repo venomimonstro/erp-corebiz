@@ -36,7 +36,8 @@ test("Internal CMS store is created over SKU and OMS, not a duplicate product ca
   assert.match(storefront,/FROM sku s/);
   assert.match(storefront,/FROM inventory_balance b/);
   assert.match(storefront,/FROM inventory_policy ip/);
-  assert.match(storefront,/createFromStorefront|checkoutFromStorefront|createFromCart/);
+  assert.match(storefront,/this\.sales\.create\(context/);
+  assert.match(storefront,/idempotencyKey: "storefront:cart:"/);
 });
 
 test("Store creation uses a cancellable form and never hides unknown commit state",()=>{
