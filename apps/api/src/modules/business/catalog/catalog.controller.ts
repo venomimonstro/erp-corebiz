@@ -92,6 +92,7 @@ export class CatalogController {
       categoryId?: string;
       description?: string;
       imageUrl?: string;
+      attributes?:Record<string,string>;
     }
   ): Promise<ApiSuccess<unknown>> {
     return {
