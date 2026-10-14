@@ -1284,6 +1284,11 @@ export class BookingService {
     }
   ): Promise<{ id: string }> {
     await this.requireServiceAll(context, "service.write");
+    // Selling a purchased subscription is an operational permission.
+    // Defining its price, debt allowance or entitlements is catalog governance.
+    if((await this.authorization.resolveScope(context,"catalog.write"))!=="all")
+      throw new ForbiddenException("Изменение тарифов абонементов требует права catalog.write");
+
     const name = input.name?.trim();
     if (!name || name.length > 180) {
       throw new BadRequestException("Некорректное название абонемента");
