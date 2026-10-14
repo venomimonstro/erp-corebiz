@@ -47,6 +47,7 @@ export class BookingService {
            s.buffer_before_minutes, s.buffer_after_minutes,
            s.price_minor::text, s.currency, s.delivery_format,
            s.group_capacity,s.rebook_after_days,s.rebook_grace_days,s.metadata,
+           EXTRACT(EPOCH FROM s.updated_at)::text AS revision,
            COALESCE(
              json_agg(
                json_build_object(
@@ -176,11 +177,16 @@ export class BookingService {
       category?:string|null;
       durationMinutes?:number;
       priceMinor?:string;
+      expectedRevision?:string;
       rebookAfterDays?:number|null;
       rebookGraceDays?:number;
     }
   ):Promise<{updated:true}>{
     await this.requireServiceAll(context,"service.write");
+    if(input.expectedRevision!==undefined &&
+       !/^\d{9,15}(?:\.\d{1,6})?$/.test(input.expectedRevision))
+      throw new BadRequestException("Неверная ревизия услуги");
+
 
     const fields:string[]=[];
     const values:unknown[]=[context.tenantId,serviceId];
@@ -232,15 +238,43 @@ export class BookingService {
     }
 
     return this.database.withTenantTransaction(context,async client=>{
-      const result=await client.query(
+      const existing=await client.query<{revision:string}>(
+        `SELECT EXTRACT(EPOCH FROM updated_at)::text AS revision
+         FROM service_catalog_item
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE' FOR UPDATE`,
+        [context.tenantId,serviceId]
+      );
+      const current=existing.rows[0];
+      if(!current)throw new NotFoundException("Услуга не найдена");
+      // One service catalog across every vertical: never silently discard
+      // another manager's price/duration edit. Comparing PostgreSQL epoch
+      // strings avoids JavaScript millisecond rounding of timestamptz.
+      if(input.expectedRevision!==undefined &&
+         current.revision!==input.expectedRevision)
+        throw new ConflictException(
+          "Услуга уже изменена другим сотрудником. Обновите карточку"
+        );
+      const result=await client.query<{revision:string}>(
         `UPDATE service_catalog_item
          SET ${fields.join(",")},updated_at=now()
          WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
-         RETURNING id`,
+         RETURNING EXTRACT(EPOCH FROM updated_at)::text AS revision`,
         values
       );
       if(!result.rowCount) throw new NotFoundException("Услуга не найдена");
-      return {updated:true};
+      await client.query(
+        `INSERT INTO audit_event(
+           tenant_id,actor_user_id,actor_membership_id,
+           action,resource_type,resource_id,after_data
+         ) VALUES ($1,$2,$3,'service.catalog_updated',
+           'service_catalog_item',$4,
+           jsonb_build_object('changedFields',$5::text[],
+             'oldRevision',$6::text,'newRevision',$7::text))`,
+        [context.tenantId,context.userId,context.membershipId,serviceId,
+          fields.map(item=>item.split("=")[0]),current.revision,
+          result.rows[0]!.revision]
+      );
+      return {updated:true,revision:result.rows[0]!.revision};
     });
   }
 
