@@ -449,3 +449,35 @@ test("Existing lessons are never silently moved by a group-template edit",()=>{
   assert.match(regression,/rejects a changed timetable/);
   assert.match(regression,/version control|retains optimistic locking/);
 });
+
+
+test("Owner can manage direction lifecycle without a second catalog",()=>{
+  const studio=src("apps/api/src/modules/business/dance-studio/dance-studio.service.ts");
+  const screens=src("apps/web/app/app/dance/directions/page.tsx");
+  const nav=src("apps/web/components/dance-workspace-nav.tsx");
+  const code=src("apps/api/src/modules/business/dance-studio/dance-lifecycle.spec.ts");
+  assert.match(studio,/async changeProgram\(/);
+  assert.match(studio,/async groupLifecycle\(/);
+  assert.match(studio,/expectedRevision/);
+  assert.match(studio,/expectedVersion/);
+  assert.match(studio,/Сначала завершите или архивируйте связанные группы/);
+  assert.match(studio,/Сначала переведите или завершите участие учеников/);
+  assert.match(studio,/Сначала отмените или перенесите будущие уроки/);
+  assert.match(studio,/status="ARCHIVED"|status='ARCHIVED'/);
+  assert.match(studio,/catalog\.write/);
+  assert.match(studio,/service_catalog_item/);
+  assert.match(studio,/branch WHERE tenant_id=\$1/);
+  assert.match(api,/@Patch\("programs\/:programId"\)/);
+  assert.match(api,/@Post\("programs\/:programId\/archive"\)/);
+  assert.match(api,/@Post\("programs\/:programId\/restore"\)/);
+  assert.match(api,/@Post\("groups\/:groupId\/lifecycle"\)/);
+  assert.match(screens,/\/dance\/programs\?includeArchived=true/);
+  assert.match(screens,/\/dance\/groups\?includeArchived=true/);
+  assert.match(screens,/Создать направление/);
+  assert.match(screens,/Восстановить/);
+  assert.match(nav,/\/app\/dance\/directions/);
+  assert.match(code,/will not archive group while a child remains enrolled/);
+  assert.match(code,/rejects a foreign branch/);
+  assert.match(workflow,/06-lifecycle real owner action and conflict recovery/);
+  assert.match(workflow,/assert\.equal\(archivedAgain\.status,"ARCHIVED"\)/);
+});
