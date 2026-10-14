@@ -348,7 +348,11 @@ export class BookingService {
       );
       if(!found.rowCount)throw new NotFoundException("Архивная услуга не найдена");
       await client.query(
-        `UPDATE service_catalog_item SET status='ACTIVE',updated_at=now()
+        `UPDATE service_catalog_item
+            SET status='ACTIVE',
+                metadata=jsonb_set(coalesce(metadata,'{}'::jsonb),
+                  '{restore_review_required}','true'::jsonb,true),
+                updated_at=now()
          WHERE tenant_id=$1 AND id=$2 AND status='ARCHIVED'`,
         [context.tenantId,serviceId]
       );
@@ -361,6 +365,37 @@ export class BookingService {
       // Service prices, duration, skills, assignment and external listing
       // must all be reviewed before the business publishes a new booking.
       return {restored:true,reviewRequired:true};
+    });
+  }
+
+  /** Publish a restored shared service only after owner price/schedule review. */
+  async approveRestoredService(
+    context:TenantContext,serviceId:string
+  ):Promise<{published:true}>{
+    await this.requireServiceAll(context,"service.write");
+    if((await this.authorization.resolveScope(context,"users.manage"))!=="all")
+      throw new ForbiddenException("Публикация восстановленной услуги доступна руководителю");
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(serviceId))
+      throw new BadRequestException("Некорректная услуга");
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query(
+        `UPDATE service_catalog_item
+           SET metadata=coalesce(metadata,'{}'::jsonb)-'restore_review_required',
+               updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+           AND metadata->>'restore_review_required'='true'
+         RETURNING id`,[context.tenantId,serviceId]
+      );
+      if(!result.rowCount)throw new ConflictException(
+        "Услуга не ожидает повторной проверки или уже опубликована"
+      );
+      await client.query(
+        `INSERT INTO audit_event(tenant_id,actor_user_id,actor_membership_id,
+           action,resource_type,resource_id)
+         VALUES($1,$2,$3,'service.catalog_republished','service_catalog_item',$4)`,
+        [context.tenantId,context.userId,context.membershipId,serviceId]
+      );
+      return {published:true};
     });
   }
 
@@ -4304,6 +4339,7 @@ export class BookingService {
     currency: string;
     delivery_format: "INDIVIDUAL" | "GROUP" | "SELF_PRACTICE" | "RENTAL";
     group_capacity: number;
+    metadata: Record<string,unknown>;
   }> {
     const result = await client.query<{
       id: string;
@@ -4314,10 +4350,11 @@ export class BookingService {
       currency: string;
       delivery_format: "INDIVIDUAL" | "GROUP" | "SELF_PRACTICE" | "RENTAL";
       group_capacity: number;
+      metadata: Record<string,unknown>;
     }>(
       `SELECT id, duration_minutes, buffer_before_minutes,
                buffer_after_minutes, price_minor::text, currency,
-               delivery_format,group_capacity
+               delivery_format,group_capacity,metadata
        FROM service_catalog_item
        WHERE tenant_id = $1 AND id = $2 AND status = 'ACTIVE'`,
       [tenantId, serviceId]
@@ -4325,6 +4362,10 @@ export class BookingService {
 
     const row = result.rows[0];
     if (!row) throw new NotFoundException("Услуга не найдена");
+    if(row.metadata?.restore_review_required===true)
+      throw new ConflictException(
+        "Услуга восстановлена, но ещё не подтверждена владельцем для записи клиентов"
+      );
     return row;
   }
 
