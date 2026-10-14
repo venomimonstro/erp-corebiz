@@ -64,7 +64,9 @@ export default function DanceServiceCatalogPage(){
     setDuration(String(item.duration_minutes));
     setArchiveConfirm(false);setPublishConfirm(false);setError("");setNotice("");
   };
-  // Match API requirements: editing the shared catalog needs catalog.write,\n  // while archiving/restoring additionally requires executive permissions.\n  async function save(e:FormEvent){
+  // Match API requirements: editing the shared catalog needs catalog.write,
+  // while archiving/restoring additionally requires executive permissions.
+  async function save(e:FormEvent){
     e.preventDefault();
     if(!chosen||!permissions.write)return;
     const priceMinor=minor(price),minutes=Number(duration);
