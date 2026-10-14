@@ -91,7 +91,7 @@ export const danceBusinessStages:BusinessStage[]=[
     id:"packages",title:"Абонементы и индивидуальные занятия",origin:"shared",
     why:"10 групповых — 7 000 ₽; разовое 2 400 ₽; индивидуальное 3 500 ₽.",
     systemOfRecord:"service_package_plan + service_package + финансовое обязательство",
-    configure:{label:"Создать тариф абонемента",href:"/app/service/packages",permission:"service.write"},
+    configure:{label:"Создать тариф абонемента",href:"/app/service/packages",permission:"catalog.write"},
     change:{label:"Продать/заморозить/проверить",href:"/app/dance/students",permission:"dance.write"},
     invariant:"Деньги, долг, доступные посещения и выручка по факту оказания услуги не взаимозаменяемы"
   },
