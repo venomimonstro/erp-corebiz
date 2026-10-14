@@ -1,6 +1,6 @@
 "use client";
 
-import {type FormEvent,useCallback,useEffect,useState} from "react";
+import {type FormEvent,useCallback,useEffect,useRef,useState} from "react";
 import {AppSidebar} from "../../../../components/app-sidebar";
 import {apiRequest} from "../../../../lib/api";
 
@@ -73,6 +73,7 @@ export default function ProductsPage(){
   const [categoryName,setCategoryName]=useState("");
   const [showCategory,setShowCategory]=useState(false);
   const [archiveConfirmed,setArchiveConfirmed]=useState(false);
+  const generatedSku=useRef<string|null>(null);
   const [canEditCost,setCanEditCost]=useState(false);
   const load=useCallback(async(next:string|null=null,q=appliedSearch)=>{
     setLoading(true);setError("");
@@ -139,12 +140,17 @@ export default function ProductsPage(){
         attributes:parseAttributes(form.attributes)
       };
       if(mode==="create"){
+        // A timed-out POST may already have committed the product.
+        // Repeat with the same SKU; never generate a second random SKU.
+        if(!form.sku.trim()&&!generatedSku.current)
+          generatedSku.current="SKU-"+crypto.randomUUID()
+            .replaceAll("-","").slice(0,12).toUpperCase();
         await apiRequest("/catalog/products",{
           method:"POST",body:JSON.stringify({
             ...base,categoryId:base.categoryId||undefined,
             barcode:base.barcode||undefined,
             imageUrl:base.imageUrl||undefined,
-            kind:form.kind,sku:form.sku.trim()||undefined,
+            kind:form.kind,sku:form.sku.trim()||generatedSku.current||undefined,
             ...(canEditCost&&form.cost.trim()?{costPriceMinor:toMinor(form.cost)}:{})
           })
         });
@@ -158,6 +164,7 @@ export default function ProductsPage(){
         });
         setNotice("Карточка обновлена. Исторические заказы не изменены.");
       }else throw new Error("Выберите товар");
+      generatedSku.current=null;
       setMode(null);setSelected(null);setForm(empty);
       await load(null,appliedSearch);
     }catch(err){setError(err instanceof Error?err.message:"Не удалось сохранить");}
@@ -205,6 +212,7 @@ export default function ProductsPage(){
         <div className="catalog-actions">
           <a className="secondary-button" href="/app/migration">Импорт Excel / CSV</a>
           <button type="button" onClick={()=>{
+            generatedSku.current=null;
             setForm(empty);setSelected(null);setMode("create");setError("");
           }}>+ Новый товар</button>
         </div>
