@@ -82,6 +82,10 @@ describe("shared ERP service catalog, optimistic updates",()=>{
     await expect(f.item.createDeliveryRule(context,{
       serviceId,priceMinor:"70000"
     })).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(f.item.createPackagePlan(context,{
+      name:"Неподтверждённая скидка 90%",
+      visitLimit:10,durationDays:30,priceMinor:"70000"
+    })).rejects.toBeInstanceOf(ForbiddenException);
     expect(f.database.withTenantTransaction).not.toHaveBeenCalled();
   });
 });
