@@ -27,7 +27,12 @@ export class ResourcesService {
     private readonly authorization: AuthorizationService
   ) {}
 
-  async list(context: TenantContext): Promise<Array<Record<string, unknown>>> {
+  async list(
+    context:TenantContext,status:"ACTIVE"|"ARCHIVED"="ACTIVE"
+  ): Promise<Array<Record<string, unknown>>> {
+    if(status==="ARCHIVED" &&
+      (await this.authorization.resolveScope(context,"users.manage"))!=="all")
+      throw new ForbiddenException("Архив ресурсов доступен только руководителю");
     const access = await this.serviceScope(context, "service.read");
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
@@ -55,7 +60,7 @@ export class ResourcesService {
          LEFT JOIN service_skill s
            ON s.tenant_id = rs.tenant_id AND s.id = rs.skill_id
          WHERE r.tenant_id = $1
-           AND r.status = 'ACTIVE'
+           AND r.status = $3
            AND (
              $2::uuid[] IS NULL
              OR r.membership_id IS NULL
@@ -63,7 +68,7 @@ export class ResourcesService {
            )
          GROUP BY r.id, b.name
          ORDER BY r.type, r.name`,
-        [context.tenantId, access.membershipIds]
+        [context.tenantId, access.membershipIds,status]
       );
 
       return result.rows;
@@ -369,6 +374,50 @@ export class ResourcesService {
         "service_resource",resourceId,
         {type:item.type,loginSuspended,linkedUserRemainsActive});
       return {archived:true,loginSuspended,linkedUserRemainsActive};
+    });
+  }
+
+  /**
+   * Restore a shared resource without resurrecting a formerly suspended login.
+   * Online booking stays off until the owner explicitly verifies new shifts,
+   * prices, and allocations for the re-hired coach or reopened hall.
+   */
+  async restore(
+    context:TenantContext,resourceId:string
+  ):Promise<{restored:true;onlineBookingEnabled:false;loginRequiresReview:boolean}>{
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(resourceId))
+      throw new BadRequestException("Некорректный ресурс");
+    const access=await this.serviceScope(context,"service.write");
+    if(access.scope!=="all"||
+       (await this.authorization.resolveScope(context,"users.manage"))!=="all")
+      throw new ForbiddenException("Восстановление ресурсов доступно руководителю");
+    return this.database.withTenantTransaction(context,async client=>{
+      const resource=await client.query<{membership_id:string|null}>(
+        `SELECT membership_id FROM service_resource
+         WHERE tenant_id=$1 AND id=$2 AND status='ARCHIVED' FOR UPDATE`,
+        [context.tenantId,resourceId]
+      );
+      const item=resource.rows[0];
+      if(!item)throw new NotFoundException("Архивный ресурс не найден");
+      // An archived employee's session may have been suspended on exit.
+      // Restoring their schedule cannot automatically reactivate credentials.
+      let loginRequiresReview=false;
+      if(item.membership_id){
+        const account=await client.query<{status:string}>(
+          `SELECT status FROM tenant_membership WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,item.membership_id]
+        );
+        loginRequiresReview=account.rows[0]?.status!=="ACTIVE";
+      }
+      await client.query(
+        `UPDATE service_resource
+           SET status='ACTIVE',online_booking_enabled=false,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='ARCHIVED'`,
+        [context.tenantId,resourceId]
+      );
+      await this.audit(client,context,"service.resource_restored",
+        "service_resource",resourceId,{loginRequiresReview,onlineBookingEnabled:false});
+      return {restored:true,onlineBookingEnabled:false,loginRequiresReview};
     });
   }
 
