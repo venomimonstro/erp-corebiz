@@ -253,7 +253,8 @@ export class MigrationService {
 
   async importBatch(
     context: TenantContext,
-    batchId: string
+    batchId: string,
+    options:{updateExisting?:boolean}={}
   ): Promise<Record<string, unknown>> {
     return this.database.withTenantTransaction(context, async (client) => {
       const batchResult = await client.query<{
@@ -285,19 +286,38 @@ export class MigrationService {
 
       let imported = 0;
       let skipped = 0;
+      let updated = 0;
+      const updateExisting=options.updateExisting===true;
+      if(batch.entity_type==="PRODUCTS"&&
+        rows.rows.some(r=>r.status!=="IMPORTED"&&
+          BigInt(r.normalized_data.costPriceMinor||"0")>0n)){
+        const costs=await client.query<{allowed:boolean}>(
+          "SELECT EXISTS(SELECT 1 FROM membership_role mr "+
+          "JOIN tenant_membership tm ON tm.tenant_id=mr.tenant_id "+
+          "AND tm.id=mr.membership_id AND tm.status='ACTIVE' "+
+          "JOIN role_permission rp ON rp.tenant_id=mr.tenant_id "+
+          "AND rp.role_id=mr.role_id "+
+          "WHERE mr.tenant_id=$1 AND mr.membership_id=$2 "+
+          "AND rp.scope='all' AND rp.permission_code "+
+          "IN ('*','finance.read','catalog.cost.read')) AS allowed",
+          [context.tenantId,context.membershipId]
+        );
+        if(!costs.rows[0]?.allowed)
+          throw new BadRequestException("Импорт закупочных цен доступен только финансовой роли");
+      }
 
       for (const row of rows.rows) {
         if (row.status === "IMPORTED") {
           imported += 1;
           continue;
         }
-        if (row.status === "SKIPPED") {
+        if (row.status === "SKIPPED"&&!updateExisting) {
           skipped += 1;
           continue;
         }
 
         const outcome = batch.entity_type === "PRODUCTS"
-          ? await this.importProduct(client, context, row.normalized_data)
+          ? await this.importProduct(client,context,row.normalized_data,updateExisting)
           : await this.importCustomer(client, context, row.normalized_data);
 
         await client.query(
@@ -306,13 +326,14 @@ export class MigrationService {
           [
             context.tenantId,
             row.id,
-            outcome.created ? "IMPORTED" : "SKIPPED",
+            outcome.created||outcome.updated ? "IMPORTED" : "SKIPPED",
             outcome.targetType,
             outcome.targetId
           ]
         );
 
         if (outcome.created) imported += 1;
+        else if(outcome.updated){updated+=1;imported+=1;}
         else skipped += 1;
       }
 
@@ -321,6 +342,7 @@ export class MigrationService {
         validRows: batch.valid_count,
         importedRows: imported,
         skippedDuplicates: skipped,
+        updatedRows:updated,
         errorRows: batch.error_count,
         balanced: imported + skipped === batch.valid_count
       };
@@ -343,6 +365,7 @@ export class MigrationService {
       return {
         batchId,
         imported,
+        updated,
         skipped,
         errors: batch.error_count,
         status: "RECONCILED",
