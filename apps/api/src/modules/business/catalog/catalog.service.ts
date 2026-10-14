@@ -246,6 +246,16 @@ export class CatalogService {
       if (duplicate.rowCount) {
         throw new BadRequestException("SKU уже используется");
       }
+      if(input.barcode?.trim()){
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+          [context.tenantId+"|barcode|"+input.barcode.trim()]);
+        const barcodes=await client.query(
+          "SELECT 1 FROM sku WHERE tenant_id=$1 AND barcode=$2 "+
+          "AND status='ACTIVE' LIMIT 1",
+          [context.tenantId,input.barcode.trim()]);
+        if(barcodes.rowCount)
+          throw new BadRequestException("Штрихкод уже присвоен другому SKU");
+      }
 
       const productResult = await client.query<{ id: string }>(
         `INSERT INTO product(
@@ -439,6 +449,16 @@ export class CatalogService {
       if(!target.rows[0])throw new NotFoundException("Товар не найден");
       if(input.costPriceMinor!==undefined&&!await this.mayReadCost(client,context))
         throw new ForbiddenException("Для закупочной цены необходимы финансовые права");
+      if(input.barcode?.trim()){
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+          [context.tenantId+"|barcode|"+input.barcode.trim()]);
+        const duplicateBarcode=await client.query(
+          "SELECT 1 FROM sku WHERE tenant_id=$1 AND barcode=$2 AND id<>$3 "+
+          "AND status='ACTIVE' LIMIT 1",
+          [context.tenantId,input.barcode.trim(),target.rows[0].sku_id]);
+        if(duplicateBarcode.rowCount)
+          throw new BadRequestException("Штрихкод уже используется другим товаром");
+      }
       if(input.categoryId){
         const category=await client.query(
           "SELECT 1 FROM catalog_category WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
