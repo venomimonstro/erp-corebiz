@@ -20,8 +20,8 @@ test("One merchant entry connects niche, CMS and operational order control",()=>
   assert.match(sidebar,/"commerce-launch": "sites.read"/);
   assert.match(homepage,/href="\/app\/commerce\/launch"/);
   assert.match(wizard,/href="\/app\/sales\/orders"/);
-  assert.match(wizard,/href="\/app\/catalog\/products"/);
-  assert.match(wizard,/href="\/app\/inventory\/stock"/);
+  assert.match(wizard,/href:"\/app\/catalog\/products"/);
+  assert.match(wizard,/href:"\/app\/inventory\/stock"/);
   assert.match(wizard,/href="\/app\/sites\/payments"/);
   assert.match(wizard,/href="\/app\/settings\/go-live"/);
 });
