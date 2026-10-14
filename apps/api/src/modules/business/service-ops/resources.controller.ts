@@ -24,6 +24,12 @@ export class ResourcesController {
     return { ok: true, data: await this.resources.list(this.context(request)) };
   }
 
+  @Get("archived")
+  @RequirePermission("service.read")
+  async archived(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.resources.list(this.context(request),"ARCHIVED")};
+  }
+
   @Post()
   @RequirePermission("service.write")
   async create(
@@ -53,6 +59,15 @@ export class ResourcesController {
   async rename(@Req() request:AuthenticatedRequest,@Param("id") id:string,
     @Body() body:{name:string}):Promise<ApiSuccess<{updated:true}>>{
     return {ok:true,data:await this.resources.rename(this.context(request),id,body)};
+  }
+
+  @Post(":id/restore")
+  @RequirePermission("service.write")
+  async restore(@Req() request:AuthenticatedRequest,
+    @Param("id") id:string):Promise<ApiSuccess<{
+      restored:true;onlineBookingEnabled:false;loginRequiresReview:boolean
+    }>>{
+    return {ok:true,data:await this.resources.restore(this.context(request),id)};
   }
 
   @Post(":id/archive")
