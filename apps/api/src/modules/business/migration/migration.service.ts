@@ -549,57 +549,102 @@ export class MigrationService {
   }
 
   private async importProduct(
-    client: PoolClient,
-    context: TenantContext,
-    row: Record<string, string>
-  ): Promise<{ created: boolean; targetType: string; targetId: string }> {
-    if (row.sku) {
-      const existing = await client.query<{ product_id: string }>(
-        "SELECT v.product_id FROM sku s JOIN product_variant v " +
-        "ON v.tenant_id = s.tenant_id AND v.id = s.variant_id " +
-        "WHERE s.tenant_id = $1 AND lower(s.code) = lower($2) LIMIT 1",
-        [context.tenantId, row.sku]
+    client:PoolClient,context:TenantContext,row:Record<string,string>,
+    updateExisting=false
+  ):Promise<{created:boolean;updated?:boolean;targetType:string;targetId:string}>{
+    const skuCode=row.sku;
+    // Serialize import of identical SKU in this tenant. A second import
+    // cannot silently create a second product after checking for duplicates.
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+      [context.tenantId+"|migration-product|"+skuCode.toLowerCase()]);
+    const existing=await client.query<{
+      product_id:string;variant_id:string;sku_id:string
+    }>(
+      "SELECT v.product_id,v.id AS variant_id,s.id AS sku_id "+
+      "FROM sku s JOIN product_variant v ON v.tenant_id=s.tenant_id "+
+      "AND v.id=s.variant_id WHERE s.tenant_id=$1 "+
+      "AND lower(s.code)=lower($2) LIMIT 1 FOR UPDATE OF s,v",
+      [context.tenantId,skuCode]
+    );
+    if(row.barcode){
+      const barcode=await client.query<{id:string}>(
+        "SELECT id FROM sku WHERE tenant_id=$1 AND barcode=$2 "+
+        "AND code<>$3 AND status='ACTIVE' LIMIT 1",
+        [context.tenantId,row.barcode,skuCode]
       );
-      if (existing.rows[0]) {
-        return {
-          created: false,
-          targetType: "product",
-          targetId: existing.rows[0].product_id
-        };
-      }
+      if(barcode.rowCount)throw new ConflictException(
+        "Штрихкод уже используется другим товаром: "+row.barcode
+      );
+    }
+    const current=existing.rows[0];
+    if(current&&!updateExisting)
+      return {created:false,targetType:"product",targetId:current.product_id};
+
+    let categoryId:string|null=null;
+    if(row.category){
+      const categoryName=row.category.trim();
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [context.tenantId+"|category|root|"+categoryName.toLowerCase()]);
+      let category=await client.query<{id:string}>(
+        "SELECT id FROM catalog_category WHERE tenant_id=$1 "+
+        "AND parent_id IS NULL AND lower(name)=lower($2) "+
+        "AND status='ACTIVE' LIMIT 1",
+        [context.tenantId,categoryName]
+      );
+      if(!category.rows[0])
+        category=await client.query<{id:string}>(
+          "INSERT INTO catalog_category(tenant_id,name) VALUES($1,$2) RETURNING id",
+          [context.tenantId,categoryName]
+        );
+      categoryId=category.rows[0]!.id;
+    }
+    const stockable=!["non_stock","услуга","без учёта"].includes(
+      (row.kind||"").toLowerCase());
+    const attrs=row.attributes||"{}";
+    if(current){
+      // Only explicitly selected updates can change existing prices.
+      // Do not replace inventory balances or change product kind.
+      await client.query(
+        "UPDATE product SET name=$3,description=$4,image_url=$5,"+
+        "category_id=coalesce($6::uuid,category_id),updated_at=now() "+
+        "WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,current.product_id,row.name,
+          row.description||null,row.imageUrl||null,categoryId]
+      );
+      await client.query(
+        "UPDATE product_variant SET attributes=$3::jsonb,updated_at=now() "+
+        "WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,current.variant_id,attrs]
+      );
+      await client.query(
+        "UPDATE sku SET barcode=$3,sale_price_minor=$4,cost_price_minor=$5,"+
+        "updated_at=now() WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,current.sku_id,row.barcode||null,
+          row.salePriceMinor,row.costPriceMinor]
+      );
+      return {created:false,updated:true,targetType:"product",targetId:current.product_id};
     }
 
-    const product = await client.query<{ id: string }>(
-      "INSERT INTO product(tenant_id, name, kind) " +
-      "VALUES ($1,$2,'STOCKABLE') RETURNING id",
-      [context.tenantId, row.name]
+    const product=await client.query<{id:string}>(
+      "INSERT INTO product(tenant_id,name,kind,category_id,description,image_url) "+
+      "VALUES($1,$2,$3,$4,$5,$6) RETURNING id",
+      [context.tenantId,row.name,stockable?"STOCKABLE":"NON_STOCK",
+        categoryId,row.description||null,row.imageUrl||null]
     );
-    const productId = product.rows[0]!.id;
-
-    const variant = await client.query<{ id: string }>(
-      "INSERT INTO product_variant(tenant_id, product_id, name) " +
-      "VALUES ($1,$2,'Основной') RETURNING id",
-      [context.tenantId, productId]
+    const id=product.rows[0]!.id;
+    const variant=await client.query<{id:string}>(
+      "INSERT INTO product_variant(tenant_id,product_id,name,attributes) "+
+      "VALUES($1,$2,'Основной',$3::jsonb) RETURNING id",
+      [context.tenantId,id,attrs]
     );
-
-    const skuCode = row.sku ||
-      "SKU-" + randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase();
-
     await client.query(
-      "INSERT INTO sku(tenant_id, variant_id, code, barcode, " +
-      "sale_price_minor, cost_price_minor, track_inventory) " +
-      "VALUES ($1,$2,$3,$4,$5,$6,true)",
-      [
-        context.tenantId,
-        variant.rows[0]!.id,
-        skuCode,
-        row.barcode || null,
-        row.salePriceMinor || "0",
-        row.costPriceMinor || "0"
-      ]
+      "INSERT INTO sku(tenant_id,variant_id,code,barcode,"+
+      "sale_price_minor,cost_price_minor,track_inventory) "+
+      "VALUES($1,$2,$3,$4,$5,$6,$7)",
+      [context.tenantId,variant.rows[0]!.id,skuCode,row.barcode||null,
+        row.salePriceMinor,row.costPriceMinor,stockable]
     );
-
-    return { created: true, targetType: "product", targetId: productId };
+    return {created:true,targetType:"product",targetId:id};
   }
 
   private async importCustomer(
