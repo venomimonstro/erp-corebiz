@@ -45,6 +45,7 @@ const api=async(actor,method,path,body,expected=method==="POST"?201:200)=>{
 const get=(actor,path,expected=200)=>api(actor,"GET",path,undefined,expected);
 const post=(actor,path,body,expected=201)=>api(actor,"POST",path,body,expected);
 const put=(actor,path,body,expected=200)=>api(actor,"PUT",path,body,expected);
+const patch=(actor,path,body,expected=200)=>api(actor,"PATCH",path,body,expected);
 async function inviteRole(actor,slug,roleId){
   const email="dance-"+slug+"-"+seed+"@example.invalid";
   const invitation=await post(actors.owner,"/tenants/invite",{email,roleId});
@@ -315,6 +316,64 @@ async function main(){
   }
   assert.equal(createdPrograms.length,12);
   assert.ok(groupForParent?.id);
+  stage="06-lifecycle real owner action and conflict recovery";
+  const allPrograms=await get(owner,"/dance/programs?includeArchived=true");
+  const first=allPrograms.find(p=>p.id===createdPrograms[0].id);
+  assert.ok(first?.revision,"Program editing requires optimistic revision");
+  const renamed=await patch(owner,"/dance/programs/"+first.id,{
+    expectedRevision:first.revision,name:first.name+" (проверено)"
+  });
+  assert.equal(renamed.status,"ACTIVE");
+  await patch(owner,"/dance/programs/"+first.id,{
+    expectedRevision:first.revision,name:"Пропавшее изменение"
+  },409);
+  await post(owner,"/dance/programs/"+first.id+"/archive",{
+    expectedRevision:renamed.revision
+  },409);
+  const scratch=await post(owner,"/dance/groups",{
+    name:"Временная группа для теста архива",
+    programId:first.id,branchId:branches[0].id,
+    trainerResourceId:trainers[0].id,roomResourceId:large.id,
+    capacity:5,breakEvenMembers:2,schedule:[]
+  });
+  const archived=await post(owner,"/dance/groups/"+scratch.id+"/lifecycle",{
+    action:"ARCHIVE",expectedVersion:scratch.version
+  });
+  assert.equal(archived.status,"ARCHIVED");
+  const restored=await post(owner,"/dance/groups/"+scratch.id+"/lifecycle",{
+    action:"RESTORE",expectedVersion:archived.version
+  });
+  assert.equal(restored.status,"DRAFT");
+  const archivedAgain=await post(owner,"/dance/groups/"+scratch.id+"/lifecycle",{
+    action:"ARCHIVE",expectedVersion:restored.version
+  });
+  assert.equal(archivedAgain.status,"ARCHIVED");
+  const temporaryService=await post(owner,"/service/catalog",{
+    name:"Тестовое направление без учеников",category:"Проверка архива",
+    durationMinutes:60,priceMinor:budget.groupVisitMinor,
+    deliveryFormat:"GROUP",groupCapacity:5
+  });
+  const temporaryProgram=await post(owner,"/dance/programs",{
+    name:"Тестовое направление",serviceId:temporaryService.id,
+    branchId:branches[0].id,defaultDurationMinutes:60
+  });
+  const allAgain=await get(owner,"/dance/programs?includeArchived=true");
+  const temporary=allAgain.find(p=>p.id===temporaryProgram.id);
+  assert.ok(temporary?.revision);
+  const closed=await post(owner,"/dance/programs/"+temporary.id+"/archive",{
+    expectedRevision:temporary.revision
+  });
+  assert.equal(closed.status,"ARCHIVED");
+  const reactivated=await post(owner,"/dance/programs/"+temporary.id+"/restore",{
+    expectedRevision:closed.revision
+  });
+  assert.equal(reactivated.status,"ACTIVE");
+  await post(owner,"/dance/programs/"+temporary.id+"/archive",{
+    expectedRevision:reactivated.revision
+  });
+  // Active business directions remain precisely twelve, archived test data
+  // stay in historical tables and never enter monthly revenue.
+  assert.equal((await get(owner,"/dance/programs")).length,12);
   stage="06a trainer-service assignments for all 52 coaches";
   for(let i=0;i<trainers.length;i++){
     const service=groupServices[i%groupServices.length];
