@@ -18,6 +18,8 @@ const minor=(rubles:string)=>{
 };
 export default function DanceServiceCatalogPage(){
   const [items,setItems]=useState<Service[]>([]);
+  const [archivedItems,setArchivedItems]=useState<Service[]>([]);
+  const [showArchived,setShowArchived]=useState(false);
   const [permissions,setPermissions]=useState({write:false,admin:false});
   const [selected,setSelected]=useState("");
   const [name,setName]=useState("");
@@ -39,15 +41,18 @@ export default function DanceServiceCatalogPage(){
       setItems(all);
       const has=(code:string)=>ctx.permissions.some(p=>
         (p.code===code||p.code==="*")&&p.scope==="all");
-      setPermissions({write:has("service.write"),admin:has("users.manage")});
+      const isAdmin=has("users.manage");
+      setPermissions({write:has("service.write"),admin:isAdmin});
+      setArchivedItems(isAdmin?await apiRequest<Service[]>("/service/catalog/archived"):[]);
     }catch(e){setError(e instanceof Error?e.message:"Не удалось открыть каталог услуг");}
     finally{setBusy(false);}
   },[]);
   useEffect(()=>{void reload();},[reload]);
-  const chosen=items.find(x=>x.id===selected);
-  const filtered=useMemo(()=>items.filter(x=>
+  const source=showArchived?archivedItems:items;
+  const chosen=source.find(x=>x.id===selected);
+  const filtered=useMemo(()=>source.filter(x=>
     (x.name+" "+(x.category??"")).toLocaleLowerCase("ru")
-      .includes(search.trim().toLocaleLowerCase("ru"))),[items,search]);
+      .includes(search.trim().toLocaleLowerCase("ru"))),[source,search]);
   const categories=[...new Set(items.map(x=>x.category).filter(
     (x):x is string=>Boolean(x)))].sort();
   const pick=(item:Service)=>{
@@ -76,6 +81,17 @@ export default function DanceServiceCatalogPage(){
     }catch(e){setError(e instanceof Error?e.message:"Не удалось изменить услугу");}
     finally{setBusy(false);}
   }
+  async function restore(){
+    if(!chosen||!permissions.admin||!archiveConfirm)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/service/catalog/"+chosen.id+"/restore",{method:"POST"});
+      setSelected("");setArchiveConfirm(false);
+      await reload();
+      setNotice("Услуга восстановлена. Перед записью клиентов проверьте цену, назначенных тренеров и длительность.");
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось восстановить услугу");}
+    finally{setBusy(false);}
+  }
   async function archive(){
     if(!chosen||!archiveConfirm||!permissions.admin)return;
     setBusy(true);setError("");setNotice("");
@@ -100,7 +116,13 @@ export default function DanceServiceCatalogPage(){
       {error?<p role="alert" className="dance-owner-error">{error}</p>:null}
       {notice?<p role="status">{notice}</p>:null}
       <section className="dance-customer-panel">
-        <h2>Каталог · {items.length} услуг</h2>
+        <h2>{showArchived?"Архив услуг":"Каталог услуг"} · {source.length}</h2>
+        {permissions.admin?<label className="dance-catalog-archive-toggle">
+          <input type="checkbox" checked={showArchived} onChange={e=>{
+            setShowArchived(e.target.checked);setSelected("");setArchiveConfirm(false);
+          }}/>
+          Показать архивные услуги
+        </label>:null}
         <input value={search} onChange={e=>setSearch(e.target.value)}
           placeholder="Поиск по названию или направлению" aria-label="Поиск услуг"/>
         <div className="dance-staff-list">{filtered.map(x=>
@@ -114,7 +136,7 @@ export default function DanceServiceCatalogPage(){
       </section>
       {chosen?<section className="dance-customer-panel">
         <h2>Изменение услуги</h2>
-        <form className="dance-budget-fields" onSubmit={e=>void save(e)}>
+        {!showArchived?<form className="dance-budget-fields" onSubmit={e=>void save(e)}>
           <label>Название<input value={name} required minLength={2}
             onChange={e=>setName(e.target.value)}/></label>
           <label>Категория / направление
@@ -131,14 +153,16 @@ export default function DanceServiceCatalogPage(){
           <button disabled={!permissions.write||busy||!name.trim()} type="submit">
             Сохранить изменения
           </button>
-        </form>
+        </form>:<p>Архивная услуга доступна только для просмотра. После восстановления проверьте актуальность цены и назначений.</p>}
         {permissions.admin?<div className="dance-staff-actions">
           <label><input type="checkbox" checked={archiveConfirm}
             onChange={e=>setArchiveConfirm(e.target.checked)}/>
-            Сначала проверил(а), что услуга не используется в действующих
-            направлениях или будущих записях.</label>
+            {showArchived?"Подтверждаю возвращение услуги в активный каталог и проверку её цены и расписания.":
+             "Подтверждаю проверку направлений и будущих записей перед архивированием."}</label>
           <button type="button" disabled={busy||!archiveConfirm}
-            onClick={()=>void archive()}>Архивировать услугу</button>
+            onClick={()=>void (showArchived?restore():archive())}>
+              {showArchived?"Восстановить услугу":"Архивировать услугу"}
+          </button>
         </div>:null}
       </section>:null}
     </section>
