@@ -38,7 +38,9 @@
     "test:dance:integrity": "node --test scripts/dance-doctor-integrity.test.mjs",
     "test:shared-lifecycle": "node --test scripts/shared-business-lifecycle.test.mjs",
     "test:ecommerce:contract": "node --test scripts/ecommerce-integration-contract.test.mjs",
-    "test:ecommerce:owner": "node scripts/ecommerce-cms-owner-e2e.mjs"
+    "test:ecommerce:owner": "node scripts/ecommerce-cms-owner-e2e.mjs",
+    "test:catalog": "node --test scripts/catalog-merchant-contract.test.mjs",
+    "test:catalog:e2e": "node scripts/catalog-product-owner-e2e.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
