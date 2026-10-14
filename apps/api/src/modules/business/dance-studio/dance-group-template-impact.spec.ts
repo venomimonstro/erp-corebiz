@@ -28,7 +28,7 @@ function fixture(future=3){
       return {rows:[{count:7}],rowCount:1};
     if(sql.includes("SELECT membership_id")&&sql.includes("FROM service_resource"))
       return {rows:[{membership_id:context.membershipId}],rowCount:1};
-    if(sql.includes("SELECT count(*)::int AS count")&&sql.includes("FROM dance_lesson"))
+    if(sql.includes("FROM dance_lesson")&&sql.includes("count(*)::"))
       return {rows:[{count:future}],rowCount:1};
     if(sql.includes("UPDATE dance_group"))
       return {rows:[{...group,version:5}],rowCount:1};
