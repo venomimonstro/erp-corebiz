@@ -182,6 +182,7 @@ export class CatalogService {
       categoryId?: string;
       description?: string;
       imageUrl?: string;
+      attributes?:Record<string,string>;
     }
   ): Promise<{ productId: string; variantId: string; skuId: string; sku: string }> {
     if(!input||typeof input.name!=="string")
@@ -200,6 +201,12 @@ export class CatalogService {
        BigInt(costPriceMinor)>9223372036854775807n)
       throw new BadRequestException("Некорректная цена");
 
+    const attrs=input.attributes??{};
+    if(!attrs||typeof attrs!=="object"||Array.isArray(attrs)||
+      Object.keys(attrs).length>40||
+      Object.entries(attrs).some(([key,value])=>
+        key.length<1||key.length>80||typeof value!=="string"||value.length>500))
+      throw new BadRequestException("Некорректные характеристики товара");
     const imageUrl=this.validImageUrl(input.imageUrl);
     const skuCode=input.sku?.trim()||
       `SKU-${randomUUID().replaceAll("-","").slice(0,10).toUpperCase()}`;
@@ -256,10 +263,10 @@ export class CatalogService {
 
       const variantResult = await client.query<{ id: string }>(
         `INSERT INTO product_variant(
-           tenant_id, product_id, name
-         ) VALUES ($1,$2,'Основной')
+           tenant_id, product_id, name, attributes
+         ) VALUES ($1,$2,'Основной',$3::jsonb)
          RETURNING id`,
-        [context.tenantId, product.id]
+        [context.tenantId, product.id,JSON.stringify(attrs)]
       );
 
       const variant = variantResult.rows[0];
