@@ -44,11 +44,14 @@ export class MigrationController {
   @RequirePermission("migration.manage")
   async importBatch(
     @Req() request: AuthenticatedRequest,
-    @Param("id") id: string
+    @Param("id") id: string,
+    @Body() body?:{updateExisting?:boolean}
   ): Promise<ApiSuccess<unknown>> {
     return {
       ok: true,
-      data: await this.migration.importBatch(this.context(request), id)
+      data: await this.migration.importBatch(this.context(request),id,{
+        updateExisting:body?.updateExisting===true
+      })
     };
   }
 
