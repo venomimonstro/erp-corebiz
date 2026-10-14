@@ -567,15 +567,21 @@ export class MigrationService {
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
       [context.tenantId+"|migration-product|"+skuCode.toLowerCase()]);
     const existing=await client.query<{
-      product_id:string;variant_id:string;sku_id:string
+      product_id:string;variant_id:string;sku_id:string;
+      sku_status:string;product_status:string
     }>(
-      "SELECT v.product_id,v.id AS variant_id,s.id AS sku_id "+
+      "SELECT v.product_id,v.id AS variant_id,s.id AS sku_id,"+
+      "s.status AS sku_status,p.status AS product_status "+
       "FROM sku s JOIN product_variant v ON v.tenant_id=s.tenant_id "+
-      "AND v.id=s.variant_id WHERE s.tenant_id=$1 "+
-      "AND lower(s.code)=lower($2) LIMIT 1 FOR UPDATE OF s,v",
+      "AND v.id=s.variant_id "+
+      "JOIN product p ON p.tenant_id=v.tenant_id AND p.id=v.product_id "+
+      "WHERE s.tenant_id=$1 AND lower(s.code)=lower($2) "+
+      "LIMIT 1 FOR UPDATE OF s,v,p",
       [context.tenantId,skuCode]
     );
     if(row.barcode){
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [context.tenantId+"|barcode|"+row.barcode]);
       const barcode=await client.query<{id:string}>(
         "SELECT id FROM sku WHERE tenant_id=$1 AND barcode=$2 "+
         "AND lower(code)<>lower($3) AND status='ACTIVE' LIMIT 1",
@@ -586,6 +592,9 @@ export class MigrationService {
       );
     }
     const current=existing.rows[0];
+    if(current&&updateExisting&&(
+      current.sku_status!=="ACTIVE"||current.product_status!=="ACTIVE"))
+      throw new ConflictException("SKU находится в архиве. Восстановите его вручную");
     if(current&&!updateExisting)
       return {created:false,targetType:"product",targetId:current.product_id};
 
