@@ -165,11 +165,13 @@ export default function SitesPage() {
     try {
       const rows = await apiRequest<Site[]>("/sites");
       setSites(rows);
-      if (!siteId && rows[0]) setSiteId(rows[0].id);
+      // Preserve explicit choice after creating a new shop. A stale closure
+      // must not silently switch the editor back to the oldest site.
+      setSiteId(current=>rows.some(x=>x.id===current)?current:rows[0]?.id??"");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить сайты");
     }
-  }, [siteId]);
+  }, []);
 
   useEffect(() => {
     void loadSites();
