@@ -234,8 +234,10 @@ export class CatalogService {
         }
       }
 
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [context.tenantId+"|migration-product|"+skuCode.toLowerCase()]);
       const duplicate = await client.query(
-        "SELECT 1 FROM sku WHERE tenant_id = $1 AND code = $2",
+        "SELECT 1 FROM sku WHERE tenant_id = $1 AND lower(code) = lower($2)",
         [context.tenantId, skuCode]
       );
 
@@ -492,6 +494,27 @@ export class CatalogService {
         [context.tenantId,productId]);
       if(stock.rowCount)throw new BadRequestException(
         "Есть остатки или резервы. Сначала проведите складские операции");
+      const pending=await client.query(
+        "SELECT 1 FROM sku s JOIN product_variant v "+
+        "ON v.tenant_id=s.tenant_id AND v.id=s.variant_id "+
+        "JOIN sales_order_line line ON line.tenant_id=s.tenant_id AND line.sku_id=s.id "+
+        "JOIN sales_order o ON o.tenant_id=line.tenant_id AND o.id=line.order_id "+
+        "WHERE s.tenant_id=$1 AND v.product_id=$2 "+
+        "AND o.order_status NOT IN ('COMPLETED','CANCELLED') LIMIT 1",
+        [context.tenantId,productId]);
+      if(pending.rowCount)throw new BadRequestException(
+        "Товар включён в незавершённые заказы клиентов");
+      const inbound=await client.query(
+        "SELECT 1 FROM purchase_order_line line "+
+        "JOIN purchase_order o ON o.tenant_id=line.tenant_id "+
+        "AND o.id=line.purchase_order_id "+
+        "JOIN sku s ON s.tenant_id=line.tenant_id AND s.id=line.sku_id "+
+        "JOIN product_variant v ON v.tenant_id=s.tenant_id AND v.id=s.variant_id "+
+        "WHERE line.tenant_id=$1 AND v.product_id=$2 "+
+        "AND o.status NOT IN ('RECEIVED','CANCELLED') LIMIT 1",
+        [context.tenantId,productId]);
+      if(inbound.rowCount)throw new BadRequestException(
+        "Сначала завершите закупки с этим товаром");
       await client.query(
         "UPDATE product SET status='ARCHIVED',updated_at=now() "+
         "WHERE tenant_id=$1 AND id=$2",[context.tenantId,productId]);
