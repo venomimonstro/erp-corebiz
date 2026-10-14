@@ -1245,8 +1245,13 @@ export class DanceStudioService {
 
     const name=input.name?.trim();
     if(!name || name.length>160) throw new BadRequestException("Некорректное направление");
-    const duration=Math.floor(input.defaultDurationMinutes ?? 60);
-    if(duration<15 || duration>360) throw new BadRequestException("Некорректная длительность");
+    const duration=input.defaultDurationMinutes??60;
+    if(!Number.isSafeInteger(duration)||duration<15||duration>360)
+      throw new BadRequestException("Длительность от 15 до 360 минут");
+    const uuid=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+    if(!uuid.test(input.serviceId??"")||
+      (input.branchId!==undefined&&!uuid.test(input.branchId)))
+      throw new BadRequestException("Укажите действительную услугу и филиал");
     if(input.minAge!==undefined && (!Number.isInteger(input.minAge)||input.minAge<0||input.minAge>120))
       throw new BadRequestException("Некорректный минимальный возраст");
     if(input.maxAge!==undefined && (!Number.isInteger(input.maxAge)||input.maxAge<0||input.maxAge>120))
@@ -1260,6 +1265,14 @@ export class DanceStudioService {
         [context.tenantId,input.serviceId]
       );
       if(!service.rowCount) throw new NotFoundException("Услуга не найдена");
+      if(input.branchId){
+        const branch=await client.query(
+          "SELECT 1 FROM branch WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
+          [context.tenantId,input.branchId]
+        );
+        if(!branch.rowCount)
+          throw new NotFoundException("Указанный филиал отсутствует в этой компании");
+      }
       const result=await client.query(
         `INSERT INTO dance_program(
            tenant_id,name,code,service_id,branch_id,min_age,max_age,
@@ -1375,14 +1388,15 @@ export class DanceStudioService {
           if(!branch.rowCount)throw new NotFoundException("Филиал не найден");
         }
         if(input.action==="UPDATE"&&(serviceId!==original.service_id||
-           branchId!==original.branch_id)){
+           branchId!==original.branch_id||
+           min!==original.min_age||max!==original.max_age)){
           const related=await client.query(
             `SELECT 1 FROM dance_group WHERE tenant_id=$1 AND program_id=$2
              AND status IN ('DRAFT','ACTIVE','PAUSED') LIMIT 1`,
             [context.tenantId,programId]
           );
           if(related.rowCount)throw new ConflictException(
-            "Нельзя изменить услугу или филиал направления с действующими группами"
+            "Сначала завершите группы перед сменой услуги, филиала или возрастных ограничений"
           );
         }
         input={...input,name,minAge:min,maxAge:max,
