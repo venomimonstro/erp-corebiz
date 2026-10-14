@@ -5,7 +5,7 @@ import {DanceWorkspaceNav} from "../../../../components/dance-workspace-nav";
 import {apiRequest} from "../../../../lib/api";
 
 type Service={id:string;name:string;category:string|null;
-  duration_minutes:number;price_minor:string;delivery_format:string};
+  duration_minutes:number;price_minor:string;delivery_format:string;revision:string};
 type Context={permissions:Array<{code:string;scope:string}>};
 const rub=(minor:string)=>new Intl.NumberFormat("ru-RU",{
   style:"currency",currency:"RUB",maximumFractionDigits:0
@@ -73,12 +73,16 @@ export default function DanceServiceCatalogPage(){
     try{
       await apiRequest("/service/catalog/"+chosen.id,{
         method:"PATCH",body:JSON.stringify({
-          name,category:category||null,durationMinutes:minutes,priceMinor
+          name,category:category||null,durationMinutes:minutes,priceMinor,
+          expectedRevision:chosen.revision
         })
       });
       setNotice("Изменения сохранены. Уже оформленные занятия остаются по старой цене.");
       await reload();
-    }catch(e){setError(e instanceof Error?e.message:"Не удалось изменить услугу");}
+    }catch(e){
+      setError((e instanceof Error?e.message:"Не удалось изменить услугу")+
+        ". Если администратор уже изменил цену, обновите данные перед повтором.");
+    }
     finally{setBusy(false);}
   }
   async function restore(){
