@@ -36,6 +36,7 @@ type BatchPreview = {
 type ImportResult = {
   batchId: string;
   imported: number;
+  updated?:number;
   skipped: number;
   errors: number;
   status: string;
@@ -74,6 +75,7 @@ export default function MigrationPage() {
   const [result, setResult] = useState<ImportResult | null>(null);
   const [busy, setBusy] = useState<"upload" | "import" | "">("");
   const [error, setError] = useState("");
+  const [updateExisting,setUpdateExisting]=useState(false);
 
   function reset(nextEntity?: EntityType) {
     if (nextEntity) setEntity(nextEntity);
@@ -82,6 +84,7 @@ export default function MigrationPage() {
     setPreview(null);
     setResult(null);
     setError("");
+    setUpdateExisting(false);
   }
 
   async function upload() {
@@ -126,6 +129,9 @@ export default function MigrationPage() {
     const agrees = window.confirm(
       "Импортировать " + formatCount(summary.validCount) + " корректных строк?\n" +
       "Ошибочных строк: " + formatCount(summary.errorCount) + ". Они будут пропущены.\n" +
+      (updateExisting
+        ? "Существующие SKU будут обновлены. Пустые поля не стирают данные.\\n"
+        : "Существующие SKU будут пропущены.\\n")+
       "Этот импорт не меняет остатки склада и не создаёт заказы или оплаты."
     );
     if (!agrees) return;
@@ -134,7 +140,7 @@ export default function MigrationPage() {
     try {
       const imported = await apiRequest<ImportResult>(
         "/migration/" + encodeURIComponent(summary.batchId) + "/import",
-        { method: "POST", body: "{}" }
+        { method: "POST", body: JSON.stringify({updateExisting}) }
       );
       setResult(imported);
       setPreview(await apiRequest<BatchPreview>(
@@ -204,9 +210,14 @@ export default function MigrationPage() {
             </button>
           </div>
           <p className="muted">
-            Для товаров рекомендуемые колонки: Название, Артикул, Штрихкод,
-            Цена, Себестоимость. Для клиентов: Контрагент, Телефон, Email, Тип.
-            Импортные данные сначала проходят проверку. Файл не публикуется на сайте.
+            Для товаров: Название, Артикул, Штрихкод, Цена, Закупочная цена,
+            Категория, Описание, Фото, Тип товара и колонки «Характеристика: Цвет»,
+            «Характеристика: Размер». Для клиентов: Контрагент, Телефон, Email, Тип.
+            Товары без артикула получают постоянный AUTO-код по названию.
+            Импорт не изменяет физические складские остатки. Файл не публикуется на сайте.
+            <a href="/templates/catalog-products.csv" download>
+              Скачать пример CSV →
+            </a>
           </p>
         </section>
 
@@ -258,6 +269,16 @@ export default function MigrationPage() {
                 либо подтвердите перенос только корректных строк.
               </p>
             ) : null}
+            {entity==="PRODUCTS"?<label className="merchant-migration-update">
+              <input type="checkbox" checked={updateExisting}
+                disabled={Boolean(busy)}
+                onChange={e=>setUpdateExisting(e.target.checked)}/>
+              Обновлять существующие SKU по артикулу. Если снять флажок,
+              совпадающие товары не меняются. Пустые поля не стирают старые цены.
+            </label>:null}
+            <p className="muted">Заполнение категорий и характеристик выполняется
+              для новых товаров. Создание и обновление цен проверяются сервером.
+              Закупочные цены разрешены только финансовым ролям.</p>
             <div className="merchant-migration-actions">
               <button type="button" disabled={!canImport}
                 onClick={() => void importRows()}>
@@ -276,7 +297,9 @@ export default function MigrationPage() {
             <p className="muted">Шаг 3 из 3</p>
             <h2>Импорт завершён</h2>
             <div className="merchant-migration-metrics">
-              <article><span>Создано</span><strong>{formatCount(result.imported)}</strong></article>
+              <article><span>Импортировано (включая обновления)</span>
+                <strong>{formatCount(result.imported)}</strong></article>
+              <article><span>Обновлено</span><strong>{formatCount(result.updated??0)}</strong></article>
               <article><span>Уже существуют</span><strong>{formatCount(result.skipped)}</strong></article>
               <article><span>Ошибочных строк</span><strong>{formatCount(result.errors)}</strong></article>
             </div>
