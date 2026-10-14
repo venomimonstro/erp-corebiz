@@ -316,6 +316,12 @@ async function main(){
   }
   assert.equal(createdPrograms.length,12);
   assert.ok(groupForParent?.id);
+  // Receptionists may operate bookings, but cannot alter company-wide
+  // service/direction catalog without catalog.write.
+  await post(actors.m1,"/dance/programs",{
+    name:"Unauthorized direction",serviceId:groupServices[0].id,
+    defaultDurationMinutes:60
+  },403);
   stage="06-lifecycle real owner action and conflict recovery";
   const allPrograms=await get(owner,"/dance/programs?includeArchived=true");
   const first=allPrograms.find(p=>p.id===createdPrograms[0].id);
@@ -327,6 +333,9 @@ async function main(){
   await patch(owner,"/dance/programs/"+first.id,{
     expectedRevision:first.revision,name:"Пропавшее изменение"
   },409);
+  await patch(actors.m1,"/dance/programs/"+first.id,{
+    expectedRevision:renamed.revision,name:"Unauthorized editing"
+  },403);
   await post(owner,"/dance/programs/"+first.id+"/archive",{
     expectedRevision:renamed.revision
   },409);
