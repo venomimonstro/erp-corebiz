@@ -125,7 +125,7 @@ export default function MigrationPage() {
 
   async function importRows() {
     if (!summary || !preview || busy || summary.validCount === 0 ||
-        preview.batch.status !== "VALIDATED") return;
+        !["VALIDATED",...(updateExisting?["RECONCILED"]:[])].includes(preview.batch.status)) return;
     const agrees = window.confirm(
       "Импортировать " + formatCount(summary.validCount) + " корректных строк?\n" +
       "Ошибочных строк: " + formatCount(summary.errorCount) + ". Они будут пропущены.\n" +
@@ -157,7 +157,8 @@ export default function MigrationPage() {
   const keys = rows.length ? Object.keys(rows[0]!.normalized_data) : [];
   const canImport = Boolean(
     summary && preview && summary.validCount > 0 &&
-    preview.batch.status === "VALIDATED" && !busy
+    (preview.batch.status==="VALIDATED"||
+      (updateExisting&&preview.batch.status==="RECONCILED")) && !busy
   );
 
   return (
