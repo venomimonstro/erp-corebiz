@@ -21,6 +21,8 @@ type TeamMember={membership_id:string;email:string;status:string;
   is_owner:boolean;roles:Array<{code:string}>};
 export default function DanceStaffPage(){
   const [workers,setWorkers]=useState<Worker[]>([]);
+  const [archivedWorkers,setArchivedWorkers]=useState<Worker[]>([]);
+  const [restoreId,setRestoreId]=useState("");
   const [branches,setBranches]=useState<Branch[]>([]);
   const [groups,setGroups]=useState<Group[]>([]);
   const [members,setMembers]=useState<TeamMember[]>([]);
@@ -69,8 +71,11 @@ export default function DanceStaffPage(){
       setBranches(o.branches);setGroups(g);setMembers(team);
       setServices(serviceList);setDeliveryRules(ruleList);
       setLessons(lessonsInMonth);
-      setCanManage(c.permissions.some(x=>(x.code==="users.manage"||x.code==="*")
-        &&x.scope==="all"));
+      const admin=c.permissions.some(x=>(x.code==="users.manage"||x.code==="*")
+        &&x.scope==="all");
+      setCanManage(admin);
+      setArchivedWorkers(admin?(await apiRequest<Worker[]>("/service/resources/archived"))
+        .filter(x=>x.type==="EMPLOYEE"):[]);
     }catch(e){setError(e instanceof Error?e.message:"Данные сотрудников недоступны");}
     finally{setBusy(false);}
   },[]);
@@ -211,6 +216,22 @@ export default function DanceStaffPage(){
       setNotice("Имя изменено. История посещений и начислений сохранена.");
       await reload();setSelected("");
     }catch(err){setError(err instanceof Error?err.message:"Не удалось изменить");}
+    finally{setBusy(false);}
+  }
+  async function restoreWorker(resourceId:string){
+    if(!canManage||restoreId!==resourceId)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      const outcome=await apiRequest<{restored:true;onlineBookingEnabled:false;
+        loginRequiresReview:boolean}>("/service/resources/"+resourceId+"/restore",
+        {method:"POST"});
+      setRestoreId("");
+      await reload();
+      setNotice(outcome.loginRequiresReview
+        ?"Ресурс восстановлен. Логин тренера остаётся приостановленным: "
+         +"проверьте права, смены и онлайн-запись."
+        :"Тренер восстановлен. Онлайн-запись выключена до проверки графика.");
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось восстановить тренера");}
     finally{setBusy(false);}
   }
   async function archiveWorker(){
@@ -441,6 +462,27 @@ export default function DanceStaffPage(){
             onChange={e=>setConfirmAccess(e.target.checked)}/>
             Подтверждаю проверку права на восстановление доступа.</label>
         </section>:null}
+      {canManage?<section className="dance-customer-panel">
+        <h2>Архив тренеров · {archivedWorkers.length}</h2>
+        <p>Восстановление сохраняет историю группы, занятий и начислений,
+          но не включает автоматически онлайн-запись и ранее отключённый логин.</p>
+        {archivedWorkers.length===0?<p>Архивных тренеров нет.</p>:
+          <div className="dance-customer-list">
+            {archivedWorkers.map(person=><article key={person.id}>
+              <strong>{person.name}</strong>
+              <span>{person.branch_name??"Без филиала"}</span>
+              {restoreId===person.id?<div>
+                <p>Восстановить тренера? После операции перепроверьте доступ
+                  и расписание до открытия записи клиентам.</p>
+                <button type="button" disabled={busy}
+                  onClick={()=>void restoreWorker(person.id)}>Подтвердить восстановление</button>{" "}
+                <button type="button" disabled={busy}
+                  onClick={()=>setRestoreId("")}>Отмена</button>
+              </div>:<button type="button" disabled={busy}
+                onClick={()=>setRestoreId(person.id)}>Восстановить</button>}
+            </article>)}
+          </div>}
+      </section>:null}
       {canManage?<section className="dance-customer-panel">
         <h2>Добавить тренера</h2>
         <form className="dance-budget-fields" onSubmit={e=>void create(e)}>
