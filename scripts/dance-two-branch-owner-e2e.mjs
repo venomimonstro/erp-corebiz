@@ -535,6 +535,61 @@ async function main(){
   await post(owner,"/service/catalog/"+groupServices[0].id+"/archive",
     {},409);
   await get(actors.parent,"/finance/summary",403);
+  stage="09a common staff/service archive and controlled restore";
+  // A disposable unassigned coach: same lifecycle is shared across salon,
+  // dance, fitness and automotive service businesses.
+  const spare=await post(owner,"/service/resources",{
+    type:"EMPLOYEE",name:"Временный тренер для восстановления "+seed.slice(0,6),
+    branchId:branches[0].id,timezone:"Europe/Moscow",capacity:1
+  });
+  await post(owner,"/service/resources/"+spare.id+"/archive",{});
+  const archivedResources=await get(owner,"/service/resources/archived");
+  assert.ok(archivedResources.some(r=>r.id===spare.id));
+  await get(actors.m1,"/service/resources/archived",403);
+  const coachBack=await post(owner,"/service/resources/"+spare.id+"/restore",{});
+  assert.equal(coachBack.restored,true);
+  assert.equal(coachBack.onlineBookingEnabled,false);
+  assert.ok((await get(owner,"/service/resources")).some(r=>
+    r.id===spare.id &&r.online_booking_enabled===false));
+  await post(owner,"/service/resources/"+spare.id+"/restore",{},404);
+
+  const temporary=await post(owner,"/service/catalog",{
+    name:"Тестовая сезонная услуга "+seed.slice(0,6),
+    category:"Сезонные",durationMinutes:60,
+    priceMinor:money(1800),deliveryFormat:"INDIVIDUAL"
+  });
+  await post(owner,"/service/catalog/"+temporary.id+"/archive",{});
+  assert.ok((await get(owner,"/service/catalog/archived")).some(x=>x.id===temporary.id));
+  await get(actors.m1,"/service/catalog/archived",403);
+  const restoredService=await post(owner,
+    "/service/catalog/"+temporary.id+"/restore",{});
+  assert.equal(restoredService.reviewRequired,true);
+  const awaiting=(await get(owner,"/service/catalog"))
+    .find(x=>x.id===temporary.id);
+  assert.equal(awaiting?.metadata?.restore_review_required,true);
+  const morning=new Date();
+  morning.setUTCHours(0,0,0,0);
+  morning.setUTCDate(morning.getUTCDate()+3);
+  const evening=new Date(morning.getTime()+6*3600000);
+  const freeSlots="/service/availability?serviceId="+temporary.id+
+    "&resourceId="+spare.id+
+    "&resourceType=EMPLOYEE&from="+encodeURIComponent(morning.toISOString())+
+    "&to="+encodeURIComponent(evening.toISOString());
+  await get(owner,freeSlots,409);
+  await post(actors.m1,"/service/catalog/"+temporary.id+"/approve",{},403);
+  // Safe editing of catalogue fields before republishing is allowed.
+  await api(owner,"PATCH","/service/catalog/"+temporary.id,{
+    name:"Возобновлённая сезонная услуга",priceMinor:money(1950),
+    durationMinutes:60,expectedRevision:awaiting.revision
+  });
+  assert.equal((await post(owner,
+    "/service/catalog/"+temporary.id+"/approve",{})).published,true);
+  await post(owner,"/service/catalog/"+temporary.id+"/approve",{},409);
+  const liveService=(await get(owner,"/service/catalog"))
+    .find(x=>x.id===temporary.id);
+  assert.equal(liveService?.price_minor,money(1950));
+  assert.notEqual(liveService?.metadata?.restore_review_required,true);
+  await get(owner,freeSlots);
   stage="09b revoke and recover parent portal access";
   const listedAccounts=await get(owner,"/dance/portal/accounts");
   assert.ok(listedAccounts.some(x=>x.membership_id===parent&&
