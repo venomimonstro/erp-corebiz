@@ -11,6 +11,7 @@ type Program={
 };
 type Service={id:string;name:string;status?:string;delivery_format:string};
 type Branch={id:string;name:string};
+type Group={id:string;name:string;program_id:string;status:string;version:number;members:number;waitlist:number};
 type Organization={branches:Branch[]};
 type Context={permissions:Array<{code:string;scope:string}>};
 const can=(context:Context,code:string)=>context.permissions.some(
@@ -20,6 +21,8 @@ export default function DanceDirectionsPage(){
  const [programs,setPrograms]=useState<Program[]>([]);
  const [services,setServices]=useState<Service[]>([]);
  const [branches,setBranches]=useState<Branch[]>([]);
+ const [groups,setGroups]=useState<Group[]>([]);
+ const [groupAction,setGroupAction]=useState<{id:string;kind:"ARCHIVE"|"RESTORE"}|null>(null);
  const [editable,setEditable]=useState(false);
  const [selected,setSelected]=useState("");
  const [name,setName]=useState("");
@@ -37,13 +40,14 @@ export default function DanceDirectionsPage(){
  const load=useCallback(async()=>{
    setBusy(true);setError("");
    try{
-     const [p,s,o,c]=await Promise.all([
+     const [p,s,o,c,g]=await Promise.all([
        apiRequest<Program[]>("/dance/programs?includeArchived=true"),
        apiRequest<Service[]>("/service/catalog"),
        apiRequest<Organization>("/organization"),
-       apiRequest<Context>("/workspace/context")
+       apiRequest<Context>("/workspace/context"),
+       apiRequest<Group[]>("/dance/groups?includeArchived=true")
      ]);
-     setPrograms(p);setServices(s);setBranches(o.branches);
+     setPrograms(p);setServices(s);setBranches(o.branches);setGroups(g);
      setEditable(can(c,"dance.write")&&can(c,"catalog.write"));
    }catch(e){setPrograms([]);setEditable(false);
      setError(e instanceof Error?e.message:"Не удалось загрузить направления");}
@@ -51,6 +55,7 @@ export default function DanceDirectionsPage(){
  },[]);
  useEffect(()=>{void load();},[load]);
  const current=programs.find(x=>x.id===selected);
+ const relatedGroups=groups.filter(g=>g.program_id===selected);
  const visible=useMemo(()=>programs.filter(x=>includeArchived||x.status==="ACTIVE"),
   [programs,includeArchived]);
  function choose(x:Program){
@@ -103,6 +108,26 @@ export default function DanceDirectionsPage(){
      blank();await load();
    }catch(e){setError(e instanceof Error?e.message:"Ошибка сохранения");}
    finally{setBusy(false);}
+ }
+ async function changeGroup(){
+   if(!groupAction||busy||!editable)return;
+   const group=groups.find(g=>g.id===groupAction.id);
+   if(!group)return;
+   setBusy(true);setError("");setNotice("");
+   try{
+     await apiRequest("/dance/groups/"+encodeURIComponent(group.id)+"/lifecycle",{
+       method:"POST",body:JSON.stringify({
+         action:groupAction.kind,expectedVersion:group.version
+       })
+     });
+     setNotice(groupAction.kind==="ARCHIVE"
+       ?"Группа архивирована. Участники и история сохранены."
+       :"Группа восстановлена как черновик. Проверьте расписание перед публикацией.");
+     setGroupAction(null);await load();
+   }catch(e){
+     setError(e instanceof Error?e.message:"Не удалось изменить группу");
+     setGroupAction(null);await load();
+   }finally{setBusy(false);}
  }
  async function lifecycle(){
    if(!current||!confirm||busy||!editable)return;
@@ -197,6 +222,29 @@ export default function DanceDirectionsPage(){
          {current.status==="ACTIVE"?"Архивировать":"Восстановить"}
        </button>
      </div>:null}
+     <h3>Связанные группы ({relatedGroups.length})</h3>
+     <p className="muted">Перед закрытием направления переведите учеников,
+       обработайте лист ожидания и отмените или перенесите будущие занятия.
+       Группы не удаляются физически.</p>
+     {relatedGroups.map(g=><div key={g.id} className="service-desk-history">
+       <div><strong>{g.name}</strong>
+         <p className="muted">{g.status} · участников {g.members??0} ·
+           ожидают {g.waitlist??0}</p>
+       </div>
+       {groupAction?.id===g.id?
+         <div>
+           <p>Подтвердить {groupAction.kind==="ARCHIVE"?"архивирование":"восстановление"}?</p>
+           <button type="button" disabled={busy}
+             onClick={()=>void changeGroup()}>Подтвердить</button>{" "}
+           <button type="button" className="secondary-button"
+             onClick={()=>setGroupAction(null)}>Отмена</button>
+         </div>:
+         <button type="button" disabled={busy}
+           onClick={()=>setGroupAction({id:g.id,
+             kind:g.status==="ARCHIVED"?"RESTORE":"ARCHIVE"})}>
+           {g.status==="ARCHIVED"?"Восстановить":"Архивировать"}
+         </button>}
+     </div>)}
      <p><a href="/app/dance/groups">Группы и расписание →</a>{" "}
        <a href="/app/dance/services">Цены общего каталога →</a></p>
    </section>:<p className="muted">Редактирование направлений доступно руководителю
