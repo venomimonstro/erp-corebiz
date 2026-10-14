@@ -163,8 +163,8 @@ export default function ProductsPage(){
     }catch(err){setError(err instanceof Error?err.message:"Не удалось сохранить");}
     finally{setSaving(false);}
   }
-  async function createCategory(e:FormEvent){
-    e.preventDefault();if(saving||!categoryName.trim())return;
+  async function createCategory(){
+    if(saving||!categoryName.trim())return;
     setSaving(true);setError("");
     try{
       const created=await apiRequest<{id:string}>("/catalog/products/categories",{
@@ -300,7 +300,7 @@ export default function ProductsPage(){
                 <input value={categoryName} maxLength={120}
                   onChange={e=>setCategoryName(e.target.value)}/></label>
               <button type="button" disabled={saving||categoryName.trim().length<2}
-                onClick={()=>void createCategory({preventDefault:()=>{}} as FormEvent)}>
+                onClick={()=>void createCategory()}>
                 Сохранить категорию</button>
             </div>:null}
             <div className="catalog-editor-two">
