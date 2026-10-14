@@ -1415,8 +1415,10 @@ export class DanceStudioService {
     });
   }
 
-  async groups(context: TenantContext) {
-    const scopeIds=await this.scopeIds(context,"dance.read");
+  async groups(context: TenantContext,includeArchived=false) {
+    const scopeIds=includeArchived
+      ? (await this.requireAll(context,"dance.read"),null)
+      : await this.scopeIds(context,"dance.read");
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query(
         `SELECT
@@ -1443,16 +1445,107 @@ export class DanceStudioService {
            ON gm.tenant_id=g.tenant_id AND gm.group_id=g.id
          LEFT JOIN dance_group_waitlist w
            ON w.tenant_id=g.tenant_id AND w.group_id=g.id
-         WHERE g.tenant_id=$1 AND g.status<>'ARCHIVED'
+         WHERE g.tenant_id=$1 AND ($3::boolean OR g.status<>'ARCHIVED')
            AND (
              $2::uuid[] IS NULL
              OR tr.membership_id = ANY($2::uuid[])
            )
          GROUP BY g.id,p.name,p.service_id,tr.name,rr.name,rz.name
          ORDER BY p.name,g.name`,
-        [context.tenantId,scopeIds]
+        [context.tenantId,scopeIds,includeArchived]
       );
       return result.rows;
+    });
+  }
+
+
+  /**
+   * Closing a group must not orphan future lessons, reserved students or
+   * waitlist entries. This workflow is shared with any resource-backed
+   * booking process: resolve open commitments before archiving.
+   */
+  async groupLifecycle(
+    context:TenantContext,groupId:string,
+    input:{action:"ARCHIVE"|"RESTORE";expectedVersion:number}
+  ){
+    await this.requireAll(context,"dance.write");
+    if((await this.authorization.resolveScope(context,"catalog.write"))!=="all")
+      throw new ForbiddenException("Управлять архивом групп может руководитель");
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(groupId)||
+       !Number.isSafeInteger(input?.expectedVersion)||
+       input.expectedVersion<1||
+       !["ARCHIVE","RESTORE"].includes(input.action))
+      throw new BadRequestException("Укажите группу, действие и текущую версию");
+    return this.database.withTenantTransaction(context,async client=>{
+      const rows=await client.query<{
+        version:number;status:string;program_id:string;
+        trainer_resource_id:string|null;room_resource_id:string|null
+      }>(
+        `SELECT version,status,program_id,trainer_resource_id,
+           room_resource_id FROM dance_group
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,groupId]
+      );
+      const current=rows.rows[0];
+      if(!current)throw new NotFoundException("Группа не найдена");
+      if(current.version!==input.expectedVersion)
+        throw new ConflictException("Группа изменена другим сотрудником. Обновите страницу");
+      if(input.action==="ARCHIVE"){
+        if(current.status==="ARCHIVED")
+          throw new ConflictException("Группа уже в архиве");
+        const enrolled=await client.query(
+          `SELECT 1 FROM dance_group_member
+           WHERE tenant_id=$1 AND group_id=$2
+             AND status IN ('TRIAL','ACTIVE','PAUSED','WAITLIST')
+           LIMIT 1`,[context.tenantId,groupId]
+        );
+        if(enrolled.rowCount)
+          throw new ConflictException("Сначала переведите или завершите участие учеников");
+        const waiting=await client.query(
+          `SELECT 1 FROM dance_group_waitlist
+           WHERE tenant_id=$1 AND group_id=$2 AND status='WAITING' LIMIT 1`,
+          [context.tenantId,groupId]
+        );
+        if(waiting.rowCount)
+          throw new ConflictException("Сначала обработайте список ожидания");
+        const upcoming=await client.query(
+          `SELECT 1 FROM dance_lesson WHERE tenant_id=$1 AND group_id=$2
+           AND starts_at>now()
+           AND status NOT IN ('COMPLETED','CANCELLED_BY_STUDIO','CANCELLED_BY_TRAINER')
+           LIMIT 1`,[context.tenantId,groupId]
+        );
+        if(upcoming.rowCount)
+          throw new ConflictException("Сначала отмените или перенесите будущие уроки");
+      }else{
+        if(current.status!=="ARCHIVED")
+          throw new ConflictException("Восстановить можно только архивную группу");
+        const program=await client.query(
+          `SELECT 1 FROM dance_program WHERE tenant_id=$1
+           AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,current.program_id]
+        );
+        if(!program.rowCount)
+          throw new ConflictException("Сначала восстановите направление");
+        if(!current.trainer_resource_id)
+          throw new ConflictException("Назначьте действующего тренера перед восстановлением");
+        await this.assertTrainerRoom(client,context.tenantId,
+          current.trainer_resource_id,current.room_resource_id);
+      }
+      const updated=await client.query<{status:string;version:number}>(
+        `UPDATE dance_group SET status=$3,version=version+1,
+           updated_at=now() WHERE tenant_id=$1 AND id=$2
+         RETURNING status,version`,
+        [context.tenantId,groupId,
+         input.action==="ARCHIVE"?"ARCHIVED":"DRAFT"]
+      );
+      await this.audit(client,context,
+        "dance.group_"+input.action.toLowerCase(),
+        "dance_group",groupId,{
+          from:current.status,to:updated.rows[0]!.status
+        });
+      return {id:groupId,status:updated.rows[0]!.status,
+        version:updated.rows[0]!.version,
+        reviewRequired:input.action==="RESTORE"};
     });
   }
 
