@@ -56,6 +56,13 @@ export class BookingController {
     };
   }
 
+  @Post("catalog/:id/approve")
+  @RequirePermission("service.write")
+  async approveRestoredService(@Req() request:AuthenticatedRequest,
+    @Param("id") id:string):Promise<ApiSuccess<{published:true}>>{
+    return {ok:true,data:await this.booking.approveRestoredService(this.context(request),id)};
+  }
+
   @Post("catalog/:id/restore")
   @RequirePermission("service.write")
   async restoreService(@Req() request:AuthenticatedRequest,
