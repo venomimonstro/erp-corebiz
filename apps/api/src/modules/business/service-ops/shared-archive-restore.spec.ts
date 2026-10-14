@@ -113,6 +113,31 @@ describe("shared service catalogue/resource lifecycle (all industry verticals)",
     expect(statements.some(x=>x.includes("service.catalog_restored"))).toBe(true);
     expect(statements.every(x=>!x.includes("DELETE FROM service_booking"))).toBe(true);
   });
+  it("restored services require approval and cannot be booked prematurely",async()=>{
+    const t=catalogue();
+    await t.service.restoreService(ctx,serviceId);
+    const sql=t.client.query.mock.calls.map(x=>String(x[0]));
+    expect(sql.some(x=>x.includes("restore_review_required"))).toBe(true);
+    const booking=t.service as any;
+    const raw={query:jest.fn(async()=>({rows:[{
+      id:serviceId,duration_minutes:60,buffer_before_minutes:0,
+      buffer_after_minutes:0,price_minor:"700000",currency:"RUB",
+      group_capacity:12,delivery_format:"GROUP",
+      metadata:{restore_review_required:true}
+    }],rowCount:1}))};
+    await expect(booking.getService(raw,ctx.tenantId,serviceId))
+      .rejects.toThrow("ещё не подтверждена владельцем");
+    expect(await t.service.approveRestoredService(ctx,serviceId))
+      .toEqual({published:true});
+    expect(t.client.query.mock.calls.some(x=>String(x[0])
+      .includes("metadata=coalesce(metadata"))).toBe(true);
+  });
+  it("permission-limited reception cannot approve service publication",async()=>{
+    const t=catalogue(false);
+    await expect(t.service.approveRestoredService(ctx,serviceId))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(t.db.withTenantTransaction).not.toHaveBeenCalled();
+  });
   it("never resurrects a service on a repeated or unauthorized request",async()=>{
     await expect(catalogue(true,false).service.restoreService(ctx,serviceId))
       .rejects.toBeInstanceOf(NotFoundException);
