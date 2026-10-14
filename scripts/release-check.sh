@@ -34,6 +34,7 @@ node --test scripts/wms-variance-approval-contract.test.mjs
 
 echo "[release] verify YCLIENTS service, subscriptions and family portal schema contracts"
 node --test scripts/service-data-integrity-contract.test.mjs
+node --test scripts/shared-business-lifecycle.test.mjs
 
 echo "[release] validate owner playbooks and simulate every failure path"
 node --test scripts/owner-industry-journeys.test.mjs scripts/multirole-source-contract.test.mjs scripts/dance-owner-contract.test.mjs scripts/dance-shift-pattern.test.mjs scripts/dance-negative-onboarding.test.mjs scripts/procurement-rules-contract.test.mjs scripts/competitor-benchmark-contract.test.mjs scripts/competitor-cross-vertical-contract.test.mjs
