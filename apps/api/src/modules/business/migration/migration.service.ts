@@ -471,9 +471,12 @@ export class MigrationService {
         barcode:get("barcode"),
         salePriceMinor:this.moneyToMinor(get("salePrice")),
         costPriceMinor:this.moneyToMinor(get("costPrice")),
+        salePriceProvided:get("salePrice")?"true":"false",
+        costPriceProvided:get("costPrice")?"true":"false",
         category:get("category"),description:get("description"),
         imageUrl:get("imageUrl"),kind:get("kind"),
-        attributes:JSON.stringify(attributes)
+        attributes:JSON.stringify(attributes),
+        attributesProvided:Object.keys(attributes).length?"true":"false"
       };
     }
 
@@ -605,22 +608,29 @@ export class MigrationService {
       // Only explicitly selected updates can change existing prices.
       // Do not replace inventory balances or change product kind.
       await client.query(
-        "UPDATE product SET name=$3,description=$4,image_url=$5,"+
-        "category_id=coalesce($6::uuid,category_id),updated_at=now() "+
+        "UPDATE product SET name=$3,"+
+        "description=CASE WHEN $4::boolean THEN $5 ELSE description END,"+
+        "image_url=CASE WHEN $6::boolean THEN $7 ELSE image_url END,"+
+        "category_id=coalesce($8::uuid,category_id),updated_at=now() "+
         "WHERE tenant_id=$1 AND id=$2",
         [context.tenantId,current.product_id,row.name,
-          row.description||null,row.imageUrl||null,categoryId]
+          Boolean(row.description),row.description||null,
+          Boolean(row.imageUrl),row.imageUrl||null,categoryId]
       );
-      await client.query(
+      if(row.attributesProvided==="true")await client.query(
         "UPDATE product_variant SET attributes=$3::jsonb,updated_at=now() "+
         "WHERE tenant_id=$1 AND id=$2",
         [context.tenantId,current.variant_id,attrs]
       );
       await client.query(
-        "UPDATE sku SET barcode=$3,sale_price_minor=$4,cost_price_minor=$5,"+
+        "UPDATE sku SET "+
+        "barcode=CASE WHEN $3::boolean THEN $4 ELSE barcode END,"+
+        "sale_price_minor=CASE WHEN $5::boolean THEN $6::bigint ELSE sale_price_minor END,"+
+        "cost_price_minor=CASE WHEN $7::boolean THEN $8::bigint ELSE cost_price_minor END,"+
         "updated_at=now() WHERE tenant_id=$1 AND id=$2",
-        [context.tenantId,current.sku_id,row.barcode||null,
-          row.salePriceMinor,row.costPriceMinor]
+        [context.tenantId,current.sku_id,Boolean(row.barcode),row.barcode||null,
+          row.salePriceProvided==="true",row.salePriceMinor,
+          row.costPriceProvided==="true",row.costPriceMinor]
       );
       return {created:false,updated:true,targetType:"product",targetId:current.product_id};
     }
