@@ -41,6 +41,7 @@ export class ResourcesService {
            r.type, r.name, r.code, r.capacity,
            r.cost_per_hour_minor::text, r.currency, r.timezone,
            r.status, r.metadata, r.online_booking_enabled, r.online_min_lead_minutes,
+           EXTRACT(EPOCH FROM r.updated_at)::text AS revision,
            COALESCE(
              json_agg(
                json_build_object(
@@ -215,9 +216,13 @@ export class ResourcesService {
   }
 
   async rename(
-    context:TenantContext,resourceId:string,input:{name:string}
+    context:TenantContext,resourceId:string,
+    input:{name:string;expectedRevision?:string}
   ):Promise<{updated:true}>{
     const label=input?.name?.trim();
+    if(input.expectedRevision!==undefined &&
+      !/^\d{9,15}(?:\.\d{1,6})?$/.test(input.expectedRevision))
+      throw new BadRequestException("Неверная ревизия ресурса");
     if(!label||label.length<2||label.length>160)
       throw new BadRequestException("Название сотрудника или зала: от 2 до 160 символов");
     if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(resourceId))
@@ -227,15 +232,31 @@ export class ResourcesService {
       (await this.authorization.resolveScope(context,"users.manage"))!=="all")
       throw new ForbiddenException("Изменять сотрудников может руководитель");
     return this.database.withTenantTransaction(context,async client=>{
-      const updated=await client.query(
+      const current=await client.query<{revision:string}>(
+        `SELECT EXTRACT(EPOCH FROM updated_at)::text AS revision
+         FROM service_resource WHERE tenant_id=$1 AND id=$2
+           AND status='ACTIVE' FOR UPDATE`,
+        [context.tenantId,resourceId]
+      );
+      if(!current.rows[0])throw new NotFoundException("Ресурс не найден");
+      if(input.expectedRevision!==undefined &&
+         current.rows[0].revision!==input.expectedRevision)
+        throw new ConflictException(
+          "Тренер или зал уже изменён другим сотрудником. Обновите карточку"
+        );
+      const updated=await client.query<{revision:string}>(
         `UPDATE service_resource SET name=$3,updated_at=now()
-         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE' RETURNING id`,
+         WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+         RETURNING EXTRACT(EPOCH FROM updated_at)::text AS revision`,
         [context.tenantId,resourceId,label]
       );
       if(!updated.rowCount)throw new NotFoundException("Ресурс не найден");
       await this.audit(client,context,"service.resource_renamed",
-        "service_resource",resourceId,{name:label});
-      return {updated:true};
+        "service_resource",resourceId,{
+          name:label,previousRevision:current.rows[0].revision,
+          revision:updated.rows[0]!.revision
+        });
+      return {updated:true,revision:updated.rows[0]!.revision};
     });
   }
 
