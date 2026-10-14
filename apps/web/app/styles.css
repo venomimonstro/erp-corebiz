@@ -4564,3 +4564,44 @@ button, .primary, .secondary { font: inherit; }
 .commerce-launch :is(input,select,button,a):focus-visible{outline:3px solid #86b0e5;outline-offset:2px}
 @media(max-width:750px){.commerce-launch-create{grid-template-columns:1fr}.commerce-launch-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:460px){.commerce-launch .section-block{padding:14px}.commerce-launch-site-picker{align-items:stretch}.commerce-launch-site-picker>*{width:100%}.commerce-launch-steps>a,.commerce-launch-checks>a{grid-template-columns:30px 1fr auto;gap:8px;padding:11px}}
+
+
+/* Shared CoreBiz product catalogue – used by every retail and e-commerce niche. */
+.catalog-workspace{min-width:0}
+.catalog-actions,.catalog-guide{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+.catalog-guide{padding:12px 0 18px}
+.catalog-guide a{border:1px solid #e0e5ec;border-radius:10px;padding:10px 13px;background:#fff;font-size:12px;color:inherit;text-decoration:none}
+.catalog-guide a:hover{background:#f1f5f9}
+.catalog-notice{padding:13px 16px;background:#eaf3ed;border-radius:12px;color:#265943}
+.catalog-product-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px;margin:15px 0 20px}
+.catalog-product-tile{border:1px solid #e3e7ef;border-radius:17px;overflow:hidden;background:#fff;display:flex;flex-direction:column;min-width:0}
+.catalog-product-tile>img,.catalog-image-empty{width:100%;height:165px;object-fit:contain;background:#f5f7fa}
+.catalog-image-empty{display:flex;align-items:center;justify-content:center;font-size:35px;color:#bdc8d6}
+.catalog-product-info{padding:15px;display:flex;flex-direction:column;align-items:start;gap:9px;flex:1}
+.catalog-product-info>strong{font-size:15px;overflow-wrap:anywhere}
+.catalog-product-info>small{font-size:12px;color:#667489}
+.catalog-product-info>button{margin-top:auto}
+.catalog-price-row{display:flex;flex-direction:column;gap:3px}
+.catalog-price-row span{font-size:19px;font-weight:700}
+.catalog-price-row small{font-size:12px;color:#5e6c7e}
+.catalog-drawer-overlay{position:fixed;z-index:1200;inset:0;background:#17202a80;display:flex;justify-content:flex-end;overflow-y:auto}
+.catalog-drawer{width:min(610px,100%);min-height:100%;height:max-content;padding:24px;background:#fff;box-shadow:-10px 0 50px #080f2033}
+.catalog-drawer-head{display:flex;align-items:start;justify-content:space-between;gap:12px;margin-bottom:20px}
+.catalog-drawer-head h2{font-size:24px;margin:3px 0;letter-spacing:-.03em}
+.catalog-drawer-head small{font-size:12px;color:#667789}
+.catalog-editor-form{display:flex;flex-direction:column;gap:14px}
+.catalog-editor-form label,.catalog-subform label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;color:#344153}
+.catalog-editor-form input,.catalog-editor-form select,.catalog-editor-form textarea,.catalog-subform input{width:100%;background:#fff;border:1px solid #d2d9e2;border-radius:10px;padding:10px 12px;font:inherit;color:#1b2633}
+.catalog-editor-form textarea{resize:vertical}
+.catalog-editor-form small{color:#6d7886;font-size:11px;font-weight:400}
+.catalog-editor-two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.catalog-editor-preview{width:100%;max-height:185px;object-fit:contain;border:1px solid #e2e7ee;border-radius:12px}
+.catalog-subform{padding:13px;border-radius:12px;background:#f5f7fa;display:flex;flex-direction:column;gap:10px}
+.catalog-stock-card{border-top:1px solid #e0e5ec;margin-top:26px;padding-top:20px}
+.catalog-stock-card>h3{margin:0 0 11px;font-size:17px}
+.catalog-stock-card p{font-size:13px;line-height:1.5;color:#657184}
+.catalog-stock-row{border-bottom:1px solid #e8edf2;padding:10px 0;display:flex;flex-wrap:wrap;justify-content:space-between;gap:7px;font-size:13px}
+.catalog-archive-confirm{display:flex;align-items:flex-start;gap:8px;font-size:12px;margin:18px 0}
+.catalog-archive-confirm input{margin-top:2px}
+.catalog-workspace :is(button,a,input,select,textarea):focus-visible{outline:3px solid #96b6df;outline-offset:2px}
+@media(max-width:640px){.catalog-drawer{padding:17px}.catalog-editor-two{grid-template-columns:1fr}.catalog-product-grid{grid-template-columns:1fr}}
