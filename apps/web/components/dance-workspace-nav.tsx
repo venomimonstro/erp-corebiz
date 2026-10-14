@@ -2,6 +2,7 @@
 
 const items = [
   { key: "overview", href: "/app/dance", label: "Обзор", hint: "Деньги и контроль" },
+  { key: "directions", href: "/app/dance/directions", label: "Направления", hint: "Категории и услуги" },
   { key: "groups", href: "/app/dance/groups", label: "Расписание", hint: "Группы и занятия" },
   { key: "students", href: "/app/dance/students", label: "Ученики", hint: "Семьи и оплаты" },
   { key: "clients", href: "/app/dance/clients", label: "Кабинеты", hint: "Доступ родителей" },
@@ -17,7 +18,7 @@ const items = [
 export function DanceWorkspaceNav({
   active
 }: {
-  active: "overview" | "groups" | "students" | "clients" | "budget" | "services" | "staff" | "shifts" | "team" | "doctor" | "setup";
+  active: "overview" | "directions" | "groups" | "students" | "clients" | "budget" | "services" | "staff" | "shifts" | "team" | "doctor" | "setup";
 }) {
   return (
     <nav className="studio-nav" aria-label="Разделы студии">
