@@ -861,9 +861,11 @@ export class MigrationService {
       .replace(/\s/g, "")
       .replace(/₽|руб\.?/gi, "")
       .replace(",", ".");
-    const number = Number(normalized);
-    if (!Number.isFinite(number) || number < 0) return "INVALID";
-    return String(Math.round(number * 100));
+    if(!/^\d{1,16}(?:\.\d{1,2})?$/.test(normalized))
+      return "INVALID";
+    const [rubles,kopecks=""]=normalized.split(".");
+    const minor=BigInt(rubles)*100n+BigInt(kopecks.padEnd(2,"0"));
+    return minor<=9223372036854775807n?minor.toString():"INVALID";
   }
 
   private async audit(
