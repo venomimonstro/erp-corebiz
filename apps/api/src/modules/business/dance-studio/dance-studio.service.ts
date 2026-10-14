@@ -1205,11 +1205,9 @@ export class DanceStudioService {
   }
 
   async programs(context: TenantContext,includeArchived=false) {
-    if(includeArchived){
-      await this.requireAll(context,"dance.read");
-    }else{
-      await this.scopeIds(context,"dance.read");
-    }
+    const scopeIds=includeArchived
+      ? (await this.requireAll(context,"dance.read"),null)
+      : await this.scopeIds(context,"dance.read");
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `SELECT p.id,p.name,p.code,p.service_id,p.branch_id,p.min_age,p.max_age,
@@ -1220,8 +1218,17 @@ export class DanceStudioService {
          LEFT JOIN service_catalog_item s
            ON s.tenant_id=p.tenant_id AND s.id=p.service_id
          WHERE p.tenant_id=$1 AND ($2::boolean OR p.status='ACTIVE')
+           AND ($3::uuid[] IS NULL OR EXISTS(
+             SELECT 1 FROM dance_group g
+             JOIN service_resource trainer
+               ON trainer.tenant_id=g.tenant_id
+               AND trainer.id=g.trainer_resource_id
+             WHERE g.tenant_id=p.tenant_id AND g.program_id=p.id
+               AND trainer.membership_id=ANY($3::uuid[])
+               AND g.status<>'ARCHIVED'
+           ))
          ORDER BY p.name`,
-        [context.tenantId,includeArchived]
+        [context.tenantId,includeArchived,scopeIds]
       );
       return result.rows;
     });
