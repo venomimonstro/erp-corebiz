@@ -323,64 +323,64 @@ async function main(){
     defaultDurationMinutes:60
   },403);
   stage="06-lifecycle real owner action and conflict recovery";
-  const allPrograms=await get(owner,"/dance/programs?includeArchived=true");
-  const first=allPrograms.find(p=>p.id===createdPrograms[0].id);
-  assert.ok(first?.revision,"Program editing requires optimistic revision");
-  const renamed=await patch(owner,"/dance/programs/"+first.id,{
-    expectedRevision:first.revision,name:first.name+" (проверено)"
+  const lifecycleAllPrograms=await get(owner,"/dance/programs?includeArchived=true");
+  const lifecycleFirst=lifecycleAllPrograms.find(p=>p.id===createdPrograms[0].id);
+  assert.ok(lifecycleFirst?.revision,"Program editing requires optimistic revision");
+  const lifecycleRenamed=await patch(owner,"/dance/programs/"+lifecycleFirst.id,{
+    expectedRevision:lifecycleFirst.revision,name:lifecycleFirst.name+" (проверено)"
   });
-  assert.equal(renamed.status,"ACTIVE");
-  await patch(owner,"/dance/programs/"+first.id,{
-    expectedRevision:first.revision,name:"Пропавшее изменение"
+  assert.equal(lifecycleRenamed.status,"ACTIVE");
+  await patch(owner,"/dance/programs/"+lifecycleFirst.id,{
+    expectedRevision:lifecycleFirst.revision,name:"Пропавшее изменение"
   },409);
-  await patch(actors.m1,"/dance/programs/"+first.id,{
-    expectedRevision:renamed.revision,name:"Unauthorized editing"
+  await patch(actors.m1,"/dance/programs/"+lifecycleFirst.id,{
+    expectedRevision:lifecycleRenamed.revision,name:"Unauthorized editing"
   },403);
-  await post(owner,"/dance/programs/"+first.id+"/archive",{
-    expectedRevision:renamed.revision
+  await post(owner,"/dance/programs/"+lifecycleFirst.id+"/archive",{
+    expectedRevision:lifecycleRenamed.revision
   },409);
-  const scratch=await post(owner,"/dance/groups",{
+  const lifecycleScratch=await post(owner,"/dance/groups",{
     name:"Временная группа для теста архива",
-    programId:first.id,branchId:branches[0].id,
+    programId:lifecycleFirst.id,branchId:branches[0].id,
     trainerResourceId:trainers[0].id,roomResourceId:large.id,
     capacity:5,breakEvenMembers:2,schedule:[]
   });
-  const archived=await post(owner,"/dance/groups/"+scratch.id+"/lifecycle",{
-    action:"ARCHIVE",expectedVersion:scratch.version
+  const lifecycleArchived=await post(owner,"/dance/groups/"+lifecycleScratch.id+"/lifecycle",{
+    action:"ARCHIVE",expectedVersion:lifecycleScratch.version
   });
-  assert.equal(archived.status,"ARCHIVED");
-  const restored=await post(owner,"/dance/groups/"+scratch.id+"/lifecycle",{
-    action:"RESTORE",expectedVersion:archived.version
+  assert.equal(lifecycleArchived.status,"ARCHIVED");
+  const lifecycleRestored=await post(owner,"/dance/groups/"+lifecycleScratch.id+"/lifecycle",{
+    action:"RESTORE",expectedVersion:lifecycleArchived.version
   });
-  assert.equal(restored.status,"DRAFT");
-  const archivedAgain=await post(owner,"/dance/groups/"+scratch.id+"/lifecycle",{
-    action:"ARCHIVE",expectedVersion:restored.version
+  assert.equal(lifecycleRestored.status,"DRAFT");
+  const lifecycleArchivedAgain=await post(owner,"/dance/groups/"+lifecycleScratch.id+"/lifecycle",{
+    action:"ARCHIVE",expectedVersion:lifecycleRestored.version
   });
-  assert.equal(archivedAgain.status,"ARCHIVED");
-  const temporaryService=await post(owner,"/service/catalog",{
+  assert.equal(lifecycleArchivedAgain.status,"ARCHIVED");
+  const lifecycleTemporaryService=await post(owner,"/service/catalog",{
     name:"Тестовое направление без учеников",category:"Проверка архива",
     durationMinutes:60,priceMinor:budget.groupVisitMinor,
     deliveryFormat:"GROUP",groupCapacity:5
   });
-  const temporaryProgram=await post(owner,"/dance/programs",{
-    name:"Тестовое направление",serviceId:temporaryService.id,
+  const lifecycleTemporaryProgram=await post(owner,"/dance/programs",{
+    name:"Тестовое направление",serviceId:lifecycleTemporaryService.id,
     branchId:branches[0].id,defaultDurationMinutes:60
   });
-  const allAgain=await get(owner,"/dance/programs?includeArchived=true");
-  const temporary=allAgain.find(p=>p.id===temporaryProgram.id);
-  assert.ok(temporary?.revision);
-  const closed=await post(owner,"/dance/programs/"+temporary.id+"/archive",{
-    expectedRevision:temporary.revision
+  const lifecycleAllAgain=await get(owner,"/dance/programs?includeArchived=true");
+  const lifecycleTemporary=lifecycleAllAgain.find(p=>p.id===lifecycleTemporaryProgram.id);
+  assert.ok(lifecycleTemporary?.revision);
+  const lifecycleClosed=await post(owner,"/dance/programs/"+lifecycleTemporary.id+"/archive",{
+    expectedRevision:lifecycleTemporary.revision
   });
-  assert.equal(closed.status,"ARCHIVED");
-  const reactivated=await post(owner,"/dance/programs/"+temporary.id+"/restore",{
-    expectedRevision:closed.revision
+  assert.equal(lifecycleClosed.status,"ARCHIVED");
+  const lifecycleReactivated=await post(owner,"/dance/programs/"+lifecycleTemporary.id+"/restore",{
+    expectedRevision:lifecycleClosed.revision
   });
-  assert.equal(reactivated.status,"ACTIVE");
-  await post(owner,"/dance/programs/"+temporary.id+"/archive",{
-    expectedRevision:reactivated.revision
+  assert.equal(lifecycleReactivated.status,"ACTIVE");
+  await post(owner,"/dance/programs/"+lifecycleTemporary.id+"/archive",{
+    expectedRevision:lifecycleReactivated.revision
   });
-  // Active business directions remain precisely twelve, archived test data
+  // Active business directions remain precisely twelve, lifecycleArchived test data
   // stay in historical tables and never enter monthly revenue.
   assert.equal((await get(owner,"/dance/programs")).length,12);
   stage="06a trainer-service assignments for all 52 coaches";
