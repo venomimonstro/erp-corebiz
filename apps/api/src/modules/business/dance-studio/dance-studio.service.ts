@@ -1204,19 +1204,23 @@ export class DanceStudioService {
     });
   }
 
-  async programs(context: TenantContext) {
-    await this.scopeIds(context, "dance.read");
+  async programs(context: TenantContext,includeArchived=false) {
+    if(includeArchived){
+      await this.requireAll(context,"dance.read");
+    }else{
+      await this.scopeIds(context,"dance.read");
+    }
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `SELECT p.id,p.name,p.code,p.service_id,p.branch_id,p.min_age,p.max_age,
-                p.default_duration_minutes,p.status,p.metadata,
+                p.default_duration_minutes,p.status,p.metadata,\n                EXTRACT(EPOCH FROM p.updated_at)::text AS revision,
                 s.name AS service_name
          FROM dance_program p
          LEFT JOIN service_catalog_item s
            ON s.tenant_id=p.tenant_id AND s.id=p.service_id
-         WHERE p.tenant_id=$1 AND p.status='ACTIVE'
+         WHERE p.tenant_id=$1 AND ($2::boolean OR p.status='ACTIVE')
          ORDER BY p.name`,
-        [context.tenantId]
+        [context.tenantId,includeArchived]
       );
       return result.rows;
     });
@@ -1235,6 +1239,9 @@ export class DanceStudioService {
     }
   ) {
     await this.requireAll(context,"dance.write");
+    if((await this.authorization.resolveScope(context,"catalog.write"))!=="all")
+      throw new ForbiddenException("Управление направлениями требует права изменения каталога");
+
     const name=input.name?.trim();
     if(!name || name.length>160) throw new BadRequestException("Некорректное направление");
     const duration=Math.floor(input.defaultDurationMinutes ?? 60);
@@ -1264,6 +1271,146 @@ export class DanceStudioService {
         ]
       );
       return result.rows[0];
+    });
+  }
+
+
+  /**
+   * Industry-specific direction lifecycle; it references the common service
+   * catalog and never duplicates service prices or historical lesson rows.
+   * Optimistic revision prevents an old owner form from overwriting a
+   * colleague's settings.
+   */
+  async changeProgram(
+    context:TenantContext,programId:string,
+    input:{
+      action:"UPDATE"|"ARCHIVE"|"RESTORE";
+      expectedRevision:string;
+      name?:string;serviceId?:string;branchId?:string|null;
+      minAge?:number|null;maxAge?:number|null;
+      defaultDurationMinutes?:number;
+    }
+  ){
+    await this.requireAll(context,"dance.write");
+    if((await this.authorization.resolveScope(context,"catalog.write"))!=="all")
+      throw new ForbiddenException("Редактировать направления может руководитель с правом каталога");
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(programId))
+      throw new BadRequestException("Некорректное направление");
+    if(!input||!["UPDATE","ARCHIVE","RESTORE"].includes(input.action)||
+       typeof input.expectedRevision!=="string"||
+       !/^\\d{9,15}(?:\\.\\d{1,6})?$/.test(input.expectedRevision))
+      throw new BadRequestException("Требуется действие и ревизия направления");
+    return this.database.withTenantTransaction(context,async client=>{
+      const rows=await client.query<{
+        id:string;name:string;service_id:string|null;
+        branch_id:string|null;min_age:number|null;max_age:number|null;
+        default_duration_minutes:number;status:string;revision:string
+      }>(
+        `SELECT id,name,service_id,branch_id,min_age,max_age,
+           default_duration_minutes,status,
+           EXTRACT(EPOCH FROM updated_at)::text AS revision
+         FROM dance_program WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [context.tenantId,programId]
+      );
+      const original=rows.rows[0];
+      if(!original)throw new NotFoundException("Направление не найдено");
+      if(original.revision!==input.expectedRevision)
+        throw new ConflictException("Направление изменено другим сотрудником. Перезагрузите данные");
+      if(input.action==="ARCHIVE"){
+        if(original.status!=="ACTIVE")
+          throw new ConflictException("Направление уже архивировано");
+        const active=await client.query(
+          `SELECT 1 FROM dance_group
+           WHERE tenant_id=$1 AND program_id=$2
+             AND status IN ('DRAFT','ACTIVE','PAUSED')
+           LIMIT 1`,[context.tenantId,programId]
+        );
+        if(active.rowCount)throw new ConflictException(
+          "Сначала завершите или архивируйте связанные группы"
+        );
+        const scheduled=await client.query(
+          `SELECT 1 FROM dance_lesson l JOIN dance_group g
+             ON g.tenant_id=l.tenant_id AND g.id=l.group_id
+           WHERE l.tenant_id=$1 AND g.program_id=$2
+             AND l.starts_at>now()
+             AND l.status NOT IN ('CANCELLED_BY_STUDIO','CANCELLED_BY_TRAINER','COMPLETED')
+           LIMIT 1`,[context.tenantId,programId]
+        );
+        if(scheduled.rowCount)throw new ConflictException(
+          "Сначала перенесите будущие занятия"
+        );
+      } else if(input.action==="UPDATE"||input.action==="RESTORE"){
+        if(input.action==="UPDATE"&&original.status!=="ACTIVE")
+          throw new ConflictException("Архивное направление сначала восстановите");
+        if(input.action==="RESTORE"&&original.status!=="ARCHIVED")
+          throw new ConflictException("Направление уже активно");
+        const name=(input.name??original.name).trim();
+        if(name.length<2||name.length>160)
+          throw new BadRequestException("Название направления: от 2 до 160 символов");
+        const min=input.minAge===undefined?original.min_age:input.minAge;
+        const max=input.maxAge===undefined?original.max_age:input.maxAge;
+        if((min!==null&&(!Number.isInteger(min)||min<0||min>120))||
+           (max!==null&&(!Number.isInteger(max)||max<0||max>120))||
+           (min!==null&&max!==null&&min>max))
+          throw new BadRequestException("Проверьте возрастные ограничения");
+        const duration=input.defaultDurationMinutes??original.default_duration_minutes;
+        if(!Number.isInteger(duration)||duration<15||duration>360)
+          throw new BadRequestException("Длительность от 15 до 360 минут");
+        const serviceId=input.serviceId??original.service_id;
+        if(!serviceId)throw new ConflictException("У направления нет услуги из общего каталога");
+        const linked=await client.query(
+          `SELECT 1 FROM service_catalog_item
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+          [context.tenantId,serviceId]
+        );
+        if(!linked.rowCount)
+          throw new ConflictException("Связанная услуга не активна");
+        const branchId=input.branchId===undefined?original.branch_id:input.branchId;
+        if(branchId){
+          const branch=await client.query(
+            "SELECT 1 FROM branch WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
+            [context.tenantId,branchId]
+          );
+          if(!branch.rowCount)throw new NotFoundException("Филиал не найден");
+        }
+        if(input.action==="UPDATE"&&(serviceId!==original.service_id||
+           branchId!==original.branch_id)){
+          const related=await client.query(
+            `SELECT 1 FROM dance_group WHERE tenant_id=$1 AND program_id=$2
+             AND status IN ('DRAFT','ACTIVE','PAUSED') LIMIT 1`,
+            [context.tenantId,programId]
+          );
+          if(related.rowCount)throw new ConflictException(
+            "Нельзя изменить услугу или филиал направления с действующими группами"
+          );
+        }
+        input={...input,name,minAge:min,maxAge:max,
+          defaultDurationMinutes:duration,serviceId,branchId};
+      }
+      const updated=await client.query<{status:string;revision:string}>(
+        `UPDATE dance_program SET
+           name=COALESCE($3,name),service_id=COALESCE($4,service_id),
+           branch_id=$5,min_age=$6,max_age=$7,
+           default_duration_minutes=COALESCE($8,default_duration_minutes),
+           status=$9,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2
+         RETURNING status,EXTRACT(EPOCH FROM updated_at)::text AS revision`,
+        [context.tenantId,programId,input.name??original.name,
+         input.serviceId??original.service_id,
+         input.branchId===undefined?original.branch_id:input.branchId,
+         input.minAge===undefined?original.min_age:input.minAge,
+         input.maxAge===undefined?original.max_age:input.maxAge,
+         input.defaultDurationMinutes??original.default_duration_minutes,
+         input.action==="ARCHIVE"?"ARCHIVED":"ACTIVE"]
+      );
+      await this.audit(client,context,
+        "dance.program_"+input.action.toLowerCase(),
+        "dance_program",programId,{
+          from:original.status,to:updated.rows[0]!.status,
+          serviceId:input.serviceId??original.service_id
+        });
+      return {id:programId,status:updated.rows[0]!.status,
+        revision:updated.rows[0]!.revision};
     });
   }
 
