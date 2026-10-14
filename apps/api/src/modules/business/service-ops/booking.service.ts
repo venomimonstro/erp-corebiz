@@ -34,7 +34,12 @@ export class BookingService {
     private readonly economics: ServiceEconomicsService
   ) {}
 
-  async services(context: TenantContext): Promise<Array<Record<string, unknown>>> {
+  async services(
+    context:TenantContext,status:"ACTIVE"|"ARCHIVED"="ACTIVE"
+  ):Promise<Array<Record<string,unknown>>>{
+    if(status==="ARCHIVED" &&
+      (await this.authorization.resolveScope(context,"users.manage"))!=="all")
+      throw new ForbiddenException("Архив услуг доступен только руководителю");
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `SELECT
@@ -55,10 +60,10 @@ export class BookingService {
          FROM service_catalog_item s
          LEFT JOIN service_catalog_skill_requirement r
            ON r.tenant_id = s.tenant_id AND r.service_id = s.id
-         WHERE s.tenant_id = $1 AND s.status = 'ACTIVE'
+         WHERE s.tenant_id = $1 AND s.status = $2
          GROUP BY s.id
          ORDER BY s.category NULLS LAST, s.name`,
-        [context.tenantId]
+        [context.tenantId,status]
       );
       return result.rows;
     });
@@ -285,6 +290,43 @@ export class BookingService {
         [context.tenantId,context.userId,context.membershipId,serviceId]
       );
       return {archived:true};
+    });
+  }
+
+  /**
+   * Common catalog lifecycle for all sectors (beauty, dance, auto service).
+   * Never delete a sold product or a historical booking. Restore returns the
+   * original stable service ID and requires an explicit owner decision.
+   */
+  async restoreService(
+    context:TenantContext,serviceId:string
+  ):Promise<{restored:true;reviewRequired:true}>{
+    await this.requireServiceAll(context,"service.write");
+    if((await this.authorization.resolveScope(context,"users.manage"))!=="all")
+      throw new ForbiddenException("Восстановление услуг доступно руководителю");
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(serviceId))
+      throw new BadRequestException("Некорректная услуга");
+    return this.database.withTenantTransaction(context,async client=>{
+      const found=await client.query(
+        `SELECT 1 FROM service_catalog_item
+         WHERE tenant_id=$1 AND id=$2 AND status='ARCHIVED' FOR UPDATE`,
+        [context.tenantId,serviceId]
+      );
+      if(!found.rowCount)throw new NotFoundException("Архивная услуга не найдена");
+      await client.query(
+        `UPDATE service_catalog_item SET status='ACTIVE',updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='ARCHIVED'`,
+        [context.tenantId,serviceId]
+      );
+      await client.query(
+        `INSERT INTO audit_event(tenant_id,actor_user_id,actor_membership_id,
+           action,resource_type,resource_id)
+         VALUES($1,$2,$3,'service.catalog_restored','service_catalog_item',$4)`,
+        [context.tenantId,context.userId,context.membershipId,serviceId]
+      );
+      // Service prices, duration, skills, assignment and external listing
+      // must all be reviewed before the business publishes a new booking.
+      return {restored:true,reviewRequired:true};
     });
   }
 
