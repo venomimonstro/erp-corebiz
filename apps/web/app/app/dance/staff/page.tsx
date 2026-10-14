@@ -5,7 +5,7 @@ import {DanceWorkspaceNav} from "../../../../components/dance-workspace-nav";
 import {apiRequest} from "../../../../lib/api";
 type Worker={id:string;name:string;type:string;branch_id:string|null;
   branch_name:string|null;membership_id:string|null;
-  online_booking_enabled:boolean;online_min_lead_minutes:number};
+  online_booking_enabled:boolean;online_min_lead_minutes:number;revision:string};
 type Branch={id:string;name:string};
 type Group={trainer_resource_id:string;name:string;program_name:string;status:string};
 type Lesson={id:string;trainer_resource_id:string|null;starts_at:string;ends_at:string;
@@ -211,11 +211,16 @@ export default function DanceStaffPage(){
     setBusy(true);setError("");setNotice("");
     try{
       await apiRequest("/service/resources/"+current.id,{
-        method:"PATCH",body:JSON.stringify({name:editedName})
+        method:"PATCH",body:JSON.stringify({
+          name:editedName,expectedRevision:current.revision
+        })
       });
       setNotice("Имя изменено. История посещений и начислений сохранена.");
       await reload();setSelected("");
-    }catch(err){setError(err instanceof Error?err.message:"Не удалось изменить");}
+    }catch(err){
+      setError((err instanceof Error?err.message:"Не удалось изменить")+
+        ". При одновременном редактировании загрузите актуальные данные.");
+    }
     finally{setBusy(false);}
   }
   async function restoreWorker(resourceId:string){
