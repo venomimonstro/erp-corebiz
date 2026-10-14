@@ -51,6 +51,10 @@ export class DanceCustomerPortalService{
       // A typo in the owner's customer selector must never silently
       // transfer a parent's login to another family's private records.
       // Switching the CRM identity requires explicit revocation first.
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [context.tenantId+"|dance-portal-link|"+input.membershipId]
+      );
       const existing=await client.query<{party_id:string;status:string}>(
         `SELECT party_id,status FROM dance_customer_account
          WHERE tenant_id=$1 AND membership_id=$2 FOR UPDATE`,
