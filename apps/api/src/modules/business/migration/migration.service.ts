@@ -113,7 +113,7 @@ export class MigrationService {
       }
 
       const rows = sourceType === "CSV"
-        ? this.parseCsv(buffer.toString("utf8"))
+        ? this.parseCsv(this.decodeCsv(buffer))
         : await this.parseXlsx(buffer);
 
       if (!rows.length) {
@@ -731,6 +731,17 @@ export class MigrationService {
     }
 
     return { created: true, targetType: "party", targetId: partyId };
+  }
+
+  // Excel frequently exports Russian CSV as Windows-1251 or UTF-16LE.
+  // Never silently replace bytes with the Unicode replacement character.
+  private decodeCsv(buffer:Buffer):string{
+    if(buffer[0]===0xff&&buffer[1]===0xfe)
+      return new TextDecoder("utf-16le",{fatal:true}).decode(buffer.subarray(2));
+    try{return new TextDecoder("utf-8",{fatal:true}).decode(buffer);}
+    catch{
+      return new TextDecoder("windows-1251",{fatal:true}).decode(buffer);
+    }
   }
 
   private parseCsv(text: string): SourceRow[] {
