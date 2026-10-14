@@ -127,9 +127,12 @@ export default function CommerceDecisionsPage() {
               Одна страница с конкретными действиями.
             </p>
           </div>
+          <div className="header-actions">
+            <a className="secondary-button" href="/app/commerce/launch">Настроить и запустить магазин →</a>
           <button type="button" disabled={loading} onClick={() => void load()}>
             {loading ? "Проверяем…" : "Обновить"}
           </button>
+          </div>
         </header>
 
         {error ? <div className="studio-message error" role="alert">{error}</div> : null}
