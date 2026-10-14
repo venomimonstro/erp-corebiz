@@ -35,7 +35,8 @@
     "test:wms:benchmark": "node --test scripts/wms-moysklad-axelot-contract.test.mjs",
     "test:wms:variance": "node --test scripts/wms-variance-approval-contract.test.mjs",
     "test:service-integrity": "node --test scripts/service-data-integrity-contract.test.mjs",
-    "test:dance:integrity": "node --test scripts/dance-doctor-integrity.test.mjs"
+    "test:dance:integrity": "node --test scripts/dance-doctor-integrity.test.mjs",
+    "test:shared-lifecycle": "node --test scripts/shared-business-lifecycle.test.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
