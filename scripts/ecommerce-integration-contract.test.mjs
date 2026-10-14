@@ -34,8 +34,8 @@ test("Internal CMS store is created over SKU and OMS, not a duplicate product ca
   assert.match(sites,/return \{\s*id: site\.id/);
   assert.match(controller,/@Post\(\)/);
   assert.match(storefront,/FROM sku s/);
-  assert.match(storefront,/FROM inventory_balance b/);
-  assert.match(storefront,/FROM inventory_policy ip/);
+  assert.match(storefront,/LEFT JOIN inventory_balance b/);
+  assert.match(storefront,/LEFT JOIN inventory_policy ip/);
   assert.match(storefront,/this\.sales\.create\(context/);
   assert.match(storefront,/idempotencyKey: "storefront:cart:"/);
 });
