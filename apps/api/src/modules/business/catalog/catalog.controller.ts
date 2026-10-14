@@ -30,6 +30,44 @@ export class CatalogController {
     };
   }
 
+
+  @Get("categories")
+  @RequirePermission("catalog.read")
+  async categories(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.catalog.categories(this.context(request))};
+  }
+
+  @Post("categories")
+  @RequirePermission("catalog.write")
+  async createCategory(@Req() request:AuthenticatedRequest,
+    @Body() body:{name:string;parentId?:string}):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.catalog.createCategory(this.context(request),body)};
+  }
+
+  @Get(":productId")
+  @RequirePermission("catalog.read")
+  async detail(@Req() request:AuthenticatedRequest,
+    @Param("productId") id:string):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.catalog.detail(this.context(request),id)};
+  }
+
+  @Patch(":productId")
+  @RequirePermission("catalog.write")
+  async update(@Req() request:AuthenticatedRequest,
+    @Param("productId") id:string,
+    @Body() body:{name?:string;description?:string|null;imageUrl?:string|null;
+      categoryId?:string|null;barcode?:string|null;attributes?:Record<string,string>;
+      salePriceMinor?:string;costPriceMinor?:string}):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.catalog.update(this.context(request),id,body)};
+  }
+
+  @Post(":productId/archive")
+  @RequirePermission("catalog.write")
+  async archive(@Req() request:AuthenticatedRequest,
+    @Param("productId") id:string):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.catalog.archive(this.context(request),id)};
+  }
+
   @Patch(":productId/image")
   @RequirePermission("catalog.write")
   async updateImage(
