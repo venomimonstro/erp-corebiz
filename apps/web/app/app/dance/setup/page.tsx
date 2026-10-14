@@ -4,18 +4,21 @@ import {ServiceBusinessSetup} from "../../../../components/service-business-setu
 import {AppSidebar} from "../../../../components/app-sidebar";
 import {DanceWorkspaceNav} from "../../../../components/dance-workspace-nav";
 import {apiRequest} from "../../../../lib/api";
+import {danceBusinessStages,type BusinessAction} from "../../../../lib/shared-business-stage-actions";
 
 type Step={
   id:string;title:string;subtitle:string;href:string;count:number;
   required:boolean;done:boolean;
 };
 type Readiness={ready:number;all:number;canLaunch:boolean;steps:Step[]};
+type Context={permissions:Array<{code:string;scope:string}>};
 
 export default function DanceSetupPage(){
   const [advanced,setAdvanced]=useState(false);
   const [data,setData]=useState<Readiness|null>(null);
   const [error,setError]=useState("");
   const [refreshing,setRefreshing]=useState(false);
+  const [context,setContext]=useState<Context|null>(null);
   const reload=useCallback(async()=>{
     // An old green progress bar cannot survive a failed server refresh.
     setData(null);setError("");
@@ -27,6 +30,26 @@ export default function DanceSetupPage(){
     finally{setRefreshing(false);}
   },[]);
   useEffect(()=>{void reload();},[reload]);
+  useEffect(()=>{
+    let cancelled=false;
+    void apiRequest<Context>("/workspace/context")
+      .then(value=>{if(!cancelled)setContext(value);})
+      .catch(()=>{if(!cancelled)setContext(null);});
+    return()=>{cancelled=true;};
+  },[]);
+  const can=(code:string)=>Boolean(context?.permissions.some(entry=>
+    (entry.code===code||entry.code==="*")&&entry.scope==="all"
+  ));
+  const action=(input:BusinessAction,kind:string)=>(
+    can(input.permission)?
+      <a key={kind} className="dance-lifecycle-action" href={input.href}>
+        {input.label} →
+      </a>:
+      <span key={kind} className="dance-lifecycle-disabled" title={
+        context?"Нужны права "+input.permission:"Права доступа ещё не проверены"
+      }>{input.label} · нет прав</span>
+  );
+
 
   if(advanced)return <>
     <div className="dance-setup-return">
@@ -62,6 +85,42 @@ export default function DanceSetupPage(){
         <a href="/app/dance/diagnostics" className="secondary-button">
           Найти ошибку и исправить →
         </a>
+      </section>
+      <section className="dance-owner-surface dance-lifecycle-guide">
+        <div className="dance-owner-section-heading">
+          <div>
+            <span className="dance-owner-eyebrow">Полный цикл управления</span>
+            <h2>Что можно создать, изменить, архивировать и восстановить</h2>
+            <p>Действия из одного рабочего места. Общие сущности CoreBiz
+              используются во всех нишах; специальные — только в студии.
+              Удаление истории платежей и посещений не допускается.</p>
+          </div>
+        </div>
+        <div className="dance-lifecycle-grid">
+          {danceBusinessStages.map((stage,index)=><article key={stage.id}
+            className="dance-lifecycle-card">
+            <div className="dance-lifecycle-heading">
+              <small>{String(index+1).padStart(2,"0")} ·
+                {stage.origin==="shared"?"Общий модуль":"Студия танцев"}</small>
+              <h3>{stage.title}</h3>
+            </div>
+            <p>{stage.why}</p>
+            <div className="dance-lifecycle-actions">
+              {action(stage.configure,"create")}
+              {stage.change?action(stage.change,"edit"):null}
+              {stage.retire?action(stage.retire,"retire"):null}
+              {stage.recover?action(stage.recover,"restore"):null}
+            </div>
+            <p className="dance-lifecycle-record">
+              <strong>Единый источник:</strong> {stage.systemOfRecord}
+            </p>
+            <p className="dance-lifecycle-invariant">{stage.invariant}</p>
+          </article>)}
+        </div>
+        {!context?<p className="muted" role="status">
+          Права доступа пока не удалось проверить: изменение данных не разрешено
+          через эти ссылки. Повторно войдите в компанию и проверьте роль.
+        </p>:null}
       </section>
       {error?<div className="dance-owner-error" role="alert">
         <span>{error}</span>
