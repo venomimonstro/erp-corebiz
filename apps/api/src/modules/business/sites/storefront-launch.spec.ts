@@ -77,6 +77,24 @@ describe("ecommerce launch safety", () => {
     // No PSP is inferred from published pages or a verified domain.
   });
 
+  it("cannot test orders with stock and CMS ready but no pickup or delivery",async()=>{
+    const row={
+      public_slug:"draft-shop",store_enabled:true,home_published:true,
+      catalog_published:true,priced_sku:true,available_sku:true,
+      primary_domain:null,acquiring_configured:false,
+      fiscal_configured:false,delivery_configured:false
+    };
+    const database={
+      withTenantTransaction:jest.fn(async(_context:any,run:any)=>
+        run({query:jest.fn(async()=>({rows:[row]}))}))
+    };
+    const result:any=await storefront(database).readiness(context,siteId);
+    expect(result.canTestOrders).toBe(false);
+    expect(result.checks.find((x:any)=>x.code==="DELIVERY_CONFIGURED").done)
+      .toBe(false);
+    expect(result.canLaunchWithOnlinePayments).toBe(false);
+  });
+
   it("builds a store catalog and storefront config in the same transaction",async()=>{
     const statements:string[]=[];
     const client={query:jest.fn(async(sql:string)=>{
