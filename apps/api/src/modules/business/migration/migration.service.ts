@@ -22,7 +22,12 @@ const PRODUCT_ALIASES: Record<string, string[]> = {
   salePrice: ["price", "цена", "цена продажи", "sale price", "розничная цена",
     "цена розничная", "розничная цена руб", "цена продажи руб", "цена руб"],
   costPrice: ["cost", "себестоимость", "закупочная цена", "cost price",
-    "учетная цена", "учётная цена", "себестоимость руб", "закупочная цена руб"]
+    "учетная цена", "учётная цена", "себестоимость руб", "закупочная цена руб"],
+  category: ["category", "категория", "группа товаров", "раздел каталога"],
+  description: ["description", "описание", "описание товара"],
+  imageUrl: ["image", "picture", "image url", "photo", "фото", "ссылка на фото",
+    "изображение", "ссылка на изображение"],
+  kind: ["kind", "тип товара", "учёт товара"]
 };
 
 const CUSTOMER_ALIASES: Record<string, string[]> = {
@@ -145,11 +150,17 @@ export class MigrationService {
 
       let validCount = 0;
       let errorCount = 0;
+      const seenProducts=new Set<string>();
 
       for (let index = 0; index < rows.length; index += 1) {
         const source = rows[index]!;
         const normalized = this.normalizeRow(input.entityType, source, mapping);
         const errors = this.validateRow(input.entityType, normalized);
+        if(input.entityType==="PRODUCTS"){
+          const key=normalized.sku!.toLocaleLowerCase("ru");
+          if(seenProducts.has(key))errors.push("Повтор SKU в файле: "+normalized.sku);
+          seenProducts.add(key);
+        }
         const status = errors.length ? "ERROR" : "VALID";
         const fingerprint = this.fingerprint(input.entityType, normalized);
 
@@ -424,12 +435,22 @@ export class MigrationService {
     };
 
     if (entityType === "PRODUCTS") {
+      const name=get("name"),sku=get("sku");
+      const attributes:Record<string,string>={};
+      for(const [column,value] of Object.entries(source)){
+        const matched=column.trim().match(/^(?:характеристика|attribute|attr)\s*:\s*(.+)$/i);
+        if(matched&&value.trim())attributes[matched[1]!.trim()]=value.trim();
+      }
       return {
-        name: get("name"),
-        sku: get("sku"),
-        barcode: get("barcode"),
-        salePriceMinor: this.moneyToMinor(get("salePrice")),
-        costPriceMinor: this.moneyToMinor(get("costPrice"))
+        name,
+        sku:sku||"AUTO-"+createHash("sha256")
+          .update(name.trim().toLocaleLowerCase("ru")).digest("hex").slice(0,12).toUpperCase(),
+        barcode:get("barcode"),
+        salePriceMinor:this.moneyToMinor(get("salePrice")),
+        costPriceMinor:this.moneyToMinor(get("costPrice")),
+        category:get("category"),description:get("description"),
+        imageUrl:get("imageUrl"),kind:get("kind"),
+        attributes:JSON.stringify(attributes)
       };
     }
 
@@ -457,6 +478,28 @@ export class MigrationService {
       if (!row.name || row.name.length < 2) errors.push("Не указано название товара");
       if (!/^\d+$/.test(row.salePriceMinor || "0")) errors.push("Некорректная цена продажи");
       if (!/^\d+$/.test(row.costPriceMinor || "0")) errors.push("Некорректная себестоимость");
+      if(row.name.length>240||row.sku.length>128||row.barcode.length>128)
+        errors.push("Превышена длина названия, артикула или штрихкода");
+      if(row.description.length>10000||row.category.length>120)
+        errors.push("Слишком длинное описание или категория");
+      if(row.imageUrl){
+        try{
+          const url=new URL(row.imageUrl);
+          if(url.protocol!=="https:"||url.username||url.password||
+             row.imageUrl.length>2048)throw new Error("INVALID");
+        }catch{errors.push("Фото должно быть ссылкой HTTPS");}
+      }
+      const kind=row.kind.toLowerCase();
+      if(kind&&!["stockable","non_stock","товар","услуга","без учёта"].includes(kind))
+        errors.push("Неподдерживаемый тип товара");
+      const attrs=JSON.parse(row.attributes) as Record<string,string>;
+      if(Object.keys(attrs).length>40||Object.entries(attrs).some(([k,v])=>
+        k.length>80||v.length>500))errors.push("Неверные характеристики");
+      for(const value of [row.salePriceMinor,row.costPriceMinor]){
+        if(/^\d+$/.test(value) && (value.length>18||
+          BigInt(value)>9223372036854775807n))
+          errors.push("Цена превышает допустимое значение");
+      }
     } else {
       if (!row.displayName || row.displayName.length < 2) {
         errors.push("Не указано имя/название клиента");
