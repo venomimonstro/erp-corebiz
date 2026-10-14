@@ -333,6 +333,37 @@ async function main(){
     assert.ok(currentRules.some(r=>r.employee_resource_id===trainer.id),
       "Trainer "+trainer.id+" has no linked service");
   stats.trainersWithServices=trainers.length;
+  stage="06b shared service price integrity and role separation";
+  const published=await get(owner,"/service/catalog");
+  const first=published.find(item=>item.id===groupServices[0].id);
+  assert.ok(first?.revision,"Catalog should expose exact database revision");
+  // Receptionists must be able to book a lesson, but not lower the
+  // company-wide prices or secretly issue a cheaper subscription plan.
+  await api(actors.m1,"PATCH","/service/catalog/"+first.id,{
+    priceMinor:"100",expectedRevision:first.revision
+  },403);
+  await post(actors.m1,"/service/delivery-rules",{
+    serviceId:first.id,employeeResourceId:trainers[0].id,
+    priceMinor:"100"
+  },403);
+  await post(actors.m1,"/service/package-plans",{
+    name:"Запрещённый льготный тариф",
+    visitLimit:10,durationDays:30,priceMinor:"100"
+  },403);
+  const saved=await api(owner,"PATCH","/service/catalog/"+first.id,{
+    name:first.name+" · проверено",expectedRevision:first.revision
+  });
+  assert.equal(saved.updated,true);
+  assert.notEqual(saved.revision,first.revision);
+  // Simulate two administrators holding the same initially loaded card.
+  await api(owner,"PATCH","/service/catalog/"+first.id,{
+    priceMinor:"100",expectedRevision:first.revision
+  },409);
+  const after=await get(owner,"/service/catalog");
+  const confirmed=after.find(item=>item.id===first.id);
+  assert.equal(confirmed.price_minor,budget.groupVisitMinor,
+    "A stale update must not overwrite the 2400 RUB group price");
+
   const oneVisit=await post(owner,"/service/package-plans",{
     name:"Разовое групповое 2 400 ₽",packageKind:"VISITS",
     visitLimit:1,durationDays:30,priceMinor:budget.groupVisitMinor,
