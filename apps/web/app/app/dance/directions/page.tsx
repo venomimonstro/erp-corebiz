@@ -148,7 +148,7 @@ export default function DanceDirectionsPage(){
    }finally{setBusy(false);}
  }
  return <main className="app-shell">
-  <AppSidebar active="dance-groups"/>
+  <AppSidebar active="dance-directions"/>
   <section className="workspace workspace-wide">
    <header className="dance-owner-heading">
      <div><p className="dance-owner-kicker">Управление направлениями</p>
