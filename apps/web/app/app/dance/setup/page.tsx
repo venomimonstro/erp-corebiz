@@ -51,7 +51,7 @@ export default function DanceSetupPage(){
   );
 
 
-  if(advanced)return <>
+  if(advanced&&can("catalog.write"))return <>
     <div className="dance-setup-return">
       <button type="button" onClick={()=>{
         setAdvanced(false);void reload();
@@ -71,7 +71,10 @@ export default function DanceSetupPage(){
         <div className="dance-owner-actions">
           <button type="button" className="dance-owner-secondary" disabled={refreshing}
             onClick={()=>void reload()}>{refreshing?"Проверяем…":"Проверить готовность"}</button>
-          <button type="button" className="dance-owner-primary" onClick={()=>setAdvanced(true)}>
+          <button type="button" className="dance-owner-primary"
+            disabled={!can("catalog.write")}
+            title={can("catalog.write")?"":"Настройки услуг требуют права catalog.write"}
+            onClick={()=>setAdvanced(true)}>
             Расширенные настройки ↗
           </button>
         </div>
@@ -158,6 +161,8 @@ export default function DanceSetupPage(){
               </div>
               {step.href==="/app/dance/setup"?
                 <button type="button" className="dance-setup-step-link"
+                  disabled={!can("catalog.write")}
+                  title={can("catalog.write")?"":"Для изменения прайса нужны права руководителя"}
                   onClick={()=>setAdvanced(true)}>
                   {step.done?"Изменить":"Настроить"} →
                 </button>:
