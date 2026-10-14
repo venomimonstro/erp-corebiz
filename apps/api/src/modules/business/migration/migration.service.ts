@@ -151,6 +151,7 @@ export class MigrationService {
       let validCount = 0;
       let errorCount = 0;
       const seenProducts=new Set<string>();
+      const seenBarcodes=new Set<string>();
 
       for (let index = 0; index < rows.length; index += 1) {
         const source = rows[index]!;
@@ -160,6 +161,11 @@ export class MigrationService {
           const key=normalized.sku!.toLocaleLowerCase("ru");
           if(seenProducts.has(key))errors.push("Повтор SKU в файле: "+normalized.sku);
           seenProducts.add(key);
+          if(normalized.barcode){
+            if(seenBarcodes.has(normalized.barcode))
+              errors.push("Повтор штрихкода в файле: "+normalized.barcode);
+            seenBarcodes.add(normalized.barcode);
+          }
         }
         const status = errors.length ? "ERROR" : "VALID";
         const fingerprint = this.fingerprint(input.entityType, normalized);
@@ -572,7 +578,7 @@ export class MigrationService {
     if(row.barcode){
       const barcode=await client.query<{id:string}>(
         "SELECT id FROM sku WHERE tenant_id=$1 AND barcode=$2 "+
-        "AND code<>$3 AND status='ACTIVE' LIMIT 1",
+        "AND lower(code)<>lower($3) AND status='ACTIVE' LIMIT 1",
         [context.tenantId,row.barcode,skuCode]
       );
       if(barcode.rowCount)throw new ConflictException(
