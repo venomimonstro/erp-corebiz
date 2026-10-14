@@ -754,7 +754,10 @@ export class StorefrontService {
         done:site.delivery_configured,
         action:"Добавьте самовывоз или курьера магазина с фиксированным тарифом."}
     ];
-    const canTestOrders=checks.slice(0,5).every(check=>check.done);
+    // Customers cannot checkout without at least one active delivery option.
+    // A configured site alone is not a usable test shop.
+    const canTestOrders=checks.slice(0,5).every(check=>check.done)
+      &&site.delivery_configured;
     return {
       siteId,publicUrl:"/s/"+site.public_slug,
       primaryDomain:site.primary_domain,
