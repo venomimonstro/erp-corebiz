@@ -160,6 +160,8 @@ export class CatalogService {
     const result=await client.query<{allowed:boolean}>(
       `SELECT EXISTS(
         SELECT 1 FROM membership_role mr
+        JOIN tenant_membership tm ON tm.tenant_id=mr.tenant_id
+          AND tm.id=mr.membership_id AND tm.status='ACTIVE'
         JOIN role_permission rp ON rp.tenant_id=mr.tenant_id AND rp.role_id=mr.role_id
         WHERE mr.tenant_id=$1 AND mr.membership_id=$2
           AND rp.scope='all'
