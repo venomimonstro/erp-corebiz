@@ -391,3 +391,43 @@ test("Family portal prioritizes upcoming visits and preserves historical attenda
   assert.match(portalPage,/finance_verified/);
   assert.match(portalPage,/unassignedFamilyPasses/);
 });
+
+test("Shared lifecycle restores trainers and rooms without reinstating revoked employee logins",()=>{
+  const common=src("apps/api/src/modules/business/service-ops/resources.service.ts");
+  const controller=src("apps/api/src/modules/business/service-ops/resources.controller.ts");
+  const ui=src("apps/web/app/app/dance/staff/page.tsx");
+  const spec=src("apps/api/src/modules/business/service-ops/shared-archive-restore.spec.ts");
+  assert.match(common,/status:"ACTIVE"\|"ARCHIVED"="ACTIVE"/);
+  assert.match(common,/status='ARCHIVED' FOR UPDATE/);
+  assert.match(common,/online_booking_enabled=false/);
+  assert.match(common,/loginRequiresReview/);
+  assert.match(common,/service\.resource_restored/);
+  assert.doesNotMatch(common.slice(common.indexOf("  async restore("),
+    common.indexOf("  async createSkill(")),/UPDATE tenant_membership/);
+  assert.match(controller,/@Get\("archived"\)/);
+  assert.match(controller,/@Post\(":id\/restore"\)/);
+  assert.match(ui,/\/service\/resources\/archived/);
+  assert.match(ui,/Подтвердить восстановление/);
+  assert.match(spec,/loginRequiresReview:true/);
+  assert.match(workflow,/archivedResources=await get/);
+  assert.match(workflow,/coachBack\.onlineBookingEnabled,false/);
+});
+
+test("Restored service remains blocked from booking until owner reviews and publishes",()=>{
+  const service=src("apps/api/src/modules/business/service-ops/booking.service.ts");
+  const controller=src("apps/api/src/modules/business/service-ops/booking.controller.ts");
+  const ui=src("apps/web/app/app/dance/services/page.tsx");
+  assert.match(service,/restore_review_required/);
+  assert.match(service,/row\.metadata\?\.restore_review_required===true/);
+  assert.match(service,/async approveRestoredService/);
+  assert.match(service,/service\.catalog_republished/);
+  assert.match(service,/metadata=coalesce\(metadata,'\{\}'::jsonb\)-'restore_review_required'/);
+  assert.match(controller,/@Get\("catalog\/archived"\)/);
+  assert.match(controller,/@Post\("catalog\/:id\/approve"\)/);
+  assert.match(ui,/restore_review_required/);
+  assert.match(ui,/Восстановленная услуга ожидает публикации/);
+  assert.match(ui,/Открыть запись клиентов/);
+  assert.match(workflow,/await get\(owner,freeSlots,409\)/);
+  assert.match(workflow,/restoredService\.reviewRequired,true/);
+  assert.match(workflow,/\/catalog\/archived/);
+});
