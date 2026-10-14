@@ -44,7 +44,7 @@ export default function DanceServiceCatalogPage(){
       const has=(code:string)=>ctx.permissions.some(p=>
         (p.code===code||p.code==="*")&&p.scope==="all");
       const isAdmin=has("users.manage");
-      setPermissions({write:has("service.write"),admin:isAdmin});
+      setPermissions({write:has("service.write")&&has("catalog.write"),admin:isAdmin&&has("service.write")});
       setArchivedItems(isAdmin?await apiRequest<Service[]>("/service/catalog/archived"):[]);
     }catch(e){setError(e instanceof Error?e.message:"Не удалось открыть каталог услуг");}
     finally{setBusy(false);}
@@ -64,7 +64,7 @@ export default function DanceServiceCatalogPage(){
     setDuration(String(item.duration_minutes));
     setArchiveConfirm(false);setPublishConfirm(false);setError("");setNotice("");
   };
-  async function save(e:FormEvent){
+  // Match API requirements: editing the shared catalog needs catalog.write,\n  // while archiving/restoring additionally requires executive permissions.\n  async function save(e:FormEvent){
     e.preventDefault();
     if(!chosen||!permissions.write)return;
     const priceMinor=minor(price),minutes=Number(duration);
