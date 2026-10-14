@@ -479,5 +479,5 @@ test("Owner can manage direction lifecycle without a second catalog",()=>{
   assert.match(code,/will not archive group while a child remains enrolled/);
   assert.match(code,/rejects a foreign branch/);
   assert.match(workflow,/06-lifecycle real owner action and conflict recovery/);
-  assert.match(workflow,/assert\.equal\(archivedAgain\.status,"ARCHIVED"\)/);
+  assert.match(workflow,/assert\.equal\(lifecycleArchivedAgain\.status,"ARCHIVED"\)/);
 });
