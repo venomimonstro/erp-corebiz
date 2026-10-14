@@ -195,6 +195,14 @@ export default function DanceGroupsPage() {
   const [programMaxAge, setProgramMaxAge] = useState("17");
   const [groupModal, setGroupModal] = useState(false);
   const [editingGroupId, setEditingGroupId] = useState("");
+  const [groupImpact,setGroupImpact]=useState<{
+    groupId:string;version:number;futureLessons:number;
+    futureParticipants:number;firstLessonAt:string|null;
+    lastLessonAt:string|null
+  }|null>(null);
+  const [impactLoading,setImpactLoading]=useState(false);
+  const [impactError,setImpactError]=useState("");
+  const [keepFutureAcknowledged,setKeepFutureAcknowledged]=useState(false);
   const [groupProgramId, setGroupProgramId] = useState("");
   const [groupTrainerId, setGroupTrainerId] = useState("");
   const [groupRoomId, setGroupRoomId] = useState("");
@@ -462,6 +470,29 @@ export default function DanceGroupsPage() {
     setGroupModal(true);
   }
 
+  useEffect(()=>{
+    if(!editingGroupId||!groupModal){
+      setGroupImpact(null);setKeepFutureAcknowledged(false);
+      return;
+    }
+    let cancelled=false;
+    setGroupImpact(null);
+    setKeepFutureAcknowledged(false);
+    setImpactLoading(true);
+    setImpactError("");
+    void apiRequest<{
+      groupId:string;version:number;futureLessons:number;
+      futureParticipants:number;firstLessonAt:string|null;
+      lastLessonAt:string|null
+    }>("/dance/groups/"+encodeURIComponent(editingGroupId)+"/impact")
+      .then(data=>{if(!cancelled)setGroupImpact(data);})
+      .catch(error=>{if(!cancelled)setImpactError(
+        error instanceof Error?error.message:"Не удалось проверить будущие занятия"
+      );})
+      .finally(()=>{if(!cancelled)setImpactLoading(false);});
+    return()=>{cancelled=true;};
+  },[editingGroupId,groupModal]);
+
   function toggleGroupDay(day:number){
     setGroupDays((current)=>
       current.includes(day)
@@ -510,9 +541,16 @@ export default function DanceGroupsPage() {
       if(editingGroupId){
         const current=groups.find(item=>item.id===editingGroupId);
         if(!current) throw new Error("Группа для изменения не найдена");
+        if(!groupImpact||groupImpact.version!==current.version)
+          throw new Error("Обновите проверку будущих занятий перед сохранением");
+        if(groupImpact.futureLessons>0&&!keepFutureAcknowledged)
+          throw new Error("Подтвердите, что уже созданные занятия не изменяются");
         const result=await apiRequest<{future_lessons_unchanged:number}>(
           `/dance/groups/${editingGroupId}`,
-          {method:"PATCH",body:JSON.stringify({...payload,version:current.version})}
+          {method:"PATCH",body:JSON.stringify({...payload,
+            version:current.version,
+            acknowledgeFutureLessonsUnchanged:keepFutureAcknowledged
+          })}
         );
         setNotice(
           "Шаблон группы обновлён. Уже созданные будущие занятия не изменены: "+
@@ -1535,12 +1573,32 @@ export default function DanceGroupsPage() {
                   setGroupModal(false);
                   setEditingGroupId("");
                 }}>Отмена</button>
-                <button disabled={pending} type="button" onClick={() => void createGroup()}>
+                <button disabled={pending||Boolean(editingGroupId&&(
+                  impactLoading||!groupImpact||
+                  groupImpact.futureLessons>0&&!keepFutureAcknowledged
+                ))} type="button" onClick={() => void createGroup()}>
                   {pending ? "Сохраняем…" : editingGroupId ? "Сохранить настройки" : "Создать группу"}
                 </button>
               </>
             }
           >
+            {editingGroupId?<div className="studio-impact-review" role="group" aria-label="Проверка последствий изменения группы">
+              {impactLoading?<p role="status">Проверяем будущие занятия и записи клиентов…</p>:null}
+              {impactError?<p role="alert">Проверка не удалась: {impactError}.
+                Сохранение заблокировано, чтобы не скрыть последствия.</p>:null}
+              {groupImpact?<>
+                <strong>Будущих занятий: {groupImpact.futureLessons}</strong>
+                <p>Записей учеников: {groupImpact.futureParticipants}.
+                  Уже созданные занятия и абонементы останутся в исходном
+                  состоянии. Изменится только шаблон новых занятий.</p>
+                {groupImpact.futureLessons>0?<label>
+                  <input type="checkbox" checked={keepFutureAcknowledged}
+                    onChange={event=>setKeepFutureAcknowledged(event.target.checked)}/>
+                  Понимаю, что существующие занятия нужно перенести отдельно
+                  в журнале и уведомить записанных клиентов
+                </label>:null}
+              </>:null}
+            </div>:null}
             <div className="studio-form-grid">
               <label>
                 <span>Направление</span>
