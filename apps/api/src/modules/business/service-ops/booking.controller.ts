@@ -23,6 +23,12 @@ export class BookingController {
     return { ok: true, data: await this.booking.services(this.context(request)) };
   }
 
+  @Get("catalog/archived")
+  @RequirePermission("service.read")
+  async archivedServices(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.booking.services(this.context(request),"ARCHIVED")};
+  }
+
   @Post("catalog")
   @RequirePermission("service.write")
   async createService(
@@ -48,6 +54,13 @@ export class BookingController {
         this.context(request),id,body
       )
     };
+  }
+
+  @Post("catalog/:id/restore")
+  @RequirePermission("service.write")
+  async restoreService(@Req() request:AuthenticatedRequest,
+    @Param("id") id:string):Promise<ApiSuccess<{restored:true;reviewRequired:true}>>{
+    return {ok:true,data:await this.booking.restoreService(this.context(request),id)};
   }
 
   @Post("catalog/:id/archive")
