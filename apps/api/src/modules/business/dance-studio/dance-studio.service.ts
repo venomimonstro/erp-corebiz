@@ -1422,6 +1422,42 @@ export class DanceStudioService {
     });
   }
 
+  /** Read-only impact: updating a group template never silently moves
+   * already-created lessons. Reuse the same scope check as the write path. */
+  async groupChangeImpact(context:TenantContext,groupId:string){
+    const scopeIds=await this.scopeIds(context,"dance.read");
+    return this.database.withTenantTransaction(context,async client=>{
+      const group=await this.assertGroupAccess(
+        client,context.tenantId,groupId,scopeIds,false
+      );
+      const result=await client.query<{
+        lessons:number;participants:number;first_lesson_at:Date|null;
+        last_lesson_at:Date|null
+      }>(
+        `SELECT count(DISTINCT l.id)::int AS lessons,
+            count(lp.id)::int AS participants,
+            min(l.starts_at) AS first_lesson_at,
+            max(l.starts_at) AS last_lesson_at
+         FROM dance_lesson l
+         LEFT JOIN dance_lesson_participant lp ON
+           lp.tenant_id=l.tenant_id AND lp.lesson_id=l.id
+           AND lp.status NOT IN ('CANCELLED_IN_TIME','CANCELLED_LATE')
+         WHERE l.tenant_id=$1 AND l.group_id=$2
+           AND l.starts_at>now()
+           AND l.status IN ('PLANNED','OPEN_FOR_BOOKING')`,
+        [context.tenantId,groupId]
+      );
+      return {
+        groupId,version:Number(group.version),
+        futureLessons:Number(result.rows[0]?.lessons??0),
+        futureParticipants:Number(result.rows[0]?.participants??0),
+        firstLessonAt:result.rows[0]?.first_lesson_at??null,
+        lastLessonAt:result.rows[0]?.last_lesson_at??null,
+        warning:"Изменение шаблона не переносит существующие занятия. Измените их отдельно."
+      };
+    });
+  }
+
   async updateGroup(
     context:TenantContext,
     groupId:string,
@@ -1442,6 +1478,7 @@ export class DanceStudioService {
         durationMinutes?:number;
       }>;
       version:number;
+      acknowledgeFutureLessonsUnchanged?:boolean;
     }
   ){
     const scopeIds=await this.scopeIds(context,"dance.write");
@@ -1578,6 +1615,39 @@ export class DanceStudioService {
           [context.tenantId,input.branchId]
         );
         if(!branch.rowCount) throw new NotFoundException("Филиал не найден");
+      }
+
+      // A changed group template is not a reschedule of already-booked
+      // customer appointments. Require explicit acknowledgment if existing
+      // future lessons would retain their old coach, room or timetable.
+      const materialChange=
+        (input.trainerResourceId!==undefined &&
+          trainerId!==group.trainer_resource_id) ||
+        (input.roomResourceId!==undefined &&
+          roomId!==group.room_resource_id) ||
+        (input.roomZoneId!==undefined &&
+          roomZoneId!==group.room_zone_id) ||
+        (input.roomCapacityUnits!==undefined &&
+          roomUnits!==group.room_capacity_units) ||
+        (input.capacity!==undefined && capacity!==group.capacity) ||
+        (input.branchId!==undefined && input.branchId!==group.branch_id) ||
+        (input.schedule!==undefined &&
+          JSON.stringify(schedule)!==JSON.stringify(group.schedule)) ||
+        input.startsOn!==undefined || input.endsOn!==undefined;
+      if(materialChange&&!input.acknowledgeFutureLessonsUnchanged){
+        const affected=await client.query<{count:number}>(
+          `SELECT count(*)::int AS count
+           FROM dance_lesson
+           WHERE tenant_id=$1 AND group_id=$2 AND starts_at>now()
+             AND status IN ('PLANNED','OPEN_FOR_BOOKING')`,
+          [context.tenantId,groupId]
+        );
+        if(Number(affected.rows[0]?.count??0)>0){
+          throw new ConflictException(
+            "Созданные будущие занятия останутся без изменений. "+
+            "Подтвердите это отдельно после проверки календаря."
+          );
+        }
       }
 
       const updated=await client.query(
