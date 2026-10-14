@@ -308,6 +308,195 @@ export class CatalogService {
       };
     });
   }
+
+  async categories(context:TenantContext){
+    return this.database.withTenantTransaction(context,async client=>{
+      const found=await client.query(
+        "SELECT id,name,parent_id FROM catalog_category "+
+        "WHERE tenant_id=$1 AND status='ACTIVE' ORDER BY name LIMIT 2000",
+        [context.tenantId]);
+      return found.rows;
+    });
+  }
+
+  async createCategory(context:TenantContext,input:{name:string;parentId?:string}){
+    const name=typeof input?.name==="string"?input.name.trim():"";
+    if(name.length<2||name.length>120)
+      throw new BadRequestException("Название категории: от 2 до 120 символов");
+    return this.database.withTenantTransaction(context,async client=>{
+      if(input.parentId){
+        const parent=await client.query(
+          "SELECT 1 FROM catalog_category WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
+          [context.tenantId,input.parentId]);
+        if(!parent.rowCount)throw new NotFoundException("Родительская категория не найдена");
+      }
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [context.tenantId+"|category|"+(input.parentId??"root")+"|"+name.toLowerCase()]);
+      const existing=await client.query(
+        "SELECT id FROM catalog_category WHERE tenant_id=$1 "+
+        "AND parent_id IS NOT DISTINCT FROM $2::uuid "+
+        "AND lower(name)=lower($3) AND status='ACTIVE'",
+        [context.tenantId,input.parentId??null,name]);
+      if(existing.rowCount)throw new BadRequestException("Категория уже существует");
+      const saved=await client.query<{id:string}>(
+        "INSERT INTO catalog_category(tenant_id,parent_id,name) "+
+        "VALUES($1,$2,$3) RETURNING id",
+        [context.tenantId,input.parentId??null,name]);
+      return {id:saved.rows[0]!.id,name};
+    });
+  }
+
+  async detail(context:TenantContext,productId:string){
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{
+        product_id:string;name:string;description:string|null;image_url:string|null;
+        category_id:string|null;category_name:string|null;kind:string;
+        variant_id:string;attributes:Record<string,string>;sku_id:string;
+        sku:string;barcode:string|null;currency:string;
+        sale_price_minor:string;cost_price_minor:string;track_inventory:boolean
+      }>(
+        "SELECT p.id AS product_id,p.name,p.description,p.image_url,"+
+        "p.category_id,c.name AS category_name,p.kind,v.id AS variant_id,"+
+        "v.attributes,s.id AS sku_id,s.code AS sku,s.barcode,s.currency,"+
+        "s.sale_price_minor::text,s.cost_price_minor::text,s.track_inventory "+
+        "FROM product p "+
+        "JOIN product_variant v ON v.tenant_id=p.tenant_id AND v.product_id=p.id AND v.status='ACTIVE' "+
+        "JOIN sku s ON s.tenant_id=v.tenant_id AND s.variant_id=v.id AND s.status='ACTIVE' "+
+        "LEFT JOIN catalog_category c ON c.tenant_id=p.tenant_id AND c.id=p.category_id "+
+        "WHERE p.tenant_id=$1 AND p.id=$2 AND p.status='ACTIVE' "+
+        "ORDER BY v.created_at LIMIT 1",
+        [context.tenantId,productId]);
+      if(!result.rows[0])throw new NotFoundException("Товар не найден");
+      const row=result.rows[0],canReadCost=await this.mayReadCost(client,context);
+      const balances=await client.query(
+        "SELECT w.id AS warehouse_id,w.name AS warehouse_name,"+
+        "b.physical_milli::text,b.reserved_milli::text,"+
+        "(b.physical_milli-b.reserved_milli)::text AS available_milli "+
+        "FROM inventory_balance b JOIN warehouse w ON w.tenant_id=b.tenant_id "+
+        "AND w.id=b.warehouse_id WHERE b.tenant_id=$1 AND b.sku_id=$2 ORDER BY w.name",
+        [context.tenantId,row.sku_id]);
+      return {...row,cost_price_minor:canReadCost?row.cost_price_minor:null,
+        stock:balances.rows};
+    });
+  }
+
+  async update(context:TenantContext,productId:string,input:{
+    name?:string;description?:string|null;imageUrl?:string|null;
+    categoryId?:string|null;barcode?:string|null;attributes?:Record<string,string>;
+    salePriceMinor?:string;costPriceMinor?:string
+  }){
+    if(!input||typeof input!=="object"||Array.isArray(input)||!Object.keys(input).length)
+      throw new BadRequestException("Нет изменений");
+    if(input.name!==undefined&&(typeof input.name!=="string"||
+      input.name.trim().length<2||input.name.trim().length>240))
+      throw new BadRequestException("Название товара: от 2 до 240 символов");
+    if(input.description!=null&&(typeof input.description!=="string"||
+      input.description.length>10000))
+      throw new BadRequestException("Описание слишком длинное");
+    if(input.barcode!=null&&(typeof input.barcode!=="string"||
+      input.barcode.length>128))
+      throw new BadRequestException("Штрихкод слишком длинный");
+    for(const price of [input.salePriceMinor,input.costPriceMinor]){
+      if(price!==undefined&&(
+        typeof price!=="string"||!/^\d{1,18}$/.test(price)||
+        BigInt(price)>9223372036854775807n
+      ))throw new BadRequestException("Цена должна быть в копейках");
+    }
+    const image=input.imageUrl===undefined?undefined:this.validImageUrl(input.imageUrl);
+    let attrs:Record<string,string>|undefined;
+    if(input.attributes!==undefined){
+      if(!input.attributes||typeof input.attributes!=="object"||
+         Array.isArray(input.attributes))
+        throw new BadRequestException("Некорректные характеристики");
+      const entries=Object.entries(input.attributes);
+      if(entries.length>40)throw new BadRequestException("Не более 40 характеристик");
+      attrs={};
+      for(const [key,value] of entries){
+        if(!key.trim()||key.length>80||typeof value!=="string"||value.length>500)
+          throw new BadRequestException("Некорректное название или значение характеристики");
+        attrs[key.trim()]=value.trim();
+      }
+    }
+    return this.database.withTenantTransaction(context,async client=>{
+      const target=await client.query<{variant_id:string;sku_id:string}>(
+        "SELECT v.id AS variant_id,s.id AS sku_id FROM product p "+
+        "JOIN product_variant v ON v.tenant_id=p.tenant_id AND v.product_id=p.id AND v.status='ACTIVE' "+
+        "JOIN sku s ON s.tenant_id=v.tenant_id AND s.variant_id=v.id AND s.status='ACTIVE' "+
+        "WHERE p.tenant_id=$1 AND p.id=$2 AND p.status='ACTIVE' "+
+        "ORDER BY v.created_at LIMIT 1 FOR UPDATE OF p,v,s",
+        [context.tenantId,productId]);
+      if(!target.rows[0])throw new NotFoundException("Товар не найден");
+      if(input.costPriceMinor!==undefined&&!await this.mayReadCost(client,context))
+        throw new ForbiddenException("Для закупочной цены необходимы финансовые права");
+      if(input.categoryId){
+        const category=await client.query(
+          "SELECT 1 FROM catalog_category WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'",
+          [context.tenantId,input.categoryId]);
+        if(!category.rowCount)throw new NotFoundException("Категория не найдена");
+      }
+      await client.query(
+        "UPDATE product SET name=coalesce($3,name),"+
+        "description=CASE WHEN $4::boolean THEN $5 ELSE description END,"+
+        "image_url=CASE WHEN $6::boolean THEN $7 ELSE image_url END,"+
+        "category_id=CASE WHEN $8::boolean THEN $9::uuid ELSE category_id END,"+
+        "updated_at=now() WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,productId,input.name?.trim()??null,
+          input.description!==undefined,input.description?.trim()||null,
+          image!==undefined,image??null,
+          input.categoryId!==undefined,input.categoryId??null]);
+      const row=target.rows[0];
+      if(attrs!==undefined)await client.query(
+        "UPDATE product_variant SET attributes=$3::jsonb,updated_at=now() "+
+        "WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,row.variant_id,JSON.stringify(attrs)]);
+      await client.query(
+        "UPDATE sku SET barcode=CASE WHEN $3::boolean THEN $4 ELSE barcode END,"+
+        "sale_price_minor=coalesce($5::bigint,sale_price_minor),"+
+        "cost_price_minor=coalesce($6::bigint,cost_price_minor),updated_at=now() "+
+        "WHERE tenant_id=$1 AND id=$2",
+        [context.tenantId,row.sku_id,input.barcode!==undefined,
+          input.barcode?.trim()||null,input.salePriceMinor??null,
+          input.costPriceMinor??null]);
+      await client.query(
+        "INSERT INTO audit_event(tenant_id,actor_user_id,actor_membership_id,"+
+        "action,resource_type,resource_id,after_data) "+
+        "VALUES($1,$2,$3,'catalog.product_updated','product',$4,$5::jsonb)",
+        [context.tenantId,context.userId,context.membershipId,productId,
+          JSON.stringify({name:input.name,categoryId:input.categoryId,
+            salePriceMinor:input.salePriceMinor,
+            changedCost:input.costPriceMinor!==undefined,
+            changedAttributes:attrs!==undefined})]);
+      return {updated:true,productId};
+    });
+  }
+
+  async archive(context:TenantContext,productId:string){
+    return this.database.withTenantTransaction(context,async client=>{
+      const product=await client.query(
+        "SELECT id FROM product WHERE tenant_id=$1 AND id=$2 "+
+        "AND status='ACTIVE' FOR UPDATE",[context.tenantId,productId]);
+      if(!product.rowCount)throw new NotFoundException("Товар не найден");
+      const stock=await client.query(
+        "SELECT 1 FROM inventory_balance b "+
+        "JOIN sku s ON s.tenant_id=b.tenant_id AND s.id=b.sku_id "+
+        "JOIN product_variant v ON v.tenant_id=s.tenant_id AND v.id=s.variant_id "+
+        "WHERE b.tenant_id=$1 AND v.product_id=$2 "+
+        "AND (b.physical_milli<>0 OR b.reserved_milli<>0) LIMIT 1",
+        [context.tenantId,productId]);
+      if(stock.rowCount)throw new BadRequestException(
+        "Есть остатки или резервы. Сначала проведите складские операции");
+      await client.query(
+        "UPDATE product SET status='ARCHIVED',updated_at=now() "+
+        "WHERE tenant_id=$1 AND id=$2",[context.tenantId,productId]);
+      await client.query(
+        "INSERT INTO audit_event(tenant_id,actor_user_id,actor_membership_id,"+
+        "action,resource_type,resource_id) "+
+        "VALUES($1,$2,$3,'catalog.product_archived','product',$4)",
+        [context.tenantId,context.userId,context.membershipId,productId]);
+      return {archived:true};
+    });
+  }
+
   /** Image links are only displayed by browsers; never server-side fetched. */
   private validImageUrl(value:unknown):string|null {
     if(value===undefined || value===null || value==="") return null;
