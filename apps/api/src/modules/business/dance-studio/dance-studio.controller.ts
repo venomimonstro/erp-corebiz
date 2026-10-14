@@ -171,6 +171,15 @@ export class DanceStudioController {
     return {ok:true,data:await this.studio.createGroup(this.ctx(req),body)};
   }
 
+  @Get("groups/:groupId/impact")
+  @RequirePermission("dance.read")
+  async groupImpact(@Req() req:AuthenticatedRequest,
+    @Param("groupId") groupId:string):Promise<ApiSuccess<unknown>>{
+    return {ok:true,data:await this.studio.groupChangeImpact(
+      this.ctx(req),groupId
+    )};
+  }
+
   @Patch("groups/:groupId")
   @RequirePermission("dance.write")
   async updateGroup(
@@ -193,6 +202,7 @@ export class DanceStudioController {
         durationMinutes?:number;
       }>;
       version:number;
+      acknowledgeFutureLessonsUnchanged?:boolean;
     }
   ):Promise<ApiSuccess<unknown>> {
     return {
