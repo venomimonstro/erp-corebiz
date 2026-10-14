@@ -5,7 +5,8 @@ import {DanceWorkspaceNav} from "../../../../components/dance-workspace-nav";
 import {apiRequest} from "../../../../lib/api";
 
 type Service={id:string;name:string;category:string|null;
-  duration_minutes:number;price_minor:string;delivery_format:string;revision:string};
+  duration_minutes:number;price_minor:string;delivery_format:string;revision:string;
+  metadata?:{restore_review_required?:boolean}};
 type Context={permissions:Array<{code:string;scope:string}>};
 const rub=(minor:string)=>new Intl.NumberFormat("ru-RU",{
   style:"currency",currency:"RUB",maximumFractionDigits:0
@@ -27,6 +28,7 @@ export default function DanceServiceCatalogPage(){
   const [price,setPrice]=useState("");
   const [duration,setDuration]=useState("60");
   const [archiveConfirm,setArchiveConfirm]=useState(false);
+  const [publishConfirm,setPublishConfirm]=useState(false);
   const [search,setSearch]=useState("");
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
@@ -60,7 +62,7 @@ export default function DanceServiceCatalogPage(){
     setCategory(item.category??"");
     setPrice((Number(item.price_minor)/100).toFixed(2));
     setDuration(String(item.duration_minutes));
-    setArchiveConfirm(false);setError("");setNotice("");
+    setArchiveConfirm(false);setPublishConfirm(false);setError("");setNotice("");
   };
   async function save(e:FormEvent){
     e.preventDefault();
@@ -92,8 +94,18 @@ export default function DanceServiceCatalogPage(){
       await apiRequest("/service/catalog/"+chosen.id+"/restore",{method:"POST"});
       setSelected("");setArchiveConfirm(false);
       await reload();
-      setNotice("Услуга восстановлена. Перед записью клиентов проверьте цену, назначенных тренеров и длительность.");
+      setNotice("Услуга восстановлена, но запись клиентов заблокирована до вашей проверки и повторной публикации.");
     }catch(e){setError(e instanceof Error?e.message:"Не удалось восстановить услугу");}
+    finally{setBusy(false);}
+  }
+  async function publishRestored(){
+    if(!chosen||!permissions.admin||!publishConfirm)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await apiRequest("/service/catalog/"+chosen.id+"/approve",{method:"POST"});
+      setPublishConfirm(false);await reload();
+      setNotice("Услуга опубликована для записи клиентов. Проверьте свободные слоты.");
+    }catch(e){setError(e instanceof Error?e.message:"Не удалось опубликовать услугу");}
     finally{setBusy(false);}
   }
   async function archive(){
@@ -134,7 +146,9 @@ export default function DanceServiceCatalogPage(){
             onClick={()=>pick(x)}>
             <strong>{x.name}</strong><span>{x.category??"Без категории"}
               {" · "}{x.delivery_format}</span>
-            <small>{rub(x.price_minor)} · {x.duration_minutes} мин</small>
+            <small>{rub(x.price_minor)} · {x.duration_minutes} мин
+              {x.metadata?.restore_review_required?" · Нужна проверка":""}
+            </small>
           </button>)}</div>
         <p><a href="/app/dance/setup">Создать новую услугу или назначить её тренеру →</a></p>
       </section>
@@ -158,7 +172,17 @@ export default function DanceServiceCatalogPage(){
             Сохранить изменения
           </button>
         </form>:<p>Архивная услуга доступна только для просмотра. После восстановления проверьте актуальность цены и назначений.</p>}
-        {permissions.admin?<div className="dance-staff-actions">
+        {permissions.admin&&!showArchived&&chosen.metadata?.restore_review_required?<div className="dance-customer-panel">
+          <h3>Восстановленная услуга ожидает публикации</h3>
+          <p>Пока сервер не разрешает новые записи. Проверьте цену,
+            длительность, подходящих тренеров, филиалы и расписания.</p>
+          <label><input type="checkbox" checked={publishConfirm}
+            onChange={e=>setPublishConfirm(e.target.checked)}/>
+            Подтверждаю проверку услуги и актуальных условий.</label>
+          <button type="button" disabled={busy||!publishConfirm}
+            onClick={()=>void publishRestored()}>Открыть запись клиентов</button>
+        </div>:null}
+        {permissions.admin&&!chosen.metadata?.restore_review_required?<div className="dance-staff-actions">
           <label><input type="checkbox" checked={archiveConfirm}
             onChange={e=>setArchiveConfirm(e.target.checked)}/>
             {showArchived?"Подтверждаю возвращение услуги в активный каталог и проверку её цены и расписания.":
