@@ -118,8 +118,13 @@ export class DanceStudioController {
 
   @Get("programs")
   @RequirePermission("dance.read")
-  async programs(@Req() req:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {
-    return {ok:true,data:await this.studio.programs(this.ctx(req))};
+  async programs(
+    @Req() req:AuthenticatedRequest,
+    @Query("includeArchived") includeArchived?:string
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.studio.programs(
+      this.ctx(req),includeArchived==="true"
+    )};
   }
 
   @Post("programs")
@@ -137,6 +142,44 @@ export class DanceStudioController {
     }
   ):Promise<ApiSuccess<unknown>> {
     return {ok:true,data:await this.studio.createProgram(this.ctx(req),body)};
+  }
+
+  @Patch("programs/:programId")
+  @RequirePermission("dance.write")
+  async updateProgram(
+    @Req() req:AuthenticatedRequest,
+    @Param("programId") programId:string,
+    @Body() body:{
+      expectedRevision:string;name?:string;serviceId?:string;
+      branchId?:string|null;minAge?:number|null;maxAge?:number|null;
+      defaultDurationMinutes?:number
+    }
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.studio.changeProgram(
+      this.ctx(req),programId,{...body,action:"UPDATE"}
+    )};
+  }
+
+  @Post("programs/:programId/archive")
+  @RequirePermission("dance.write")
+  async archiveProgram(@Req() req:AuthenticatedRequest,
+    @Param("programId") programId:string,
+    @Body() body:{expectedRevision:string}
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.studio.changeProgram(
+      this.ctx(req),programId,{...body,action:"ARCHIVE"}
+    )};
+  }
+
+  @Post("programs/:programId/restore")
+  @RequirePermission("dance.write")
+  async restoreProgram(@Req() req:AuthenticatedRequest,
+    @Param("programId") programId:string,
+    @Body() body:{expectedRevision:string}
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.studio.changeProgram(
+      this.ctx(req),programId,{...body,action:"RESTORE"}
+    )};
   }
 
   @Get("groups")
