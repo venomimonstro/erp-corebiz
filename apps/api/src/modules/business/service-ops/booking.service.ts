@@ -88,6 +88,11 @@ export class BookingService {
     }
   ): Promise<{ id: string }> {
     await this.requireServiceAll(context, "service.write");
+    // Appointments and price governance are separate capabilities.
+    // Receptionists can book clients but cannot change the company price list.
+    if((await this.authorization.resolveScope(context,"catalog.write"))!=="all")
+      throw new ForbiddenException("Управление прайсом требует права catalog.write");
+
     const name = input.name.trim();
     if (name.length < 2 || name.length > 160) {
       throw new BadRequestException("Некорректное название услуги");
@@ -183,6 +188,11 @@ export class BookingService {
     }
   ):Promise<{updated:true}>{
     await this.requireServiceAll(context,"service.write");
+    // Appointments and price governance are separate capabilities.
+    // Receptionists can book clients but cannot change the company price list.
+    if((await this.authorization.resolveScope(context,"catalog.write"))!=="all")
+      throw new ForbiddenException("Управление прайсом требует права catalog.write");
+
     if(input.expectedRevision!==undefined &&
        !/^\d{9,15}(?:\.\d{1,6})?$/.test(input.expectedRevision))
       throw new BadRequestException("Неверная ревизия услуги");
@@ -456,6 +466,11 @@ export class BookingService {
     }
   ): Promise<{ id: string }> {
     await this.requireServiceAll(context, "service.write");
+    // Appointments and price governance are separate capabilities.
+    // Receptionists can book clients but cannot change the company price list.
+    if((await this.authorization.resolveScope(context,"catalog.write"))!=="all")
+      throw new ForbiddenException("Управление прайсом требует права catalog.write");
+
 
     const format = input.deliveryFormat ?? "INDIVIDUAL";
     if (!["INDIVIDUAL","GROUP","SELF_PRACTICE","RENTAL"].includes(format)) {
@@ -563,6 +578,11 @@ export class BookingService {
     ruleId:string
   ):Promise<{id:string;status:string;changed:boolean}>{
     await this.requireServiceAll(context,"service.write");
+    // Appointments and price governance are separate capabilities.
+    // Receptionists can book clients but cannot change the company price list.
+    if((await this.authorization.resolveScope(context,"catalog.write"))!=="all")
+      throw new ForbiddenException("Управление прайсом требует права catalog.write");
+
     return this.database.withTenantTransaction(context,async client=>{
       const result=await client.query<{status:string}>(
         `SELECT status
