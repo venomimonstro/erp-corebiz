@@ -141,6 +141,12 @@ export default function SitesPage() {
   const [previewMode, setPreviewMode] = useState<"DESKTOP" | "MOBILE">("DESKTOP");
   const [readiness, setReadiness] = useState<StoreReadiness | null>(null);
   const [readinessError, setReadinessError] = useState("");
+  const [siteCreateOpen,setSiteCreateOpen]=useState(false);
+  const [siteCreateTemplate,setSiteCreateTemplate]=useState<"STORE"|"WEBSITE">("STORE");
+  const [siteCreateName,setSiteCreateName]=useState("");
+  const [siteCreateSlug,setSiteCreateSlug]=useState("");
+  const [siteCreating,setSiteCreating]=useState(false);
+  const [siteCreatedNotice,setSiteCreatedNotice]=useState("");
 
   const loadReadiness = useCallback(async (id: string) => {
     try {
@@ -215,42 +221,39 @@ export default function SitesPage() {
       });
   }, [siteId, loadPages]);
 
-  async function createSite(template: "WEBSITE" | "STORE" = "WEBSITE") {
-    const name = window.prompt(
-      template === "STORE" ? "Название интернет-магазина" : "Название сайта",
-      template === "STORE" ? "Мой интернет-магазин" : "Основной сайт"
-    );
-    if (!name?.trim()) return;
-
-    const suggested = name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "");
-    const publicSlug = window.prompt(
-      "Публичный адрес латиницей. Можно оставить пустым — система создаст автоматически.",
-      suggested
-    );
-
+  async function createSite(event:import("react").FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if(siteCreating)return;
+    const name=siteCreateName.trim();
+    const publicSlug=siteCreateSlug.trim().toLowerCase();
+    if(name.length<2||name.length>160||
+      (publicSlug!==""&&!/^[a-z0-9][a-z0-9-]{2,80}$/.test(publicSlug))){
+      setError("Укажите название 2–160 символов. Публичный адрес — латиницей, от 3 символов.");
+      return;
+    }
+    setSiteCreating(true);setError("");setSiteCreatedNotice("");
     try {
       const created = await apiRequest<{
-        id: string;
-        pageId: string;
-      }>("/sites", {
-        method: "POST",
-        body: JSON.stringify({
-          name: name.trim(),
-          template,
-          publicSlug: publicSlug?.trim() || undefined
+        id:string;pageId:string;publicSlug:string
+      }>("/sites",{
+        method:"POST",
+        body:JSON.stringify({
+          name,template:siteCreateTemplate,
+          ...(publicSlug?{publicSlug}:{})
         })
       });
-      await loadSites();
       setSiteId(created.id);
+      await loadSites();
       await loadPages(created.id);
       await openPage(created.pageId);
       await loadReadiness(created.id);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось создать сайт");
-    }
+      setSiteCreateOpen(false);setSiteCreateName("");setSiteCreateSlug("");
+      setSiteCreatedNotice("Сайт создан как черновик. Опубликуйте страницу и проверьте готовность магазина.");
+    }catch(cause){
+      setError((cause instanceof Error?cause.message:"Не удалось создать сайт")+
+        ". Проверьте список сайтов перед повтором: запрос мог сохраниться при потере сети.");
+      try{setSites(await apiRequest<Site[]>("/sites"));}catch{/* show original error */}
+    }finally{setSiteCreating(false);}
   }
 
   async function enableStore() {
@@ -730,10 +733,16 @@ export default function SitesPage() {
             <a className="secondary-button" href="/app/sites/payments">
               Оплата и доставка
             </a>
-            <button className="secondary-button" onClick={() => void createSite("WEBSITE")}>
+            <a className="secondary-button" href="/app/commerce/launch">
+              Маршрут запуска магазина →
+            </a>
+            <button type="button" className="secondary-button"
+              onClick={() => {setSiteCreateTemplate("WEBSITE");setSiteCreateOpen(true);}}>
               + Сайт
             </button>
-            <button onClick={() => void createSite("STORE")}>
+            <button type="button" onClick={() => {
+              setSiteCreateTemplate("STORE");setSiteCreateOpen(true);
+            }}>
               + Интернет-магазин
             </button>
             <button onClick={() => void createPage()} disabled={!siteId}>
@@ -741,6 +750,32 @@ export default function SitesPage() {
             </button>
           </div>
         </header>
+
+        {siteCreateOpen?(
+          <form className="commerce-launch-create" onSubmit={event=>void createSite(event)}>
+            <h2>{siteCreateTemplate==="STORE"?"Создать интернет-магазин":"Создать сайт"}</h2>
+            <label>Название
+              <input value={siteCreateName} required minLength={2} maxLength={160}
+                onChange={event=>setSiteCreateName(event.target.value)}
+                placeholder="Мой магазин электроники"/>
+            </label>
+            <label>Публичный адрес (можно оставить пустым)
+              <input value={siteCreateSlug}
+                onChange={event=>setSiteCreateSlug(event.target.value)}
+                placeholder="my-shop" pattern="[a-z0-9][a-z0-9-]{2,80}"/>
+            </label>
+            <p>Черновик сайта создаётся вместе с шаблоном. Товары, заказы и остатки
+              используются из основной ERP, отдельную товарную базу заводить не нужно.</p>
+            <div className="commerce-launch-links">
+              <button type="submit" disabled={siteCreating||siteCreateName.trim().length<2}>
+                {siteCreating?"Создание…":"Создать черновик"}
+              </button>
+              <button type="button" className="secondary-button"
+                disabled={siteCreating} onClick={()=>setSiteCreateOpen(false)}>Отмена</button>
+            </div>
+          </form>
+        ):null}
+        {siteCreatedNotice?<p role="status">{siteCreatedNotice}</p>:null}
 
         {error ? (
           <div className="inline-error">
