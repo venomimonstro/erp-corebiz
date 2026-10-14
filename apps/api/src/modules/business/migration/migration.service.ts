@@ -322,7 +322,9 @@ export class MigrationService {
           continue;
         }
 
-        const outcome = batch.entity_type === "PRODUCTS"
+        const outcome:{
+          created:boolean;updated?:boolean;targetType:string;targetId:string
+        } = batch.entity_type === "PRODUCTS"
           ? await this.importProduct(client,context,row.normalized_data,updateExisting)
           : await this.importCustomer(client, context, row.normalized_data);
 
