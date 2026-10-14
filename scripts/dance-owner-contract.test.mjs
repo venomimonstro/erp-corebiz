@@ -431,3 +431,21 @@ test("Restored service remains blocked from booking until owner reviews and publ
   assert.match(workflow,/restoredService\.reviewRequired,true/);
   assert.match(workflow,/\/catalog\/archived/);
 });
+
+
+test("Existing lessons are never silently moved by a group-template edit",()=>{
+  const studio=src("apps/api/src/modules/business/dance-studio/dance-studio.service.ts");
+  const endpoints=src("apps/api/src/modules/business/dance-studio/dance-studio.controller.ts");
+  const screen=src("apps/web/app/app/dance/groups/page.tsx");
+  const regression=src("apps/api/src/modules/business/dance-studio/dance-group-template-impact.spec.ts");
+  assert.match(studio,/async groupChangeImpact\(/);
+  assert.match(studio,/futureParticipants/);
+  assert.match(studio,/acknowledgeFutureLessonsUnchanged/);
+  assert.match(studio,/throw new ConflictException\(\s*"Созданные будущие занятия/);
+  assert.match(endpoints,/@Get\("groups\/:groupId\/impact"\)/);
+  assert.match(screen,/groupImpact\.futureLessons/);
+  assert.match(screen,/keepFutureAcknowledged/);
+  assert.match(screen,/Подтвердите, что уже созданные занятия не изменяются/);
+  assert.match(regression,/rejects a changed timetable/);
+  assert.match(regression,/version control|retains optimistic locking/);
+});
