@@ -184,8 +184,22 @@ export class DanceStudioController {
 
   @Get("groups")
   @RequirePermission("dance.read")
-  async groups(@Req() req:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {
-    return {ok:true,data:await this.studio.groups(this.ctx(req))};
+  async groups(@Req() req:AuthenticatedRequest,
+    @Query("includeArchived") includeArchived?:string):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.studio.groups(
+      this.ctx(req),includeArchived==="true"
+    )};
+  }
+
+  @Post("groups/:groupId/lifecycle")
+  @RequirePermission("dance.write")
+  async groupLifecycle(@Req() req:AuthenticatedRequest,
+    @Param("groupId") groupId:string,
+    @Body() body:{action:"ARCHIVE"|"RESTORE";expectedVersion:number}
+  ):Promise<ApiSuccess<unknown>> {
+    return {ok:true,data:await this.studio.groupLifecycle(
+      this.ctx(req),groupId,body
+    )};
   }
 
   @Post("groups")
