@@ -119,18 +119,20 @@ export class SiteFormsService {
       if (input.action==="BOOKING") {
         const service=await client.query(
           `SELECT 1 FROM service_catalog_item
-           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+           WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'
+             AND (metadata->>'restore_review_required') IS DISTINCT FROM 'true'`,
           [context.tenantId,input.serviceId]
         );
         if(!service.rowCount) throw new NotFoundException("Услуга недоступна");
         const resourceIds=config.resourceIds as string[];
         const resourceRows=await client.query<{id:string}>(
           `SELECT id FROM service_resource
-           WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND status='ACTIVE'`,
+           WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND status='ACTIVE'
+             AND online_booking_enabled=true`,
           [context.tenantId,resourceIds]
         );
         if(resourceRows.rowCount!==resourceIds.length) {
-          throw new BadRequestException("Один или несколько ресурсов недоступны");
+          throw new BadRequestException("Один или несколько ресурсов не включены для онлайн-записи");
         }
       }
 
