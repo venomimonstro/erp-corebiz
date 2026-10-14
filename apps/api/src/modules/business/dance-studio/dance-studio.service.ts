@@ -1213,7 +1213,8 @@ export class DanceStudioService {
     return this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `SELECT p.id,p.name,p.code,p.service_id,p.branch_id,p.min_age,p.max_age,
-                p.default_duration_minutes,p.status,p.metadata,\n                EXTRACT(EPOCH FROM p.updated_at)::text AS revision,
+                p.default_duration_minutes,p.status,p.metadata,
+                EXTRACT(EPOCH FROM p.updated_at)::text AS revision,
                 s.name AS service_name
          FROM dance_program p
          LEFT JOIN service_catalog_item s
@@ -1298,7 +1299,7 @@ export class DanceStudioService {
       throw new BadRequestException("Некорректное направление");
     if(!input||!["UPDATE","ARCHIVE","RESTORE"].includes(input.action)||
        typeof input.expectedRevision!=="string"||
-       !/^\\d{9,15}(?:\\.\\d{1,6})?$/.test(input.expectedRevision))
+       !/^\d{9,15}(?:\.\d{1,6})?$/.test(input.expectedRevision))
       throw new BadRequestException("Требуется действие и ревизия направления");
     return this.database.withTenantTransaction(context,async client=>{
       const rows=await client.query<{
