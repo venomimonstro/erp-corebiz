@@ -1,5 +1,5 @@
 import {
-  BadRequestException,ForbiddenException,Injectable,NotFoundException
+  BadRequestException,ConflictException,ForbiddenException,Injectable,NotFoundException
 } from "@nestjs/common";
 import type {TenantContext} from "@corebiz/contracts";
 import {DatabaseService} from "../../../infrastructure/database/database.service";
@@ -48,6 +48,20 @@ export class DanceCustomerPortalService{
         [context.tenantId,input.partyId]
       );
       if(!party.rowCount)throw new NotFoundException("Клиент не найден");
+      // A typo in the owner's customer selector must never silently
+      // transfer a parent's login to another family's private records.
+      // Switching the CRM identity requires explicit revocation first.
+      const existing=await client.query<{party_id:string;status:string}>(
+        `SELECT party_id,status FROM dance_customer_account
+         WHERE tenant_id=$1 AND membership_id=$2 FOR UPDATE`,
+        [context.tenantId,input.membershipId]
+      );
+      if(existing.rows[0]?.status==="ACTIVE" &&
+        existing.rows[0].party_id!==input.partyId){
+        throw new ConflictException(
+          "Этот логин уже связан с другим клиентом. Сначала отзовите прежнюю привязку"
+        );
+      }
       const saved=await client.query<{id:string}>(
         `INSERT INTO dance_customer_account(
            tenant_id,membership_id,party_id,linked_by_membership_id
