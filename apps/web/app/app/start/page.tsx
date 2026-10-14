@@ -28,7 +28,7 @@ const startPage:Record<string,string>={
   DANCE_FITNESS:"/app/dance/setup",
   AUTO_SERVICE:"/app/automotive",
   AUTO_PARTS_DISMANTLING:"/app/automotive",
-  ECOMMERCE_STORE:"/app/sites",
+  ECOMMERCE_STORE:"/app/commerce/launch",
   MARKETPLACE_SELLER:"/app/channels",
   WAREHOUSE_3PL:"/app/wms/inbound",
   RETAIL_STORE:"/app/catalog/products",
