@@ -481,3 +481,23 @@ test("Owner can manage direction lifecycle without a second catalog",()=>{
   assert.match(workflow,/06-lifecycle real owner action and conflict recovery/);
   assert.match(workflow,/assert\.equal\(lifecycleArchivedAgain\.status,"ARCHIVED"\)/);
 });
+
+
+test("Parent re-binding must be explicit, tenant scoped, serialized and audited",()=>{
+  assert.match(portal,/pg_advisory_xact_lock/);
+  assert.match(portal,/dance-portal-link/);
+  assert.match(portal,/SELECT party_id,status FROM dance_customer_account/);
+  assert.match(portal,/FOR UPDATE/);
+  assert.match(portal,/existing\.rows\[0\]\?\.status==="ACTIVE"/);
+  assert.match(portal,/Сначала отзовите прежнюю привязку/);
+  assert.match(portal,/dance\.portal_revoked/);
+  assert.match(portal,/dance\.portal_linked/);
+});
+test("Generic catalog lifecycle preserves original service record and historical prices",()=>{
+  assert.match(bookings,/async archiveService/);
+  assert.match(bookings,/async restoreService/);
+  assert.match(bookings,/service\.catalog_archived/);
+  assert.match(bookings,/service\.catalog_restored/);
+  assert.match(bookings,/activePrograms/);
+  assert.match(bookings,/service_booking/);
+});
