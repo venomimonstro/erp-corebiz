@@ -4526,3 +4526,41 @@ button, .primary, .secondary { font: inherit; }
 .studio-impact-review label{display:flex;align-items:flex-start;gap:9px;font-size:13px;line-height:1.5;margin-top:12px;cursor:pointer}
 .studio-impact-review input[type=checkbox]{width:17px;height:17px;flex:none;margin:2px 0 0}
 .studio-impact-review input:focus-visible{outline:3px solid #8fb4ef;outline-offset:2px}
+
+
+/* Ecommerce launch: one owner journey over existing CMS, ERP and OMS. */
+.commerce-launch{min-width:0}
+.commerce-launch .section-block{margin:16px 0;padding:22px;border:1px solid #e1e6ed;border-radius:16px}
+.commerce-launch h2{font-size:21px;letter-spacing:-.025em;margin:0 0 10px}
+.commerce-launch .section-block p{line-height:1.55}
+.commerce-launch-top{display:grid;gap:12px}
+.commerce-launch-site-picker{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.commerce-launch-site-picker label{font-size:13px;font-weight:650}
+.commerce-launch-site-picker select,.commerce-launch-create input{min-height:42px;min-width:160px;max-width:100%;border:1px solid #cdd8e3;border-radius:10px;background:white;padding:9px 12px}
+.commerce-launch-site-picker select{flex:1 1 200px}
+.commerce-launch-site-picker button,.commerce-launch-create button{min-height:42px}
+.commerce-launch-create{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;padding:16px;border:1px solid #d7e2ed;border-radius:14px;background:#f7f9fc}
+.commerce-launch-create label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600}
+.commerce-launch-create p,.commerce-launch-create .commerce-launch-links{grid-column:1/-1;margin:0}
+.commerce-launch-links{display:flex;gap:9px;flex-wrap:wrap;margin:12px 0}
+.commerce-launch-links a{min-height:35px;display:inline-flex;align-items:center}
+.commerce-launch-section-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.commerce-launch-section-head span{font-size:13px;color:#647184}
+.commerce-launch-steps,.commerce-launch-checks{display:grid;gap:8px;margin:16px 0}
+.commerce-launch-steps>a,.commerce-launch-checks>a{display:grid;grid-template-columns:38px 1fr auto;gap:12px;align-items:center;border:1px solid #e1e7ed;border-radius:13px;background:white;padding:14px;text-decoration:none;color:inherit}
+.commerce-launch-steps>a:hover,.commerce-launch-checks>a:hover{background:#f4f7fb}
+.commerce-launch-steps>a>span:nth-child(2),.commerce-launch-checks>a>span:nth-child(2){display:flex;flex-direction:column;gap:5px}
+.commerce-launch-steps strong,.commerce-launch-checks strong{font-size:14px}
+.commerce-launch-steps small,.commerce-launch-checks small{font-size:12px;color:#677385;line-height:1.5}
+.commerce-launch-stepnum{display:grid;place-items:center;width:33px;height:33px;border-radius:11px;background:#edf2f9;color:#364e6b;font-size:13px;font-weight:750}
+.commerce-launch-checks>a>span:first-child{font-weight:750;text-align:center}
+.commerce-launch-checks>a.complete>span:first-child{color:#26744a}
+.commerce-launch-checks>a.incomplete>span:first-child{color:#ad7531}
+.commerce-launch-verdict{font-weight:750}
+.commerce-launch-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:14px}
+.commerce-launch-kpis>a{padding:18px;border:1px solid #e1e7ed;border-radius:14px;display:flex;flex-direction:column;gap:7px;text-decoration:none;color:inherit}
+.commerce-launch-kpis strong{font-size:23px}
+.commerce-launch-kpis small{font-size:12px;color:#677385}
+.commerce-launch :is(input,select,button,a):focus-visible{outline:3px solid #86b0e5;outline-offset:2px}
+@media(max-width:750px){.commerce-launch-create{grid-template-columns:1fr}.commerce-launch-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:460px){.commerce-launch .section-block{padding:14px}.commerce-launch-site-picker{align-items:stretch}.commerce-launch-site-picker>*{width:100%}.commerce-launch-steps>a,.commerce-launch-checks>a{grid-template-columns:30px 1fr auto;gap:8px;padding:11px}}
