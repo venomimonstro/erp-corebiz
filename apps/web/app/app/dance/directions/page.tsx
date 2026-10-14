@@ -125,8 +125,8 @@ export default function DanceDirectionsPage(){
        :"Группа восстановлена как черновик. Проверьте расписание перед публикацией.");
      setGroupAction(null);await load();
    }catch(e){
-     setError(e instanceof Error?e.message:"Не удалось изменить группу");
-     setGroupAction(null);await load();
+     const message=e instanceof Error?e.message:"Не удалось изменить группу";
+     setGroupAction(null);await load();setError(message);
    }finally{setBusy(false);}
  }
  async function lifecycle(){
@@ -141,9 +141,10 @@ export default function DanceDirectionsPage(){
        ?"Направление архивировано. Группы и история сохранены."
        :"Направление восстановлено. Проверьте актуальность услуги и расписания.");
      blank();await load();
-   }catch(e){setError(e instanceof Error?e.message:"Не удалось изменить статус");
-     // Revision may have changed; require an explicit refresh before retry.
-     setConfirm(null);await load();
+   }catch(e){
+     const message=e instanceof Error?e.message:"Не удалось изменить статус";
+     // Refresh the revision but retain the actionable conflict message.
+     setConfirm(null);await load();setError(message);
    }finally{setBusy(false);}
  }
  return <main className="app-shell">
