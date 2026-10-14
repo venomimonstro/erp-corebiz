@@ -515,6 +515,16 @@ export class CatalogService {
         [context.tenantId,productId]);
       if(inbound.rowCount)throw new BadRequestException(
         "Сначала завершите закупки с этим товаром");
+      // Archive product, its variants and SKU atomically. Procurement and
+      // sales must not accept the same SKU as ACTIVE after this operation.
+      await client.query(
+        "UPDATE sku SET status='ARCHIVED',updated_at=now() "+
+        "WHERE tenant_id=$1 AND variant_id IN "+
+        "(SELECT id FROM product_variant WHERE tenant_id=$1 AND product_id=$2)",
+        [context.tenantId,productId]);
+      await client.query(
+        "UPDATE product_variant SET status='ARCHIVED',updated_at=now() "+
+        "WHERE tenant_id=$1 AND product_id=$2",[context.tenantId,productId]);
       await client.query(
         "UPDATE product SET status='ARCHIVED',updated_at=now() "+
         "WHERE tenant_id=$1 AND id=$2",[context.tenantId,productId]);
