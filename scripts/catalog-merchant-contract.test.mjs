@@ -84,7 +84,7 @@ test("real stock comes from procurement receipt, not CSV or price update",()=>{
   assert.match(procurement,/sessionStorage/);
   assert.match(procurement,/Подтверждаю факт поступления/);
   assert.doesNotMatch(procurement,/window\.(?:prompt|confirm|alert)\(/);
-  assert.match(purchaseService,/postMovement/);
+  assert.match(purchaseService,/postGoodsReceipt/);
   assert.doesNotMatch(migration,/INSERT INTO inventory_balance/);
 });
 
