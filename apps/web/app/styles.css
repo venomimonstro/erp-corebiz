@@ -4517,3 +4517,12 @@ button, .primary, .secondary { font: inherit; }
 .dance-lifecycle-invariant{border-top:1px solid #edf0f5;padding-top:9px!important;color:#445267!important}
 .dance-lifecycle-action:focus-visible{outline:3px solid #96b9f3;outline-offset:2px}
 @media(max-width:900px){.dance-lifecycle-grid{grid-template-columns:1fr}}
+
+
+/* Change-impact previews are intentionally neutral and require explicit consent. */
+.studio-impact-review{margin:14px 0;padding:15px 17px;border:1px solid #d5dde7;border-radius:13px;background:#f8fafc;color:#314052}
+.studio-impact-review>strong{font-size:14px;display:block}
+.studio-impact-review p{font-size:13px;line-height:1.5;margin:8px 0}
+.studio-impact-review label{display:flex;align-items:flex-start;gap:9px;font-size:13px;line-height:1.5;margin-top:12px;cursor:pointer}
+.studio-impact-review input[type=checkbox]{width:17px;height:17px;flex:none;margin:2px 0 0}
+.studio-impact-review input:focus-visible{outline:3px solid #8fb4ef;outline-offset:2px}
