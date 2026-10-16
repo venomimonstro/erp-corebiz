@@ -245,6 +245,15 @@ export class AuthService {
       throw new BadRequestException("Некорректный пароль");
     }
     this.validatePassword(newPassword);
+    // Verify the token BEFORE expensive Argon2 work; the final locked query
+    // below rechecks it to prevent use-after-expiration and double redemption.
+    const preflight = await this.database.query<{ user_id: string }>(
+      "SELECT t.user_id FROM password_reset_token t JOIN app_user u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.consumed_at IS NULL AND t.expires_at>now() AND u.status='ACTIVE' LIMIT 1",
+      [hashToken(rawToken)]
+    );
+    if (!preflight.rows[0]) {
+      throw new BadRequestException("Ссылка недействительна или устарела");
+    }
     const passwordHash = await hash(newPassword, {
       type: argon2id,
       memoryCost: 19_456,
