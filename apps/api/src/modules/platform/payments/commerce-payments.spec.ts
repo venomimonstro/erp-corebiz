@@ -72,6 +72,34 @@ describe("regulated provider boundary",()=>{
       enabled:true,fiscal_enabled:false
     })).toThrow(ConflictException);
   });
+  it("blocks SaaS payment attempts when the owner's email is not verified",async()=>{
+    const statements:string[]=[];
+    const client={
+      query:jest.fn(async(sql:string)=>{
+        statements.push(sql);
+        if(sql.includes("FROM billing_plan")) return {rows:[{
+          id:"44444444-4444-4444-8444-444444444444",
+          code:"BUSINESS",monthly_price_minor:"1490000"
+        }]};
+        if(sql.includes("FROM app_user"))return {rows:[{
+          email:"owner@example.com",email_verified_at:null
+        }]};
+        return {rows:[],rowCount:1};
+      })
+    };
+    const db={
+      withTenantTransaction:jest.fn(async(_ctx:unknown,cb:any)=>cb(client))
+    };
+    const svc=new CommercePaymentsService(db as any,{} as any);
+    jest.spyOn(svc as any,"platform").mockReturnValue({
+      shopId:"test-shop",secret:"not-sent"
+    });
+    await expect(svc.beginSaas(context,"BUSINESS"))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(statements.some(sql=>sql.includes("INSERT INTO commerce_payment_intent")))
+      .toBe(false);
+  });
+
   it("never trusts an unsigned refund notification status alone",async()=>{
     const get=jest.fn().mockResolvedValue({rows:[]});
     const svc=new CommercePaymentsService({query:get} as any,{} as any);
