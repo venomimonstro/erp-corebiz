@@ -130,3 +130,13 @@ test("SaaS operating metrics are operator-authenticated and do not include custo
   assert.match(api,/@Get\("summary"\)/);
   assert.match(web,/Коммерческое состояние платформы/);
 });
+
+
+test("operator suspension history is scoped and session verified", () => {
+  const sql = read("infrastructure/postgres/258_platform_suspension_history.sql");
+  const api = read("apps/api/src/modules/platform/platform-operations/platform-operations.service.ts");
+  assert.match(sql, /s\.session_hash=p_session_hash/);
+  assert.match(sql, /WHERE tenant_id=p_tenant_id/);
+  assert.match(sql, /LIMIT 25/);
+  assert.match(api, /corebiz_platform_suspension_history/);
+});
