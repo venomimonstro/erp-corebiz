@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiRequest } from "../../lib/api";
 
 type SuspensionRecord = {
@@ -45,6 +45,7 @@ export default function PlatformOperationsPage() {
   const [busyTenant,setBusyTenant] = useState<string|null>(null);
   const [historyTenant,setHistoryTenant] = useState<string|null>(null);
   const [history,setHistory] = useState<SuspensionRecord[]>([]);
+  const historySerial = useRef(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,15 +68,17 @@ export default function PlatformOperationsPage() {
   },[offset]);
 
   async function showHistory(tenant:Tenant) {
+    const serial=++historySerial.current;
     setHistoryTenant(tenant.companyName);
     setHistory([]);
     try {
       const data = await apiRequest<SuspensionRecord[]>(
         "/platform-operations/tenants/"+encodeURIComponent(tenant.tenantId)+"/suspensions"
       );
-      setHistory(data);
+      if(serial===historySerial.current)setHistory(data);
     } catch (cause) {
-      setError(cause instanceof Error?cause.message:"История недоступна");
+      if(serial===historySerial.current)
+        setError(cause instanceof Error?cause.message:"История недоступна");
     }
   }
 
@@ -104,6 +107,9 @@ export default function PlatformOperationsPage() {
         "/platform-operations/tenants/"+encodeURIComponent(tenant.tenantId)+"/suspension",
         {method:"PATCH",body:JSON.stringify({action,reason:reason.trim()})}
       );
+      ++historySerial.current;
+      setHistoryTenant(null);
+      setHistory([]);
       await load();
     }catch(cause){
       setError(cause instanceof Error?cause.message:"Не удалось изменить состояние");
