@@ -9,6 +9,7 @@ import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import type { AuthenticatedRequest } from "./auth.types";
 import { generateToken, hashToken } from "./auth.utils";
+import { AuthMailService } from "./auth-mail.service";
 
 type SessionAuth = NonNullable<AuthenticatedRequest["auth"]>;
 
@@ -31,7 +32,10 @@ export class AuthService {
   private static readonly SESSION_TOUCH_INTERVAL_MS = 5*60*1000;
   private static readonly SESSION_TOUCH_CACHE_MAX = 20_000;
 
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly mail: AuthMailService
+  ) {}
 
   async register(input: RegisterInput): Promise<{
     token: string;
@@ -185,6 +189,97 @@ export class AuthService {
         );
       throw error;
     }
+  }
+
+  // Identical API response whether the account exists or not.
+  // Tokens are persisted only as SHA-256 hashes and never returned to the user.
+  async requestPasswordReset(rawEmail: unknown): Promise<void> {
+    if (typeof rawEmail !== "string" || rawEmail.length > 254 ||
+        !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(rawEmail.trim())) {
+      return;
+    }
+    const email = rawEmail.trim().toLowerCase();
+    const result = await this.database.query<{ id: string }>(
+      `SELECT id FROM app_user
+       WHERE lower(email)=$1 AND status='ACTIVE' LIMIT 1`, [email]
+    );
+    const row = result.rows[0];
+    if (!row) return;
+    const token = generateToken();
+    await this.database.withTransaction(async client => {
+      // Serialize concurrent reset requests for one user so only the most
+      // recently issued link remains valid.
+      await client.query(
+        "SELECT id FROM app_user WHERE id=$1 FOR UPDATE", [row.id]
+      );
+      await client.query(
+        `UPDATE password_reset_token SET consumed_at=now()
+         WHERE user_id=$1 AND consumed_at IS NULL`, [row.id]
+      );
+      await client.query(
+        `INSERT INTO password_reset_token(user_id,token_hash,expires_at)
+         VALUES ($1,$2,now()+interval '30 minutes')`,
+        [row.id,hashToken(token)]
+      );
+    });
+
+    // A provider outage must not let attackers enumerate which emails exist.
+    // Delivery failures are an operational NO-GO until provider integration
+    // and alerts have been confirmed on a live sandbox.
+    try {
+      await this.mail.sendReset(email,token);
+    } catch {
+      console.error("[corebiz-auth] password recovery delivery failed");
+    }
+  }
+
+  async completePasswordReset(
+    rawToken: unknown,
+    newPassword: unknown
+  ): Promise<void> {
+    if (typeof rawToken !== "string" ||
+        !/^[A-Za-z0-9_-]{40,128}$/.test(rawToken)) {
+      throw new BadRequestException("Ссылка недействительна или устарела");
+    }
+    if (typeof newPassword !== "string") {
+      throw new BadRequestException("Некорректный пароль");
+    }
+    this.validatePassword(newPassword);
+    const passwordHash = await hash(newPassword, {
+      type: argon2id,
+      memoryCost: 19_456,
+      timeCost: 2,
+      parallelism: 1
+    });
+    await this.database.withTransaction(async client => {
+      const found = await client.query<{user_id:string}>(
+        `SELECT t.user_id
+         FROM password_reset_token t
+         JOIN app_user u ON u.id=t.user_id
+         WHERE t.token_hash=$1
+           AND t.consumed_at IS NULL
+           AND t.expires_at>now()
+           AND u.status='ACTIVE'
+         FOR UPDATE OF t`, [hashToken(rawToken)]
+      );
+      const row=found.rows[0];
+      if(!row)throw new BadRequestException(
+        "Ссылка недействительна или устарела"
+      );
+      await client.query(
+        "UPDATE app_user SET password_hash=$2,updated_at=now() WHERE id=$1",
+        [row.user_id,passwordHash]
+      );
+      await client.query(
+        `UPDATE password_reset_token
+         SET consumed_at=now()
+         WHERE user_id=$1 AND consumed_at IS NULL`, [row.user_id]
+      );
+      await client.query(
+        `UPDATE user_session SET revoked_at=now()
+         WHERE user_id=$1 AND revoked_at IS NULL`, [row.user_id]
+      );
+    });
   }
 
   async login(input: LoginInput): Promise<{
