@@ -258,18 +258,21 @@ export default function SupportPage() {
 
   async function closeTicket() {
     if (!selected) return;
-    if (
-      !window.confirm(
-        "Закрыть тикет " + selected.ticket.number + "?"
-      )
-    ) {
+    const resolution = window.prompt(
+      "Укажите итог решения по обращению " + selected.ticket.number +
+      " (от 10 символов). Результат увидит клиент."
+    );
+    if (resolution === null) return;
+    if (resolution.trim().length < 10 || resolution.trim().length > 2000) {
+      setError("Укажите результат от 10 до 2000 символов");
       return;
     }
 
     try {
       await apiRequest(
         "/support/tickets/" + selected.ticket.id + "/close",
-        { method: "PATCH" }
+        { method: "PATCH",
+          body: JSON.stringify({ resolution: resolution.trim() }) }
       );
       await loadTickets();
       await openTicket(selected.ticket.id);
