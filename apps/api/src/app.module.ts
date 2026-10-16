@@ -37,6 +37,7 @@ import { TasksModule } from "./modules/business/tasks/tasks.module";
 import { AuthModule } from "./modules/platform/auth/auth.module";
 import { BillingModule } from "./modules/platform/billing/billing.module";
 import { PaymentsModule } from "./modules/platform/payments/payments.module";
+import { PlatformOperationsModule } from "./modules/platform/platform-operations/platform-operations.module";
 import { MerchantConnectorModule } from "./modules/platform/provider-connectors/merchant-connector.module";
 import { CustomizationModule } from "./modules/platform/customization/customization.module";
 import { DataManagementModule } from "./modules/platform/data-management/data-management.module";
@@ -59,6 +60,7 @@ import { TenantsModule } from "./modules/platform/tenants/tenants.module";
     AuthModule,
     BillingModule,
     PaymentsModule,
+    PlatformOperationsModule,
     MerchantConnectorModule,
     CustomizationModule,
     DataManagementModule,
