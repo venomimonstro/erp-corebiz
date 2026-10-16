@@ -37,6 +37,22 @@ describe("password reset security", () => {
     expect(writes.some(w=>w.sql.includes("FOR UPDATE"))).toBe(true);
   });
 
+  it("rejects well-formed but unknown tokens before opening a write transaction", async () => {
+    const db = {
+      query:jest.fn(async () => ({rows:[]})),
+      withTransaction:jest.fn()
+    };
+    const service = new AuthService(db as any,{} as any);
+    await expect(service.completePasswordReset(
+      "A".repeat(43), "a valid replacement password"
+    )).rejects.toBeInstanceOf(BadRequestException);
+    expect(db.query).toHaveBeenCalledWith(
+      expect.stringContaining("FROM password_reset_token"),
+      [expect.stringMatching(/^[0-9a-f]{64}$/)]
+    );
+    expect(db.withTransaction).not.toHaveBeenCalled();
+  });
+
   it("rejects missing and invalid tokens without updating credentials", async () => {
     const db = {withTransaction: jest.fn()};
     const service = new AuthService(db as any, {} as any);
