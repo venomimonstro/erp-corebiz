@@ -27,6 +27,27 @@ describe("platform operator read-only access", () => {
     expect(params[1]).not.toBe(token);
   });
 
+  it("checks the operator's session for suspension history", async () => {
+    const db={query:jest.fn()};
+    const svc=new PlatformOperationsService(db as any);
+    await expect(svc.suspensionHistory(id,undefined,id))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("reads only the selected tenant's history through a trusted DB function", async () => {
+    const db={query:jest.fn(async (_sql:string,_args:unknown[])=>({
+      rows:[{history:[]}]
+    }))};
+    const svc=new PlatformOperationsService(db as any);
+    await expect(svc.suspensionHistory(id,token,id)).resolves.toEqual([]);
+    const sql=db.query.mock.calls[0]![0] as string;
+    const args=db.query.mock.calls[0]![1] as unknown[];
+    expect(sql).toContain("corebiz_platform_suspension_history");
+    expect(args[1]).toMatch(/^[0-9a-f]{64}$/);
+    expect(args[2]).toBe(id);
+  });
+
   it("requires a valid session for aggregate platform metrics", async () => {
     const db={query:jest.fn()};
     const svc=new PlatformOperationsService(db as any);
