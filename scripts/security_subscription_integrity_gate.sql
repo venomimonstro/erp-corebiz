@@ -3,6 +3,8 @@
 -- A missing subscription or paid ACTIVE without verified provider evidence
 -- is a release blocker. This gate does not reconcile external PSP data;
 -- sandbox and provider checks are still mandatory.
+-- Fail instead of silently reading zero rows under a tenant-restricted DB role.
+SET row_security = off;
 DO $$
 DECLARE
   v_missing bigint;
