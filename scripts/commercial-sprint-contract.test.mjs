@@ -45,3 +45,39 @@ test("production release gate audits subscription integrity", () => {
   assert.match(script,/security_subscription_integrity_gate\.sql/);
   assert.match(script,/BILLING:SUBSCRIPTION_INTEGRITY/);
 });
+
+test("email verification is one-time and checked before SaaS payment", () => {
+  const verify = read("apps/api/src/modules/platform/auth/email-verification.service.ts");
+  const auth = read("apps/api/src/modules/platform/auth/auth.controller.ts");
+  const pay = read("apps/api/src/modules/platform/payments/commerce-payments.service.ts");
+  const sql = read("infrastructure/postgres/002_auth_sessions.sql");
+  assert.match(sql,/CREATE TABLE email_verification_token/);
+  assert.match(verify,/INSERT INTO email_verification_token\(user_id,token_hash,expires_at\)/);
+  assert.match(verify,/hashToken\(token\)/);
+  assert.match(verify,/email_verified_at=COALESCE/);
+  assert.match(verify,/FOR UPDATE OF t/);
+  assert.match(auth,/email-verification\/complete/);
+  assert.match(pay,/email_verified_at/);
+  assert.match(pay,/Перед оплатой тарифа подтвердите email/);
+});
+
+test("email and password reset use the same deadlock-safe lock order", () => {
+  const verify = read("apps/api/src/modules/platform/auth/email-verification.service.ts");
+  const auth = read("apps/api/src/modules/platform/auth/auth.service.ts");
+  const verifyComplete = verify.slice(verify.indexOf("async complete("));
+  const resetComplete = auth.slice(auth.indexOf("async completePasswordReset("),
+    auth.indexOf("  async login(input: LoginInput)"));
+  assert.ok(verifyComplete.indexOf("SELECT id FROM app_user") <
+    verifyComplete.indexOf("FOR UPDATE OF t"));
+  assert.ok(resetComplete.indexOf("SELECT id FROM app_user") <
+    resetComplete.indexOf("FOR UPDATE OF t"));
+  assert.ok(resetComplete.indexOf("const preflight") <
+    resetComplete.indexOf("const passwordHash = await hash"));
+});
+
+test("failed exports cannot race an active export claim across workers", () => {
+  const sql = read("infrastructure/postgres/255_tenant_export_claim_serialization.sql");
+  assert.match(sql,/active\.status IN \('PENDING','PROCESSING'\)/);
+  assert.match(sql,/FROM tenant[\s\S]*FOR UPDATE SKIP LOCKED/);
+  assert.match(sql,/FOR UPDATE OF j SKIP LOCKED/);
+});
