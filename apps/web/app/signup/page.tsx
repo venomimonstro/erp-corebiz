@@ -23,6 +23,13 @@ export default function SignupPage() {
         method: "POST",
         body: JSON.stringify({ companyName, email, password })
       });
+      // Registration is committed before email delivery. Failure to send the
+      // letter must not roll back an account or strand the user's onboarding.
+      try {
+        await apiRequest("/auth/email-verification/request", {method:"POST"});
+      } catch {
+        // A dedicated email settings screen explains how to resend later.
+      }
       // Registration is completed before profile setup. Keep a recovery path
       // if the second request fails: never suggest the whole account failed.
       try {
