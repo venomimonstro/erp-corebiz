@@ -1,7 +1,10 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
+  Param,
+  Patch,
   Query,
   Req,
   Res
@@ -26,6 +29,24 @@ function pageNumber(raw: string | undefined, fallback: number,
 @Controller("platform-operations")
 export class PlatformOperationsController {
   constructor(private readonly platform: PlatformOperationsService) {}
+
+  @Patch("tenants/:id/suspension")
+  async suspension(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+    @Param("id") id: string,
+    @Body() body: {action?: "SUSPEND" | "RESUME";reason?: string}
+  ): Promise<ApiSuccess<unknown>> {
+    response.setHeader("Cache-Control", "no-store, private");
+    const session = parseCookie(request.headers.cookie, SESSION_COOKIE);
+    return {
+      ok: true,
+      data: await this.platform.setSuspension(
+        request.auth!.userId, session, id,
+        body?.action as "SUSPEND" | "RESUME", body?.reason ?? ""
+      )
+    };
+  }
 
   @Get("tenants")
   async tenants(
