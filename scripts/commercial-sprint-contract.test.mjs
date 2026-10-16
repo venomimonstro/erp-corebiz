@@ -81,3 +81,11 @@ test("failed exports cannot race an active export claim across workers", () => {
   assert.match(sql,/FROM tenant[\s\S]*FOR UPDATE SKIP LOCKED/);
   assert.match(sql,/FOR UPDATE OF j SKIP LOCKED/);
 });
+
+test("read-only subscriptions preserve secure account recovery, not business writes", () => {
+  const guard = read("apps/api/src/modules/platform/billing/subscription.guard.ts");
+  assert.match(guard,/cleanPath === "\/api\/v1\/auth\/email-verification\/request"/);
+  assert.match(guard,/cleanPath === "\/api\/v1\/auth\/password-reset\/complete"/);
+  assert.match(guard,/HttpStatus\.PAYMENT_REQUIRED/);
+  assert.match(guard,/path\.split\("\?"\)\[0\]/);
+});
