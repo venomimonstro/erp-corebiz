@@ -1,4 +1,4 @@
-import { ForbiddenException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException } from "@nestjs/common";
 import { PlatformOperationsService } from "./platform-operations.service";
 
 const id = "11111111-1111-4111-8111-111111111111";
@@ -25,6 +25,45 @@ describe("platform operator read-only access", () => {
     const params = db.query.mock.calls[0]?.[1] as unknown[];
     expect(params[1]).toMatch(/^[0-9a-f]{64}$/);
     expect(params[1]).not.toBe(token);
+  });
+
+  it("rejects untrusted actions before reaching SQL", async () => {
+    const db={query:jest.fn()};
+    const svc=new PlatformOperationsService(db as any);
+    await expect(svc.setSuspension(id,undefined,id,"SUSPEND","A proper justification"))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.setSuspension(id,token,id,"SUSPEND","too short"))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.setSuspension(id,token,"bad-id","RESUME","A proper justification"))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("hashes operator session rather than sending raw cookie to SQL", async () => {
+    const tenantId="22222222-2222-4222-8222-222222222222";
+    const db={query:jest.fn(async (_sql:string,_params:unknown[])=>({
+      rows:[{outcome:{tenantId,status:"SUSPENDED",suspensionId:id}}]
+    }))};
+    const svc=new PlatformOperationsService(db as any);
+    await expect(svc.setSuspension(
+      id,token,tenantId,"SUSPEND","Repeated abuse investigation"
+    )).resolves.toMatchObject({status:"SUSPENDED"});
+    const args=db.query.mock.calls[0]![1] as unknown[];
+    expect(args[0]).toBe(id);
+    expect(args[1]).toMatch(/^[0-9a-f]{64}$/);
+    expect(args[1]).not.toBe(token);
+    expect(args[2]).toBe(tenantId);
+    expect(args[3]).toBe("SUSPEND");
+  });
+
+  it("does not allow suspension when state conflicts", async () => {
+    const db={query:jest.fn(async ()=>{
+      throw Object.assign(new Error("state conflict"),{code:"23514"});
+    })};
+    const svc=new PlatformOperationsService(db as any);
+    await expect(svc.setSuspension(
+      id,token,id,"SUSPEND","Potential fraudulent operation"
+    )).rejects.toBeInstanceOf(ConflictException);
   });
 
   it("denies explicit DB permission errors", async () => {
