@@ -125,6 +125,9 @@ JSON
 
 trap 'write_manifest "FAIL"; cleanup' ERR
 
+echo "[production-gate] commercial controls source contracts"
+node --test scripts/commercial-sprint-contract.test.mjs
+
 echo "[production-gate] 1/13 source + disposable migration release check"
 bash scripts/release-check.sh
 pass_step "CORE:MIGRATIONS"
