@@ -54,6 +54,44 @@ function money(value: string, currency: string): string {
   }).format(Number(value) / 100);
 }
 
+type BillingEvent = {
+  id:string; type:string; status:string|null;
+  amountMinor:string|null; currency:string|null;
+  provider:string|null; createdAt:string;
+};
+
+function BillingHistory() {
+  const [events,setEvents]=useState<BillingEvent[]>([]);
+  const [error,setError]=useState("");
+  useEffect(()=>{
+    let active=true;
+    void apiRequest<BillingEvent[]>("/billing/events")
+      .then(items=>{if(active)setEvents(items);})
+      .catch(cause=>{
+        if(active)setError(cause instanceof Error?cause.message:"Недоступно");
+      });
+    return ()=>{active=false;};
+  },[]);
+  if(error)return null; // History is restricted to billing.manage roles.
+  return <section className="studio-section">
+    <h2>История подписки</h2>
+    <p className="muted">Записи операций сервиса. Подтверждение оплаты
+      проверяется отдельно у платёжного провайдера.</p>
+    {events.length===0?<p>Пока нет операций.</p>:
+      <div style={{overflowX:"auto"}}><table>
+        <thead><tr><th>Дата</th><th>Событие</th>
+          <th>Статус</th><th>Сумма</th></tr></thead>
+        <tbody>{events.map(event=><tr key={event.id}>
+          <td>{new Date(event.createdAt).toLocaleString("ru-RU")}</td>
+          <td>{event.type}</td>
+          <td>{event.status??"—"}</td>
+          <td>{event.amountMinor!==null && event.currency==="RUB"
+            ?money(event.amountMinor,"RUB"):"—"}</td>
+        </tr>)}</tbody>
+      </table></div>}
+  </section>;
+}
+
 export default function BillingPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [reconciliation,setReconciliation]=useState<ReconciliationStatus|null>(null);
@@ -352,6 +390,7 @@ export default function BillingPage() {
             </button>
           </section>
         ) : null}
+        <BillingHistory />
       </section>
     </main>
   );
