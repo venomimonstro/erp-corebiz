@@ -31,6 +31,12 @@ describe("read-only subscription renewal path", () => {
     ))).resolves.toBe(true);
   });
 
+  it("allows password reset even if a READ_ONLY session cookie is present",async()=>{
+    await expect(guard.canActivate(requestContext(
+      "/api/v1/auth/password-reset/complete"
+    ))).resolves.toBe(true);
+  });
+
   it("still blocks unrelated writes",async()=>{
     await expect(guard.canActivate(requestContext(
       "/api/v1/sales/orders"
