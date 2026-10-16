@@ -38,6 +38,13 @@ export class EmailVerificationService {
       if (!user) throw new UnauthorizedException("Аккаунт недоступен");
       if (user.email_verified_at !== null) return null;
 
+      // Do not invalidate a link just sent by another rapid click.
+      const recent = await client.query<{id:string}>(
+        "SELECT id FROM email_verification_token WHERE user_id=$1 AND consumed_at IS NULL AND expires_at>now() AND created_at>now()-interval '60 seconds' LIMIT 1",
+        [user.id]
+      );
+      if (recent.rows[0]) return {recent:true as const};
+
       const token = generateToken();
       await client.query(
         "UPDATE email_verification_token SET consumed_at=now() WHERE user_id=$1 AND consumed_at IS NULL",
@@ -51,6 +58,7 @@ export class EmailVerificationService {
     });
 
     if (!pending) return {sent:false,verified:true};
+    if ("recent" in pending) return {sent:false,verified:false};
     try {
       await this.mail.sendVerification(pending.email,pending.token);
     } catch (error) {
