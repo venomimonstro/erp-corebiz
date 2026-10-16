@@ -440,10 +440,18 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
       if(!plan.rows[0]||BigInt(plan.rows[0].monthly_price_minor)<=0n){
         throw new BadRequestException("Платный тариф недоступен");
       }
-      const user=await client.query<{email:string}>(
-        "SELECT email FROM app_user WHERE id=$1",[context.userId]);
+      const user=await client.query<{
+        email:string;email_verified_at:Date|null;
+      }>(
+        "SELECT email,email_verified_at FROM app_user WHERE id=$1 AND status='ACTIVE'",
+        [context.userId]);
       if(!user.rows[0] || !isEmail(user.rows[0].email)){
         throw new BadRequestException("Для оплаты укажите корректный email");
+      }
+      if(!user.rows[0].email_verified_at){
+        throw new ConflictException(
+          "Перед оплатой тарифа подтвердите email в настройках аккаунта"
+        );
       }
       const existing=await client.query<Intent>(
         `SELECT * FROM commerce_payment_intent
