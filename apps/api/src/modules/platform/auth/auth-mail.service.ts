@@ -58,9 +58,12 @@ export class AuthMailService {
     }
     // Unisender Go may return an HTTP 200 with an application-level error.
     const payload = await response.json().catch(() => null) as
-      { status?: string; error?: unknown } | null;
-    if (!payload || payload.error ||
-        (payload.status && payload.status !== "success")) {
+      { status?: string; error?: unknown; job_id?: string;
+        emails?: string[]; failed_emails?: Record<string,string> } | null;
+    if (!payload || payload.status !== "success" ||
+        typeof payload.job_id !== "string" || payload.error ||
+        !Array.isArray(payload.emails) || !payload.emails.includes(email) ||
+        payload.failed_emails?.[email]) {
       throw new ServiceUnavailableException("Не удалось отправить письмо");
     }
   }
