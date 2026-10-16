@@ -50,6 +50,23 @@ export class AuthRateLimitService {
     }
   }
 
+  async assertPasswordResetAllowed(ip: string, email: string): Promise<void> {
+    const normalized =
+      typeof email === "string" ? email.trim().toLowerCase().slice(0,254) : "";
+    const ipCount = await this.redis.incrementWindow(
+      this.key("reset-ip", ip, ""), 60 * 60
+    );
+    const targetCount = await this.redis.incrementWindow(
+      this.key("reset-target", ip, normalized), 60 * 60
+    );
+    if (ipCount > 30 || targetCount > 5) {
+      throw new HttpException(
+        "Слишком много запросов. Повторите позже.",
+        HttpStatus.TOO_MANY_REQUESTS
+      );
+    }
+  }
+
   private key(action: string, ip: string, subject: string): string {
     const digest = createHash("sha256")
       .update(`${ip}|${subject}`)
