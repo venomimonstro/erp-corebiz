@@ -3,6 +3,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiRequest } from "../../lib/api";
 
+type CommercialSummary = {
+  tenants:number;
+  operating:number;
+  suspended:number;
+  readOnly:number;
+  trial:number;
+  paidActive:number;
+  missingSubscription:number;
+  pastDue:number;
+  expiredSubscriptions:number;
+};
+
 type Tenant = {
   tenantId: string;
   companyName: string;
@@ -18,6 +30,7 @@ type Tenant = {
 export default function PlatformOperationsPage() {
   const [items,setItems] = useState<Tenant[]>([]);
   const [total,setTotal] = useState(0);
+  const [summary,setSummary] = useState<CommercialSummary|null>(null);
   const [offset,setOffset] = useState(0);
   const [error,setError] = useState("");
   const [loading,setLoading] = useState(true);
@@ -32,6 +45,8 @@ export default function PlatformOperationsPage() {
       );
       setItems(data.items);
       setTotal(data.total);
+      void apiRequest<CommercialSummary>("/platform-operations/summary")
+        .then(setSummary).catch(()=>setSummary(null));
     } catch (cause) {
       setItems([]);
       setTotal(0);
@@ -88,6 +103,22 @@ export default function PlatformOperationsPage() {
       </button>
     </header>
     {error ? <div className="inline-error" role="alert">{error}</div> : null}
+    {!error && summary ? <section className="studio-section">
+      <h2>Коммерческое состояние платформы</h2>
+      <div className="crm-funnel-metrics">
+        <article><small>Компаний всего</small><strong>{summary.tenants}</strong></article>
+        <article><small>Работают</small><strong>{summary.operating}</strong></article>
+        <article><small>Приостановлены</small><strong>{summary.suspended}</strong></article>
+        <article><small>Пробный период</small><strong>{summary.trial}</strong></article>
+        <article><small>Оплачены</small><strong>{summary.paidActive}</strong></article>
+        <article><small>Только чтение</small><strong>{summary.readOnly}</strong></article>
+        <article><small>Без подписки</small><strong>{summary.missingSubscription}</strong></article>
+        <article><small>Задолженность / льготный период</small><strong>{summary.pastDue}</strong></article>
+        <article><small>Истёк срок</small><strong>{summary.expiredSubscriptions}</strong></article>
+      </div>
+      <p className="muted">Статистика отражает данные БД, а не подтверждение
+        банковского зачисления. Оплаченные подписки требуют отдельной сверки с ЮKassa.</p>
+    </section> : null}
     {!error ? <section className="studio-section">
       <h2>Организации: {total}</h2>
       {loading ? <p>Загрузка…</p> : <div style={{overflowX:"auto"}}>
