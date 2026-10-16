@@ -59,3 +59,50 @@ describe("paid subscription activation requires a verified payment flow", () => 
       .rejects.toBeInstanceOf(BadRequestException);
   });
 });
+
+describe("tenant subscription security gate", () => {
+  it("fails closed when no tenant subscription exists", async () => {
+    const statements: string[] = [];
+    const db = {
+      withTenantTransaction: jest.fn(async (_context: unknown, cb: any) =>
+        cb({
+          query: jest.fn(async (sql: string) => {
+            statements.push(sql);
+            return { rows: [], rowCount: 0 };
+          })
+        }))
+    };
+    const service = new BillingService(db as any);
+
+    await expect(service.evaluate(context)).resolves.toBe("READ_ONLY");
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toContain("FROM tenant_subscription");
+    expect(statements.some(sql => /UPDATE\\s+(tenant|tenant_subscription)/i.test(sql)))
+      .toBe(false);
+  });
+
+  it("keeps an unexpired trial active", async () => {
+    const statements: string[] = [];
+    const db = {
+      withTenantTransaction: jest.fn(async (_context: unknown, cb: any) =>
+        cb({
+          query: jest.fn(async (sql: string) => {
+            statements.push(sql);
+            if (sql.includes("FROM tenant_subscription")) {
+              return { rows: [{
+                status: "TRIAL",
+                current_period_end: new Date(Date.now() + 86400000),
+                grace_until: null
+              }], rowCount: 1 };
+            }
+            return { rows: [], rowCount: 0 };
+          })
+        }))
+    };
+    const service = new BillingService(db as any);
+
+    await expect(service.evaluate(context)).resolves.toBe("ACTIVE");
+    expect(statements.some(sql => /UPDATE\\s+tenant_subscription/i.test(sql)))
+      .toBe(true);
+  });
+});
