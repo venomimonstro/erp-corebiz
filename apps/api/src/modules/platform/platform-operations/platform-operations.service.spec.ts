@@ -15,7 +15,7 @@ describe("platform operator read-only access", () => {
 
   it("does not pass raw session token to SQL", async () => {
     const db = {
-      query: jest.fn(async () => ({
+      query: jest.fn(async (_sql: string, _values: unknown[]) => ({
         rows: [{overview:{total:0,items:[]}}]
       }))
     };
