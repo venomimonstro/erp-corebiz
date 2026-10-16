@@ -39,6 +39,11 @@ export class SubscriptionGuard implements CanActivate {
     if (path.startsWith("/api/v1/payments/saas/")) return true;
     if (path.includes("/api/v1/auth/logout")) return true;
     if (path.includes("/api/v1/auth/switch-tenant")) return true;
+    // READ_ONLY accounts must still be able to prove ownership of their
+    // email before paying to reactivate. Match only the intended endpoints.
+    const cleanPath = path.split("?")[0];
+    if (cleanPath === "/api/v1/auth/email-verification/request" ||
+        cleanPath === "/api/v1/auth/email-verification/complete") return true;
 
     throw new HttpException(
       "Рабочее пространство доступно только для чтения. Обновите подписку.",
