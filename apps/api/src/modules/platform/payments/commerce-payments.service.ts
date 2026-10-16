@@ -430,9 +430,14 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
       // Serialize checkout attempts for one tenant before looking for an
       // existing intent. Together with the partial unique index this prevents
       // concurrent unpaid subscription charges.
-      await client.query(
+      const subscription=await client.query<{tenant_id:string}>(
         "SELECT tenant_id FROM tenant_subscription WHERE tenant_id=$1 FOR UPDATE",
         [context.tenantId]);
+      if(!subscription.rows[0]){
+        throw new ConflictException(
+          "Подписка компании не найдена. Обратитесь в поддержку."
+        );
+      }
       const plan=await client.query<{id:string;code:string;monthly_price_minor:string}>(
         `SELECT id,code,monthly_price_minor::text FROM billing_plan
          WHERE code=$1 AND status='ACTIVE' AND currency='RUB'`,
