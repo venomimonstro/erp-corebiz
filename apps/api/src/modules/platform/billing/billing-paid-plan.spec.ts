@@ -77,7 +77,7 @@ describe("tenant subscription security gate", () => {
     await expect(service.evaluate(context)).resolves.toBe("READ_ONLY");
     expect(statements).toHaveLength(1);
     expect(statements[0]).toContain("FROM tenant_subscription");
-    expect(statements.some(sql => /UPDATE\\s+(tenant|tenant_subscription)/i.test(sql)))
+    expect(statements.some(sql => /UPDATE\s+(tenant|tenant_subscription)/i.test(sql)))
       .toBe(false);
   });
 
@@ -102,7 +102,7 @@ describe("tenant subscription security gate", () => {
     const service = new BillingService(db as any);
 
     await expect(service.evaluate(context)).resolves.toBe("ACTIVE");
-    expect(statements.some(sql => /UPDATE\\s+tenant_subscription/i.test(sql)))
+    expect(statements.some(sql => /UPDATE\s+tenant_subscription/i.test(sql)))
       .toBe(true);
   });
 });
