@@ -27,7 +27,7 @@ describe("auth RLS and tenant lifecycle safeguards", () => {
       })
     };
     const db = { withTransaction: jest.fn(async (fn: any) => fn(client)) };
-    const service = new AuthService(db as any);
+    const service = new AuthService(db as any, {} as any);
     await service.register({ email: "a@example.com", password: "correct horse battery", companyName: "Demo" });
     const setCtx = queries.findIndex((sql) => sql.includes("set_config('app.tenant_id'"));
     const insertMembership = queries.findIndex((sql) => sql.includes("INSERT INTO tenant_membership"));
@@ -56,7 +56,7 @@ describe("auth RLS and tenant lifecycle safeguards", () => {
         }
       }))
     };
-    const result = await new AuthService(database as any)
+    const result = await new AuthService(database as any, {} as any)
       .login({ email: "a@example.com", password: "correct horse battery" });
     expect(result.auth.tenantId).toBe(tenantId);
     expect(database.query).toHaveBeenCalledWith(
@@ -67,7 +67,7 @@ describe("auth RLS and tenant lifecycle safeguards", () => {
 
   it("rejects a tenant switch when the protected DB function refuses it", async () => {
     const database = { query: jest.fn(async () => ({ rows: [{ switched: false }] })) };
-    await expect(new AuthService(database as any)
+    await expect(new AuthService(database as any, {} as any)
       .switchTenant(sessionId, userId, membershipId))
       .rejects.toBeInstanceOf(UnauthorizedException);
     expect(database.query).toHaveBeenCalledWith(
