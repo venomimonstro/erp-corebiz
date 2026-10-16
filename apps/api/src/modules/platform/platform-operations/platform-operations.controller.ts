@@ -43,6 +43,22 @@ export class PlatformOperationsController {
     };
   }
 
+  @Get("tenants/:id/suspensions")
+  async suspensionHistory(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+    @Param("id") id: string
+  ): Promise<ApiSuccess<unknown>> {
+    response.setHeader("Cache-Control", "no-store, private");
+    const session = parseCookie(request.headers.cookie, SESSION_COOKIE);
+    return {
+      ok: true,
+      data: await this.platform.suspensionHistory(
+        request.auth!.userId,session,id
+      )
+    };
+  }
+
   @Patch("tenants/:id/suspension")
   async suspension(
     @Req() request: AuthenticatedRequest,
