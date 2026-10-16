@@ -110,7 +110,7 @@ export default function PlatformOperationsPage() {
         <article><small>Работают</small><strong>{summary.operating}</strong></article>
         <article><small>Приостановлены</small><strong>{summary.suspended}</strong></article>
         <article><small>Пробный период</small><strong>{summary.trial}</strong></article>
-        <article><small>Оплачены</small><strong>{summary.paidActive}</strong></article>
+        <article><small>Активные с отметкой оплаты</small><strong>{summary.paidActive}</strong></article>
         <article><small>Только чтение</small><strong>{summary.readOnly}</strong></article>
         <article><small>Без подписки</small><strong>{summary.missingSubscription}</strong></article>
         <article><small>Задолженность / льготный период</small><strong>{summary.pastDue}</strong></article>
