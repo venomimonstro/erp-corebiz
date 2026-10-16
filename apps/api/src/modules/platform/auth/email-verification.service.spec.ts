@@ -21,6 +21,24 @@ describe("commercial email verification", () => {
     expect(client.query).toHaveBeenCalledTimes(1);
   });
 
+  it("does not invalidate a recently issued verification link", async () => {
+    const client = {query:jest.fn(async (sql:string) => {
+      if (sql.startsWith("SELECT id,email")) {
+        return {rows:[{id:userId,email:"owner@example.com",email_verified_at:null}]};
+      }
+      if (sql.includes("created_at>now()-interval")) {
+        return {rows:[{id:"existing-token-id"}]};
+      }
+      throw new Error("Token must not be replaced within cooldown");
+    })};
+    const db = {withTransaction:jest.fn(async (fn:any)=>fn(client))};
+    const mail = {sendVerification:jest.fn()};
+    const service = new EmailVerificationService(db as any,mail as any);
+    await expect(service.request(userId))
+      .resolves.toEqual({sent:false,verified:false});
+    expect(mail.sendVerification).not.toHaveBeenCalled();
+  });
+
   it("persists a hash, never the raw token, and sends a 24-hour link", async () => {
     const statements: Array<{sql:string;params:unknown[]}> = [];
     const client = {query: jest.fn(async (sql:string,params:unknown[]=[]) => {
