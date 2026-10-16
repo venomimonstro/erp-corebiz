@@ -28,7 +28,7 @@ export class PlatformOperationsService {
     userId: string, session: string | undefined, tenantId: string,
     action: "SUSPEND" | "RESUME", reason: string
   ): Promise<{ tenantId: string; status: string; suspensionId: string }> {
-    if (!session || !/^[0-9a-f-]{36}$/i.test(tenantId))
+    if (!session || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tenantId))
       throw new ForbiddenException("Недостаточно прав оператора");
     if (!["SUSPEND","RESUME"].includes(action) ||
         typeof reason !== "string" ||
