@@ -37,6 +37,20 @@ describe("read-only subscription renewal path", () => {
     ))).resolves.toBe(true);
   });
 
+  it("does not block duly authorized platform operators due to tenant billing",async()=>{
+    await expect(guard.canActivate(requestContext(
+      "/api/v1/platform-operations/tenants/11111111-1111-4111-8111-111111111111/suspension"
+    ))).resolves.toBe(true);
+    // The operator's session and rights are checked by the protected SQL,
+    // not by the billing guard.
+  });
+
+  it("rejects malformed platform mutation paths",async()=>{
+    await expect(guard.canActivate(requestContext(
+      "/api/v1/platform-operations/tenants/x/suspension"
+    ))).rejects.toBeInstanceOf(HttpException);
+  });
+
   it("still blocks unrelated writes",async()=>{
     await expect(guard.canActivate(requestContext(
       "/api/v1/sales/orders"
