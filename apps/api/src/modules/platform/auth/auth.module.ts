@@ -4,6 +4,7 @@ import { AuthController } from "./auth.controller";
 import { AuthGuard } from "./auth.guard";
 import { AuthRateLimitService } from "./auth-rate-limit.service";
 import { AuthService } from "./auth.service";
+import { AuthMailService } from "./auth-mail.service";
 import { BrowserOriginGuard } from "./browser-origin.guard";
 import { SessionContextMiddleware } from "./session-context.middleware";
 
@@ -11,6 +12,7 @@ import { SessionContextMiddleware } from "./session-context.middleware";
   controllers: [AuthController],
   providers: [
     AuthService,
+    AuthMailService,
     AuthRateLimitService,
     SessionContextMiddleware,
     {
