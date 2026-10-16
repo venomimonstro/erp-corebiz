@@ -81,6 +81,8 @@ export default function LoginPage() {
         </form>
 
         <p className="auth-footer">
+          <a href="/forgot-password">Забыли пароль?</a>
+          {" · "}
           Нет аккаунта? <a href="/signup">Создать бесплатно</a>
         </p>
       </section>
