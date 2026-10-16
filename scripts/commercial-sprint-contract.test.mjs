@@ -89,3 +89,30 @@ test("read-only subscriptions preserve secure account recovery, not business wri
   assert.match(guard,/HttpStatus\.PAYMENT_REQUIRED/);
   assert.match(guard,/path\.split\("\?"\)\[0\]/);
 });
+
+test("operator suspension requires real session, explanation, and records an audit", () => {
+  const sql = read("infrastructure/postgres/256_platform_tenant_suspension.sql");
+  const service = read("apps/api/src/modules/platform/platform-operations/platform-operations.service.ts");
+  const web = read("apps/web/app/platform-operations/page.tsx");
+  const controller = read("apps/api/src/modules/platform/platform-operations/platform-operations.controller.ts");
+  assert.match(sql,/s\.session_hash=p_session_hash/);
+  assert.match(sql,/s\.revoked_at IS NULL/);
+  assert.match(sql,/p_action NOT IN \('SUSPEND','RESUME'\)/);
+  assert.match(sql,/length\(btrim\(p_reason\)\) NOT BETWEEN 15 AND 800/);
+  assert.match(sql,/m\.user_id=p_operator_user_id/);
+  assert.match(sql,/UPDATE public\.user_session s SET revoked_at=now\(\)/);
+  assert.match(sql,/INSERT INTO public\.audit_event/);
+  assert.match(sql,/REVOKE ALL ON FUNCTION[\s\S]*FROM PUBLIC/);
+  assert.doesNotMatch(sql,/UPDATE public\.tenant_subscription/);
+  assert.match(service,/hashToken\(session\)/);
+  assert.match(web,/confirmation\.trim\(\)!==tenant\.companyName/);
+  assert.match(controller,/@Patch\("tenants\/:id\/suspension"\)/);
+});
+
+test("operator actions do not remove read-only billing enforcement for customers", () => {
+  const guard = read("apps/api/src/modules/platform/billing/subscription.guard.ts");
+  const bill = read("apps/api/src/modules/platform/billing/billing.service.ts");
+  assert.match(guard,/platform-operations/);
+  assert.match(guard,/HttpStatus\.PAYMENT_REQUIRED/);
+  assert.match(bill,/status NOT IN \('SUSPENDED','CANCELLED'\)/);
+});
