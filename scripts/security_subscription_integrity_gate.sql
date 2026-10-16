@@ -25,7 +25,7 @@ BEGIN
   WHERE s.status = 'ACTIVE'
     AND p.monthly_price_minor > 0
     AND (
-      s.provider IS DISTINCT FROM 'YOOKASSA'
+      NULLIF(btrim(s.provider), '') IS NULL
       OR NULLIF(btrim(s.provider_reference), '') IS NULL
       OR s.last_payment_at IS NULL
       OR s.last_payment_minor IS NULL
