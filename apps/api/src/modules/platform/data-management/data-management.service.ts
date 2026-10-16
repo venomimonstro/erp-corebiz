@@ -24,7 +24,8 @@ export class DataManagementService {
       throw new BadRequestException("Неизвестный формат экспорта");
     }
 
-    return this.database.withTenantTransaction(context, async (client) => {
+    try {
+      return await this.database.withTenantTransaction(context, async (client) => {
       const running = await client.query<{ id: string }>(
         `SELECT id
          FROM tenant_export_job
@@ -70,7 +71,14 @@ export class DataManagementService {
       );
 
       return row;
-    });
+      });
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error &&
+          error.code === "23505") {
+        throw new ConflictException("Уже выполняется экспорт данных компании");
+      }
+      throw error;
+    }
   }
 
   async exports(
