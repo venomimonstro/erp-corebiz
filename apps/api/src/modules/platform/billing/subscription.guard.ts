@@ -42,6 +42,11 @@ export class SubscriptionGuard implements CanActivate {
     // READ_ONLY accounts must still be able to prove ownership of their
     // email before paying to reactivate. Match only the intended endpoints.
     const cleanPath = path.split("?")[0];
+    // Tenant subscription of an operator's own workspace does not control
+    // platform administration. The SQL function authenticates the operator
+    // again against the session and the dedicated platform_operator registry.
+    if (/^\/api\/v1\/platform-operations\/tenants\/[0-9a-f-]{36}\/suspension$/i.test(cleanPath))
+      return true;
     if (cleanPath === "/api/v1/auth/email-verification/request" ||
         cleanPath === "/api/v1/auth/email-verification/complete" ||
         cleanPath === "/api/v1/auth/password-reset/request" ||
