@@ -74,9 +74,10 @@ export class SupportController {
   @RequirePermission("support.write")
   async close(
     @Req() request: AuthenticatedRequest,
-    @Param("id") id: string
+    @Param("id") id: string,
+    @Body() body: { resolution?: string }
   ): Promise<ApiSuccess<{ closed: true }>> {
-    await this.support.close(this.context(request), id);
+    await this.support.close(this.context(request), id, body?.resolution ?? "");
     return { ok: true, data: { closed: true } };
   }
 
