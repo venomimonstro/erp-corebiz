@@ -350,6 +350,20 @@ export class SupportService {
       throw new BadRequestException("Некорректный размер файла");
     }
 
+    // Metadata may reference only this tenant's support storage namespace.
+    // The real upload path must independently validate object ownership and
+    // content before issuing any download URL.
+    const objectKey = input.objectKey;
+    const prefix = "tenants/" + context.tenantId + "/support/";
+    if (typeof objectKey !== "string" || objectKey.length > 500 ||
+        !objectKey.startsWith(prefix) ||
+        !/^[A-Za-z0-9_./-]+$/.test(objectKey) ||
+        objectKey.includes("..") || objectKey.endsWith("/")) {
+      throw new BadRequestException(
+        "Недопустимая ссылка на файл обращения"
+      );
+    }
+
     const size = BigInt(input.sizeBytes);
     if (size > 25_000_000n) {
       throw new BadRequestException("Максимальный размер вложения 25 МБ");
