@@ -15,7 +15,7 @@ import { PlatformOperationsService } from "./platform-operations.service";
 function pageNumber(raw: string | undefined, fallback: number,
                     min: number, max: number): number {
   if (raw === undefined) return fallback;
-  if (!/^\\d+$/.test(raw)) throw new BadRequestException("Некорректная страница");
+  if (!/^\d+$/.test(raw)) throw new BadRequestException("Некорректная страница");
   const num = Number(raw);
   if (!Number.isSafeInteger(num) || num < min || num > max) {
     throw new BadRequestException("Некорректная страница");
