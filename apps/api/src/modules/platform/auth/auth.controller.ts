@@ -87,6 +87,31 @@ export class AuthController {
     };
   }
 
+  @Public()
+  @Post("password-reset/request")
+  async requestPasswordReset(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: {email?:unknown}
+  ): Promise<ApiSuccess<{accepted:true}>> {
+    await this.rateLimit.assertPasswordResetAllowed(
+      request.ip ?? "unknown",
+      typeof body?.email === "string" ? body.email : ""
+    );
+    await this.authService.requestPasswordReset(body?.email);
+    return {ok:true,data:{accepted:true}};
+  }
+
+  @Public()
+  @Post("password-reset/complete")
+  async completePasswordReset(
+    @Body() body: {token?:unknown;password?:unknown}
+  ): Promise<ApiSuccess<{changed:true}>> {
+    await this.authService.completePasswordReset(
+      body?.token, body?.password
+    );
+    return {ok:true,data:{changed:true}};
+  }
+
   @Post("logout")
   async logout(
     @Req() request: AuthenticatedRequest,
