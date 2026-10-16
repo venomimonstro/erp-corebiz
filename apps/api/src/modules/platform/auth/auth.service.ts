@@ -261,6 +261,15 @@ export class AuthService {
       parallelism: 1
     });
     await this.database.withTransaction(async client => {
+      // Same order as reset issuance: user row before token row. Preflight
+      // alone is not authorization; the token is checked again under lock.
+      const owner = await client.query<{id:string}>(
+        "SELECT id FROM app_user WHERE id=$1 AND status='ACTIVE' FOR UPDATE",
+        [preflight.rows[0]!.user_id]
+      );
+      if (!owner.rows[0]) {
+        throw new BadRequestException("Ссылка недействительна или устарела");
+      }
       const found = await client.query<{user_id:string}>(
         `SELECT t.user_id
          FROM password_reset_token t
