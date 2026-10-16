@@ -43,7 +43,9 @@ export class SubscriptionGuard implements CanActivate {
     // email before paying to reactivate. Match only the intended endpoints.
     const cleanPath = path.split("?")[0];
     if (cleanPath === "/api/v1/auth/email-verification/request" ||
-        cleanPath === "/api/v1/auth/email-verification/complete") return true;
+        cleanPath === "/api/v1/auth/email-verification/complete" ||
+        cleanPath === "/api/v1/auth/password-reset/request" ||
+        cleanPath === "/api/v1/auth/password-reset/complete") return true;
 
     throw new HttpException(
       "Рабочее пространство доступно только для чтения. Обновите подписку.",
