@@ -47,6 +47,35 @@ export class PlatformOperationsService {
     }
   }
 
+  async suspensionHistory(
+    userId: string, session: string | undefined, tenantId: string
+  ): Promise<Array<{
+    id:string; suspendedAt:string; resumedAt:string|null;
+    reason:string; resumeReason:string|null;
+  }>> {
+    if (!session || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tenantId))
+      throw new ForbiddenException("Недостаточно прав оператора");
+    try {
+      const res = await this.database.query<{
+        history: Array<{
+          id:string;suspendedAt:string;resumedAt:string|null;
+          reason:string;resumeReason:string|null;
+        }>
+      }>(
+        "SELECT public.corebiz_platform_suspension_history($1::uuid,$2::text,$3::uuid) AS history",
+        [userId,hashToken(session),tenantId]
+      );
+      const history=res.rows[0]?.history;
+      if (!Array.isArray(history)) throw new Error("PLATFORM_HISTORY_INVALID");
+      return history;
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error &&
+          error.code === "42501")
+        throw new ForbiddenException("Недостаточно прав оператора");
+      throw error;
+    }
+  }
+
   async setSuspension(
     userId: string, session: string | undefined, tenantId: string,
     action: "SUSPEND" | "RESUME", reason: string
