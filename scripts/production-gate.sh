@@ -148,7 +148,7 @@ psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/security_rbac_owner_gate.sql
 
 echo "[production-gate] commercial tenant-subscription integrity gate"
-psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \\
+psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/security_subscription_integrity_gate.sql
 pass_step "BILLING:SUBSCRIPTION_INTEGRITY"
 
