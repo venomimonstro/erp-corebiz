@@ -49,7 +49,7 @@ describe("commercial email verification", () => {
 
   it("invalidates a token when its delivery fails", async () => {
     const client={query:jest.fn(async (sql:string) =>
-      sql.startsWith("SELECT") ? {
+      sql.startsWith("SELECT id,email") ? {
         rows:[{id:userId,email:"owner@example.com",email_verified_at:null}]
       } : {rows:[]}
     )};
