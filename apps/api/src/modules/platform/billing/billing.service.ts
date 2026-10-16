@@ -425,6 +425,39 @@ export class BillingService {
     return output;
   }
 
+  async history(context: TenantContext): Promise<Array<{
+    id: string; type: string; status: string | null;
+    amountMinor: string | null; currency: string | null;
+    provider: string | null; createdAt: string;
+  }>> {
+    // Do not return raw event payload or provider_reference:
+    // both may contain PII/identifiers intended for provider reconciliation.
+    return this.database.withTenantTransaction(context, async (client) => {
+      const result = await client.query<{
+        id: string; event_type: string;
+        subscription_status: string | null; amount_minor: string | null;
+        currency: string | null; provider: string | null;
+        created_at: Date;
+      }>(
+        `SELECT id,event_type,subscription_status,
+                amount_minor::text,currency,provider,created_at
+         FROM billing_event
+         WHERE tenant_id=$1
+         ORDER BY created_at DESC,id DESC LIMIT 100`,
+        [context.tenantId]
+      );
+      return result.rows.map(row => ({
+        id: row.id,
+        type: row.event_type,
+        status: row.subscription_status,
+        amountMinor: row.amount_minor,
+        currency: row.currency,
+        provider: row.provider,
+        createdAt: row.created_at.toISOString()
+      }));
+    });
+  }
+
   async setCancelAtPeriodEnd(
     context: TenantContext,
     value: boolean
