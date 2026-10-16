@@ -32,10 +32,10 @@ export default function EmailSettingsPage() {
       if (result.verified) {
         setStatus(old => old ? {...old, verified:true} : old);
         setNotice("Адрес уже подтверждён.");
-      } else {
-        setNotice("Письмо уже запрошено. Проверьте почту или повторите позже.");
       } else if (result.sent) {
         setNotice("Письмо принято почтовым сервисом. Проверьте входящие и «Спам».");
+      } else {
+        setNotice("Письмо уже запрошено. Проверьте почту или повторите позже.");
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Отправка не выполнена");
