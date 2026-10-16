@@ -20,7 +20,7 @@ describe("DB-backed session validation with throttled telemetry",()=>{
         return {rows:[],rowCount:1};
       })
     };
-    const service=new AuthService(db as any);
+    const service=new AuthService(db as any, {} as any);
     const responses=await Promise.all(
       Array.from({length:50},()=>service.resolveSession("session-token"))
     );
@@ -41,7 +41,7 @@ describe("DB-backed session validation with throttled telemetry",()=>{
         return {rows:[],rowCount:1};
       })
     };
-    const service=new AuthService(db as any);
+    const service=new AuthService(db as any, {} as any);
     expect(await service.resolveSession("session-token")).not.toBeNull();
     active=false;
     expect(await service.resolveSession("session-token")).toBeNull();
