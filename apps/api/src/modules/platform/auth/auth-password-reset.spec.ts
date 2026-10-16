@@ -18,7 +18,7 @@ describe("password reset security", () => {
 
   it("stores only a hashed token and accepts a single active link", async () => {
     const writes: Array<{sql:string;values:unknown[]}> = [];
-    const mail = {sendReset: jest.fn(async () => undefined)};
+    const mail = {sendReset: jest.fn(async (_email: string, _token: string) => undefined)};
     const db = {
       query: jest.fn(async () => ({rows:[{id:"user-uuid"}]})),
       withTransaction: jest.fn(async (work: any) =>
