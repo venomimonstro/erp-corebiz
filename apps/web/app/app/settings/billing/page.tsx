@@ -97,6 +97,7 @@ export default function BillingPage() {
   const [reconciliation,setReconciliation]=useState<ReconciliationStatus|null>(null);
   const [current, setCurrent] = useState<CurrentBilling | null>(null);
   const [error, setError] = useState("");
+  const [emailStatus,setEmailStatus] = useState<{verified:boolean;email:string}|null>(null);
   const [pending, setPending] = useState(false);
 
   const load = useCallback(async () => {
@@ -120,6 +121,14 @@ export default function BillingPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    let mounted = true;
+    void apiRequest<{verified:boolean;email:string}>("/auth/email-verification/status")
+      .then(data => { if (mounted) setEmailStatus(data); })
+      .catch(() => { if (mounted) setEmailStatus(null); });
+    return () => { mounted = false; };
+  }, []);
 
   async function payPlan(code:string){
     setPending(true);
@@ -226,6 +235,12 @@ export default function BillingPage() {
           ) : null}
         </header>
 
+        {emailStatus && !emailStatus.verified ? <section className="studio-section">
+          <h2>Подтвердите адрес электронной почты</h2>
+          <p>Подписка не может быть оплачена, пока адрес {emailStatus.email}
+            не подтверждён. Работа в пробном тарифе сохраняется.</p>
+          <a href="/app/verify-email">Отправить письмо подтверждения</a>
+        </section> : null}
         {reconciliation?<section className="studio-section">
           <h2>Контроль подтверждения платежей</h2>
           <p>Фоновая сверка: <strong>{reconciliation.enabled?
