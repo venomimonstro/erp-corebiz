@@ -341,7 +341,10 @@ export default function BillingPage() {
         <div className="plan-grid">
           {plans.map((plan) => {
             const active = current?.subscription.planCode === plan.code;
-            const requiresPayment = Number(plan.monthlyPriceMinor) > 0 && !active;
+            // Paid subscriptions can be purchased during a trial and renewed
+            // on the same plan; previously the active plan button was always
+            // disabled, blocking both of these legitimate checkout journeys.
+            const requiresPayment = Number(plan.monthlyPriceMinor) > 0;
             const modules = Array.isArray(plan.entitlements.modules)
               ? plan.entitlements.modules
               : [];
@@ -369,13 +372,16 @@ export default function BillingPage() {
                 </ul>
 
                 <button
-                  disabled={pending || active}
+                  disabled={pending || (active && !requiresPayment)}
                   onClick={() => void (requiresPayment
                     ? payPlan(plan.code) : selectPlan(plan.code))}
                   type="button"
                 >
-                  {active ? "Текущий" : requiresPayment
-                    ? "Перейти к безопасной оплате" : "Выбрать"}
+                  {active && requiresPayment
+                    ? current?.subscription.status === "TRIAL"
+                      ? "Оплатить этот тариф" : "Продлить на месяц"
+                    : active ? "Текущий" : requiresPayment
+                      ? "Перейти к безопасной оплате" : "Выбрать"}
                 </button>
               </article>
             );
