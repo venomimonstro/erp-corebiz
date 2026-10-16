@@ -77,6 +77,7 @@ describe("regulated provider boundary",()=>{
     const client={
       query:jest.fn(async(sql:string)=>{
         statements.push(sql);
+        if(sql.includes("FROM tenant_subscription")) return {rows:[{tenant_id:context.tenantId}]};
         if(sql.includes("FROM billing_plan")) return {rows:[{
           id:"44444444-4444-4444-8444-444444444444",
           code:"BUSINESS",monthly_price_minor:"1490000"
@@ -98,6 +99,27 @@ describe("regulated provider boundary",()=>{
       .rejects.toBeInstanceOf(ConflictException);
     expect(statements.some(sql=>sql.includes("INSERT INTO commerce_payment_intent")))
       .toBe(false);
+  });
+
+  it("prevents provider checkout when tenant subscription is missing",async()=>{
+    const queries:string[]=[];
+    const db={
+      withTenantTransaction:jest.fn(async(_ctx:unknown,cb:any)=>cb({
+        query:jest.fn(async(sql:string)=>{
+          queries.push(sql);
+          return {rows:[],rowCount:0};
+        })
+      }))
+    };
+    const svc=new CommercePaymentsService(db as any,{} as any);
+    jest.spyOn(svc as any,"platform").mockReturnValue({
+      shopId:"test-shop",secret:"not-sent"
+    });
+    await expect(svc.beginSaas(context,"START"))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(queries).toEqual([
+      "SELECT tenant_id FROM tenant_subscription WHERE tenant_id=$1 FOR UPDATE"
+    ]);
   });
 
   it("never trusts an unsigned refund notification status alone",async()=>{
