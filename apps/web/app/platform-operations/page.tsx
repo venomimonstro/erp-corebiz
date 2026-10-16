@@ -3,6 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiRequest } from "../../lib/api";
 
+type SuspensionRecord = {
+  id:string;
+  suspendedAt:string;
+  resumedAt:string|null;
+  reason:string;
+  resumeReason:string|null;
+};
+
 type CommercialSummary = {
   tenants:number;
   operating:number;
@@ -35,6 +43,8 @@ export default function PlatformOperationsPage() {
   const [error,setError] = useState("");
   const [loading,setLoading] = useState(true);
   const [busyTenant,setBusyTenant] = useState<string|null>(null);
+  const [historyTenant,setHistoryTenant] = useState<string|null>(null);
+  const [history,setHistory] = useState<SuspensionRecord[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -55,6 +65,19 @@ export default function PlatformOperationsPage() {
       setLoading(false);
     }
   },[offset]);
+
+  async function showHistory(tenant:Tenant) {
+    setHistoryTenant(tenant.companyName);
+    setHistory([]);
+    try {
+      const data = await apiRequest<SuspensionRecord[]>(
+        "/platform-operations/tenants/"+encodeURIComponent(tenant.tenantId)+"/suspensions"
+      );
+      setHistory(data);
+    } catch (cause) {
+      setError(cause instanceof Error?cause.message:"История недоступна");
+    }
+  }
 
   async function setSuspension(tenant:Tenant, action:"SUSPEND"|"RESUME") {
     const label=action==="SUSPEND"?"приостановить":"возобновить";
@@ -138,7 +161,7 @@ export default function PlatformOperationsPage() {
               <td>{t.openTickets}</td>
               <td>{t.periodEnd ?
                 new Date(t.periodEnd).toLocaleDateString("ru-RU") : "—"}</td>
-              <td>{t.tenantStatus==="ACTIVE"?
+              <td><div style={{display:"flex",gap:8,alignItems:"center"}}><button type="button" onClick={()=>void showHistory(t)}>История</button>{t.tenantStatus==="ACTIVE"?
                 <button type="button" disabled={busyTenant!==null}
                   onClick={()=>void setSuspension(t,"SUSPEND")}>
                   {busyTenant===t.tenantId?"Изменяем…":"Приостановить"}
@@ -146,11 +169,24 @@ export default function PlatformOperationsPage() {
                 <button type="button" disabled={busyTenant!==null}
                   onClick={()=>void setSuspension(t,"RESUME")}>
                   {busyTenant===t.tenantId?"Изменяем…":"Возобновить"}
-                </button>:"—"}</td>
+                </button>:"—"}</div></td>
             </tr>)}
           </tbody>
         </table>
       </div>}
+      {historyTenant ? <section className="studio-section">
+        <h3>История решений: {historyTenant}</h3>
+        {history.length===0 ? <p>Записей нет.</p> :
+          <ul>{history.map(h=><li key={h.id}>
+            <strong>{new Date(h.suspendedAt).toLocaleString("ru-RU")}</strong>
+            {" · Приостановка: "}{h.reason}
+            {h.resumedAt ? <span>
+              {" · Возобновлено "}{new Date(h.resumedAt).toLocaleString("ru-RU")}
+              {" · "}{h.resumeReason}
+            </span>:null}
+          </li>)}</ul>}
+        <button type="button" onClick={()=>setHistoryTenant(null)}>Закрыть историю</button>
+      </section> : null}
       <div style={{display:"flex",gap:12,marginTop:16,alignItems:"center"}}>
         <button type="button" disabled={offset===0 || loading}
           onClick={()=>setOffset(Math.max(0,offset-25))}>Назад</button>
