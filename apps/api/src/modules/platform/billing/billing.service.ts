@@ -170,8 +170,11 @@ export class BillingService {
       );
 
       const row = result.rows[0];
+      // A missing subscription must never grant commercial write access.
+      // New tenants receive a trial through the database bootstrap trigger;
+      // if that mechanism fails, fail closed instead of silently becoming ACTIVE.
       if (!row) {
-        return "ACTIVE";
+        return "READ_ONLY";
       }
 
       const now = new Date();
