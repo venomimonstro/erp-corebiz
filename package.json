@@ -17,6 +17,7 @@
     "restore:db": "bash scripts/restore-postgres.sh",
     "release:check": "bash scripts/release-check.sh",
     "release:gate": "bash scripts/production-gate.sh",
+    "test:commercial:contracts": "node --test scripts/commercial-sprint-contract.test.mjs",
     "stability:check": "node scripts/stability-source-preflight.mjs",
     "golden:journeys": "node scripts/golden-business-journeys.mjs",
     "simulate:100-users": "node scripts/simulate-100-users.mjs",
