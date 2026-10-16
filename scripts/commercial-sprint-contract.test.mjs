@@ -140,3 +140,14 @@ test("operator suspension history is scoped and session verified", () => {
   assert.match(sql, /LIMIT 25/);
   assert.match(api, /corebiz_platform_suspension_history/);
 });
+
+test("current paid tariff remains purchasable for trial conversion and renewal", () => {
+  const web = read("apps/web/app/app/settings/billing/page.tsx");
+  const pay = read("apps/api/src/modules/platform/payments/commerce-payments.service.ts");
+  assert.match(web, /const requiresPayment = Number\(plan\.monthlyPriceMinor\) > 0/);
+  assert.match(web, /Продлить на месяц/);
+  assert.match(web, /Оплатить этот тариф/);
+  assert.match(web, /Автоматических списаний пока нет/);
+  assert.match(pay, /if\(!subscription\.rows\[0\]\)/);
+  assert.match(pay, /current_period_end=GREATEST\(current_period_end,now\(\)\)\+interval '1 month'/);
+});
