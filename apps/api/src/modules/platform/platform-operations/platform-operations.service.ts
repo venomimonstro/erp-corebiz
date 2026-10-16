@@ -1,6 +1,9 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
-  Injectable
+  Injectable,
+  NotFoundException
 } from "@nestjs/common";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import { hashToken } from "../auth/auth.utils";
