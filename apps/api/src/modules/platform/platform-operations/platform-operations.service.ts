@@ -24,6 +24,29 @@ export type OperatorTenant = {
 export class PlatformOperationsService {
   constructor(private readonly database: DatabaseService) {}
 
+  async setSuspension(
+    userId: string, session: string | undefined, tenantId: string,
+    action: "SUSPEND" | "RESUME", reason: string
+  ): Promise<{ tenantId: string; status: string; suspensionId: string }> {
+    if (!session || !/^[0-9a-f-]{36}$/i.test(tenantId))
+      throw new ForbiddenException("Недостаточно прав оператора");
+    if (!["SUSPEND","RESUME"].includes(action) ||
+        typeof reason !== "string" ||
+        reason.trim().length < 15 || reason.trim().length > 800)
+      throw new BadRequestException("Укажите причину от 15 до 800 символов");
+
+    const res = await this.database.query<{
+      outcome: {tenantId: string; status: string; suspensionId: string}
+    }>(
+      "SELECT public.corebiz_platform_tenant_suspension($1::uuid,$2::text,$3::uuid,$4::text,$5::text) AS outcome",
+      [userId, hashToken(session), tenantId, action, reason.trim()]
+    );
+    const outcome = res.rows[0]?.outcome;
+    if (!outcome || outcome.tenantId !== tenantId)
+      throw new Error("PLATFORM_ACTION_INVALID_RESPONSE");
+    return outcome;
+  }
+
   async tenants(
     userId: string,
     rawSession: string | undefined,
