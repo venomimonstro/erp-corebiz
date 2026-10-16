@@ -27,6 +27,29 @@ describe("platform operator read-only access", () => {
     expect(params[1]).not.toBe(token);
   });
 
+  it("requires a valid session for aggregate platform metrics", async () => {
+    const db={query:jest.fn()};
+    const svc=new PlatformOperationsService(db as any);
+    await expect(svc.summary(id,undefined)).rejects.toBeInstanceOf(
+      ForbiddenException
+    );
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("obtains business-wide statistics only via operator-gated SQL", async () => {
+    const db={query:jest.fn(async (_sql:string,_params:unknown[])=>({
+      rows:[{overview:{
+        tenants:3,operating:2,suspended:1,paidActive:1
+      }}]
+    }))};
+    const svc=new PlatformOperationsService(db as any);
+    const data=await svc.summary(id,token);
+    expect(data.tenants).toBe(3);
+    const params=db.query.mock.calls[0]![1] as unknown[];
+    expect(params[1]).toMatch(/^[0-9a-f]{64}$/);
+    expect(params[1]).not.toBe(token);
+  });
+
   it("rejects untrusted actions before reaching SQL", async () => {
     const db={query:jest.fn()};
     const svc=new PlatformOperationsService(db as any);
