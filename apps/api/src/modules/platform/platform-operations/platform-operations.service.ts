@@ -35,13 +35,28 @@ export class PlatformOperationsService {
         reason.trim().length < 15 || reason.trim().length > 800)
       throw new BadRequestException("Укажите причину от 15 до 800 символов");
 
-    const res = await this.database.query<{
-      outcome: {tenantId: string; status: string; suspensionId: string}
-    }>(
-      "SELECT public.corebiz_platform_tenant_suspension($1::uuid,$2::text,$3::uuid,$4::text,$5::text) AS outcome",
-      [userId, hashToken(session), tenantId, action, reason.trim()]
-    );
-    const outcome = res.rows[0]?.outcome;
+    let outcome: {tenantId: string; status: string; suspensionId: string} | undefined;
+    try {
+      const res = await this.database.query<{
+        outcome: {tenantId: string; status: string; suspensionId: string}
+      }>(
+        "SELECT public.corebiz_platform_tenant_suspension($1::uuid,$2::text,$3::uuid,$4::text,$5::text) AS outcome",
+        [userId, hashToken(session), tenantId, action, reason.trim()]
+      );
+      outcome = res.rows[0]?.outcome;
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error
+        ? String(error.code) : "";
+      if (code === "42501")
+        throw new ForbiddenException("Недостаточно прав оператора");
+      if (code === "22023")
+        throw new BadRequestException("Некорректные параметры действия");
+      if (code === "P0002")
+        throw new NotFoundException("Компания не найдена");
+      if (code === "23514" || code === "23505")
+        throw new ConflictException("Состояние компании изменилось");
+      throw error;
+    }
     if (!outcome || outcome.tenantId !== tenantId)
       throw new Error("PLATFORM_ACTION_INVALID_RESPONSE");
     return outcome;
