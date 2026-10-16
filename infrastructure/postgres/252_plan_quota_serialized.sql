@@ -28,6 +28,11 @@ BEGIN
   WHERE tenant_id=NEW.tenant_id
   FOR UPDATE;
 
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PLAN_SUBSCRIPTION_MISSING:%',NEW.tenant_id
+      USING ERRCODE='23514';
+  END IF;
+
   v_limit := corebiz_plan_integer_limit(NEW.tenant_id,v_key);
   IF v_limit IS NULL THEN
     RETURN NEW;
