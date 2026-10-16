@@ -23,6 +23,17 @@ export class BillingController {
     };
   }
 
+  @Get("events")
+  @RequirePermission("billing.manage")
+  async history(
+    @Req() request: AuthenticatedRequest
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.billing.history(this.context(request))
+    };
+  }
+
   @Post("select-plan")
   @RequirePermission("billing.manage")
   async selectPlan(
