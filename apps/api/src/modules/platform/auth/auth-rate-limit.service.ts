@@ -67,6 +67,33 @@ export class AuthRateLimitService {
     }
   }
 
+  async assertEmailVerificationAllowed(ip: string, userId: string): Promise<void> {
+    const byUser = await this.redis.incrementWindow(
+      this.key("verify-email-user", "global", userId), 60 * 60
+    );
+    const byIp = await this.redis.incrementWindow(
+      this.key("verify-email-ip", ip, ""), 60 * 60
+    );
+    if (byUser > 5 || byIp > 30) {
+      throw new HttpException(
+        "Слишком много запросов подтверждения. Повторите позже.",
+        HttpStatus.TOO_MANY_REQUESTS
+      );
+    }
+  }
+
+  async assertRecoveryCompletionAllowed(ip: string): Promise<void> {
+    const count = await this.redis.incrementWindow(
+      this.key("token-complete", ip, ""), 15 * 60
+    );
+    if (count > 30) {
+      throw new HttpException(
+        "Слишком много попыток проверки ссылки. Повторите позже.",
+        HttpStatus.TOO_MANY_REQUESTS
+      );
+    }
+  }
+
   private key(action: string, ip: string, subject: string): string {
     const digest = createHash("sha256")
       .update(`${ip}|${subject}`)
