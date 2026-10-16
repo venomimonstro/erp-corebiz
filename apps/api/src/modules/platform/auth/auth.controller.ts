@@ -11,6 +11,7 @@ import type { Response } from "express";
 import type { ApiSuccess } from "@corebiz/contracts";
 import { AuthRateLimitService } from "./auth-rate-limit.service";
 import { AuthService } from "./auth.service";
+import { EmailVerificationService } from "./email-verification.service";
 import { parseLoginPayload, parseRegisterPayload, parseMembershipPayload } from "./auth-payload";
 import type { AuthenticatedRequest } from "./auth.types";
 import {
@@ -23,7 +24,8 @@ import { Public } from "./public.decorator";
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
-    private readonly rateLimit: AuthRateLimitService
+    private readonly rateLimit: AuthRateLimitService,
+    private readonly verification: EmailVerificationService
   ) {}
 
   @Public()
@@ -104,12 +106,54 @@ export class AuthController {
   @Public()
   @Post("password-reset/complete")
   async completePasswordReset(
+    @Req() request: AuthenticatedRequest,
     @Body() body: {token?:unknown;password?:unknown}
   ): Promise<ApiSuccess<{changed:true}>> {
+    await this.rateLimit.assertRecoveryCompletionAllowed(
+      request.ip ?? "unknown"
+    );
     await this.authService.completePasswordReset(
       body?.token, body?.password
     );
     return {ok:true,data:{changed:true}};
+  }
+
+  @Get("email-verification/status")
+  async verificationStatus(
+    @Req() request: AuthenticatedRequest
+  ): Promise<ApiSuccess<{verified:boolean;email:string}>> {
+    return {
+      ok: true,
+      data: await this.verification.status(request.auth!.userId)
+    };
+  }
+
+  @Post("email-verification/request")
+  async verificationRequest(
+    @Req() request: AuthenticatedRequest
+  ): Promise<ApiSuccess<{sent:boolean;verified:boolean}>> {
+    await this.rateLimit.assertEmailVerificationAllowed(
+      request.ip ?? "unknown", request.auth!.userId
+    );
+    return {
+      ok: true,
+      data: await this.verification.request(request.auth!.userId)
+    };
+  }
+
+  @Public()
+  @Post("email-verification/complete")
+  async verificationComplete(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: {token?:unknown}
+  ): Promise<ApiSuccess<{verified:true}>> {
+    await this.rateLimit.assertRecoveryCompletionAllowed(
+      request.ip ?? "unknown"
+    );
+    return {
+      ok: true,
+      data: await this.verification.complete(body?.token)
+    };
   }
 
   @Post("logout")
