@@ -69,6 +69,22 @@ export class EmailVerificationService {
       throw new BadRequestException("Ссылка недействительна или устарела");
     }
     await this.database.withTransaction(async client => {
+      // Lock order MUST match request(): app_user first, token second.
+      // Otherwise reissue and completion can deadlock on the same account.
+      const candidate = await client.query<{user_id:string}>(
+        "SELECT t.user_id FROM email_verification_token t JOIN app_user u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.consumed_at IS NULL AND t.expires_at>now() AND u.status='ACTIVE' LIMIT 1",
+        [hashToken(rawToken)]
+      );
+      if (!candidate.rows[0]) {
+        throw new BadRequestException("Ссылка недействительна или устарела");
+      }
+      const owner = await client.query<{id:string}>(
+        "SELECT id FROM app_user WHERE id=$1 AND status='ACTIVE' FOR UPDATE",
+        [candidate.rows[0].user_id]
+      );
+      if (!owner.rows[0]) {
+        throw new BadRequestException("Ссылка недействительна или устарела");
+      }
       const result = await client.query<{ user_id: string }>(
         "SELECT t.user_id FROM email_verification_token t JOIN app_user u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.consumed_at IS NULL AND t.expires_at>now() AND u.status='ACTIVE' FOR UPDATE OF t",
         [hashToken(rawToken)]
