@@ -293,29 +293,45 @@ export class SupportService {
 
   async close(
     context: TenantContext,
-    ticketId: string
+    ticketId: string,
+    resolutionInput: string
   ): Promise<void> {
+    if (typeof resolutionInput !== "string" ||
+        resolutionInput.trim().length < 10 ||
+        resolutionInput.trim().length > 2000) {
+      throw new BadRequestException(
+        "Укажите результат обращения (от 10 до 2000 символов)"
+      );
+    }
+    const resolution = resolutionInput.trim();
+
     await this.database.withTenantTransaction(context, async (client) => {
-      const result = await client.query(
-        `UPDATE support_ticket
-         SET status = 'CLOSED',
-             closed_at = now(),
-             updated_at = now()
-         WHERE tenant_id = $1
-           AND id = $2
-           AND status <> 'CLOSED'
-         RETURNING id`,
+      const current = await client.query<{ status: string }>(
+        `SELECT status FROM support_ticket
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
         [context.tenantId, ticketId]
       );
+      if (!current.rows[0]) throw new NotFoundException("Тикет не найден");
+      if (current.rows[0].status === "CLOSED") return;
 
-      if (!result.rowCount) {
-        const exists = await client.query(
-          `SELECT 1 FROM support_ticket
-           WHERE tenant_id = $1 AND id = $2`,
-          [context.tenantId, ticketId]
-        );
-        if (!exists.rowCount) throw new NotFoundException("Тикет не найден");
-      }
+      await client.query(
+        `INSERT INTO support_message(
+           tenant_id,ticket_id,author_membership_id,body,visibility
+         ) VALUES ($1,$2,$3,$4,'PUBLIC')`,
+        [context.tenantId,ticketId,context.membershipId,
+         "Результат обращения: " + resolution]
+      );
+      await client.query(
+        `UPDATE support_ticket
+         SET status='CLOSED',resolved_at=COALESCE(resolved_at,now()),
+             closed_at=now(),updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,ticketId]
+      );
+      await this.audit(
+        client,context,"support.ticket_closed","support_ticket",
+        ticketId,{ resolutionRecorded: true }
+      );
     });
   }
 
