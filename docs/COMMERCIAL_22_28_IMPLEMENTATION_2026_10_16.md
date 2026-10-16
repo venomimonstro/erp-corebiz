@@ -17,7 +17,7 @@ SELECT id FROM app_user WHERE lower(email)=lower('operator@example.com')
 ON CONFLICT (user_id) DO UPDATE SET status='ACTIVE',updated_at=now();
 ```
 
-- Добавлены миграции `256_platform_tenant_suspension.sql` и `257_platform_commercial_overview.sql`. На странице `/platform-operations` появилась сводка по тарифам и действия `SUSPEND / RESUME` с обязательной причиной. API: `GET /api/v1/platform-operations/summary` и `PATCH /api/v1/platform-operations/tenants/:id/suspension`.
+- Добавлены миграции `256_platform_tenant_suspension.sql`, `257_platform_commercial_overview.sql` и `258_platform_suspension_history.sql`. На странице `/platform-operations` появилась сводка по тарифам, действия `SUSPEND / RESUME` с обязательной причиной и история операторских решений для конкретной компании. API: `GET /api/v1/platform-operations/summary`, `GET /api/v1/platform-operations/tenants/:id/suspensions` и `PATCH /api/v1/platform-operations/tenants/:id/suspension`.
 - Операция исполняется только в `SECURITY DEFINER`-функции после повторной проверки действующей сессии и права `platform_operator`. Нельзя приостанавливать собственную компанию, менять `GRACE/READ_ONLY/CANCELLED` на `SUSPENDED` или возобновлять чужие исторические блокировки. Применяется журнал `audit_event`, при приостановке отзываются сеансы выбранной компании.
 - Возобновление восстанавливает состояние `ACTIVE` лишь если была именно операторская блокировка состояния `ACTIVE`. Оплаченный период и платежи не переписываются; истёкшая подписка при следующей оценке остаётся `READ_ONLY`. После снятия блокировки нужен новый вход.
 - **Границы действия:** реализована блокировка входа/сессий в ERP. Она не доказана как глобальное выключение всех публичных витрин, внешних вебхуков и фоновых задач: эти сценарии необходимо отдельно испытать и при необходимости защитить.
@@ -65,7 +65,7 @@ ON CONFLICT (user_id) DO UPDATE SET status='ACTIVE',updated_at=now();
 
 - `scripts/commercial-sprint-contract.test.mjs` проверяет критические **структурные** свойства исходников; подключён к `scripts/production-gate.sh`.
 - Ранее добавленный `scripts/security_subscription_integrity_gate.sql` проверяет tenant subscription перед дальнейшими тестами.
-- Исходники, UI, документация и API изменены **в main**. На сервере не запускались `pnpm typecheck`, `pnpm test`, полное исполнение миграций 252–257, browser E2E, провайдерные тесты, нагрузочные тесты, backup→restore.
+- Исходники, UI, документация и API изменены **в main**. На сервере не запускались `pnpm typecheck`, `pnpm test`, полное исполнение миграций 252–258, browser E2E, провайдерные тесты, нагрузочные тесты, backup→restore.
 - **Финальный GO запрещён**, пока не получены реальные подтверждения и письменное решение для конкретных профиля и тарифа.
 
 ## Обязательный порядок испытаний
