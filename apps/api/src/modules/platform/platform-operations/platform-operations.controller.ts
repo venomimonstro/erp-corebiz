@@ -30,6 +30,19 @@ function pageNumber(raw: string | undefined, fallback: number,
 export class PlatformOperationsController {
   constructor(private readonly platform: PlatformOperationsService) {}
 
+  @Get("summary")
+  async summary(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response
+  ): Promise<ApiSuccess<Record<string, number>>> {
+    response.setHeader("Cache-Control", "no-store, private");
+    const token = parseCookie(request.headers.cookie, SESSION_COOKIE);
+    return {
+      ok: true,
+      data: await this.platform.summary(request.auth!.userId, token)
+    };
+  }
+
   @Patch("tenants/:id/suspension")
   async suspension(
     @Req() request: AuthenticatedRequest,
