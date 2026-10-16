@@ -73,14 +73,20 @@ describe("commercial email verification", () => {
       withTransaction:jest.fn(async (fn:any)=>fn({
         query:jest.fn(async (sql:string)=>{
           statements.push(sql);
-          return sql.startsWith("SELECT t.user_id")
-            ? {rows:[{user_id:userId}]} : {rows:[],rowCount:1};
+          if (sql.startsWith("SELECT t.user_id")) {
+            return {rows:[{user_id:userId}]};
+          }
+          if (sql.startsWith("SELECT id FROM app_user")) {
+            return {rows:[{id:userId}]};
+          }
+          return {rows:[],rowCount:1};
         })
       }))
     };
     const service=new EmailVerificationService(db as any,{} as any);
     await expect(service.complete(token)).resolves.toEqual({verified:true});
-    expect(statements[0]).toContain("FOR UPDATE OF t");
+    expect(statements[1]).toContain("FOR UPDATE");
+    expect(statements[2]).toContain("FOR UPDATE OF t");
     expect(statements.some(s=>s.includes("email_verified_at=COALESCE"))).toBe(true);
     expect(statements.some(s=>s.includes("consumed_at=now()"))).toBe(true);
   });
