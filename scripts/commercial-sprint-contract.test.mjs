@@ -116,3 +116,17 @@ test("operator actions do not remove read-only billing enforcement for customers
   assert.match(guard,/HttpStatus\.PAYMENT_REQUIRED/);
   assert.match(bill,/status NOT IN \('SUSPENDED','CANCELLED'\)/);
 });
+
+test("SaaS operating metrics are operator-authenticated and do not include customer PII", () => {
+  const sql = read("infrastructure/postgres/257_platform_commercial_overview.sql");
+  const api = read("apps/api/src/modules/platform/platform-operations/platform-operations.controller.ts");
+  const web = read("apps/web/app/platform-operations/page.tsx");
+  assert.match(sql,/s\.session_hash=p_session_hash/);
+  assert.match(sql,/s\.revoked_at IS NULL/);
+  assert.match(sql,/REVOKE ALL ON FUNCTION[\s\S]*FROM PUBLIC/);
+  assert.match(sql,/missingSubscription/);
+  assert.match(sql,/pastDue/);
+  assert.doesNotMatch(sql,/SELECT \* FROM public\.app_user/);
+  assert.match(api,/@Get\("summary"\)/);
+  assert.match(web,/Коммерческое состояние платформы/);
+});
