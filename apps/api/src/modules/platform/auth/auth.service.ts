@@ -195,7 +195,7 @@ export class AuthService {
   // Tokens are persisted only as SHA-256 hashes and never returned to the user.
   async requestPasswordReset(rawEmail: unknown): Promise<void> {
     if (typeof rawEmail !== "string" || rawEmail.length > 254 ||
-        !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(rawEmail.trim())) {
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail.trim())) {
       return;
     }
     const email = rawEmail.trim().toLowerCase();
