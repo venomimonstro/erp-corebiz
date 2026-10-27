@@ -42,7 +42,7 @@ $$;
 
 CREATE OR REPLACE FUNCTION public.corebiz_support_apply_sla()
 RETURNS trigger
-LANGUAGE plpgsql
+LANGUAGE plpgsql SECURITY DEFINER
 SET search_path=pg_catalog,public,pg_temp
 AS $$
 DECLARE
@@ -66,18 +66,27 @@ CREATE TRIGGER support_ticket_sla_defaults_v1
 BEFORE INSERT ON support_ticket
 FOR EACH ROW EXECUTE FUNCTION public.corebiz_support_apply_sla();
 
-UPDATE support_ticket t
+UPDATE support_ticket
 SET first_response_due_at=COALESCE(
-      t.first_response_due_at,d.first_response_due_at
+      first_response_due_at,
+      created_at + CASE priority
+        WHEN 'URGENT' THEN interval '15 minutes'
+        WHEN 'HIGH' THEN interval '1 hour'
+        WHEN 'NORMAL' THEN interval '4 hours'
+        ELSE interval '1 day'
+      END
     ),
     resolution_due_at=COALESCE(
-      t.resolution_due_at,d.resolution_due_at
+      resolution_due_at,
+      created_at + CASE priority
+        WHEN 'URGENT' THEN interval '4 hours'
+        WHEN 'HIGH' THEN interval '8 hours'
+        WHEN 'NORMAL' THEN interval '2 days'
+        ELSE interval '5 days'
+      END
     )
-FROM LATERAL public.corebiz_support_sla_deadlines(
-  t.priority,t.created_at
-) d
-WHERE t.first_response_due_at IS NULL
-   OR t.resolution_due_at IS NULL;
+WHERE first_response_due_at IS NULL
+   OR resolution_due_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS support_ticket_sla_queue_idx
   ON support_ticket(
@@ -517,6 +526,7 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.corebiz_support_sla_deadlines(text,timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.corebiz_support_apply_sla() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.corebiz_platform_operator_session_ok(uuid,text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.corebiz_platform_support_queue(uuid,text,integer,integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.corebiz_platform_support_ticket(uuid,text,uuid) FROM PUBLIC;
@@ -528,8 +538,6 @@ REVOKE ALL ON FUNCTION public.corebiz_claim_support_sla_escalation() FROM PUBLIC
 DO $$
 BEGIN
   IF EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='corebiz_app') THEN
-    GRANT EXECUTE ON FUNCTION public.corebiz_platform_operator_session_ok(uuid,text)
-      TO corebiz_app;
     GRANT EXECUTE ON FUNCTION public.corebiz_platform_support_queue(uuid,text,integer,integer)
       TO corebiz_app;
     GRANT EXECUTE ON FUNCTION public.corebiz_platform_support_ticket(uuid,text,uuid)
