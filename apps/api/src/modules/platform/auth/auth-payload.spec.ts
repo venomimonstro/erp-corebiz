@@ -6,8 +6,16 @@ describe("authentication input validation", () => {
     expect(parseLoginPayload({ email: " TEST@example.com ", password: "  secret " }))
       .toEqual({ email: "TEST@example.com", password: "  secret " });
   });
+  it("accepts a bounded MFA code without normalizing the recovery secret", () => {
+    expect(parseLoginPayload({
+      email:"e@example.com",password:"secret-secret",mfaCode:" ABCD-1234 "
+    })).toEqual({
+      email:"e@example.com",password:"secret-secret",mfaCode:"ABCD-1234"
+    });
+  });
   it.each([null, [], {}, { email: {}, password: "secret" }, { email: "e@example.com", password: [] },
-    { email: "e@example.com", password: "x".repeat(50000) }])(
+    { email: "e@example.com", password: "x".repeat(50000) },
+    { email:"e@example.com",password:"secret-secret",mfaCode:"x".repeat(65) }])(
     "rejects malformed or oversized login request (%p)", (value) => {
       expect(() => parseLoginPayload(value)).toThrow(BadRequestException);
     }
