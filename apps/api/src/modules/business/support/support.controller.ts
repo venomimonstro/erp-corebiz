@@ -202,14 +202,25 @@ export class SupportController {
     };
   }
 
+  @Get("grants")
+  @RequirePermission("users.manage")
+  async grants(
+    @Req() request:AuthenticatedRequest
+  ):Promise<ApiSuccess<unknown>>{
+    return {
+      ok:true,
+      data:await this.support.listTemporaryGrants(this.context(request))
+    };
+  }
+
   @Post("grants")
   @RequirePermission("users.manage")
   async createGrant(
     @Req() request: AuthenticatedRequest,
     @Body() body: {
       hours?: number;
-      scopes?: string[];
       reason?: string;
+      ticketId?: string;
     }
   ): Promise<ApiSuccess<unknown>> {
     return {
