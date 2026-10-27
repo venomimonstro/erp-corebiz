@@ -945,34 +945,93 @@ export class SupportService {
   }
 
 
+  async listTemporaryGrants(
+    context:TenantContext
+  ):Promise<Array<{
+    id:string;
+    ticketId:string|null;
+    reason:string|null;
+    expiresAt:string;
+    consumedAt:string|null;
+    revokedAt:string|null;
+    createdAt:string;
+    active:boolean;
+  }>>{
+    return this.database.withTenantTransaction(context,async client=>{
+      const result=await client.query<{
+        id:string;ticket_id:string|null;reason:string|null;
+        expires_at:Date;consumed_at:Date|null;revoked_at:Date|null;
+        created_at:Date;
+      }>(
+        `SELECT id,ticket_id,reason,expires_at,consumed_at,revoked_at,created_at
+         FROM support_access_grant
+         WHERE tenant_id=$1
+         ORDER BY created_at DESC
+         LIMIT 50`,
+        [context.tenantId]
+      );
+      const now=Date.now();
+      return result.rows.map(row=>({
+        id:row.id,
+        ticketId:row.ticket_id,
+        reason:row.reason,
+        expiresAt:row.expires_at.toISOString(),
+        consumedAt:row.consumed_at?.toISOString()??null,
+        revokedAt:row.revoked_at?.toISOString()??null,
+        createdAt:row.created_at.toISOString(),
+        active:row.revoked_at===null&&row.expires_at.getTime()>now
+      }));
+    });
+  }
+
   async createTemporaryGrant(
     context: TenantContext,
     input: {
       hours?: number;
-      scopes?: string[];
       reason?: string;
+      ticketId?: string;
     }
   ): Promise<{ token: string; grantId: string; expiresAt: string }> {
-    const hours = Math.max(1, Math.min(24, Math.floor(input.hours ?? 4)));
-    const scopes = input.scopes?.length ? input.scopes : ["read"];
+    const hours=Math.floor(input.hours??1);
+    if(![1,24,72].includes(hours)){
+      throw new BadRequestException(
+        "Временный доступ может действовать 1 час, 24 часа или 3 дня"
+      );
+    }
+    const reason=String(input.reason??"").trim();
+    if(reason.length<10||reason.length>500){
+      throw new BadRequestException(
+        "Укажите причину временного доступа от 10 до 500 символов"
+      );
+    }
+    const ticketId=input.ticketId?.trim()||null;
+    if(ticketId&&!/^[0-9a-f-]{36}$/i.test(ticketId)){
+      throw new BadRequestException("Некорректное обращение");
+    }
+
     const token = randomBytes(32).toString("base64url");
     const tokenHash = createHash("sha256").update(token).digest("hex");
     const expiresAt = new Date(Date.now() + hours * 3600000);
 
     return this.database.withTenantTransaction(context, async (client) => {
+      if(ticketId){
+        const ticket=await client.query(
+          `SELECT 1 FROM support_ticket
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,ticketId]
+        );
+        if(!ticket.rowCount)throw new NotFoundException("Обращение не найдено");
+      }
+
       const result = await client.query<{ id: string }>(
         `INSERT INTO support_access_grant(
-           tenant_id, token_hash, scopes, reason,
-           granted_by_membership_id, expires_at
-         ) VALUES ($1,$2,$3,$4,$5,$6)
+           tenant_id,token_hash,scopes,reason,ticket_id,
+           granted_by_membership_id,expires_at
+         ) VALUES($1,$2,'["diagnostics"]'::jsonb,$3,$4,$5,$6)
          RETURNING id`,
         [
-          context.tenantId,
-          tokenHash,
-          JSON.stringify(scopes),
-          input.reason?.trim() || null,
-          context.membershipId,
-          expiresAt
+          context.tenantId,tokenHash,reason,ticketId,
+          context.membershipId,expiresAt
         ]
       );
 
@@ -985,7 +1044,11 @@ export class SupportService {
         "support.access_granted",
         "support_access_grant",
         grant.id,
-        { scopes, expiresAt: expiresAt.toISOString() }
+        {
+          scope:"diagnostics",
+          ticketId,
+          expiresAt:expiresAt.toISOString()
+        }
       );
 
       return {
@@ -1003,9 +1066,9 @@ export class SupportService {
     await this.database.withTenantTransaction(context, async (client) => {
       const result = await client.query(
         `UPDATE support_access_grant
-         SET revoked_at = now()
-         WHERE tenant_id = $1
-           AND id = $2
+         SET revoked_at=now()
+         WHERE tenant_id=$1
+           AND id=$2
            AND revoked_at IS NULL
          RETURNING id`,
         [context.tenantId, grantId]
@@ -1023,39 +1086,6 @@ export class SupportService {
         grantId
       );
     });
-  }
-
-  async validateGrant(
-    token: string
-  ): Promise<{
-    tenantId: string;
-    grantId: string;
-    scopes: string[];
-  } | null> {
-    const hash = createHash("sha256").update(token).digest("hex");
-
-    const result = await this.database.query<{
-      id: string;
-      tenant_id: string;
-      scopes: string[];
-    }>(
-      `SELECT id, tenant_id, scopes
-       FROM support_access_grant
-       WHERE token_hash = $1
-         AND revoked_at IS NULL
-         AND expires_at > now()
-       LIMIT 1`,
-      [hash]
-    );
-
-    const row = result.rows[0];
-    if (!row) return null;
-
-    return {
-      tenantId: row.tenant_id,
-      grantId: row.id,
-      scopes: Array.isArray(row.scopes) ? row.scopes : []
-    };
   }
 
   private async nextNumber(
