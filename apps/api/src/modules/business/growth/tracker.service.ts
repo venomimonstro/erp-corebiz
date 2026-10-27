@@ -163,7 +163,7 @@ export class TrackerService {
       tenant_id: string;
       allowed_domains: unknown;
     }>(
-      "SELECT * FROM corebiz_resolve_tracker_site($1)",
+      "SELECT r.* FROM corebiz_resolve_tracker_site($1) r WHERE corebiz_tenant_is_operational(r.tenant_id)",
       [input.trackerKey.trim()]
     );
 
