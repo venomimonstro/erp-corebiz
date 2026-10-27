@@ -1,6 +1,8 @@
 import {
   ConflictException,
   Injectable,
+  Optional,
+  ServiceUnavailableException,
   UnauthorizedException,
   BadRequestException
 } from "@nestjs/common";
@@ -9,6 +11,7 @@ import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import type { AuthenticatedRequest } from "./auth.types";
 import { generateToken, hashToken } from "./auth.utils";
+import { MfaService } from "./mfa.service";
 
 type SessionAuth = NonNullable<AuthenticatedRequest["auth"]>;
 
@@ -21,6 +24,7 @@ type RegisterInput = {
 type LoginInput = {
   email: string;
   password: string;
+  mfaCode?: string;
 };
 
 @Injectable()
@@ -31,7 +35,10 @@ export class AuthService {
   private static readonly SESSION_TOUCH_INTERVAL_MS = 5*60*1000;
   private static readonly SESSION_TOUCH_CACHE_MAX = 20_000;
 
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    @Optional() private readonly mfa?: MfaService
+  ) {}
 
   async register(input: RegisterInput): Promise<{
     token: string;
@@ -102,7 +109,8 @@ export class AuthService {
           client,
           user.id,
           membership.id,
-          token
+          token,
+          false
         );
 
         await client.query(
@@ -122,7 +130,10 @@ export class AuthService {
             userId: user.id,
             membershipId: membership.id,
             email: user.email,
-            isOwner: true
+            isOwner: true,
+            mfaRequired: true,
+            mfaEnabled: false,
+            mfaVerified: false
           }
         };
       });
@@ -167,14 +178,15 @@ export class AuthService {
         if(!tenant.rows[0])throw new Error("INVITED_TENANT_NOT_FOUND");
         const sessionToken=generateToken();
         const sessionId=await this.createSession(
-          client,user.id,membership.membership_id,sessionToken);
+          client,user.id,membership.membership_id,sessionToken,false);
         return {
           token:sessionToken,
           auth:{
             sessionId,tenantId:membership.tenant_id,
             tenantName:tenant.rows[0].name,
             userId:user.id,membershipId:membership.membership_id,
-            email:user.email,isOwner:false
+            email:user.email,isOwner:false,
+            mfaRequired:false,mfaEnabled:false,mfaVerified:true
           }
         };
       });
@@ -296,8 +308,10 @@ export class AuthService {
       tenant_id: string;
       tenant_name: string;
       is_owner: boolean;
+      mfa_required: boolean;
+      mfa_enabled: boolean;
     }>(
-      "SELECT * FROM public.corebiz_auth_login_identity($1)",
+      "SELECT * FROM public.corebiz_auth_login_identity_v2($1)",
       [email]
     );
 
@@ -310,13 +324,36 @@ export class AuthService {
       throw new UnauthorizedException("Неверный email или пароль");
     }
 
+    let mfaVerified=!user.mfa_required;
+    if(user.mfa_enabled){
+      if(!input.mfaCode){
+        throw new UnauthorizedException({
+          code:"MFA_REQUIRED",
+          message:"Введите код приложения-аутентификатора или резервный код"
+        });
+      }
+      if(!this.mfa){
+        throw new ServiceUnavailableException(
+          "Сервис двухфакторной защиты недоступен"
+        );
+      }
+      if(!await this.mfa.verifyLogin(user.id,input.mfaCode)){
+        throw new UnauthorizedException({
+          code:"MFA_INVALID",
+          message:"Неверный код двухфакторной защиты"
+        });
+      }
+      mfaVerified=true;
+    }
+
     return this.database.withTransaction(async (client) => {
       const token = generateToken();
       const sessionId = await this.createSession(
         client,
         user.id,
         user.membership_id,
-        token
+        token,
+        mfaVerified
       );
 
       await client.query("SELECT set_config('app.tenant_id', $1, true)", [user.tenant_id]);
@@ -338,7 +375,10 @@ export class AuthService {
           userId: user.id,
           membershipId: user.membership_id,
           email: user.email,
-          isOwner: user.is_owner
+          isOwner: user.is_owner,
+          mfaRequired: user.mfa_required,
+          mfaEnabled: user.mfa_enabled,
+          mfaVerified
         }
       };
     });
@@ -361,7 +401,10 @@ export class AuthService {
       tenant_id: string;
       tenant_name: string;
       is_owner: boolean;
-    }>("SELECT * FROM public.corebiz_auth_resolve_session($1)", [hashToken(token)]);
+      mfa_required: boolean;
+      mfa_enabled: boolean;
+      mfa_verified: boolean;
+    }>("SELECT * FROM public.corebiz_auth_resolve_session_v2($1)", [hashToken(token)]);
 
     const row = result.rows[0];
     if (!row) return null;
@@ -397,7 +440,10 @@ export class AuthService {
       userId: row.user_id,
       membershipId: row.membership_id,
       email: row.email,
-      isOwner: row.is_owner
+      isOwner: row.is_owner,
+      mfaRequired: row.mfa_required,
+      mfaEnabled: row.mfa_enabled,
+      mfaVerified: row.mfa_verified
     };
   }
 
@@ -442,14 +488,19 @@ export class AuthService {
     client: PoolClient,
     userId: string,
     membershipId: string,
-    token: string
+    token: string,
+    mfaVerified: boolean
   ): Promise<string> {
     const result = await client.query<{ id: string }>(
       `INSERT INTO user_session(
-         user_id, session_hash, active_membership_id, expires_at, last_seen_at
-       ) VALUES ($1, $2, $3, now() + interval '30 days', now())
+         user_id,session_hash,active_membership_id,expires_at,last_seen_at,
+         mfa_verified_at
+       ) VALUES(
+         $1,$2,$3,now()+interval '30 days',now(),
+         CASE WHEN $4::boolean THEN now() ELSE NULL END
+       )
        RETURNING id`,
-      [userId, hashToken(token), membershipId]
+      [userId,hashToken(token),membershipId,mfaVerified]
     );
 
     const row = result.rows[0];
