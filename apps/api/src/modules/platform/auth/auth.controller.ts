@@ -131,7 +131,7 @@ export class AuthController {
   @Post("email-verification/request")
   async verificationRequest(
     @Req() request: AuthenticatedRequest
-  ): Promise<ApiSuccess<{sent:boolean;verified:boolean}>> {
+  ): Promise<ApiSuccess<{queued:boolean;verified:boolean}>> {
     await this.rateLimit.assertEmailVerificationAllowed(
       request.ip ?? "unknown", request.auth!.userId
     );
