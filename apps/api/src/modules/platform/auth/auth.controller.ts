@@ -13,6 +13,7 @@ import { AuthRateLimitService } from "./auth-rate-limit.service";
 import { AuthService } from "./auth.service";
 import { EmailVerificationService } from "./email-verification.service";
 import { AuthMailWebhookService } from "./auth-mail-webhook.service";
+import { MfaService } from "./mfa.service";
 import { parseLoginPayload, parseRegisterPayload, parseMembershipPayload } from "./auth-payload";
 import type { AuthenticatedRequest } from "./auth.types";
 import {
@@ -27,7 +28,8 @@ export class AuthController {
     private readonly authService: AuthService,
     private readonly rateLimit: AuthRateLimitService,
     private readonly verification: EmailVerificationService,
-    private readonly mailWebhook: AuthMailWebhookService
+    private readonly mailWebhook: AuthMailWebhookService,
+    private readonly mfa: MfaService
   ) {}
 
   @Public()
@@ -136,6 +138,53 @@ export class AuthController {
       body?.token, body?.password
     );
     return {ok:true,data:{changed:true}};
+  }
+
+  @Get("mfa/status")
+  async mfaStatus(
+    @Req() request:AuthenticatedRequest
+  ):Promise<ApiSuccess<Awaited<ReturnType<MfaService["status"]>>>>{
+    return {ok:true,data:await this.mfa.status(request.auth!)};
+  }
+
+  @Post("mfa/begin")
+  async mfaBegin(
+    @Req() request:AuthenticatedRequest
+  ):Promise<ApiSuccess<Awaited<ReturnType<MfaService["begin"]>>>>{
+    return {ok:true,data:await this.mfa.begin(request.auth!)};
+  }
+
+  @Post("mfa/confirm")
+  async mfaConfirm(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:{code?:unknown}
+  ):Promise<ApiSuccess<Awaited<ReturnType<MfaService["confirm"]>>>>{
+    return {ok:true,data:await this.mfa.confirm(request.auth!,body?.code)};
+  }
+
+  @Post("mfa/verify-session")
+  async mfaVerifySession(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:{code?:unknown}
+  ):Promise<ApiSuccess<{verified:true}>>{
+    await this.mfa.verifyCurrentSession(request.auth!,body?.code);
+    return {ok:true,data:{verified:true}};
+  }
+
+  @Post("mfa/recovery/rotate")
+  async mfaRotateRecovery(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:{code?:unknown}
+  ):Promise<ApiSuccess<Awaited<ReturnType<MfaService["rotateRecovery"]>>>>{
+    return {ok:true,data:await this.mfa.rotateRecovery(request.auth!,body?.code)};
+  }
+
+  @Post("mfa/disable")
+  async mfaDisable(
+    @Req() request:AuthenticatedRequest,
+    @Body() body:{code?:unknown}
+  ):Promise<ApiSuccess<{disabled:true}>>{
+    return {ok:true,data:await this.mfa.disable(request.auth!,body?.code)};
   }
 
   @Get("email-verification/status")
