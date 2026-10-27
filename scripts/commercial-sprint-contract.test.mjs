@@ -340,3 +340,32 @@ test("mail provider delivery status is authenticated and keyed by provider job i
   assert.match(controller,/@Post\("mail\/webhooks\/unisender"\)/);
 });
 
+test("temporary support access is one-time, MFA-session-bound and diagnostics-only", () => {
+  const sql = read("infrastructure/postgres/267_consent_support_diagnostics.sql");
+  const tenant = read("apps/api/src/modules/business/support/support.service.ts");
+  const operator = read("apps/api/src/modules/platform/platform-operations/platform-operations.service.ts");
+  const web = read("apps/web/app/platform-operations/page.tsx");
+
+  assert.match(sql,/scopes='\["diagnostics"\]'::jsonb/);
+  assert.match(sql,/consumed_at IS NULL/);
+  assert.match(sql,/consumed_by_operator_user_id/);
+  assert.match(sql,/s\.mfa_verified_at IS NOT NULL/);
+  assert.match(sql,/operator_session_id/);
+  assert.match(sql,/support\.diagnostics_claimed/);
+  assert.match(sql,/support\.diagnostics_viewed/);
+  assert.match(sql,/g\.revoked_at IS NULL/);
+  assert.doesNotMatch(sql,/crm_deal|financial_payment|sales_order_line|party_person/i);
+  assert.match(tenant,/\[1,24,72\]\.includes\(hours\)/);
+  assert.match(tenant,/'\["diagnostics"\]'::jsonb/);
+  assert.doesNotMatch(
+    tenant.slice(
+      tenant.indexOf("async createTemporaryGrant"),
+      tenant.indexOf("async revokeGrant")
+    ),
+    /input\.scopes/
+  );
+  assert.match(operator,/hashToken\(token\.trim\(\)\)/);
+  assert.match(web,/Consent-based доступ/);
+  assert.match(web,/без impersonation/);
+});
+
