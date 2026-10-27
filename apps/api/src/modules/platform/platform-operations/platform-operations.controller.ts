@@ -164,6 +164,54 @@ export class PlatformOperationsController {
     };
   }
 
+  @Post("support/diagnostics/claim")
+  async claimSupportDiagnostics(
+    @Req() request:AuthenticatedRequest,
+    @Res({passthrough:true}) response:Response,
+    @Body() body:{token?:string}
+  ):Promise<ApiSuccess<unknown>>{
+    response.setHeader("Cache-Control","no-store, private");
+    const session=parseCookie(request.headers.cookie,SESSION_COOKIE);
+    return {
+      ok:true,
+      data:await this.platform.claimSupportDiagnostics(
+        request.auth!.userId,session,body?.token??""
+      )
+    };
+  }
+
+  @Get("support/diagnostics/:id")
+  async supportDiagnostics(
+    @Req() request:AuthenticatedRequest,
+    @Res({passthrough:true}) response:Response,
+    @Param("id") id:string
+  ):Promise<ApiSuccess<unknown>>{
+    response.setHeader("Cache-Control","no-store, private");
+    const session=parseCookie(request.headers.cookie,SESSION_COOKIE);
+    return {
+      ok:true,
+      data:await this.platform.supportDiagnostics(
+        request.auth!.userId,session,id
+      )
+    };
+  }
+
+  @Post("support/diagnostics/:id/end")
+  async endSupportDiagnostics(
+    @Req() request:AuthenticatedRequest,
+    @Res({passthrough:true}) response:Response,
+    @Param("id") id:string
+  ):Promise<ApiSuccess<{ended:true}>>{
+    response.setHeader("Cache-Control","no-store, private");
+    const session=parseCookie(request.headers.cookie,SESSION_COOKIE);
+    return {
+      ok:true,
+      data:await this.platform.endSupportDiagnostics(
+        request.auth!.userId,session,id
+      )
+    };
+  }
+
   @Get("tenants")
   async tenants(
     @Req() request: AuthenticatedRequest,
