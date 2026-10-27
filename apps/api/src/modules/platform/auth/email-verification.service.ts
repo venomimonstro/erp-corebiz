@@ -4,15 +4,11 @@ import {
   UnauthorizedException
 } from "@nestjs/common";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
-import { generateToken, hashToken } from "./auth.utils";
-import { AuthMailService } from "./auth-mail.service";
+import { hashToken } from "./auth.utils";
 
 @Injectable()
 export class EmailVerificationService {
-  constructor(
-    private readonly database: DatabaseService,
-    private readonly mail: AuthMailService
-  ) {}
+  constructor(private readonly database: DatabaseService) {}
 
   async status(userId: string): Promise<{ verified: boolean; email: string }> {
     const result = await this.database.query<{
@@ -26,49 +22,33 @@ export class EmailVerificationService {
     return { verified: user.email_verified_at !== null, email: user.email };
   }
 
-  async request(userId: string): Promise<{ sent: boolean; verified: boolean }> {
-    const pending = await this.database.withTransaction(async client => {
-      const result = await client.query<{
-        id: string; email: string; email_verified_at: Date | null;
-      }>(
-        "SELECT id,email,email_verified_at FROM app_user WHERE id=$1 AND status='ACTIVE' FOR UPDATE",
-        [userId]
-      );
-      const user = result.rows[0];
-      if (!user) throw new UnauthorizedException("Аккаунт недоступен");
-      if (user.email_verified_at !== null) return null;
-
-      // Do not invalidate a link just sent by another rapid click.
-      const recent = await client.query<{id:string}>(
-        "SELECT id FROM email_verification_token WHERE user_id=$1 AND consumed_at IS NULL AND expires_at>now() AND created_at>now()-interval '60 seconds' LIMIT 1",
-        [user.id]
-      );
-      if (recent.rows[0]) return {recent:true as const};
-
-      const token = generateToken();
-      await client.query(
-        "UPDATE email_verification_token SET consumed_at=now() WHERE user_id=$1 AND consumed_at IS NULL",
-        [user.id]
-      );
-      await client.query(
-        "INSERT INTO email_verification_token(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '24 hours')",
-        [user.id,hashToken(token)]
-      );
-      return { email:user.email, token };
-    });
-
-    if (!pending) return {sent:false,verified:true};
-    if ("recent" in pending) return {sent:false,verified:false};
-    try {
-      await this.mail.sendVerification(pending.email,pending.token);
-    } catch (error) {
-      await this.database.query(
-        "UPDATE email_verification_token SET consumed_at=now() WHERE token_hash=$1 AND consumed_at IS NULL",
-        [hashToken(pending.token)]
-      );
-      throw error;
+  async request(
+    userId: string
+  ): Promise<{ queued: boolean; verified: boolean }> {
+    const result=await this.database.query<{
+      email_verified_at:Date|null;
+    }>(
+      `SELECT email_verified_at
+       FROM app_user
+       WHERE id=$1 AND status='ACTIVE'`,
+      [userId]
+    );
+    const user=result.rows[0];
+    if(!user)throw new UnauthorizedException("Аккаунт недоступен");
+    if(user.email_verified_at!==null){
+      return {queued:false,verified:true};
     }
-    return {sent:true,verified:false};
+
+    const queued=await this.database.query<{queued:boolean}>(
+      `SELECT public.corebiz_enqueue_auth_mail(
+         $1::uuid,'EMAIL_VERIFICATION'
+       ) AS queued`,
+      [userId]
+    );
+    return {
+      queued:queued.rows[0]?.queued===true,
+      verified:false
+    };
   }
 
   async complete(rawToken: unknown): Promise<{ verified: true }> {
