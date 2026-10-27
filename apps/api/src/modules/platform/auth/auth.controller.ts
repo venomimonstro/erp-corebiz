@@ -12,6 +12,7 @@ import type { ApiSuccess } from "@corebiz/contracts";
 import { AuthRateLimitService } from "./auth-rate-limit.service";
 import { AuthService } from "./auth.service";
 import { EmailVerificationService } from "./email-verification.service";
+import { AuthMailWebhookService } from "./auth-mail-webhook.service";
 import { parseLoginPayload, parseRegisterPayload, parseMembershipPayload } from "./auth-payload";
 import type { AuthenticatedRequest } from "./auth.types";
 import {
@@ -25,8 +26,27 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly rateLimit: AuthRateLimitService,
-    private readonly verification: EmailVerificationService
+    private readonly verification: EmailVerificationService,
+    private readonly mailWebhook: AuthMailWebhookService
   ) {}
+
+  @Public()
+  @Get("mail/webhooks/unisender")
+  mailWebhookProbe(): ApiSuccess<{ready:true}> {
+    // Unisender calls GET without parameters before accepting webhook/set.
+    // No secret or account data is exposed by this readiness probe.
+    return {ok:true,data:{ready:true}};
+  }
+
+  @Public()
+  @Post("mail/webhooks/unisender")
+  async mailWebhookStatus(
+    @Body() body: unknown
+  ): Promise<ApiSuccess<{
+    accepted:true;events:number;matched:number;
+  }>> {
+    return {ok:true,data:await this.mailWebhook.accept(body)};
+  }
 
   @Public()
   @Post("register")
