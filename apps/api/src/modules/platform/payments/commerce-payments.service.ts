@@ -345,7 +345,7 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Некорректный код магазина");
     }
     const sf=await this.database.query<{site_id:string;tenant_id:string;currency:string}>(
-      "SELECT * FROM corebiz_resolve_public_storefront($1)",[siteCode]);
+      "SELECT r.* FROM corebiz_resolve_public_storefront($1) r WHERE corebiz_tenant_is_operational(r.tenant_id)",[siteCode]);
     const row=sf.rows[0];if(!row)throw new NotFoundException("Магазин не найден");
     return this.database.withTenantTransaction(this.context(row.tenant_id),async client=>{
       const methods=await client.query(
@@ -485,7 +485,7 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
     }
     const resolved=await this.database.query<{
       cart_id:string;tenant_id:string;site_id:string;
-    }>("SELECT * FROM corebiz_resolve_public_cart($1)",[cartKey]);
+    }>("SELECT r.* FROM corebiz_resolve_public_cart($1) r WHERE corebiz_tenant_is_operational(r.tenant_id)",[cartKey]);
     const cart=resolved.rows[0];if(!cart)throw new NotFoundException("Корзина не найдена");
     const claim=await this.database.withTenantTransaction(this.context(cart.tenant_id),
       async client=>{
@@ -668,7 +668,7 @@ export class CommercePaymentsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Неверный ключ корзины");
     }
     const row=await this.database.query<{cart_id:string;tenant_id:string}>(
-      "SELECT * FROM corebiz_resolve_public_cart($1)",[cartKey]);
+      "SELECT r.* FROM corebiz_resolve_public_cart($1) r WHERE corebiz_tenant_is_operational(r.tenant_id)",[cartKey]);
     if(!row.rows[0])throw new NotFoundException("Корзина не найдена");
     const intent=await this.database.withTenantTransaction(this.context(row.rows[0].tenant_id),
       async client=>{
