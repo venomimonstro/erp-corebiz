@@ -7,5 +7,8 @@ export type AuthenticatedRequest = Request & {
     email: string;
     tenantName: string;
     isOwner: boolean;
+    mfaRequired: boolean;
+    mfaEnabled: boolean;
+    mfaVerified: boolean;
   };
 };
