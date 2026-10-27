@@ -209,3 +209,46 @@ test("channel stock hub exposes only one mappings route", () => {
   );
 });
 
+test("support files use reserved private storage, plan quota, verification and short-lived downloads", () => {
+  const migration = read("infrastructure/postgres/262_support_storage_lifecycle.sql");
+  const service = read("apps/api/src/modules/business/support/support.service.ts");
+  const storage = read("apps/api/src/infrastructure/storage/private-object-storage.service.ts");
+  const controller = read("apps/api/src/modules/business/support/support.controller.ts");
+
+  assert.match(migration,/max_support_storage_bytes/);
+  assert.match(migration,/support_attachment_upload/);
+  assert.match(migration,/FOR UPDATE/);
+  assert.match(service,/beginAttachmentUpload/);
+  assert.match(service,/corebiz_plan_bigint_limit/);
+  assert.match(service,/verifyObject/);
+  assert.match(service,/verified_at/);
+  assert.doesNotMatch(controller,/@Post\("attachments"\)/);
+  assert.match(controller,/attachments\/upload/);
+  assert.match(storage,/AWS4-HMAC-SHA256/);
+  assert.match(storage,/AbortSignal\.timeout/);
+  assert.match(storage,/COREBIZ_FILE_SCAN_URL/);
+  assert.match(storage,/nodeEnv === "production"/);
+});
+
+test("platform support is session-proved, audited and SLA escalated without tenant impersonation", () => {
+  const sql = read("infrastructure/postgres/263_platform_support_sla.sql");
+  const api = read("apps/api/src/modules/platform/platform-operations/platform-operations.service.ts");
+  const worker = read("apps/worker/src/support-sla.ts");
+  const web = read("apps/web/app/platform-operations/page.tsx");
+
+  assert.match(sql,/corebiz_platform_operator_session_ok/);
+  assert.match(sql,/s\.session_hash=p_session_hash/);
+  assert.match(sql,/corebiz_platform_support_queue/);
+  assert.match(sql,/corebiz_platform_support_reply/);
+  assert.match(sql,/corebiz_platform_support_close/);
+  assert.match(sql,/support\.operator_reply/);
+  assert.match(sql,/support\.operator_closed/);
+  assert.match(sql,/corebiz_claim_support_sla_escalation/);
+  assert.match(sql,/FOR UPDATE OF st SKIP LOCKED/);
+  assert.match(sql,/escalation_level<3/);
+  assert.match(api,/hashToken\(rawSession\)/);
+  assert.match(worker,/corebiz_claim_support_sla_escalation/);
+  assert.match(web,/Поддержка клиентов/);
+  assert.match(web,/Закрыть с итогом/);
+});
+
