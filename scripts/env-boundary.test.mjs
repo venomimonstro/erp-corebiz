@@ -37,3 +37,16 @@ test("proxy trust is explicit and cannot default to trusting everyone", async ()
   assert.match(main, /"loopback"/);
   assert.doesNotMatch(main, /set\("trust proxy",\s*true\)/);
 });
+
+test("production security dependencies fail closed", async () => {
+  const env = await source("apps/api/src/infrastructure/config/env.ts");
+  assert.match(env,/validateProductionSecurity/);
+  assert.match(env,/COREBIZ_MFA_ENCRYPTION_KEY/);
+  assert.match(env,/decoded\.length!==32/);
+  assert.match(env,/COREBIZ_UNISENDER_GO_KEY/);
+  assert.match(env,/COREBIZ_UNISENDER_WEBHOOK_AUTH/);
+  assert.match(env,/COREBIZ_STORAGE_ENDPOINT/);
+  assert.match(env,/COREBIZ_FILE_SCAN_URL/);
+  assert.match(env,/validHttpsUrl\("WEB_ORIGIN"/);
+});
+
