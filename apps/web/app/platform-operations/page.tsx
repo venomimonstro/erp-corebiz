@@ -58,6 +58,24 @@ type SupportDetails = {
   }>;
 };
 
+type SupportDiagnostics = {
+  tenant:{id:string;name:string;status:string};
+  subscription:null|{
+    plan:string;status:string;periodEnd:string;graceUntil:string|null;
+    cancelAtPeriodEnd:boolean;
+  };
+  capabilities:string[];
+  connections:Array<{
+    provider:string;status:string;
+    lastSyncedAt:string|null;lastReceivedAt:string|null;
+  }>;
+  openIssues:Array<{code:string;count:number}>;
+  support:{openTickets:number};
+  migration:Record<string,number>;
+  exports:Record<string,number>;
+  access:{id:string;expiresAt:string};
+};
+
 type Tenant = {
   tenantId: string;
   companyName: string;
@@ -87,6 +105,7 @@ export default function PlatformOperationsPage() {
   const [supportSelected,setSupportSelected]=useState<SupportDetails|null>(null);
   const [supportReply,setSupportReply]=useState("");
   const [supportLoading,setSupportLoading]=useState(false);
+  const [diagnostics,setDiagnostics]=useState<SupportDiagnostics|null>(null);
 
 
   const load = useCallback(async () => {
@@ -196,6 +215,56 @@ export default function PlatformOperationsPage() {
     }
   }
 
+  async function claimDiagnostics(){
+    const token=window.prompt(
+      "Вставьте одноразовый токен диагностики, который создал владелец компании."
+    );
+    if(!token?.trim())return;
+    setError("");
+    try{
+      const access=await apiRequest<{
+        accessId:string;tenantId:string;ticketId:string|null;expiresAt:string;
+      }>("/platform-operations/support/diagnostics/claim",{
+        method:"POST",body:JSON.stringify({token:token.trim()})
+      });
+      setDiagnostics(await apiRequest<SupportDiagnostics>(
+        "/platform-operations/support/diagnostics/"+
+          encodeURIComponent(access.accessId)
+      ));
+      if(access.ticketId)void openSupportTicket(access.ticketId);
+    }catch(cause){
+      setDiagnostics(null);
+      setError(cause instanceof Error?cause.message:"Диагностика недоступна");
+    }
+  }
+
+  async function refreshDiagnostics(){
+    if(!diagnostics)return;
+    try{
+      setDiagnostics(await apiRequest<SupportDiagnostics>(
+        "/platform-operations/support/diagnostics/"+
+          encodeURIComponent(diagnostics.access.id)
+      ));
+    }catch(cause){
+      setDiagnostics(null);
+      setError(cause instanceof Error?cause.message:"Диагностический доступ завершён");
+    }
+  }
+
+  async function endDiagnostics(){
+    if(!diagnostics)return;
+    try{
+      await apiRequest(
+        "/platform-operations/support/diagnostics/"+
+          encodeURIComponent(diagnostics.access.id)+"/end",
+        {method:"POST"}
+      );
+      setDiagnostics(null);
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось закрыть диагностику");
+    }
+  }
+
   async function showHistory(tenant:Tenant) {
     const serial=++historySerial.current;
     setHistoryTenant(tenant.companyName);
@@ -287,8 +356,14 @@ export default function PlatformOperationsPage() {
             эскалации и остаётся в журнале.
           </p>
         </div>
-        <button type="button" disabled={supportLoading}
-          onClick={()=>void loadSupport()}>Обновить обращения</button>
+        <div style={{display:"flex",gap:8}}>
+          <button className="secondary-button" type="button"
+            onClick={()=>void claimDiagnostics()}>
+            Диагностика по токену
+          </button>
+          <button type="button" disabled={supportLoading}
+            onClick={()=>void loadSupport()}>Обновить обращения</button>
+        </div>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"minmax(320px,0.9fr) minmax(420px,1.4fr)",gap:16}}>
         <div>
@@ -380,6 +455,57 @@ export default function PlatformOperationsPage() {
           </p>}
         </div>
       </div>
+    </section> : null}
+    {diagnostics ? <section className="studio-section">
+      <div style={{display:"flex",justifyContent:"space-between",gap:12}}>
+        <div>
+          <p className="muted">Consent-based доступ · без impersonation</p>
+          <h2>Техническая диагностика: {diagnostics.tenant.name}</h2>
+          <p className="muted">
+            Доступ до {new Date(diagnostics.access.expiresAt).toLocaleString("ru-RU")}.
+            CRM, финансы, документы, клиенты, товары и содержимое заказов здесь
+            намеренно отсутствуют.
+          </p>
+        </div>
+        <div className="header-actions">
+          <button className="secondary-button" type="button"
+            onClick={()=>void refreshDiagnostics()}>Обновить</button>
+          <button type="button" onClick={()=>void endDiagnostics()}>
+            Завершить доступ
+          </button>
+        </div>
+      </div>
+      <div className="crm-funnel-metrics">
+        <article><small>Tenant</small><strong>{diagnostics.tenant.status}</strong></article>
+        <article><small>Тариф</small><strong>{diagnostics.subscription?.plan??"Нет"}</strong></article>
+        <article><small>Подписка</small><strong>{diagnostics.subscription?.status??"Нет"}</strong></article>
+        <article><small>Открытые тикеты</small><strong>{diagnostics.support.openTickets}</strong></article>
+        <article><small>Интеграции</small><strong>{diagnostics.connections.length}</strong></article>
+        <article><small>Проблемы</small><strong>
+          {diagnostics.openIssues.reduce((sum,item)=>sum+Number(item.count),0)}
+        </strong></article>
+      </div>
+      <h3>Интеграции</h3>
+      {diagnostics.connections.length ? <ul>
+        {diagnostics.connections.map((connection,index)=><li
+          key={connection.provider+"-"+index}>
+          <strong>{connection.provider}</strong>{" · "}{connection.status}
+          {connection.lastSyncedAt
+            ?" · синхронизация "+new Date(connection.lastSyncedAt).toLocaleString("ru-RU")
+            :""}
+        </li>)}
+      </ul>:<p className="muted">Интеграции не подключены.</p>}
+      <h3>Операционные сигналы</h3>
+      {diagnostics.openIssues.length ? <ul>
+        {diagnostics.openIssues.map(issue=><li key={issue.code}>
+          {issue.code}: {issue.count}
+        </li>)}
+      </ul>:<p className="muted">Открытых технических сигналов нет.</p>}
+      <p className="muted">
+        Возможности: {diagnostics.capabilities.join(", ")||"нет активных"}.
+        Migration: {JSON.stringify(diagnostics.migration)}.
+        Export: {JSON.stringify(diagnostics.exports)}.
+      </p>
     </section> : null}
     {!error ? <section className="studio-section">
       <h2>Организации: {total}</h2>
