@@ -1,6 +1,10 @@
 import { BadRequestException } from "@nestjs/common";
 
-export type LoginPayload = { email: string; password: string };
+export type LoginPayload = {
+  email: string;
+  password: string;
+  mfaCode?: string;
+};
 export type RegisterPayload = LoginPayload & { companyName: string };
 
 function record(value: unknown): Record<string, unknown> {
@@ -22,7 +26,21 @@ export function parseLoginPayload(value: unknown): LoginPayload {
   ) {
     throw new BadRequestException("Некорректный email или пароль");
   }
-  return { email: body.email.trim(), password: body.password };
+  if (
+    body.mfaCode !== undefined &&
+    (typeof body.mfaCode !== "string" ||
+      body.mfaCode.trim().length < 1 ||
+      body.mfaCode.trim().length > 64)
+  ) {
+    throw new BadRequestException("Некорректный код двухфакторной защиты");
+  }
+  return {
+    email: body.email.trim(),
+    password: body.password,
+    ...(typeof body.mfaCode === "string"
+      ? { mfaCode: body.mfaCode.trim() }
+      : {})
+  };
 }
 
 export function parseRegisterPayload(value: unknown): RegisterPayload {
