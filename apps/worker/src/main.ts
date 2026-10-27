@@ -2,6 +2,7 @@ import { processMarketingSyncOnce } from "./marketing-sync.js";
 import { processMarketplaceSyncOnce } from "./marketplace-sync.js";
 import {processStockHubOnce} from "./stock-hub.js";
 import { processTenantExportOnce } from "./tenant-export.js";
+import { processSupportSlaOnce } from "./support-sla.js";
 import { createDecipheriv, createHash } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 
@@ -1016,6 +1017,12 @@ async function workOnce(): Promise<boolean> {
   }
 
   if (await processTenantExportOnce(pool)) {
+    return true;
+  }
+
+  // Support remains operational even for suspended/read-only tenants, so SLA
+  // escalation is intentionally independent from commercial operability.
+  if (await processSupportSlaOnce(pool)) {
     return true;
   }
 
