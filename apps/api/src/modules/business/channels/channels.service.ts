@@ -386,7 +386,7 @@ export class ChannelsService {
       webhook_secret_hash: string | null;
       status: string;
     }>(
-      "SELECT * FROM corebiz_resolve_channel_webhook($1)",
+      "SELECT r.* FROM corebiz_resolve_channel_webhook($1) r WHERE corebiz_tenant_is_operational(r.tenant_id)",
       [connectionId]
     );
 
