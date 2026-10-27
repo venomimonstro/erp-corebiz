@@ -777,7 +777,7 @@ export class StorefrontService {
     site_id:string;tenant_id:string;responsible_membership_id:string;currency:string;
   }>{
     const result=await this.database.query<any>(
-      "SELECT * FROM corebiz_resolve_public_storefront($1)",
+      "SELECT r.* FROM corebiz_resolve_public_storefront($1) r WHERE corebiz_tenant_is_operational(r.tenant_id)",
       [siteCode]
     );
     if(!result.rows[0]) throw new NotFoundException("Магазин не найден");
@@ -790,7 +790,7 @@ export class StorefrontService {
     const publicResult=await this.database.query<{
       cart_id:string;tenant_id:string;site_id:string;status:string;expires_at:Date;
     }>(
-      "SELECT * FROM corebiz_resolve_public_cart($1)",
+      "SELECT r.* FROM corebiz_resolve_public_cart($1) r WHERE corebiz_tenant_is_operational(r.tenant_id)",
       [cartKey]
     );
     const resolved=publicResult.rows[0];
