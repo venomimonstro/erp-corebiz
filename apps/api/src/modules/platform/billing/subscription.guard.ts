@@ -50,7 +50,12 @@ export class SubscriptionGuard implements CanActivate {
     if (cleanPath === "/api/v1/auth/email-verification/request" ||
         cleanPath === "/api/v1/auth/email-verification/complete" ||
         cleanPath === "/api/v1/auth/password-reset/request" ||
-        cleanPath === "/api/v1/auth/password-reset/complete") return true;
+        cleanPath === "/api/v1/auth/password-reset/complete" ||
+        cleanPath === "/api/v1/auth/mfa/begin" ||
+        cleanPath === "/api/v1/auth/mfa/confirm" ||
+        cleanPath === "/api/v1/auth/mfa/verify-session" ||
+        cleanPath === "/api/v1/auth/mfa/recovery/rotate" ||
+        cleanPath === "/api/v1/auth/mfa/disable") return true;
 
     throw new HttpException(
       "Рабочее пространство доступно только для чтения. Обновите подписку.",
