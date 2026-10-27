@@ -3,6 +3,7 @@ import { processMarketplaceSyncOnce } from "./marketplace-sync.js";
 import {processStockHubOnce} from "./stock-hub.js";
 import { processTenantExportOnce } from "./tenant-export.js";
 import { processSupportSlaOnce } from "./support-sla.js";
+import { processAuthMailOnce } from "./auth-mail.js";
 import { createDecipheriv, createHash } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 
@@ -1034,10 +1035,11 @@ async function loop(): Promise<void> {
 
   while (!stopping) {
     try {
+      const authMailWorked = await processAuthMailOnce(pool);
       const workflowWorked = await workOnce();
       const marketingWorked = await processMarketingSyncOnce(pool);
 
-      if (!workflowWorked && !marketingWorked) {
+      if (!authMailWorked && !workflowWorked && !marketingWorked) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch (error) {
