@@ -287,3 +287,56 @@ test("auth mail outbox is crash-recoverable, bounded and token-safe", () => {
   assert.match(main,/processAuthMailOnce/);
 });
 
+test("privileged accounts require encrypted MFA before business access", () => {
+  const sql = read("infrastructure/postgres/266_privileged_mfa.sql");
+  const service = read("apps/api/src/modules/platform/auth/mfa.service.ts");
+  const guard = read("apps/api/src/modules/platform/auth/mfa.guard.ts");
+  const auth = read("apps/api/src/modules/platform/auth/auth.service.ts");
+  const web = read("apps/web/app/app/settings/security/page.tsx");
+
+  assert.match(sql,/platform_operator/);
+  assert.match(sql,/m\.is_owner=true/);
+  assert.match(sql,/roles\.manage/);
+  assert.match(sql,/platform\.settings\.manage/);
+  assert.match(sql,/billing\.manage/);
+  assert.match(sql,/mfa_verified_at/);
+  assert.match(sql,/UPDATE public\.user_session[\s\S]*revoked_at=now\(\)/);
+  assert.match(sql,/code_hash text NOT NULL/);
+  assert.doesNotMatch(sql,/recovery_code[^\n]*text NOT NULL/i);
+  assert.match(service,/createCipheriv\("aes-256-gcm"/);
+  assert.match(service,/createHmac\("sha1"/);
+  assert.match(service,/timingSafeEqual/);
+  assert.match(service,/corebiz_auth_mfa_consume_recovery/);
+  assert.match(guard,/MFA_SETUP_REQUIRED/);
+  assert.match(guard,/MFA_SESSION_REQUIRED/);
+  assert.match(auth,/corebiz_auth_login_identity_v2/);
+  assert.match(auth,/corebiz_auth_resolve_session_v2/);
+  assert.match(web,/Сохраните резервные коды сейчас/);
+});
+
+test("commercial production env fails closed without MFA mail storage and scanning", () => {
+  const env = read("apps/api/src/infrastructure/config/env.ts");
+  assert.match(env,/validateProductionSecurity/);
+  assert.match(env,/COREBIZ_MFA_ENCRYPTION_KEY/);
+  assert.match(env,/COREBIZ_UNISENDER_GO_KEY/);
+  assert.match(env,/COREBIZ_UNISENDER_WEBHOOK_AUTH/);
+  assert.match(env,/COREBIZ_STORAGE_ENDPOINT/);
+  assert.match(env,/COREBIZ_FILE_SCAN_URL/);
+});
+
+test("mail provider delivery status is authenticated and keyed by provider job id", () => {
+  const sql = read("infrastructure/postgres/265_auth_mail_provider_events.sql");
+  const webhook = read("apps/api/src/modules/platform/auth/auth-mail-webhook.service.ts");
+  const controller = read("apps/api/src/modules/platform/auth/auth.controller.ts");
+
+  assert.match(sql,/provider_job_id/);
+  assert.match(sql,/hard_bounced/);
+  assert.match(sql,/delivered_at/);
+  assert.match(webhook,/timingSafeEqual/);
+  assert.match(webhook,/COREBIZ_UNISENDER_WEBHOOK_AUTH/);
+  assert.match(webhook,/transactional_email_status/);
+  assert.doesNotMatch(webhook,/WHERE[^\n]*email/i);
+  assert.match(controller,/@Get\("mail\/webhooks\/unisender"\)/);
+  assert.match(controller,/@Post\("mail\/webhooks\/unisender"\)/);
+});
+
