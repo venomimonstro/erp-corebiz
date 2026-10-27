@@ -151,3 +151,61 @@ test("current paid tariff remains purchasable for trial conversion and renewal",
   assert.match(pay, /if\(!subscription\.rows\[0\]\)/);
   assert.match(pay, /current_period_end=GREATEST\(current_period_end,now\(\)\)\+interval '1 month'/);
 });
+
+test("tenant suspension and subscription lifecycle stop public traffic and external workers", () => {
+  const lifecycle = read("infrastructure/postgres/259_commercial_tenant_operability.sql");
+  const publicSites = read("infrastructure/postgres/260_public_site_operability.sql");
+  const workers = read("infrastructure/postgres/261_worker_operability_claims.sql");
+  const storefront = read("apps/api/src/modules/business/sites/storefront.service.ts");
+  const forms = read("apps/api/src/modules/business/sites/site-forms.service.ts");
+  const channels = read("apps/api/src/modules/business/channels/channels.service.ts");
+  const release = read("scripts/production-gate.sh");
+
+  assert.match(lifecycle,/tenant_subscription/);
+  assert.match(lifecycle,/t\.status NOT IN \('SUSPENDED','CANCELLED'\)/);
+  assert.match(lifecycle,/s\.status NOT IN \('SUSPENDED','CANCELLED','READ_ONLY'\)/);
+  assert.match(lifecycle,/current_period_end>now\(\)/);
+  assert.match(lifecycle,/grace_until>now\(\)/);
+  assert.match(lifecycle,/REVOKE ALL ON FUNCTION public\.corebiz_tenant_is_operational\(uuid\) FROM PUBLIC/);
+
+  for (const name of [
+    "corebiz_public_site_page",
+    "corebiz_public_site_page_by_host",
+    "corebiz_public_site_routes",
+    "corebiz_public_site_routes_by_host",
+    "corebiz_public_site_tracker"
+  ]) {
+    assert.match(publicSites,new RegExp(name+"[\\s\\S]*corebiz_tenant_is_operational"));
+  }
+
+  for (const name of [
+    "corebiz_claim_domain_event",
+    "corebiz_claim_marketing_sync_job",
+    "corebiz_claim_channel_sync_job",
+    "corebiz_claim_stock_dirty",
+    "corebiz_claim_stock_target",
+    "corebiz_schedule_fbs_stock_poll",
+    "corebiz_claim_offline_conversion_job",
+    "corebiz_claim_offline_conversion_status_job"
+  ]) {
+    assert.match(workers,new RegExp(name+"[\\s\\S]*corebiz_tenant_is_operational"));
+  }
+
+  assert.match(storefront,/corebiz_tenant_is_operational\(r\.tenant_id\)/);
+  assert.match(forms,/corebiz_tenant_is_operational\(r\.tenant_id\)/);
+  assert.match(channels,/corebiz_tenant_is_operational\(r\.tenant_id\)/);
+  assert.match(release,/security_tenant_operability_gate\.sql/);
+});
+
+test("channel stock hub exposes only one mappings route", () => {
+  const controller = read("apps/api/src/modules/business/channels/channels.controller.ts");
+  assert.equal(
+    (controller.match(/@Get\("stock-hub\\/mappings"\)/g) ?? []).length,
+    1
+  );
+  assert.equal(
+    (controller.match(/async stockHubMappings\(/g) ?? []).length,
+    1
+  );
+});
+
