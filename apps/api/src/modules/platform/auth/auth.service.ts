@@ -9,7 +9,6 @@ import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
 import type { AuthenticatedRequest } from "./auth.types";
 import { generateToken, hashToken } from "./auth.utils";
-import { AuthMailService } from "./auth-mail.service";
 
 type SessionAuth = NonNullable<AuthenticatedRequest["auth"]>;
 
@@ -32,10 +31,7 @@ export class AuthService {
   private static readonly SESSION_TOUCH_INTERVAL_MS = 5*60*1000;
   private static readonly SESSION_TOUCH_CACHE_MAX = 20_000;
 
-  constructor(
-    private readonly database: DatabaseService,
-    private readonly mail: AuthMailService
-  ) {}
+  constructor(private readonly database: DatabaseService) {}
 
   async register(input: RegisterInput): Promise<{
     token: string;
@@ -194,43 +190,29 @@ export class AuthService {
   // Identical API response whether the account exists or not.
   // Tokens are persisted only as SHA-256 hashes and never returned to the user.
   async requestPasswordReset(rawEmail: unknown): Promise<void> {
-    if (typeof rawEmail !== "string" || rawEmail.length > 254 ||
-        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail.trim())) {
+    // The response is intentionally identical for existing and unknown
+    // addresses. A durable worker creates the one-time token only when a
+    // delivery attempt is actually claimed.
+    if(typeof rawEmail!=="string"||rawEmail.length>254||
+       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail.trim())){
       return;
     }
-    const email = rawEmail.trim().toLowerCase();
-    const result = await this.database.query<{ id: string }>(
+    const email=rawEmail.trim().toLowerCase();
+    const result=await this.database.query<{id:string}>(
       `SELECT id FROM app_user
-       WHERE lower(email)=$1 AND status='ACTIVE' LIMIT 1`, [email]
+       WHERE lower(email)=$1 AND status='ACTIVE'
+       LIMIT 1`,
+      [email]
     );
-    const row = result.rows[0];
-    if (!row) return;
-    const token = generateToken();
-    await this.database.withTransaction(async client => {
-      // Serialize concurrent reset requests for one user so only the most
-      // recently issued link remains valid.
-      await client.query(
-        "SELECT id FROM app_user WHERE id=$1 FOR UPDATE", [row.id]
-      );
-      await client.query(
-        `UPDATE password_reset_token SET consumed_at=now()
-         WHERE user_id=$1 AND consumed_at IS NULL`, [row.id]
-      );
-      await client.query(
-        `INSERT INTO password_reset_token(user_id,token_hash,expires_at)
-         VALUES ($1,$2,now()+interval '30 minutes')`,
-        [row.id,hashToken(token)]
-      );
-    });
+    const user=result.rows[0];
+    if(!user)return;
 
-    // A provider outage must not let attackers enumerate which emails exist.
-    // Delivery failures are an operational NO-GO until provider integration
-    // and alerts have been confirmed on a live sandbox.
-    try {
-      await this.mail.sendReset(email,token);
-    } catch {
-      console.error("[corebiz-auth] password recovery delivery failed");
-    }
+    await this.database.query(
+      `SELECT public.corebiz_enqueue_auth_mail(
+         $1::uuid,'PASSWORD_RESET'
+       )`,
+      [user.id]
+    );
   }
 
   async completePasswordReset(
