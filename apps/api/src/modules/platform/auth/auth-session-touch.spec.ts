@@ -6,7 +6,8 @@ const session={
   email:"user@example.test",
   membership_id:"33333333-3333-4333-8333-333333333333",
   tenant_id:"44444444-4444-4444-8444-444444444444",
-  tenant_name:"Example Ltd",is_owner:true
+  tenant_name:"Example Ltd",is_owner:true,
+  mfa_required:false,mfa_enabled:false,mfa_verified:true
 };
 
 describe("DB-backed session validation with throttled telemetry",()=>{
@@ -15,7 +16,7 @@ describe("DB-backed session validation with throttled telemetry",()=>{
     const db={
       query:jest.fn(async(sql:string)=>{
         queries.push(sql);
-        if(sql.includes("corebiz_auth_resolve_session"))
+        if(sql.includes("corebiz_auth_resolve_session_v2"))
           return {rows:[session],rowCount:1};
         return {rows:[],rowCount:1};
       })
@@ -26,7 +27,7 @@ describe("DB-backed session validation with throttled telemetry",()=>{
     );
     expect(responses).toHaveLength(50);
     expect(responses.every(r=>r?.tenantId===session.tenant_id)).toBe(true);
-    expect(queries.filter(q=>q.includes("corebiz_auth_resolve_session")))
+    expect(queries.filter(q=>q.includes("corebiz_auth_resolve_session_v2")))
       .toHaveLength(50);
     expect(queries.filter(q=>q.includes("SET last_seen_at")))
       .toHaveLength(1);
@@ -36,7 +37,7 @@ describe("DB-backed session validation with throttled telemetry",()=>{
     let active=true;
     const db={
       query:jest.fn(async(sql:string)=>{
-        if(sql.includes("corebiz_auth_resolve_session"))
+        if(sql.includes("corebiz_auth_resolve_session_v2"))
           return {rows:active?[session]:[],rowCount:active?1:0};
         return {rows:[],rowCount:1};
       })
@@ -46,6 +47,6 @@ describe("DB-backed session validation with throttled telemetry",()=>{
     active=false;
     expect(await service.resolveSession("session-token")).toBeNull();
     expect(db.query.mock.calls.filter(([sql])=>sql.includes(
-      "corebiz_auth_resolve_session"))).toHaveLength(2);
+      "corebiz_auth_resolve_session_v2"))).toHaveLength(2);
   });
 });
