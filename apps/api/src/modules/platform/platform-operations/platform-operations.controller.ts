@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Patch,
+  Post,
   Query,
   Req,
   Res
@@ -73,6 +74,92 @@ export class PlatformOperationsController {
       data: await this.platform.setSuspension(
         request.auth!.userId, session, id,
         body?.action as "SUSPEND" | "RESUME", body?.reason ?? ""
+      )
+    };
+  }
+
+  @Get("support/tickets")
+  async supportQueue(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+    @Query("limit") limitInput?: string,
+    @Query("offset") offsetInput?: string
+  ): Promise<ApiSuccess<unknown>> {
+    response.setHeader("Cache-Control", "no-store, private");
+    const session=parseCookie(request.headers.cookie,SESSION_COOKIE);
+    return {
+      ok:true,
+      data:await this.platform.supportQueue(
+        request.auth!.userId,
+        session,
+        pageNumber(limitInput,50,1,100),
+        pageNumber(offsetInput,0,0,100000)
+      )
+    };
+  }
+
+  @Get("support/tickets/:id")
+  async supportTicket(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+    @Param("id") id:string
+  ): Promise<ApiSuccess<unknown>> {
+    response.setHeader("Cache-Control", "no-store, private");
+    const session=parseCookie(request.headers.cookie,SESSION_COOKIE);
+    return {
+      ok:true,
+      data:await this.platform.supportTicket(
+        request.auth!.userId,session,id
+      )
+    };
+  }
+
+  @Post("support/tickets/:id/reply")
+  async supportReply(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+    @Param("id") id:string,
+    @Body() body:{body?:string}
+  ): Promise<ApiSuccess<unknown>> {
+    response.setHeader("Cache-Control", "no-store, private");
+    const session=parseCookie(request.headers.cookie,SESSION_COOKIE);
+    return {
+      ok:true,
+      data:await this.platform.supportReply(
+        request.auth!.userId,session,id,body?.body??""
+      )
+    };
+  }
+
+  @Patch("support/tickets/:id/close")
+  async supportClose(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+    @Param("id") id:string,
+    @Body() body:{resolution?:string}
+  ): Promise<ApiSuccess<unknown>> {
+    response.setHeader("Cache-Control", "no-store, private");
+    const session=parseCookie(request.headers.cookie,SESSION_COOKIE);
+    return {
+      ok:true,
+      data:await this.platform.supportClose(
+        request.auth!.userId,session,id,body?.resolution??""
+      )
+    };
+  }
+
+  @Get("support/attachments/:id/download")
+  async supportAttachmentDownload(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+    @Param("id") id:string
+  ): Promise<ApiSuccess<unknown>> {
+    response.setHeader("Cache-Control", "no-store, private");
+    const session=parseCookie(request.headers.cookie,SESSION_COOKIE);
+    return {
+      ok:true,
+      data:await this.platform.supportAttachmentDownload(
+        request.auth!.userId,session,id
       )
     };
   }
