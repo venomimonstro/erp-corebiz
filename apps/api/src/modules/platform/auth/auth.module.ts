@@ -5,6 +5,7 @@ import { AuthGuard } from "./auth.guard";
 import { AuthRateLimitService } from "./auth-rate-limit.service";
 import { AuthService } from "./auth.service";
 import { EmailVerificationService } from "./email-verification.service";
+import { AuthMailWebhookService } from "./auth-mail-webhook.service";
 import { BrowserOriginGuard } from "./browser-origin.guard";
 import { SessionContextMiddleware } from "./session-context.middleware";
 
@@ -13,6 +14,7 @@ import { SessionContextMiddleware } from "./session-context.middleware";
   providers: [
     AuthService,
     EmailVerificationService,
+    AuthMailWebhookService,
     AuthRateLimitService,
     SessionContextMiddleware,
     {
