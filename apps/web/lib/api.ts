@@ -2,6 +2,18 @@ export type ApiResponse<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string; traceId?: string } };
 
+export class ApiError extends Error {
+  constructor(
+    readonly code:string,
+    message:string,
+    readonly status:number,
+    readonly traceId?:string
+  ){
+    super(message);
+    this.name="ApiError";
+  }
+}
+
 // Same-origin API by default: the Next.js server rewrites /api/v1 to the
 // configured upstream. Never ask a customer's browser to call its localhost.
 const API_URL =
@@ -55,7 +67,12 @@ export async function apiRequest<T>(
 
     if (!response.ok || !payload.ok) {
       if (!payload.ok) {
-        throw new Error(payload.error.message || "Запрос не выполнен");
+        throw new ApiError(
+          payload.error.code || "REQUEST_FAILED",
+          payload.error.message || "Запрос не выполнен",
+          response.status,
+          payload.error.traceId
+        );
       }
       throw new Error(`Запрос не выполнен (HTTP ${response.status})`);
     }
