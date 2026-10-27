@@ -250,6 +250,88 @@ export class PlatformOperationsService {
     }
   }
 
+  async claimSupportDiagnostics(
+    userId:string,
+    rawSession:string|undefined,
+    token:string
+  ):Promise<Record<string,unknown>>{
+    if(!rawSession||typeof token!=="string"||
+       token.trim().length<32||token.trim().length>200){
+      throw new BadRequestException("Некорректный токен диагностики");
+    }
+    try{
+      const result=await this.database.query<{access:Record<string,unknown>}>(
+        `SELECT public.corebiz_platform_support_claim_diagnostics(
+           $1::uuid,$2::text,$3::text
+         ) AS access`,
+        [userId,hashToken(rawSession),hashToken(token.trim())]
+      );
+      const access=result.rows[0]?.access;
+      if(!access)throw new NotFoundException("Доступ диагностики недоступен");
+      return access;
+    }catch(error){
+      const code=this.dbCode(error);
+      if(code==="42501")
+        throw new ForbiddenException(
+          "Для диагностики требуется активная MFA-сессия оператора"
+        );
+      if(code==="P0002")
+        throw new NotFoundException(
+          "Токен истёк, уже использован или был отозван"
+        );
+      if(code==="22023")
+        throw new BadRequestException("Некорректный токен диагностики");
+      throw error;
+    }
+  }
+
+  async supportDiagnostics(
+    userId:string,
+    rawSession:string|undefined,
+    accessId:string
+  ):Promise<Record<string,unknown>>{
+    if(!rawSession||!this.uuid(accessId))
+      throw new ForbiddenException("Диагностический доступ недоступен");
+    try{
+      const result=await this.database.query<{diagnostics:Record<string,unknown>}>(
+        `SELECT public.corebiz_platform_support_diagnostics(
+           $1::uuid,$2::text,$3::uuid
+         ) AS diagnostics`,
+        [userId,hashToken(rawSession),accessId]
+      );
+      const diagnostics=result.rows[0]?.diagnostics;
+      if(!diagnostics)throw new NotFoundException("Диагностика недоступна");
+      return diagnostics;
+    }catch(error){
+      const code=this.dbCode(error);
+      if(code==="42501")
+        throw new ForbiddenException(
+          "Диагностический доступ истёк, отозван или принадлежит другой сессии"
+        );
+      if(code==="P0002")
+        throw new NotFoundException("Компания недоступна");
+      throw error;
+    }
+  }
+
+  async endSupportDiagnostics(
+    userId:string,
+    rawSession:string|undefined,
+    accessId:string
+  ):Promise<{ended:true}>{
+    if(!rawSession||!this.uuid(accessId))
+      throw new ForbiddenException("Диагностический доступ недоступен");
+    const result=await this.database.query<{ended:boolean}>(
+      `SELECT public.corebiz_platform_support_end_diagnostics(
+         $1::uuid,$2::text,$3::uuid
+       ) AS ended`,
+      [userId,hashToken(rawSession),accessId]
+    );
+    if(result.rows[0]?.ended!==true)
+      throw new NotFoundException("Активная диагностическая сессия не найдена");
+    return {ended:true};
+  }
+
   async tenants(
     userId: string,
     rawSession: string | undefined,
@@ -283,6 +365,11 @@ export class PlatformOperationsService {
       throw error;
     }
   }
+  private dbCode(error:unknown):string{
+    return error&&typeof error==="object"&&"code" in error
+      ?String((error as {code:unknown}).code):"";
+  }
+
   private mapSupportError(error: unknown): void {
     const code=error&&typeof error==="object"&&"code" in error
       ?String(error.code):"";
