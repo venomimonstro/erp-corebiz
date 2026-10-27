@@ -16,14 +16,23 @@ DECLARE
     'corebiz_auth_memberships',
     'corebiz_auth_switch_tenant',
     'corebiz_auth_accept_invitation',
+    'corebiz_enqueue_auth_mail',
+    'corebiz_claim_auth_mail',
+    'corebiz_issue_auth_mail_token',
+    'corebiz_complete_auth_mail',
+    'corebiz_fail_auth_mail',
+    'corebiz_tenant_is_operational',
     'corebiz_plan_bigint_limit',
+    'corebiz_platform_operator_tenants',
+    'corebiz_platform_tenant_suspension',
+    'corebiz_platform_operator_summary',
+    'corebiz_platform_suspension_history',
     'corebiz_platform_support_queue',
     'corebiz_platform_support_ticket',
     'corebiz_platform_support_reply',
     'corebiz_platform_support_close',
     'corebiz_platform_support_attachment',
     'corebiz_claim_support_sla_escalation',
-    'corebiz_tenant_is_operational',
     'corebiz_public_site_page',
     'corebiz_public_site_page_by_host',
     'corebiz_public_site_routes',
@@ -41,7 +50,8 @@ DECLARE
     'corebiz_tracker_site_lookup',
     'corebiz_resolve_3pl_portal_access',
     'corebiz_resolve_channel_webhook',
-    'corebiz_resolve_calltracking_connection'
+    'corebiz_resolve_calltracking_connection',
+    'corebiz_wms_receive_unassigned'
   ];
 BEGIN
   SELECT oid INTO v_runtime_role FROM pg_catalog.pg_roles
