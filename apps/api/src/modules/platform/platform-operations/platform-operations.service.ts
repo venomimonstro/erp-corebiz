@@ -6,6 +6,7 @@ import {
   NotFoundException
 } from "@nestjs/common";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { PrivateObjectStorageService } from "../../../infrastructure/storage/private-object-storage.service";
 import { hashToken } from "../auth/auth.utils";
 
 export type OperatorTenant = {
@@ -22,7 +23,10 @@ export type OperatorTenant = {
 
 @Injectable()
 export class PlatformOperationsService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly storage: PrivateObjectStorageService
+  ) {}
 
   async summary(
     userId: string, rawSession: string | undefined
@@ -114,6 +118,138 @@ export class PlatformOperationsService {
     return outcome;
   }
 
+  async supportQueue(
+    userId: string,
+    rawSession: string | undefined,
+    limit: number,
+    offset: number
+  ): Promise<{total:number;items:Array<Record<string,unknown>>}> {
+    if(!rawSession) throw new ForbiddenException("Недостаточно прав оператора");
+    try{
+      const result=await this.database.query<{
+        queue:{total:number;items:Array<Record<string,unknown>>}
+      }>(
+        `SELECT public.corebiz_platform_support_queue(
+           $1::uuid,$2::text,$3::integer,$4::integer
+         ) AS queue`,
+        [userId,hashToken(rawSession),limit,offset]
+      );
+      const queue=result.rows[0]?.queue;
+      if(!queue||!Array.isArray(queue.items))
+        throw new Error("PLATFORM_SUPPORT_QUEUE_INVALID");
+      return queue;
+    }catch(error){
+      this.mapSupportError(error);
+      throw error;
+    }
+  }
+
+  async supportTicket(
+    userId:string,
+    rawSession:string|undefined,
+    ticketId:string
+  ):Promise<Record<string,unknown>>{
+    if(!rawSession||!this.uuid(ticketId))
+      throw new ForbiddenException("Недостаточно прав оператора");
+    try{
+      const result=await this.database.query<{ticket:Record<string,unknown>}>(
+        `SELECT public.corebiz_platform_support_ticket(
+           $1::uuid,$2::text,$3::uuid
+         ) AS ticket`,
+        [userId,hashToken(rawSession),ticketId]
+      );
+      const ticket=result.rows[0]?.ticket;
+      if(!ticket)throw new NotFoundException("Обращение не найдено");
+      return ticket;
+    }catch(error){
+      this.mapSupportError(error);
+      throw error;
+    }
+  }
+
+  async supportReply(
+    userId:string,
+    rawSession:string|undefined,
+    ticketId:string,
+    body:string
+  ):Promise<Record<string,unknown>>{
+    if(!rawSession||!this.uuid(ticketId))
+      throw new ForbiddenException("Недостаточно прав оператора");
+    if(typeof body!=="string"||body.trim().length<1||body.trim().length>20000)
+      throw new BadRequestException("Некорректное сообщение");
+    try{
+      const result=await this.database.query<{outcome:Record<string,unknown>}>(
+        `SELECT public.corebiz_platform_support_reply(
+           $1::uuid,$2::text,$3::uuid,$4::text
+         ) AS outcome`,
+        [userId,hashToken(rawSession),ticketId,body.trim()]
+      );
+      const outcome=result.rows[0]?.outcome;
+      if(!outcome)throw new Error("PLATFORM_SUPPORT_REPLY_INVALID_RESPONSE");
+      return outcome;
+    }catch(error){
+      this.mapSupportError(error);
+      throw error;
+    }
+  }
+
+  async supportClose(
+    userId:string,
+    rawSession:string|undefined,
+    ticketId:string,
+    resolution:string
+  ):Promise<Record<string,unknown>>{
+    if(!rawSession||!this.uuid(ticketId))
+      throw new ForbiddenException("Недостаточно прав оператора");
+    if(typeof resolution!=="string"||
+       resolution.trim().length<10||resolution.trim().length>2000)
+      throw new BadRequestException("Укажите результат от 10 до 2000 символов");
+    try{
+      const result=await this.database.query<{outcome:Record<string,unknown>}>(
+        `SELECT public.corebiz_platform_support_close(
+           $1::uuid,$2::text,$3::uuid,$4::text
+         ) AS outcome`,
+        [userId,hashToken(rawSession),ticketId,resolution.trim()]
+      );
+      const outcome=result.rows[0]?.outcome;
+      if(!outcome)throw new Error("PLATFORM_SUPPORT_CLOSE_INVALID_RESPONSE");
+      return outcome;
+    }catch(error){
+      this.mapSupportError(error);
+      throw error;
+    }
+  }
+
+  async supportAttachmentDownload(
+    userId:string,
+    rawSession:string|undefined,
+    attachmentId:string
+  ):Promise<{url:string;expiresAt:string;filename:string}>{
+    if(!rawSession||!this.uuid(attachmentId))
+      throw new ForbiddenException("Недостаточно прав оператора");
+    try{
+      const result=await this.database.query<{
+        object_key:string;filename:string;
+      }>(
+        `SELECT * FROM public.corebiz_platform_support_attachment(
+           $1::uuid,$2::text,$3::uuid
+         )`,
+        [userId,hashToken(rawSession),attachmentId]
+      );
+      const item=result.rows[0];
+      if(!item)throw new NotFoundException("Вложение не найдено");
+      const expiresAt=new Date(Date.now()+5*60_000);
+      return {
+        url:this.storage.createDownloadUrl(item.object_key,300),
+        expiresAt:expiresAt.toISOString(),
+        filename:item.filename
+      };
+    }catch(error){
+      this.mapSupportError(error);
+      throw error;
+    }
+  }
+
   async tenants(
     userId: string,
     rawSession: string | undefined,
@@ -147,4 +283,22 @@ export class PlatformOperationsService {
       throw error;
     }
   }
+  private mapSupportError(error: unknown): void {
+    const code=error&&typeof error==="object"&&"code" in error
+      ?String(error.code):"";
+    if(code==="42501")
+      throw new ForbiddenException("Недостаточно прав оператора");
+    if(code==="22023")
+      throw new BadRequestException("Некорректные параметры поддержки");
+    if(code==="P0002")
+      throw new NotFoundException("Обращение не найдено");
+    if(code==="23514")
+      throw new ConflictException("Состояние обращения изменилось");
+  }
+
+  private uuid(value:string):boolean{
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      .test(value);
+  }
+
 }
