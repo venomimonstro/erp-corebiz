@@ -2,13 +2,15 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiRequest } from "../../lib/api";
+import { ApiError, apiRequest } from "../../lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [mfaCode,setMfaCode]=useState("");
+  const [mfaRequested,setMfaRequested]=useState(false);
   const [pending, setPending] = useState(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -17,10 +19,28 @@ export default function LoginPage() {
     setPending(true);
 
     try {
-      await apiRequest("/auth/login", {
+      const result=await apiRequest<{
+        auth:{
+          mfaRequired:boolean;
+          mfaEnabled:boolean;
+          mfaVerified:boolean;
+        };
+      }>("/auth/login", {
         method: "POST",
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({
+          email,
+          password,
+          ...(mfaRequested&&mfaCode.trim()?{mfaCode:mfaCode.trim()}: {})
+        })
       });
+      if(
+        result.auth.mfaRequired &&
+        (!result.auth.mfaEnabled || !result.auth.mfaVerified)
+      ){
+        router.push("/app/settings/security?setup=mfa");
+        router.refresh();
+        return;
+      }
       const pendingInvite=window.sessionStorage.getItem("corebiz.pending_invite");
       // Only our known internal portal path may be used as a return target.
       // This is not an open redirect to an arbitrary site.
@@ -37,7 +57,19 @@ export default function LoginPage() {
       router.push(route);
       router.refresh();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось войти");
+      if(
+        cause instanceof ApiError &&
+        (cause.code==="MFA_REQUIRED"||cause.code==="MFA_INVALID")
+      ){
+        setMfaRequested(true);
+        setError(
+          cause.code==="MFA_INVALID"
+            ?cause.message
+            :"Введите код из приложения-аутентификатора или резервный код"
+        );
+      }else{
+        setError(cause instanceof Error ? cause.message : "Не удалось войти");
+      }
     } finally {
       setPending(false);
     }
@@ -72,6 +104,23 @@ export default function LoginPage() {
               required
             />
           </label>
+
+          {mfaRequested ? (
+            <label>
+              Код двухфакторной защиты
+              <input
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                value={mfaCode}
+                onChange={(event)=>setMfaCode(event.target.value)}
+                placeholder="123456 или резервный код"
+                required
+              />
+              <small>
+                Подойдёт шестизначный код аутентификатора или один резервный код.
+              </small>
+            </label>
+          ) : null}
 
           {error ? <p className="form-error">{error}</p> : null}
 
