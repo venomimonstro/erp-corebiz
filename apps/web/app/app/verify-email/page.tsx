@@ -26,16 +26,21 @@ export default function EmailSettingsPage() {
     setNotice("");
     setError("");
     try {
-      const result = await apiRequest<{sent:boolean;verified:boolean}>(
+      const result = await apiRequest<{queued:boolean;verified:boolean}>(
         "/auth/email-verification/request", {method:"POST"}
       );
       if (result.verified) {
         setStatus(old => old ? {...old, verified:true} : old);
         setNotice("Адрес уже подтверждён.");
-      } else if (result.sent) {
-        setNotice("Письмо принято почтовым сервисом. Проверьте входящие и «Спам».");
+      } else if (result.queued) {
+        setNotice(
+          "Запрос принят. Письмо отправляется через защищённую очередь; " +
+          "проверьте входящие и «Спам»."
+        );
       } else {
-        setNotice("Письмо уже запрошено. Проверьте почту или повторите позже.");
+        setNotice(
+          "Письмо уже находится в очереди. Повторная отправка не создавалась."
+        );
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Отправка не выполнена");
