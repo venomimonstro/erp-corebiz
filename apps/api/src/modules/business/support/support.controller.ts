@@ -81,22 +81,55 @@ export class SupportController {
     return { ok: true, data: { closed: true } };
   }
 
-  @Post("attachments")
+  @Post("tickets/:id/attachments/upload")
   @RequirePermission("support.write")
-  async attachment(
+  async beginAttachmentUpload(
     @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
     @Body() body: {
-      ticketId: string;
       messageId?: string;
-      objectKey: string;
       filename: string;
-      mimeType?: string;
+      mimeType: string;
       sizeBytes: string;
     }
   ): Promise<ApiSuccess<unknown>> {
     return {
       ok: true,
-      data: await this.support.registerAttachment(this.context(request), body)
+      data: await this.support.beginAttachmentUpload(
+        this.context(request),
+        id,
+        body
+      )
+    };
+  }
+
+  @Post("attachments/:id/complete")
+  @RequirePermission("support.write")
+  async completeAttachmentUpload(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.support.completeAttachmentUpload(
+        this.context(request),
+        id
+      )
+    };
+  }
+
+  @Get("attachments/:id/download")
+  @RequirePermission("support.read")
+  async attachmentDownload(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string
+  ): Promise<ApiSuccess<unknown>> {
+    return {
+      ok: true,
+      data: await this.support.attachmentDownload(
+        this.context(request),
+        id
+      )
     };
   }
 
