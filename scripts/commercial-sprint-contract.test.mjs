@@ -15,15 +15,30 @@ test("SaaS operator console is protected by session proof in DB", () => {
   assert.doesNotMatch(service,/SELECT \* FROM tenant/);
 });
 
-test("password recovery never stores plaintext tokens and revokes sessions", () => {
+test("password recovery is durable and never stores plaintext bearer tokens", () => {
   const source = read("apps/api/src/modules/platform/auth/auth.service.ts");
-  assert.match(source,/INSERT INTO password_reset_token\(user_id,token_hash,expires_at\)/);
-  assert.match(source,/\[row\.id,hashToken\(token\)\]/);
+  const outbox = read("infrastructure/postgres/264_auth_mail_outbox.sql");
+  const worker = read("apps/worker/src/auth-mail.ts");
+
+  assert.match(source,/corebiz_enqueue_auth_mail/);
+  assert.doesNotMatch(
+    source.slice(
+      source.indexOf("async requestPasswordReset"),
+      source.indexOf("async completePasswordReset")
+    ),
+    /generateToken\(\)/
+  );
+  assert.match(outbox,/CREATE TABLE auth_mail_delivery/);
+  assert.match(outbox,/Raw verification\/reset tokens are NEVER/);
+  assert.match(outbox,/corebiz_issue_auth_mail_token/);
+  assert.match(outbox,/INSERT INTO public\.password_reset_token/);
+  assert.match(worker,/randomBytes\(48\)\.toString\("base64url"\)/);
+  assert.match(worker,/sha256\(rawToken\)/);
+  assert.match(worker,/corebiz_issue_auth_mail_token/);
   assert.match(source,/FOR UPDATE OF t/);
   assert.match(source,/UPDATE user_session SET revoked_at=now\(\)/);
   assert.match(source,/password_reset_token[\s\S]*consumed_at=now\(\)/);
 });
-
 test("support closure records reason for customer and audit", () => {
   const api = read("apps/api/src/modules/business/support/support.service.ts");
   assert.match(api,/Результат обращения:/);
@@ -46,21 +61,24 @@ test("production release gate audits subscription integrity", () => {
   assert.match(script,/BILLING:SUBSCRIPTION_INTEGRITY/);
 });
 
-test("email verification is one-time and checked before SaaS payment", () => {
+test("email verification is queued, one-time and checked before SaaS payment", () => {
   const verify = read("apps/api/src/modules/platform/auth/email-verification.service.ts");
   const auth = read("apps/api/src/modules/platform/auth/auth.controller.ts");
   const pay = read("apps/api/src/modules/platform/payments/commerce-payments.service.ts");
-  const sql = read("infrastructure/postgres/002_auth_sessions.sql");
-  assert.match(sql,/CREATE TABLE email_verification_token/);
-  assert.match(verify,/INSERT INTO email_verification_token\(user_id,token_hash,expires_at\)/);
-  assert.match(verify,/hashToken\(token\)/);
+  const base = read("infrastructure/postgres/002_auth_sessions.sql");
+  const outbox = read("infrastructure/postgres/264_auth_mail_outbox.sql");
+
+  assert.match(base,/CREATE TABLE email_verification_token/);
+  assert.match(verify,/corebiz_enqueue_auth_mail/);
+  assert.match(outbox,/INSERT INTO public\.email_verification_token/);
+  assert.match(outbox,/now\(\)\+interval '24 hours'/);
+  assert.match(outbox,/UPDATE public\.email_verification_token[\s\S]*consumed_at=now\(\)/);
   assert.match(verify,/email_verified_at=COALESCE/);
   assert.match(verify,/FOR UPDATE OF t/);
   assert.match(auth,/email-verification\/complete/);
   assert.match(pay,/email_verified_at/);
   assert.match(pay,/Перед оплатой тарифа подтвердите email/);
 });
-
 test("email and password reset use the same deadlock-safe lock order", () => {
   const verify = read("apps/api/src/modules/platform/auth/email-verification.service.ts");
   const auth = read("apps/api/src/modules/platform/auth/auth.service.ts");
@@ -250,5 +268,22 @@ test("platform support is session-proved, audited and SLA escalated without tena
   assert.match(worker,/corebiz_claim_support_sla_escalation/);
   assert.match(web,/Поддержка клиентов/);
   assert.match(web,/Закрыть с итогом/);
+});
+test("auth mail outbox is crash-recoverable, bounded and token-safe", () => {
+  const sql = read("infrastructure/postgres/264_auth_mail_outbox.sql");
+  const worker = read("apps/worker/src/auth-mail.ts");
+  const main = read("apps/worker/src/main.ts");
+
+  assert.match(sql,/FOR UPDATE OF q SKIP LOCKED/);
+  assert.match(sql,/claimed_at<now\(\)-interval '10 minutes'/);
+  assert.match(sql,/attempts<8/);
+  assert.match(sql,/interval '1 minute'/);
+  assert.match(sql,/interval '6 hours'/);
+  assert.match(sql,/CREATE UNIQUE INDEX auth_mail_delivery_one_active_idx/);
+  assert.doesNotMatch(sql,/raw_token|plaintext_token/i);
+  assert.match(worker,/MAIL_PROVIDER_NETWORK/);
+  assert.match(worker,/AbortSignal\.timeout\(8_000\)/);
+  assert.doesNotMatch(worker,/recipient_email.*stderr|rawToken.*stderr/s);
+  assert.match(main,/processAuthMailOnce/);
 });
 
