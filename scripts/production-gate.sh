@@ -155,6 +155,10 @@ psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
   -f scripts/security_subscription_integrity_gate.sql
 pass_step "BILLING:SUBSCRIPTION_INTEGRITY"
 
+echo "[production-gate] tenant lifecycle / public-worker operability gate"
+psql "${COREBIZ_DISPOSABLE_DATABASE_URL}" -X -q -v ON_ERROR_STOP=1 \
+  -f scripts/security_tenant_operability_gate.sql
+
 echo "[production-gate] 4/13 API business journey"
 node scripts/smoke-user-journey.mjs
 pass_step "API:INTEGRATION"
