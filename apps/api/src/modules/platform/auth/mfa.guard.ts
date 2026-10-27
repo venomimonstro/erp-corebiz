@@ -37,7 +37,8 @@ export class MfaGuard implements CanActivate {
     const auth=request.auth;
     if(!auth||!auth.mfaRequired||auth.mfaVerified)return true;
 
-    const path=(request.path||request.url?.split("?")[0]||"")
+    const path=(request.originalUrl||request.url||request.path||"")
+      .split("?")[0]!
       .replace(/\/$/,"");
     if(MFA_BOOTSTRAP_ROUTES.has(path))return true;
 
