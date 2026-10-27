@@ -21,19 +21,6 @@ export class ChannelsController {
   constructor(private readonly channels: ChannelsService, private readonly hub:MarketplaceHubService) {}
 
 
-  @Get("stock-hub/mappings")
-  @RequirePermission("channels.read")
-  async stockHubMappings(
-    @Req() request:AuthenticatedRequest,
-    @Query("connectionId") connectionId?:string,
-    @Query("q") query?:string,
-    @Query("limit") limit?:string
-  ):Promise<ApiSuccess<unknown>>{
-    return {ok:true,data:await this.hub.searchMappings(this.context(request),{
-      connectionId,query,limit:limit===undefined?50:Number(limit)
-    })};
-  }
-
   @Get("stock-hub")
   @RequirePermission("channels.read")
   async stockHub(@Req() request:AuthenticatedRequest):Promise<ApiSuccess<unknown>> {
