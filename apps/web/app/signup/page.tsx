@@ -19,7 +19,13 @@ export default function SignupPage() {
     setPending(true);
 
     try {
-      await apiRequest("/auth/register", {
+      const registration=await apiRequest<{
+        auth:{
+          mfaRequired:boolean;
+          mfaEnabled:boolean;
+          mfaVerified:boolean;
+        };
+      }>("/auth/register", {
         method: "POST",
         body: JSON.stringify({ companyName, email, password })
       });
@@ -30,6 +36,19 @@ export default function SignupPage() {
       } catch {
         // A dedicated email settings screen explains how to resend later.
       }
+      if(
+        registration.auth.mfaRequired &&
+        (!registration.auth.mfaEnabled || !registration.auth.mfaVerified)
+      ){
+        window.sessionStorage.setItem(
+          "corebiz.pending_vertical",
+          verticalCode
+        );
+        router.push("/app/settings/security?setup=mfa");
+        router.refresh();
+        return;
+      }
+
       // Registration is completed before profile setup. Keep a recovery path
       // if the second request fails: never suggest the whole account failed.
       try {
