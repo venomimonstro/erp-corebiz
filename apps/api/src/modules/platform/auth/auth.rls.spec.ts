@@ -43,7 +43,8 @@ describe("auth RLS and tenant lifecycle safeguards", () => {
       query: jest.fn(async (sql: string) => {
         if (sql.includes("corebiz_auth_login_identity")) return { rows: [{
           id: userId, email: "a@example.com", password_hash: "argon-hash",
-          membership_id: membershipId, tenant_id: tenantId, tenant_name: "Demo", is_owner: true
+          membership_id: membershipId, tenant_id: tenantId, tenant_name: "Demo", is_owner: true,
+          mfa_required:false,mfa_enabled:false
         }] };
         throw new Error("unexpected unscoped auth SQL");
       }),
@@ -60,7 +61,7 @@ describe("auth RLS and tenant lifecycle safeguards", () => {
       .login({ email: "a@example.com", password: "correct horse battery" });
     expect(result.auth.tenantId).toBe(tenantId);
     expect(database.query).toHaveBeenCalledWith(
-      expect.stringContaining("corebiz_auth_login_identity"), ["a@example.com"]);
+      expect.stringContaining("corebiz_auth_login_identity_v2"), ["a@example.com"]);
     expect(clientQueries.findIndex((sql) => sql.includes("set_config('app.tenant_id'")))
       .toBeLessThan(clientQueries.findIndex((sql) => sql.includes("INSERT INTO audit_event")));
   });
