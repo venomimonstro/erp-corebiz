@@ -64,6 +64,17 @@ type Article = {
   bodyMarkdown: string;
 };
 
+type SupportGrant = {
+  id:string;
+  ticketId:string|null;
+  reason:string|null;
+  expiresAt:string;
+  consumedAt:string|null;
+  revokedAt:string|null;
+  createdAt:string;
+  active:boolean;
+};
+
 type Telemetry = {
   periodDays: number;
   searches: number;
@@ -91,6 +102,8 @@ export default function SupportPage() {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [canManageGrants,setCanManageGrants]=useState(false);
+  const [grants,setGrants]=useState<SupportGrant[]>([]);
 
   const contextUrl = useMemo(() => {
     if (typeof window === "undefined") return "/app/support";
@@ -122,6 +135,14 @@ export default function SupportPage() {
     }
   }, []);
 
+  const loadGrants = useCallback(async () => {
+    try{
+      setGrants(await apiRequest<SupportGrant[]>("/support/grants"));
+    }catch{
+      setGrants([]);
+    }
+  },[]);
+
   const searchKnowledge = useCallback(
     async (value = "") => {
       try {
@@ -150,7 +171,17 @@ export default function SupportPage() {
     void loadTickets();
     void searchKnowledge("");
     void loadTelemetry();
-  }, [loadTickets, searchKnowledge, loadTelemetry]);
+    void apiRequest<{permissions:Array<{code:string;scope:string}>}>(
+      "/workspace/context"
+    ).then(context=>{
+      const allowed=context.permissions.some(permission=>
+        permission.scope==="all"&&
+        (permission.code==="*"||permission.code==="users.manage")
+      );
+      setCanManageGrants(allowed);
+      if(allowed)void loadGrants();
+    }).catch(()=>setCanManageGrants(false));
+  }, [loadTickets, searchKnowledge, loadTelemetry, loadGrants]);
 
   async function openTicket(id: string) {
     setPending(true);
@@ -373,10 +404,26 @@ export default function SupportPage() {
 
   async function createGrant() {
     const reason = window.prompt(
-      "Для чего поддержке нужен временный доступ?",
-      "Диагностика обращения"
+      "Для чего оператору нужна техническая диагностика? Коммерческие документы и данные клиентов этот доступ не открывает.",
+      selected
+        ?"Диагностика обращения "+selected.ticket.number
+        :"Диагностика технической проблемы"
     );
-    if (!reason?.trim()) return;
+    if(reason===null)return;
+    if(reason.trim().length<10||reason.trim().length>500){
+      setError("Укажите причину от 10 до 500 символов");
+      return;
+    }
+    const rawHours=window.prompt(
+      "Срок доступа: 1 час, 24 часа или 72 часа",
+      "1"
+    );
+    if(rawHours===null)return;
+    const hours=Number(rawHours);
+    if(![1,24,72].includes(hours)){
+      setError("Допустимый срок: 1, 24 или 72 часа");
+      return;
+    }
 
     try {
       const grant = await apiRequest<{
@@ -386,14 +433,15 @@ export default function SupportPage() {
       }>("/support/grants", {
         method: "POST",
         body: JSON.stringify({
-          hours: 4,
-          scopes: ["read"],
-          reason: reason.trim()
+          hours,
+          reason:reason.trim(),
+          ticketId:selected?.ticket.id
         })
       });
 
+      await loadGrants();
       window.prompt(
-        "Одноразовый токен поддержки. Он больше не будет показан:",
+        "Одноразовый токен диагностики. Передайте его оператору CoreBiz. После обмена токен больше не работает:",
         grant.token
       );
     } catch (cause) {
@@ -402,6 +450,18 @@ export default function SupportPage() {
           ? cause.message
           : "Не удалось создать временный доступ"
       );
+    }
+  }
+
+  async function revokeGrant(id:string){
+    if(!window.confirm("Немедленно отозвать диагностический доступ?"))return;
+    try{
+      await apiRequest("/support/grants/"+encodeURIComponent(id)+"/revoke",{
+        method:"PATCH"
+      });
+      await loadGrants();
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:"Не удалось отозвать доступ");
     }
   }
 
@@ -421,13 +481,15 @@ export default function SupportPage() {
           </div>
 
           <div className="header-actions">
-            <button
-              className="secondary-button"
-              onClick={() => void createGrant()}
-              type="button"
-            >
-              Временный доступ
-            </button>
+            {canManageGrants ? (
+              <button
+                className="secondary-button"
+                onClick={() => void createGrant()}
+                type="button"
+              >
+                Доступ для диагностики
+              </button>
+            ) : null}
             <button
               disabled={pending}
               onClick={() => void createTicket()}
@@ -443,6 +505,45 @@ export default function SupportPage() {
             <strong>Не удалось выполнить действие</strong>
             <span>{error}</span>
           </div>
+        ) : null}
+
+        {canManageGrants&&grants.length ? (
+          <section className="studio-section">
+            <h2>Диагностический доступ поддержки</h2>
+            <p className="muted">
+              Токен одноразовый. Даже после обмена доступ действует только в
+              MFA-сессии конкретного оператора и открывает техническое состояние,
+              но не CRM, финансы, документы или содержимое заказов.
+            </p>
+            <div className="support-ticket-list">
+              {grants.map(grant=>(
+                <article className="support-ticket" key={grant.id}>
+                  <div>
+                    <strong>
+                      {grant.active
+                        ?"Активный доступ"
+                        :grant.revokedAt?"Отозван":"Завершён"}
+                    </strong>
+                    <span>{grant.reason??"Без причины"}</span>
+                    <small>
+                      до {new Date(grant.expiresAt).toLocaleString("ru-RU")}
+                      {grant.consumedAt
+                        ?" · токен использован "+new Date(
+                          grant.consumedAt
+                        ).toLocaleString("ru-RU")
+                        :""}
+                    </small>
+                  </div>
+                  {grant.active ? (
+                    <button className="secondary-button" type="button"
+                      onClick={()=>void revokeGrant(grant.id)}>
+                      Отозвать
+                    </button>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          </section>
         ) : null}
 
         {telemetry ? (
