@@ -21,6 +21,7 @@ DECLARE
     'corebiz_issue_auth_mail_token',
     'corebiz_complete_auth_mail',
     'corebiz_fail_auth_mail',
+    'corebiz_record_auth_mail_provider_status',
     'corebiz_tenant_is_operational',
     'corebiz_plan_bigint_limit',
     'corebiz_platform_operator_tenants',
