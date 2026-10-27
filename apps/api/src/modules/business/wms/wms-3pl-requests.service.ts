@@ -267,7 +267,7 @@ export class Wms3plRequestsService {
     const result=await this.database.query<{
       access_id:string;tenant_id:string;owner_id:string;
     }>(
-      "SELECT * FROM corebiz_resolve_3pl_portal_access($1)",
+      "SELECT r.* FROM corebiz_resolve_3pl_portal_access($1) r WHERE corebiz_tenant_is_operational(r.tenant_id)",
       [hash]
     );
     const row=result.rows[0];
