@@ -11,7 +11,8 @@ ALTER TABLE support_ticket
   ADD COLUMN IF NOT EXISTS sla_breached_at timestamptz,
   ADD COLUMN IF NOT EXISTS escalation_level smallint NOT NULL DEFAULT 0
     CHECK(escalation_level BETWEEN 0 AND 3),
-  ADD COLUMN IF NOT EXISTS last_escalated_at timestamptz;
+  ADD COLUMN IF NOT EXISTS last_escalated_at timestamptz,
+  ADD COLUMN IF NOT EXISTS sla_paused_at timestamptz;
 
 ALTER TABLE support_message
   ADD COLUMN IF NOT EXISTS author_operator_user_id uuid
@@ -22,7 +23,7 @@ CREATE OR REPLACE FUNCTION public.corebiz_support_sla_deadlines(
   p_started_at timestamptz
 )
 RETURNS TABLE(first_response_due_at timestamptz,resolution_due_at timestamptz)
-LANGUAGE sql IMMUTABLE
+LANGUAGE sql STABLE
 SET search_path=pg_catalog,public,pg_temp
 AS $$
   SELECT
@@ -337,6 +338,7 @@ BEGIN
   UPDATE public.support_ticket
   SET status='WAITING_CUSTOMER',
       first_responded_at=COALESCE(first_responded_at,now()),
+      sla_paused_at=now(),
       sla_breached_at=CASE
         WHEN v_late THEN COALESCE(sla_breached_at,now())
         ELSE sla_breached_at
@@ -414,6 +416,7 @@ BEGIN
         ELSE sla_breached_at
       END,
       resolved_at=COALESCE(resolved_at,now()),
+      sla_paused_at=NULL,
       closed_at=now(),updated_at=now()
   WHERE id=v_ticket.id;
 
@@ -474,7 +477,7 @@ BEGIN
   SELECT st.*
   INTO v_ticket
   FROM public.support_ticket st
-  WHERE st.status NOT IN ('RESOLVED','CLOSED')
+  WHERE st.status NOT IN ('WAITING_CUSTOMER','RESOLVED','CLOSED')
     AND (
       (
         st.first_responded_at IS NULL
