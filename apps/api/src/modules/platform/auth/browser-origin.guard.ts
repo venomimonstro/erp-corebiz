@@ -22,6 +22,7 @@ const EXTERNAL_PUBLIC_MUTATIONS: ReadonlyArray<RegExp> = [
   /^\/api\/v1\/site-forms\/submit\/[^/]+\/?$/,
   /^\/api\/v1\/payments\/storefront\/carts\/[^/]+\/start\/?$/,
   /^\/api\/v1\/payments\/webhooks\/yookassa\/?$/,
+  /^\/api\/v1\/auth\/mail\/webhooks\/unisender\/?$/,
   /^\/api\/v1\/storefront\/[^/]+\/carts\/?$/,
   /^\/api\/v1\/storefront\/carts\/[^/]+\/lines\/?$/,
   /^\/api\/v1\/storefront\/carts\/[^/]+\/checkout\/?$/,
