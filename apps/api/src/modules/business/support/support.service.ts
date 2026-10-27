@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException
 } from "@nestjs/common";
@@ -7,10 +8,27 @@ import type { TenantContext } from "@corebiz/contracts";
 import { createHash, randomBytes } from "node:crypto";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
+import { SupportStorageService } from "./support-storage.service";
+
+const SUPPORT_ATTACHMENT_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/pdf",
+  "text/plain",
+  "text/csv",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+]);
 
 @Injectable()
 export class SupportService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly storage: SupportStorageService
+  ) {}
 
   async listTickets(context: TenantContext): Promise<Array<{
     id: string;
@@ -240,7 +258,6 @@ export class SupportService {
           filename: item.filename,
           mimeType: item.mime_type,
           sizeBytes: item.size_bytes,
-          objectKey: item.object_key,
           createdAt: item.created_at.toISOString()
         }))
       };
@@ -335,77 +352,353 @@ export class SupportService {
     });
   }
 
-  async registerAttachment(
+  async beginAttachmentUpload(
     context: TenantContext,
+    ticketId: string,
     input: {
-      ticketId: string;
       messageId?: string;
-      objectKey: string;
       filename: string;
-      mimeType?: string;
+      mimeType: string;
       sizeBytes: string;
     }
-  ): Promise<{ id: string }> {
-    if (!/^\d+$/.test(input.sizeBytes)) {
+  ): Promise<{
+    uploadId: string;
+    uploadUrl: string;
+    expiresAt: string;
+    requiredHeaders: Record<string, string>;
+  }> {
+    const filename=String(input.filename??"").trim();
+    const mimeType=String(input.mimeType??"")
+      .split(";")[0]!.trim().toLowerCase();
+    if(filename.length<1||filename.length>240||
+       /[\\/\u0000-\u001f]/.test(filename)){
+      throw new BadRequestException("Некорректное имя файла");
+    }
+    if(!SUPPORT_ATTACHMENT_MIME_TYPES.has(mimeType)){
+      throw new BadRequestException("Этот тип файла не поддерживается");
+    }
+    if(typeof input.sizeBytes!=="string"||!/^\d+$/.test(input.sizeBytes)){
       throw new BadRequestException("Некорректный размер файла");
     }
-
-    // Metadata may reference only this tenant's support storage namespace.
-    // The real upload path must independently validate object ownership and
-    // content before issuing any download URL.
-    const objectKey = input.objectKey;
-    const prefix = "tenants/" + context.tenantId + "/support/";
-    if (typeof objectKey !== "string" || objectKey.length > 500 ||
-        !objectKey.startsWith(prefix) ||
-        !/^[A-Za-z0-9_./-]+$/.test(objectKey) ||
-        objectKey.includes("..") || objectKey.endsWith("/")) {
-      throw new BadRequestException(
-        "Недопустимая ссылка на файл обращения"
-      );
-    }
-
-    const size = BigInt(input.sizeBytes);
-    if (size > 25_000_000n) {
+    const size=BigInt(input.sizeBytes);
+    if(size<=0n||size>26214400n){
       throw new BadRequestException("Максимальный размер вложения 25 МБ");
     }
 
-    return this.database.withTenantTransaction(context, async (client) => {
-      const ticket = await client.query(
-        `SELECT 1 FROM support_ticket
-         WHERE tenant_id = $1 AND id = $2`,
-        [context.tenantId, input.ticketId]
-      );
-      if (!ticket.rowCount) throw new NotFoundException("Тикет не найден");
+    const objectKey=
+      "tenants/"+context.tenantId+"/support/"+ticketId+"/"+
+      randomBytes(24).toString("hex");
+    const uploadUrl=this.storage.createUploadUrl(objectKey,600);
+    const expiresAt=new Date(Date.now()+15*60_000);
 
-      if (input.messageId) {
-        const message = await client.query(
-          `SELECT 1 FROM support_message
-           WHERE tenant_id = $1 AND ticket_id = $2 AND id = $3`,
-          [context.tenantId, input.ticketId, input.messageId]
+    const uploadId=await this.database.withTenantTransaction(
+      context,
+      async client=>{
+        const subscription=await client.query(
+          `SELECT plan_id
+           FROM tenant_subscription
+           WHERE tenant_id=$1
+           FOR UPDATE`,
+          [context.tenantId]
         );
-        if (!message.rowCount) throw new NotFoundException("Сообщение не найдено");
+        if(!subscription.rowCount){
+          throw new ConflictException("Тариф компании не активирован");
+        }
+
+        const ticket=await client.query<{status:string}>(
+          `SELECT status FROM support_ticket
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,ticketId]
+        );
+        if(!ticket.rows[0]) throw new NotFoundException("Тикет не найден");
+        if(ticket.rows[0].status==="CLOSED"){
+          throw new ConflictException("Нельзя добавлять файлы в закрытый тикет");
+        }
+
+        if(input.messageId){
+          const message=await client.query(
+            `SELECT 1 FROM support_message
+             WHERE tenant_id=$1 AND ticket_id=$2 AND id=$3`,
+            [context.tenantId,ticketId,input.messageId]
+          );
+          if(!message.rowCount){
+            throw new NotFoundException("Сообщение не найдено");
+          }
+        }
+
+        const limit=await client.query<{limit_value:string|null}>(
+          `SELECT corebiz_plan_bigint_limit(
+             $1,'max_support_storage_bytes'
+           )::text AS limit_value`,
+          [context.tenantId]
+        );
+        const limitBytes=limit.rows[0]?.limit_value;
+        if(!limitBytes){
+          throw new ConflictException(
+            "Для тарифа не настроен лимит файлового хранилища"
+          );
+        }
+
+        const usage=await client.query<{used_bytes:string}>(
+          `SELECT (
+             COALESCE((
+               SELECT sum(size_bytes)
+               FROM support_attachment
+               WHERE tenant_id=$1 AND verified_at IS NOT NULL
+             ),0)
+             +
+             COALESCE((
+               SELECT sum(declared_size_bytes)
+               FROM support_attachment_upload
+               WHERE tenant_id=$1 AND status='PENDING'
+                 AND expires_at>now()
+             ),0)
+           )::text AS used_bytes`,
+          [context.tenantId]
+        );
+        const used=BigInt(usage.rows[0]?.used_bytes??"0");
+        if(used+size>BigInt(limitBytes)){
+          throw new ConflictException(
+            "Превышен лимит файлового хранилища тарифа"
+          );
+        }
+
+        const created=await client.query<{id:string}>(
+          `INSERT INTO support_attachment_upload(
+             tenant_id,ticket_id,message_id,object_key,filename,
+             declared_mime_type,declared_size_bytes,
+             uploaded_by_membership_id,expires_at
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           RETURNING id`,
+          [
+            context.tenantId,ticketId,input.messageId??null,objectKey,
+            filename,mimeType,size.toString(),context.membershipId,expiresAt
+          ]
+        );
+        return created.rows[0]!.id;
       }
+    );
 
-      const result = await client.query<{ id: string }>(
-        `INSERT INTO support_attachment(
-           tenant_id, ticket_id, message_id, object_key,
-           filename, mime_type, size_bytes, uploaded_by_membership_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         RETURNING id`,
-        [
-          context.tenantId,
-          input.ticketId,
-          input.messageId ?? null,
-          input.objectKey,
-          input.filename,
-          input.mimeType?.trim() || null,
-          size.toString(),
-          context.membershipId
-        ]
+    return {
+      uploadId,
+      uploadUrl,
+      expiresAt:expiresAt.toISOString(),
+      requiredHeaders:{"Content-Type":mimeType}
+    };
+  }
+
+  async completeAttachmentUpload(
+    context: TenantContext,
+    uploadId: string
+  ): Promise<{id:string}> {
+    const upload=await this.database.withTenantTransaction(
+      context,
+      async client=>{
+        const result=await client.query<{
+          id:string;ticket_id:string;message_id:string|null;
+          object_key:string;filename:string;declared_mime_type:string;
+          declared_size_bytes:string;status:string;attachment_id:string|null;
+          expires_at:Date;
+        }>(
+          `SELECT id,ticket_id,message_id,object_key,filename,
+                  declared_mime_type,declared_size_bytes::text,status,
+                  attachment_id,expires_at
+           FROM support_attachment_upload
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,uploadId]
+        );
+        return result.rows[0]??null;
+      }
+    );
+    if(!upload) throw new NotFoundException("Загрузка не найдена");
+    if(upload.status==="VERIFIED"&&upload.attachment_id){
+      return {id:upload.attachment_id};
+    }
+    if(upload.status!=="PENDING"){
+      throw new ConflictException("Загрузка уже завершена или отклонена");
+    }
+    if(upload.expires_at.getTime()<=Date.now()){
+      await this.database.withTenantTransaction(context,async client=>{
+        await client.query(
+          `UPDATE support_attachment_upload
+           SET status='EXPIRED',failure_reason='UPLOAD_EXPIRED',updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status='PENDING'`,
+          [context.tenantId,uploadId]
+        );
+      });
+      await this.storage.deleteObject(upload.object_key);
+      throw new ConflictException("Срок загрузки файла истёк");
+    }
+
+    let info:{sizeBytes:bigint;mimeType:string;etag:string|null};
+    try{
+      info=await this.storage.verifyObject(upload.object_key);
+    }catch(error){
+      await this.database.withTenantTransaction(context,async client=>{
+        await client.query(
+          `UPDATE support_attachment_upload
+           SET status='REJECTED',failure_reason='VERIFY_FAILED',updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status='PENDING'`,
+          [context.tenantId,uploadId]
+        );
+      });
+      throw error;
+    }
+
+    const declaredSize=BigInt(upload.declared_size_bytes);
+    if(info.sizeBytes!==declaredSize||
+       info.mimeType!==upload.declared_mime_type){
+      await this.database.withTenantTransaction(context,async client=>{
+        await client.query(
+          `UPDATE support_attachment_upload
+           SET status='REJECTED',failure_reason='OBJECT_METADATA_MISMATCH',
+               verified_size_bytes=$3,verified_mime_type=$4,updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status='PENDING'`,
+          [context.tenantId,uploadId,info.sizeBytes.toString(),info.mimeType]
+        );
+      });
+      await this.storage.deleteObject(upload.object_key);
+      throw new BadRequestException(
+        "Размер или тип загруженного файла не совпадает с заявленным"
       );
+    }
 
-      return { id: result.rows[0]!.id };
-    });
+    const finalized=await this.database.withTenantTransaction(
+      context,
+      async client=>{
+        const subscription=await client.query(
+          `SELECT plan_id FROM tenant_subscription
+           WHERE tenant_id=$1 FOR UPDATE`,
+          [context.tenantId]
+        );
+        if(!subscription.rowCount){
+          return {rejected:true as const,id:null};
+        }
+
+        const current=await client.query<{
+          status:string;attachment_id:string|null;expires_at:Date;
+        }>(
+          `SELECT status,attachment_id,expires_at
+           FROM support_attachment_upload
+           WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+          [context.tenantId,uploadId]
+        );
+        const state=current.rows[0];
+        if(!state) throw new NotFoundException("Загрузка не найдена");
+        if(state.status==="VERIFIED"&&state.attachment_id){
+          return {rejected:false as const,id:state.attachment_id};
+        }
+        if(state.status!=="PENDING"||state.expires_at.getTime()<=Date.now()){
+          return {rejected:true as const,id:null};
+        }
+
+        const limit=await client.query<{limit_value:string|null}>(
+          `SELECT corebiz_plan_bigint_limit(
+             $1,'max_support_storage_bytes'
+           )::text AS limit_value`,
+          [context.tenantId]
+        );
+        const used=await client.query<{used_bytes:string}>(
+          `SELECT COALESCE(sum(size_bytes),0)::text AS used_bytes
+           FROM support_attachment
+           WHERE tenant_id=$1 AND verified_at IS NOT NULL`,
+          [context.tenantId]
+        );
+        const limitBytes=limit.rows[0]?.limit_value;
+        if(!limitBytes||
+           BigInt(used.rows[0]?.used_bytes??"0")+info.sizeBytes>
+             BigInt(limitBytes)){
+          await client.query(
+            `UPDATE support_attachment_upload
+             SET status='REJECTED',failure_reason='PLAN_STORAGE_LIMIT',
+                 updated_at=now()
+             WHERE tenant_id=$1 AND id=$2`,
+            [context.tenantId,uploadId]
+          );
+          return {rejected:true as const,id:null};
+        }
+
+        const attachment=await client.query<{id:string}>(
+          `INSERT INTO support_attachment(
+             tenant_id,ticket_id,message_id,object_key,filename,mime_type,
+             size_bytes,uploaded_by_membership_id,object_etag,verified_at
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,now())
+           RETURNING id`,
+          [
+            context.tenantId,upload.ticket_id,upload.message_id,
+            upload.object_key,upload.filename,upload.declared_mime_type,
+            info.sizeBytes.toString(),context.membershipId,info.etag
+          ]
+        );
+        const id=attachment.rows[0]!.id;
+        await client.query(
+          `UPDATE support_attachment_upload
+           SET status='VERIFIED',attachment_id=$3,object_etag=$4,
+               verified_size_bytes=$5,verified_mime_type=$6,
+               verified_at=now(),updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [
+            context.tenantId,uploadId,id,info.etag,
+            info.sizeBytes.toString(),info.mimeType
+          ]
+        );
+        await this.audit(
+          client,context,"support.attachment_verified",
+          "support_attachment",id,
+          {ticketId:upload.ticket_id,sizeBytes:info.sizeBytes.toString()}
+        );
+        return {rejected:false as const,id};
+      }
+    );
+
+    if(finalized.rejected||!finalized.id){
+      await this.storage.deleteObject(upload.object_key);
+      throw new ConflictException(
+        "Файл не может быть сохранён в текущем состоянии тарифа"
+      );
+    }
+    return {id:finalized.id};
+  }
+
+  async attachmentDownload(
+    context: TenantContext,
+    attachmentId: string
+  ): Promise<{url:string;expiresAt:string}> {
+    const row=await this.database.withTenantTransaction(
+      context,
+      async client=>{
+        const result=await client.query<{
+          object_key:string;verified_at:Date|null;
+        }>(
+          `SELECT object_key,verified_at
+           FROM support_attachment
+           WHERE tenant_id=$1 AND id=$2`,
+          [context.tenantId,attachmentId]
+        );
+        const item=result.rows[0]??null;
+        if(item?.verified_at){
+          await client.query(
+            `UPDATE support_attachment
+             SET download_count=download_count+1,last_downloaded_at=now()
+             WHERE tenant_id=$1 AND id=$2`,
+            [context.tenantId,attachmentId]
+          );
+          await this.audit(
+            client,context,"support.attachment_downloaded",
+            "support_attachment",attachmentId
+          );
+        }
+        return item;
+      }
+    );
+    if(!row||!row.verified_at){
+      throw new NotFoundException("Проверенное вложение не найдено");
+    }
+    const expiresAt=new Date(Date.now()+5*60_000);
+    return {
+      url:this.storage.createDownloadUrl(row.object_key,300),
+      expiresAt:expiresAt.toISOString()
+    };
   }
 
   async searchKnowledge(queryInput: string): Promise<Array<{
