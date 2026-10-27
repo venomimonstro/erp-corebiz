@@ -76,6 +76,7 @@ export default function SupportPage() {
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const contextUrl = useMemo(() => {
     if (typeof window === "undefined") return "/app/support";
@@ -253,6 +254,79 @@ export default function SupportPage() {
       );
     } finally {
       setPending(false);
+    }
+  }
+
+  async function uploadAttachment(file: File) {
+    if (!selected) return;
+    if (file.size <= 0 || file.size > 25 * 1024 * 1024) {
+      setError("Файл должен быть не больше 25 МБ");
+      return;
+    }
+
+    setUploading(true);
+    setError("");
+    try {
+      const upload = await apiRequest<{
+        uploadId: string;
+        uploadUrl: string;
+        expiresAt: string;
+        requiredHeaders: Record<string, string>;
+      }>(
+        "/support/tickets/" + selected.ticket.id + "/attachments/upload",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            filename: file.name,
+            mimeType: file.type || "application/octet-stream",
+            sizeBytes: String(file.size)
+          })
+        }
+      );
+
+      const response = await fetch(upload.uploadUrl, {
+        method: "PUT",
+        headers: upload.requiredHeaders,
+        body: file
+      });
+      if (!response.ok) {
+        throw new Error(
+          "Хранилище отклонило загрузку (" + response.status + ")"
+        );
+      }
+
+      await apiRequest(
+        "/support/attachments/" + upload.uploadId + "/complete",
+        { method: "POST" }
+      );
+      await openTicket(selected.ticket.id);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось загрузить вложение"
+      );
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function downloadAttachment(id: string) {
+    try {
+      const result = await apiRequest<{ url: string; expiresAt: string }>(
+        "/support/attachments/" + id + "/download"
+      );
+      const url = new URL(result.url);
+      if (!["https:", "http:"].includes(url.protocol)) {
+        throw new Error("Недопустимая ссылка на файл");
+      }
+      window.open(url.toString(), "_blank", "noopener,noreferrer");
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Не удалось открыть вложение"
+      );
     }
   }
 
@@ -474,6 +548,52 @@ export default function SupportPage() {
                     </article>
                   ))}
                 </div>
+
+                {selected.attachments.length ? (
+                  <section className="support-attachments">
+                    <strong>Вложения</strong>
+                    <div className="support-attachment-list">
+                      {selected.attachments.map((attachment) => (
+                        <button
+                          className="secondary-button"
+                          key={attachment.id}
+                          onClick={() =>
+                            void downloadAttachment(attachment.id)
+                          }
+                          type="button"
+                        >
+                          {attachment.filename} ·{" "}
+                          {Math.max(
+                            1,
+                            Math.ceil(Number(attachment.sizeBytes) / 1024)
+                          )} КБ
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {selected.ticket.status !== "CLOSED" ? (
+                  <div className="support-upload">
+                    <label className="secondary-button">
+                      {uploading ? "Проверяем файл…" : "Прикрепить файл"}
+                      <input
+                        accept=".jpg,.jpeg,.png,.webp,.pdf,.txt,.csv,.xls,.xlsx,.doc,.docx"
+                        disabled={uploading}
+                        hidden
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          event.currentTarget.value = "";
+                          if (file) void uploadAttachment(file);
+                        }}
+                        type="file"
+                      />
+                    </label>
+                    <small>
+                      До 25 МБ. Файл становится доступен только после проверки.
+                    </small>
+                  </div>
+                ) : null}
 
                 {selected.ticket.status !== "CLOSED" ? (
                   <form className="support-reply" onSubmit={sendReply}>
