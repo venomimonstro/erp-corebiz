@@ -8,7 +8,7 @@ import type { TenantContext } from "@corebiz/contracts";
 import { createHash, randomBytes } from "node:crypto";
 import type { PoolClient } from "pg";
 import { DatabaseService } from "../../../infrastructure/database/database.service";
-import { SupportStorageService } from "./support-storage.service";
+import { PrivateObjectStorageService } from "../../../infrastructure/storage/private-object-storage.service";
 
 const SUPPORT_ATTACHMENT_MIME_TYPES = new Set([
   "image/jpeg",
@@ -27,7 +27,7 @@ const SUPPORT_ATTACHMENT_MIME_TYPES = new Set([
 export class SupportService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly storage: SupportStorageService
+    private readonly storage: PrivateObjectStorageService
   ) {}
 
   async listTickets(context: TenantContext): Promise<Array<{
