@@ -184,7 +184,7 @@ export class SiteFormsService {
       throw new BadRequestException("Select a future day within 90 days");
     const result=await this.database.query<{
       binding_id:string;tenant_id:string;action:string;config:Record<string,unknown>;
-    }>("SELECT * FROM corebiz_resolve_site_form_binding($1)",[publicKey]);
+    }>("SELECT r.* FROM corebiz_resolve_site_form_binding($1) r WHERE corebiz_tenant_is_operational(r.tenant_id)",[publicKey]);
     const binding=result.rows[0];
     if (!binding || !["BOOKING","DANCE_BOOKING"].includes(binding.action)) {
       throw new NotFoundException("Booking form not found");
@@ -351,7 +351,7 @@ export class SiteFormsService {
       action:"CRM_LEAD"|"BOOKING"|"DANCE_BOOKING";
       config:Record<string,unknown>;
     }>(
-      "SELECT * FROM corebiz_resolve_site_form_binding($1)",
+      "SELECT r.* FROM corebiz_resolve_site_form_binding($1) r WHERE corebiz_tenant_is_operational(r.tenant_id)",
       [publicKey]
     );
     const row=binding.rows[0];
