@@ -16,6 +16,7 @@ DECLARE
     'corebiz_auth_memberships',
     'corebiz_auth_switch_tenant',
     'corebiz_auth_accept_invitation',
+    'corebiz_tenant_is_operational',
     'corebiz_public_site_page',
     'corebiz_public_site_page_by_host',
     'corebiz_public_site_routes',
