@@ -298,10 +298,16 @@ export class SupportService {
 
       await client.query(
         `UPDATE support_ticket
-         SET status = 'WAITING_SUPPORT',
-             updated_at = now()
-         WHERE tenant_id = $1 AND id = $2`,
-        [context.tenantId, ticketId]
+         SET status='WAITING_SUPPORT',
+             resolution_due_at=CASE
+               WHEN sla_paused_at IS NOT NULL
+                 THEN resolution_due_at+(now()-sla_paused_at)
+               ELSE resolution_due_at
+             END,
+             sla_paused_at=NULL,
+             updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [context.tenantId,ticketId]
       );
 
       return { messageId: result.rows[0]!.id };
@@ -341,7 +347,7 @@ export class SupportService {
       await client.query(
         `UPDATE support_ticket
          SET status='CLOSED',resolved_at=COALESCE(resolved_at,now()),
-             closed_at=now(),updated_at=now()
+             sla_paused_at=NULL,closed_at=now(),updated_at=now()
          WHERE tenant_id=$1 AND id=$2`,
         [context.tenantId,ticketId]
       );
