@@ -69,7 +69,17 @@ export class HealthService {
                  ('public.corebiz_auth_resolve_session(text)'),
                  ('public.corebiz_auth_memberships(uuid)'),
                  ('public.corebiz_auth_switch_tenant(uuid,uuid,uuid)'),
-                 ('public.corebiz_auth_accept_invitation(uuid,text)')
+                 ('public.corebiz_auth_accept_invitation(uuid,text)'),
+                 ('public.corebiz_auth_login_identity_v2(text)'),
+                 ('public.corebiz_auth_resolve_session_v2(text)'),
+                 ('public.corebiz_auth_mfa_state(uuid,uuid,uuid)'),
+                 ('public.corebiz_auth_mfa_secret(uuid)'),
+                 ('public.corebiz_auth_mfa_begin(uuid,text)'),
+                 ('public.corebiz_auth_mfa_enable(uuid,uuid,uuid,uuid,text[])'),
+                 ('public.corebiz_auth_mfa_consume_recovery(uuid,text)'),
+                 ('public.corebiz_auth_mfa_mark_session_verified(uuid,uuid)'),
+                 ('public.corebiz_auth_mfa_replace_recovery(uuid,uuid,uuid,uuid,text[])'),
+                 ('public.corebiz_auth_mfa_disable(uuid,uuid,uuid,uuid)')
                ) AS auth_functions(function_name)
              ) AS safe`
         );
