@@ -42,6 +42,20 @@ type TicketDetails = {
   }>;
 };
 
+function supportFileMime(file: File): string {
+  if (file.type) return file.type.toLowerCase();
+  const extension=file.name.split(".").pop()?.toLowerCase()??"";
+  const byExtension:Record<string,string>={
+    jpg:"image/jpeg",jpeg:"image/jpeg",png:"image/png",webp:"image/webp",
+    pdf:"application/pdf",txt:"text/plain",csv:"text/csv",
+    xls:"application/vnd.ms-excel",
+    xlsx:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    doc:"application/msword",
+    docx:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  };
+  return byExtension[extension]??"";
+}
+
 type Article = {
   id: string;
   slug: string;
@@ -278,7 +292,7 @@ export default function SupportPage() {
           method: "POST",
           body: JSON.stringify({
             filename: file.name,
-            mimeType: file.type || "application/octet-stream",
+            mimeType: supportFileMime(file),
             sizeBytes: String(file.size)
           })
         }
