@@ -148,7 +148,7 @@ export class ConversionBridgeService {
       webhook_secret_hash: string;
       status: string;
     }>(
-      "SELECT * FROM corebiz_resolve_calltracking_connection($1)",
+      "SELECT r.* FROM corebiz_resolve_calltracking_connection($1) r WHERE corebiz_tenant_is_operational(r.tenant_id)",
       [connectionId]
     );
 
