@@ -117,12 +117,6 @@ export default function PlatformOperationsPage() {
       );
       setSupportItems(data.items);
       setSupportTotal(data.total);
-      if(supportSelected){
-        const stillVisible=data.items.some(
-          item=>item.ticketId===supportSelected.ticket.ticketId
-        );
-        if(!stillVisible)setSupportSelected(null);
-      }
     }catch(cause){
       setSupportItems([]);
       setSupportTotal(0);
@@ -130,7 +124,7 @@ export default function PlatformOperationsPage() {
     }finally{
       setSupportLoading(false);
     }
-  },[supportOffset,supportSelected]);
+  },[supportOffset]);
 
   async function openSupportTicket(ticketId:string){
     setError("");
